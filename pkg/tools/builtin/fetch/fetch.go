@@ -163,7 +163,7 @@ func (h *fetchHandler) fetchURL(ctx context.Context, client *http.Client, urlStr
 	robots, cached := robotsCache[host]
 	if !cached {
 		var err error
-		robots, err = h.fetchRobots(ctx, client, parsedURL, useragent.Header)
+		robots, err = h.fetchRobots(ctx, client, parsedURL)
 		if err != nil {
 			result.Error = fmt.Sprintf("robots.txt check failed: %v", err)
 			return result
@@ -183,8 +183,8 @@ func (h *fetchHandler) fetchURL(ctx context.Context, client *http.Client, urlStr
 		result.Error = fmt.Sprintf("failed to create request: %v", err)
 		return result
 	}
-	req.Header.Set("User-Agent", useragent.Header)
 	req.Header.Set("Accept", fmtHandler.accept)
+	useragent.SetIdentity(ctx, req)
 	// Apply caller-configured headers last so an operator-supplied
 	// Authorization, User-Agent, Accept, ... wins over the defaults set above.
 	for k, v := range h.headers {
@@ -233,7 +233,7 @@ func (h *fetchHandler) fetchURL(ctx context.Context, client *http.Client, urlStr
 //   - caller-supplied headers (Authorization, X-Api-Key, ...) are stripped
 //     when crossing host boundaries, so credentials never leak to a
 //     third-party host that handles a robots.txt redirect.
-func (h *fetchHandler) fetchRobots(ctx context.Context, client *http.Client, targetURL *url.URL, userAgent string) (*robotstxt.RobotsData, error) {
+func (h *fetchHandler) fetchRobots(ctx context.Context, client *http.Client, targetURL *url.URL) (*robotstxt.RobotsData, error) {
 	// Build robots.txt URL
 	robotsURL := &url.URL{
 		Scheme: targetURL.Scheme,
@@ -248,7 +248,7 @@ func (h *fetchHandler) fetchRobots(ctx context.Context, client *http.Client, tar
 		return nil, nil
 	}
 
-	req.Header.Set("User-Agent", userAgent)
+	useragent.SetIdentity(ctx, req)
 	// Apply custom headers to robots.txt requests too, so authenticated
 	// endpoints that also protect robots.txt work correctly. Cross-host
 	// leaks are prevented by the shared client's CheckRedirect.

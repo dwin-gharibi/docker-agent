@@ -13,6 +13,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/docker/docker-agent/pkg/tools"
+	"github.com/docker/docker-agent/pkg/useragent"
+	"github.com/docker/docker-agent/pkg/version"
 )
 
 // newFetchToolForTest constructs a FetchTool that bypasses SSRF dial-time
@@ -438,7 +440,7 @@ func TestFetchTool_WithHeadersOption(t *testing.T) {
 }
 
 func TestFetch_Headers_SentOnRequest(t *testing.T) {
-	var gotAuthorization, gotAPIKey string
+	var gotAuthorization, gotAPIKey, gotUserAgent, gotAgentVersion string
 	url := runHTTPServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/robots.txt" {
 			http.NotFound(w, r)
@@ -446,6 +448,8 @@ func TestFetch_Headers_SentOnRequest(t *testing.T) {
 		}
 		gotAuthorization = r.Header.Get("Authorization")
 		gotAPIKey = r.Header.Get("X-Api-Key")
+		gotUserAgent = r.Header.Get("User-Agent")
+		gotAgentVersion = r.Header.Get(useragent.HeaderAgentVersion)
 		w.Header().Set("Content-Type", "text/plain")
 		fmt.Fprint(w, "ok")
 	})
@@ -463,6 +467,8 @@ func TestFetch_Headers_SentOnRequest(t *testing.T) {
 	assert.Contains(t, result.Output, "Successfully fetched")
 	assert.Equal(t, "Bearer secret-token", gotAuthorization)
 	assert.Equal(t, "key-123", gotAPIKey)
+	assert.Equal(t, useragent.Header, gotUserAgent)
+	assert.Equal(t, version.Version, gotAgentVersion)
 }
 
 // TestFetch_Headers_OverrideDefaults pins the precedence rule: caller-supplied
