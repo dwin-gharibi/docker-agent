@@ -11,6 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/docker/docker-agent/pkg/tools"
+	"github.com/docker/docker-agent/pkg/useragent"
+	"github.com/docker/docker-agent/pkg/version"
 )
 
 // newOpenAPIToolForTest constructs an OpenAPITool that bypasses SSRF
@@ -342,6 +344,8 @@ func TestOpenAPITool_CustomHeaders(t *testing.T) {
 
 	assert.Equal(t, "Bearer test-token", receivedHeaders.Get("Authorization"))
 	assert.Equal(t, "custom-value", receivedHeaders.Get("X-Custom"))
+	assert.Equal(t, useragent.Header, receivedHeaders.Get("User-Agent"))
+	assert.Equal(t, version.Version, receivedHeaders.Get(useragent.HeaderAgentVersion))
 }
 
 func TestOpenAPITool_ErrorResponse(t *testing.T) {
