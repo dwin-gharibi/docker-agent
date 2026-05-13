@@ -72,6 +72,10 @@ func (s *Server) registerRoutes() {
 	group.PATCH("/sessions/:id/tokens", s.updateSessionTokens)
 	group.PATCH("/sessions/:id/starred", s.setSessionStarred)
 	group.GET("/sessions/:id/models", s.getSessionModels)
+	// PATCH is the canonical verb for updating the agent's model. POST is
+	// also accepted because pkg/runtime Client.SetAgentModel (used by
+	// RemoteRuntime) was historically a POST; keep both so a client
+	// upgrade is not required.
 	group.PATCH("/sessions/:id/model", s.setSessionModel)
 	group.POST("/sessions/:id/model", s.setSessionModel)
 	group.POST("/sessions", s.createSession)
