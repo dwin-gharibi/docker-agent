@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/docker/docker-agent/pkg/config"
 	"github.com/docker/docker-agent/pkg/config/latest"
@@ -56,7 +55,7 @@ func NewDefaultToolsetRegistry() ToolsetRegistry {
 			"shell":             shell.CreateToolSet,
 			"script":            shell.CreateScriptToolSet,
 			"filesystem":        filesystem.CreateToolSet,
-			"fetch":             createFetchTool,
+			"fetch":             fetch.CreateToolSet,
 			"mcp":               createMCPTool,
 			"api":               createAPITool,
 			"a2a":               createA2ATool,
@@ -161,31 +160,6 @@ func createAPITool(ctx context.Context, toolset latest.Toolset, _ string, runCon
 	toolset.APIConfig.Headers = expander.ExpandMap(ctx, toolset.APIConfig.Headers)
 
 	return api.NewAPITool(toolset.APIConfig, expander), nil
-}
-
-func createFetchTool(ctx context.Context, toolset latest.Toolset, _ string, runConfig *config.RuntimeConfig, _ string) (tools.ToolSet, error) {
-	// Expand ${env.X} in headers so secrets (API tokens, ...) can come from
-	// the environment instead of being inlined in YAML — same behaviour as
-	// openapi/a2a/mcp.remote/api headers. ExpandMap and WithHeaders are both
-	// nil-safe, so no guard is needed when the user hasn't configured any.
-	expander := js.NewJsExpander(runConfig.EnvProvider())
-
-	var opts []fetch.ToolOption
-	if toolset.Timeout > 0 {
-		timeout := time.Duration(toolset.Timeout) * time.Second
-		opts = append(opts, fetch.WithTimeout(timeout))
-	}
-	if len(toolset.AllowedDomains) > 0 {
-		opts = append(opts, fetch.WithAllowedDomains(toolset.AllowedDomains))
-	}
-	if len(toolset.BlockedDomains) > 0 {
-		opts = append(opts, fetch.WithBlockedDomains(toolset.BlockedDomains))
-	}
-	if toolset.AllowPrivateIPs {
-		opts = append(opts, fetch.WithAllowPrivateIPs(true))
-	}
-	opts = append(opts, fetch.WithHeaders(expander.ExpandMap(ctx, toolset.Headers)))
-	return fetch.NewFetchTool(opts...), nil
 }
 
 func createMCPTool(ctx context.Context, toolset latest.Toolset, _ string, runConfig *config.RuntimeConfig, _ string) (tools.ToolSet, error) {

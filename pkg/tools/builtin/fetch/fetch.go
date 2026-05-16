@@ -16,7 +16,10 @@ import (
 	"github.com/k3a/html2text"
 	"github.com/temoto/robotstxt"
 
+	"github.com/docker/docker-agent/pkg/config"
+	"github.com/docker/docker-agent/pkg/config/latest"
 	"github.com/docker/docker-agent/pkg/httpclient"
+	"github.com/docker/docker-agent/pkg/js"
 	"github.com/docker/docker-agent/pkg/tools"
 	"github.com/docker/docker-agent/pkg/useragent"
 )
@@ -450,6 +453,28 @@ func htmlToMarkdown(html string) string {
 
 func htmlToText(html string) string {
 	return html2text.HTML2Text(html)
+}
+
+// CreateToolSet is used by the tools registry.
+func CreateToolSet(ctx context.Context, toolset latest.Toolset, _ string, runConfig *config.RuntimeConfig, _ string) (tools.ToolSet, error) {
+	expander := js.NewJsExpander(runConfig.EnvProvider())
+
+	var opts []ToolOption
+	if toolset.Timeout > 0 {
+		timeout := time.Duration(toolset.Timeout) * time.Second
+		opts = append(opts, WithTimeout(timeout))
+	}
+	if len(toolset.AllowedDomains) > 0 {
+		opts = append(opts, WithAllowedDomains(toolset.AllowedDomains))
+	}
+	if len(toolset.BlockedDomains) > 0 {
+		opts = append(opts, WithBlockedDomains(toolset.BlockedDomains))
+	}
+	if toolset.AllowPrivateIPs {
+		opts = append(opts, WithAllowPrivateIPs(true))
+	}
+	opts = append(opts, WithHeaders(expander.ExpandMap(ctx, toolset.Headers)))
+	return NewFetchTool(opts...), nil
 }
 
 func NewFetchTool(options ...ToolOption) *Tool {
