@@ -3,12 +3,10 @@ package teamloader
 import (
 	"cmp"
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/docker/docker-agent/pkg/config"
 	"github.com/docker/docker-agent/pkg/config/latest"
-	"github.com/docker/docker-agent/pkg/rag"
 	"github.com/docker/docker-agent/pkg/tools"
 	"github.com/docker/docker-agent/pkg/tools/a2a"
 	agenttool "github.com/docker/docker-agent/pkg/tools/builtin/agent"
@@ -57,7 +55,7 @@ func NewDefaultToolsetRegistry() ToolsetRegistry {
 			"openapi":           openapi.CreateToolSet,
 			"model_picker":      modelpicker.CreateToolSet,
 			"background_agents": agenttool.CreateToolSet,
-			"rag":               createRAGTool,
+			"rag":               builtinrag.CreateToolSet,
 		},
 	}
 }
@@ -104,27 +102,4 @@ func (r *toolsetRegistry) CreateTool(ctx context.Context, toolset latest.Toolset
 // module root in a monorepo) are intentional and must not be silently blocked.
 func resolveToolsetWorkingDir(toolsetWorkingDir, agentWorkingDir string) string {
 	return workingdir.Resolve(toolsetWorkingDir, agentWorkingDir)
-}
-
-func createRAGTool(ctx context.Context, toolset latest.Toolset, parentDir string, runConfig *config.RuntimeConfig, _ string) (tools.ToolSet, error) {
-	if toolset.RAGConfig == nil {
-		return nil, errors.New("rag toolset requires rag_config (should have been resolved from ref)")
-	}
-
-	ragName := cmp.Or(toolset.Name, "rag")
-
-	mgr, err := rag.NewManager(ctx, ragName, toolset.RAGConfig, rag.ManagersBuildConfig{
-		ParentDir:     parentDir,
-		ModelsGateway: runConfig.ModelsGateway,
-		Env:           runConfig.EnvProvider(),
-		Models:        runConfig.Models,
-		Providers:     runConfig.Providers,
-		RuntimeConfig: runConfig,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create RAG manager: %w", err)
-	}
-
-	toolName := cmp.Or(mgr.ToolName(), ragName)
-	return builtinrag.NewRAGTool(mgr, toolName), nil
 }
