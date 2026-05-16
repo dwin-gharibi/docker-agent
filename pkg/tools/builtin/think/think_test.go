@@ -10,7 +10,7 @@ import (
 )
 
 func TestThinkTool_Handler(t *testing.T) {
-	tool := NewThinkTool()
+	tool := newTool()
 
 	result, err := tool.callTool(t.Context(), Args{Thought: "This is a test thought"})
 	require.NoError(t, err)
@@ -24,7 +24,7 @@ func TestThinkTool_Handler(t *testing.T) {
 }
 
 func TestThinkTool_OutputSchema(t *testing.T) {
-	tool := NewThinkTool()
+	tool := newTool()
 
 	allTools, err := tool.Tools(t.Context())
 	require.NoError(t, err)
@@ -36,7 +36,7 @@ func TestThinkTool_OutputSchema(t *testing.T) {
 }
 
 func TestThinkTool_ParametersAreObjects(t *testing.T) {
-	tool := NewThinkTool()
+	tool := newTool()
 
 	allTools, err := tool.Tools(t.Context())
 	require.NoError(t, err)

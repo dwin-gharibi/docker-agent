@@ -54,7 +54,7 @@ func NewDefaultToolsetRegistry() ToolsetRegistry {
 			"todo":              todo.CreateToolSet,
 			"tasks":             createTasksTool,
 			"memory":            createMemoryTool,
-			"think":             createThinkTool,
+			"think":             think.CreateToolSet,
 			"shell":             createShellTool,
 			"script":            createScriptTool,
 			"filesystem":        createFilesystemTool,
@@ -214,10 +214,6 @@ func createMemoryTool(_ context.Context, toolset latest.Toolset, parentDir strin
 	}
 
 	return memory.NewMemoryToolWithPath(db, validatedMemoryPath), nil
-}
-
-func createThinkTool(_ context.Context, _ latest.Toolset, _ string, _ *config.RuntimeConfig, _ string) (tools.ToolSet, error) {
-	return think.NewThinkTool(), nil
 }
 
 func createShellTool(ctx context.Context, toolset latest.Toolset, _ string, runConfig *config.RuntimeConfig, _ string) (tools.ToolSet, error) {

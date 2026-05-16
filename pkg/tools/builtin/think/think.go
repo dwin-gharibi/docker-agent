@@ -4,35 +4,36 @@ import (
 	"context"
 	"strings"
 
+	"github.com/docker/docker-agent/pkg/config"
+	"github.com/docker/docker-agent/pkg/config/latest"
 	"github.com/docker/docker-agent/pkg/tools"
 )
 
 const ToolNameThink = "think"
 
-type Tool struct {
-	thoughts []string
+// CreateToolSet is used by the tools registry.
+func CreateToolSet(context.Context, latest.Toolset, string, *config.RuntimeConfig, string) (tools.ToolSet, error) {
+	return newTool(), nil
 }
 
-// Verify interface compliance
-var (
-	_ tools.ToolSet      = (*Tool)(nil)
-	_ tools.Instructable = (*Tool)(nil)
-)
+type tool struct {
+	thoughts []string
+}
 
 type Args struct {
 	Thought string `json:"thought" jsonschema:"The thought to think about"`
 }
 
-func (t *Tool) callTool(_ context.Context, params Args) (*tools.ToolCallResult, error) {
+func (t *tool) callTool(_ context.Context, params Args) (*tools.ToolCallResult, error) {
 	t.thoughts = append(t.thoughts, params.Thought)
 	return tools.ResultSuccess("Thoughts:\n" + strings.Join(t.thoughts, "\n")), nil
 }
 
-func NewThinkTool() *Tool {
-	return &Tool{}
+func newTool() *tool {
+	return &tool{}
 }
 
-func (t *Tool) Instructions() string {
+func (t *tool) Instructions() string {
 	return `## Think Tool
 
 Use the think tool as a scratchpad before acting. Think to:
@@ -42,7 +43,7 @@ Use the think tool as a scratchpad before acting. Think to:
 - Reason through complex multi-step problems`
 }
 
-func (t *Tool) Tools(context.Context) ([]tools.Tool, error) {
+func (t *tool) Tools(context.Context) ([]tools.Tool, error) {
 	return []tools.Tool{
 		{
 			Name:         ToolNameThink,
