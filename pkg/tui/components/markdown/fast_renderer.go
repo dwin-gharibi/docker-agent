@@ -17,6 +17,7 @@ import (
 	xansi "github.com/charmbracelet/x/ansi"
 	runewidth "github.com/mattn/go-runewidth"
 
+	"github.com/docker/docker-agent/pkg/concurrent"
 	"github.com/docker/docker-agent/pkg/tui/styles"
 )
 
@@ -2369,8 +2370,7 @@ type syntaxCacheKey struct {
 }
 
 var (
-	lexerCache   = make(map[string]chroma.Lexer)
-	lexerCacheMu sync.RWMutex
+	lexerCache concurrent.Map[string, chroma.Lexer]
 
 	// Cache for chroma token type to ansiStyle conversion (with code bg)
 	chromaStyleCache   = make(map[chroma.TokenType]ansiStyle)
@@ -2440,14 +2440,11 @@ func (p *parser) getLexer(lang string) chroma.Lexer {
 		return nil
 	}
 
-	lexerCacheMu.RLock()
-	lexer := lexerCache[lang]
-	lexerCacheMu.RUnlock()
-	if lexer != nil {
+	if lexer, ok := lexerCache.Load(lang); ok {
 		return lexer
 	}
 
-	lexer = lexers.Get(lang)
+	lexer := lexers.Get(lang)
 	if lexer == nil {
 		lexer = lexers.Match("file." + lang)
 	}
@@ -2456,9 +2453,7 @@ func (p *parser) getLexer(lang string) chroma.Lexer {
 	}
 
 	lexer = chroma.Coalesce(lexer)
-	lexerCacheMu.Lock()
-	lexerCache[lang] = lexer
-	lexerCacheMu.Unlock()
+	lexerCache.Store(lang, lexer)
 	return lexer
 }
 
