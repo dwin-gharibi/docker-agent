@@ -9,4 +9,5 @@
 !./**/*.txt
 !/pkg/chatserver/openapi.json
 !/pkg/config/builtin-agents/*.yaml
+!/pkg/tools/builtin/mcpcatalog/servers.json
 !/pkg/tui/styles/themes/*.yaml

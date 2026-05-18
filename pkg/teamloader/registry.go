@@ -14,6 +14,7 @@ import (
 	"github.com/docker/docker-agent/pkg/tools/builtin/fetch"
 	"github.com/docker/docker-agent/pkg/tools/builtin/filesystem"
 	"github.com/docker/docker-agent/pkg/tools/builtin/lsp"
+	"github.com/docker/docker-agent/pkg/tools/builtin/mcpcatalog"
 	"github.com/docker/docker-agent/pkg/tools/builtin/memory"
 	"github.com/docker/docker-agent/pkg/tools/builtin/modelpicker"
 	"github.com/docker/docker-agent/pkg/tools/builtin/openapi"
@@ -64,6 +65,9 @@ func NewDefaultToolsetRegistry() ToolsetRegistry {
 			},
 			"mcp": func(ctx context.Context, toolset latest.Toolset, _ string, runConfig *config.RuntimeConfig, _ string) (tools.ToolSet, error) {
 				return mcp.CreateToolSet(ctx, toolset, runConfig)
+			},
+			"mcp_catalog": func(_ context.Context, _ latest.Toolset, _ string, runConfig *config.RuntimeConfig, _ string) (tools.ToolSet, error) {
+				return mcpcatalog.New(runConfig.EnvProvider()), nil
 			},
 			"api": func(ctx context.Context, toolset latest.Toolset, _ string, runConfig *config.RuntimeConfig, _ string) (tools.ToolSet, error) {
 				return api.CreateToolSet(ctx, toolset, runConfig)

@@ -1,0 +1,1129 @@
+{
+  "source": "Docker MCP Catalog",
+  "source_url": "https://desktop.docker.com/mcp/catalog/v3/catalog.json",
+  "schema_version": 3,
+  "filter": "type=remote AND remote.transport_type=streamable-http",
+  "count": 45,
+  "servers": [
+    {
+      "id": "apify",
+      "title": "Apify Remote",
+      "description": "Apify is the world's largest marketplace of tools for web scraping, data extraction, and web automation. You can extract structured data from social media, e-commerce, search engines, maps, travel sites, or any other website.",
+      "url": "https://mcp.apify.com",
+      "transport": "streamable-http",
+      "category": "automation",
+      "tags": [
+        "automation",
+        "web-scraping",
+        "data-extraction",
+        "remote"
+      ],
+      "icon": "https://www.google.com/s2/favicons?domain=apify.com&sz=64",
+      "readme": "http://desktop.docker.com/mcp/catalog/v3/readme/apify.md",
+      "headers": {
+        "Authorization": "Bearer ${APIFY_API_KEY}"
+      },
+      "auth": {
+        "type": "api_key",
+        "secrets": [
+          {
+            "name": "apify.api_key",
+            "env": "APIFY_API_KEY",
+            "example": "<YOUR_API_KEY>"
+          }
+        ]
+      }
+    },
+    {
+      "id": "astro-docs",
+      "title": "Astro Docs",
+      "description": "Access the latest Astro web framework documentation, guides, and API references.",
+      "url": "https://mcp.docs.astro.build/mcp",
+      "transport": "streamable-http",
+      "category": "documentation",
+      "tags": [
+        "documentation",
+        "astro",
+        "web-framework",
+        "remote"
+      ],
+      "icon": "https://astro.build/favicon.svg",
+      "readme": "http://desktop.docker.com/mcp/catalog/v3/readme/astro-docs.md",
+      "headers": {},
+      "auth": {
+        "type": "none"
+      }
+    },
+    {
+      "id": "atlassian-remote",
+      "title": "Atlassian",
+      "description": "Interact with Jira, Confluence, and Compass to manage projects, create documentation, and track services.",
+      "url": "https://mcp.atlassian.com/v1/mcp",
+      "transport": "streamable-http",
+      "category": "productivity",
+      "tags": [
+        "productivity",
+        "project-management",
+        "documentation",
+        "collaboration",
+        "remote"
+      ],
+      "icon": "https://www.google.com/s2/favicons?domain=atlassian.com&sz=64",
+      "readme": "http://desktop.docker.com/mcp/catalog/v3/readme/atlassian-remote.md",
+      "headers": {},
+      "auth": {
+        "type": "oauth",
+        "providers": [
+          {
+            "provider": "atlassian-remote",
+            "env": "ATLASSIAN_REMOTE_PERSONAL_ACCESS_TOKEN",
+            "secret": "atlassian-remote.personal_access_token"
+          }
+        ]
+      }
+    },
+    {
+      "id": "audioscrape",
+      "title": "Audioscrape",
+      "description": "Search and analyze audio content from a massive database of podcasts, interviews, and other talks.",
+      "url": "https://mcp.audioscrape.com",
+      "transport": "streamable-http",
+      "category": "ai",
+      "tags": [
+        "ai",
+        "rag",
+        "audio",
+        "remote"
+      ],
+      "icon": "https://www.google.com/s2/favicons?domain=audioscrape.com&sz=64",
+      "readme": "http://desktop.docker.com/mcp/catalog/v3/readme/audioscrape.md",
+      "headers": {},
+      "auth": {
+        "type": "oauth",
+        "providers": [
+          {
+            "provider": "audioscrape",
+            "env": "AUDIOSCRAPE_PERSONAL_ACCESS_TOKEN",
+            "secret": "audioscrape.personal_access_token"
+          }
+        ]
+      }
+    },
+    {
+      "id": "brightdata",
+      "title": "Bright Data",
+      "description": "One MCP for the Web. Easily search, crawl, navigate, and extract websites without getting blocked. Ideal for discovering and retrieving structured insights from any public source - effortlessly and ethically.  The Web MCP is your gateway to giving AI assistants true web capabilities. No more outdated responses, no more \"I can't access real-time information\" - just seamless, reliable web access that actually works.  Built by Bright Data, the world's #1 web data platform, this MCP server ensures your AI never gets blocked, rate-limited, or served CAPTCHAs.",
+      "url": "https://mcp.brightdata.com/mcp",
+      "transport": "streamable-http",
+      "category": "web-scraping",
+      "tags": [
+        "web-scraping",
+        "data",
+        "search",
+        "remote"
+      ],
+      "icon": "https://www.google.com/s2/favicons?domain=brightdata.com&sz=128",
+      "readme": "http://desktop.docker.com/mcp/catalog/v3/readme/brightdata.md",
+      "headers": {},
+      "auth": {
+        "type": "api_key",
+        "secrets": [
+          {
+            "name": "brightdata.api_token",
+            "env": "BRIGHTDATA_API_TOKEN",
+            "example": "<YOUR_API_TOKEN>"
+          }
+        ]
+      }
+    },
+    {
+      "id": "carbon-voice",
+      "title": "Carbon Voice",
+      "description": "Communicate asynchronously with voice messages featuring AI transcription, summaries, and automated action item extraction.",
+      "url": "https://mcp.carbonvoice.app",
+      "transport": "streamable-http",
+      "category": "productivity",
+      "tags": [
+        "productivity",
+        "voice",
+        "automation",
+        "remote"
+      ],
+      "icon": "https://www.google.com/s2/favicons?domain=carbonvoice.app&sz=64",
+      "readme": "http://desktop.docker.com/mcp/catalog/v3/readme/carbon-voice.md",
+      "headers": {},
+      "auth": {
+        "type": "oauth",
+        "providers": [
+          {
+            "provider": "carbon-voice",
+            "env": "CARBON_VOICE_PERSONAL_ACCESS_TOKEN",
+            "secret": "carbon-voice.personal_access_token"
+          }
+        ]
+      }
+    },
+    {
+      "id": "close",
+      "title": "Close",
+      "description": "Streamline sales processes with integrated calling, email, SMS, and automated workflows for small and scaling businesses.",
+      "url": "https://mcp.close.com/mcp",
+      "transport": "streamable-http",
+      "category": "crm",
+      "tags": [
+        "crm",
+        "sales",
+        "customer-management",
+        "remote"
+      ],
+      "icon": "https://www.google.com/s2/favicons?domain=close.com&sz=64",
+      "readme": "http://desktop.docker.com/mcp/catalog/v3/readme/close.md",
+      "headers": {
+        "Authorization": "Bearer ${CLOSE_API_KEY}"
+      },
+      "auth": {
+        "type": "api_key",
+        "secrets": [
+          {
+            "name": "close.api_key",
+            "env": "CLOSE_API_KEY",
+            "example": "<YOUR_API_KEY>"
+          }
+        ]
+      }
+    },
+    {
+      "id": "dappier-remote",
+      "title": "Dappier Remote",
+      "description": "Enable fast, free real-time web search and access premium data from trusted media brands—news, financial markets, sports, entertainment, weather, and more. Build powerful AI agents with Dappier.",
+      "url": "https://mcp.dappier.com/mcp",
+      "transport": "streamable-http",
+      "category": "ai",
+      "tags": [
+        "ai",
+        "rag",
+        "knowledge-base",
+        "remote"
+      ],
+      "icon": "https://avatars.githubusercontent.com/u/152645347?s=200&v=4",
+      "readme": "http://desktop.docker.com/mcp/catalog/v3/readme/dappier-remote.md",
+      "headers": {
+        "Authorization": "Bearer ${DAPPIER_REMOTE_API_KEY}"
+      },
+      "auth": {
+        "type": "api_key",
+        "secrets": [
+          {
+            "name": "dappier-remote.api_key",
+            "env": "DAPPIER_REMOTE_API_KEY",
+            "example": "<YOUR_API_KEY>"
+          }
+        ]
+      }
+    },
+    {
+      "id": "docker-docs",
+      "title": "Docker Docs",
+      "description": "Search and retrieve Docker documentation to help with containerization, Docker Compose, Docker Hub, and related topics.",
+      "url": "https://mcp-docs.docker.com/mcp",
+      "transport": "streamable-http",
+      "category": "documentation",
+      "tags": [
+        "documentation",
+        "docker",
+        "containers",
+        "remote"
+      ],
+      "icon": "https://www.google.com/s2/favicons?domain=docker.com&sz=64",
+      "readme": "http://desktop.docker.com/mcp/catalog/v3/readme/docker-docs.md",
+      "headers": {},
+      "auth": {
+        "type": "none"
+      }
+    },
+    {
+      "id": "excalidraw-remote",
+      "title": "Excalidraw",
+      "description": "Create hand-drawn style diagrams and sketches with streaming animations. Renders interactive Excalidraw diagrams directly in chat with smooth draw-on effects.",
+      "url": "https://excalidraw-mcp-app.vercel.app/mcp",
+      "transport": "streamable-http",
+      "category": "productivity",
+      "tags": [
+        "productivity",
+        "collaboration",
+        "diagramming",
+        "remote"
+      ],
+      "icon": "https://www.google.com/s2/favicons?domain=excalidraw.com&sz=64",
+      "readme": "http://desktop.docker.com/mcp/catalog/v3/readme/excalidraw-remote.md",
+      "headers": {},
+      "auth": {
+        "type": "none"
+      }
+    },
+    {
+      "id": "find-a-domain",
+      "title": "Find-A-Domain",
+      "description": "Tools for finding domain names.",
+      "url": "https://api.findadomain.dev/mcp",
+      "transport": "streamable-http",
+      "category": "tools",
+      "tags": [
+        "tools",
+        "domain",
+        "productivity",
+        "remote"
+      ],
+      "icon": "https://www.google.com/s2/favicons?domain=findadomain.dev&sz=64",
+      "readme": "http://desktop.docker.com/mcp/catalog/v3/readme/find-a-domain.md",
+      "headers": {},
+      "auth": {
+        "type": "none"
+      }
+    },
+    {
+      "id": "firefly",
+      "title": "Firefly",
+      "description": "Transcribe, summarize, and analyze meetings with AI-powered note-taking across video conferencing platforms.",
+      "url": "https://api.fireflies.ai/mcp",
+      "transport": "streamable-http",
+      "category": "productivity",
+      "tags": [
+        "productivity",
+        "meetings",
+        "transcription",
+        "remote"
+      ],
+      "icon": "https://www.google.com/s2/favicons?domain=fireflies.ai&sz=64",
+      "readme": "http://desktop.docker.com/mcp/catalog/v3/readme/firefly.md",
+      "headers": {},
+      "auth": {
+        "type": "oauth",
+        "providers": [
+          {
+            "provider": "firefly",
+            "env": "FIREFLY_PERSONAL_ACCESS_TOKEN",
+            "secret": "firefly.personal_access_token"
+          }
+        ]
+      }
+    },
+    {
+      "id": "gitmcp",
+      "title": "GitMCP",
+      "description": "Tools for interacting with Git repositories.",
+      "url": "https://gitmcp.io/docs",
+      "transport": "streamable-http",
+      "category": "development",
+      "tags": [
+        "git",
+        "version-control",
+        "development",
+        "remote"
+      ],
+      "icon": "https://www.google.com/s2/favicons?domain=gitmcp.io&sz=64",
+      "readme": "http://desktop.docker.com/mcp/catalog/v3/readme/gitmcp.md",
+      "headers": {},
+      "auth": {
+        "type": "none"
+      }
+    },
+    {
+      "id": "grafbase",
+      "title": "Grafbase",
+      "description": "Build and deploy high-performance GraphQL APIs with federation, edge computing, and enterprise-grade governance.",
+      "url": "https://api.grafbase.com/mcp",
+      "transport": "streamable-http",
+      "category": "devops",
+      "tags": [
+        "devops",
+        "graphql",
+        "database",
+        "remote"
+      ],
+      "icon": "https://www.google.com/s2/favicons?domain=grafbase.com&sz=64",
+      "readme": "http://desktop.docker.com/mcp/catalog/v3/readme/grafbase.md",
+      "headers": {},
+      "auth": {
+        "type": "oauth",
+        "providers": [
+          {
+            "provider": "grafbase",
+            "env": "GRAFBASE_PERSONAL_ACCESS_TOKEN",
+            "secret": "grafbase.personal_access_token"
+          }
+        ]
+      }
+    },
+    {
+      "id": "granola-remote",
+      "title": "Granola",
+      "description": "Access meeting notes and conversations from Granola to use as context for tasks like creating tickets, drafting summaries, and scaffolding features.",
+      "url": "https://mcp.granola.ai/mcp",
+      "transport": "streamable-http",
+      "category": "productivity",
+      "tags": [
+        "productivity",
+        "meetings",
+        "notes",
+        "remote"
+      ],
+      "icon": "https://www.google.com/s2/favicons?domain=granola.ai&sz=64",
+      "readme": "http://desktop.docker.com/mcp/catalog/v3/readme/granola-remote.md",
+      "headers": {},
+      "auth": {
+        "type": "oauth",
+        "providers": [
+          {
+            "provider": "granola-remote",
+            "env": "GRANOLA_PERSONAL_ACCESS_TOKEN",
+            "secret": "granola-remote.personal_access_token"
+          }
+        ]
+      }
+    },
+    {
+      "id": "hubspot",
+      "title": "HubSpot",
+      "description": "Unite marketing, sales, and customer service with AI-powered automation, lead management, and comprehensive analytics.",
+      "url": "https://app.hubspot.com/mcp/v1/http",
+      "transport": "streamable-http",
+      "category": "crm",
+      "tags": [
+        "crm",
+        "marketing",
+        "sales",
+        "remote"
+      ],
+      "icon": "https://www.google.com/s2/favicons?domain=hubspot.com&sz=64",
+      "readme": "http://desktop.docker.com/mcp/catalog/v3/readme/hubspot.md",
+      "headers": {
+        "Authorization": "Bearer ${HUBSPOT_API_KEY}"
+      },
+      "auth": {
+        "type": "api_key",
+        "secrets": [
+          {
+            "name": "hubspot.api_key",
+            "env": "HUBSPOT_API_KEY",
+            "example": "<YOUR_API_KEY>"
+          }
+        ]
+      }
+    },
+    {
+      "id": "hugging-face",
+      "title": "Hugging Face",
+      "description": "Tools for interacting with Hugging Face models, datasets, research papers, and more.",
+      "url": "https://huggingface.co/mcp",
+      "transport": "streamable-http",
+      "category": "ai",
+      "tags": [
+        "ai",
+        "machine-learning",
+        "models",
+        "remote"
+      ],
+      "icon": "https://www.google.com/s2/favicons?domain=hf.co&sz=64",
+      "readme": "http://desktop.docker.com/mcp/catalog/v3/readme/hugging-face.md",
+      "headers": {},
+      "auth": {
+        "type": "none"
+      }
+    },
+    {
+      "id": "incident-io",
+      "title": "Incident.io",
+      "description": "Manage incidents, analyze alerts, check on-call schedules, and run operational analysis directly from your AI assistant.",
+      "url": "https://mcp.incident.io/mcp",
+      "transport": "streamable-http",
+      "category": "monitoring",
+      "tags": [
+        "monitoring",
+        "incident-management",
+        "on-call",
+        "remote"
+      ],
+      "icon": "https://www.google.com/s2/favicons?domain=incident.io&sz=64",
+      "readme": "http://desktop.docker.com/mcp/catalog/v3/readme/incident-io.md",
+      "headers": {},
+      "auth": {
+        "type": "oauth",
+        "providers": [
+          {
+            "provider": "incident-io",
+            "env": "INCIDENT_IO_PERSONAL_ACCESS_TOKEN",
+            "secret": "incident-io.personal_access_token"
+          }
+        ]
+      }
+    },
+    {
+      "id": "instant",
+      "title": "Instant",
+      "description": "Build real-time, offline-first applications with a modern Firebase-like database and instant synchronization.",
+      "url": "https://mcp.instantdb.com/mcp",
+      "transport": "streamable-http",
+      "category": "database",
+      "tags": [
+        "database",
+        "realtime",
+        "backend",
+        "remote"
+      ],
+      "icon": "https://www.google.com/s2/favicons?domain=instantdb.com&sz=64",
+      "readme": "http://desktop.docker.com/mcp/catalog/v3/readme/instant.md",
+      "headers": {},
+      "auth": {
+        "type": "oauth",
+        "providers": [
+          {
+            "provider": "instant",
+            "env": "INSTANT_PERSONAL_ACCESS_TOKEN",
+            "secret": "instant.personal_access_token"
+          }
+        ]
+      }
+    },
+    {
+      "id": "javadocs",
+      "title": "Javadocs",
+      "description": "Access to Java, Kotlin, and Scala library documentation.",
+      "url": "https://www.javadocs.dev/mcp",
+      "transport": "streamable-http",
+      "category": "documentation",
+      "tags": [
+        "documentation",
+        "java",
+        "api",
+        "remote"
+      ],
+      "icon": "https://www.google.com/s2/favicons?domain=docs.oracle.com&sz=64",
+      "readme": "http://desktop.docker.com/mcp/catalog/v3/readme/javadocs.md",
+      "headers": {},
+      "auth": {
+        "type": "none"
+      }
+    },
+    {
+      "id": "linear",
+      "title": "Linear",
+      "description": "Track issues, plan sprints, and manage product development with a fast, keyboard-first interface designed for software teams.",
+      "url": "https://mcp.linear.app/mcp",
+      "transport": "streamable-http",
+      "category": "productivity",
+      "tags": [
+        "productivity",
+        "project-management",
+        "issue-tracking",
+        "remote"
+      ],
+      "icon": "https://www.google.com/s2/favicons?domain=linear.app&sz=64",
+      "readme": "http://desktop.docker.com/mcp/catalog/v3/readme/linear.md",
+      "headers": {},
+      "auth": {
+        "type": "oauth",
+        "providers": [
+          {
+            "provider": "linear",
+            "env": "LINEAR_PERSONAL_ACCESS_TOKEN",
+            "secret": "linear.personal_access_token"
+          }
+        ]
+      }
+    },
+    {
+      "id": "manifold",
+      "title": "Manifold",
+      "description": "Tools for accessing the Manifold Markets online prediction market platform.",
+      "url": "https://api.manifold.markets/v0/mcp",
+      "transport": "streamable-http",
+      "category": "analytics",
+      "tags": [
+        "analytics",
+        "forecasting",
+        "prediction-markets",
+        "remote"
+      ],
+      "icon": "https://www.google.com/s2/favicons?domain=manifold.markets&sz=64",
+      "readme": "http://desktop.docker.com/mcp/catalog/v3/readme/manifold.md",
+      "headers": {},
+      "auth": {
+        "type": "none"
+      }
+    },
+    {
+      "id": "mercado-libre",
+      "title": "Mercado Libre",
+      "description": "Provides access to Mercado Libre E-Commerce API.",
+      "url": "https://mcp.mercadolibre.com",
+      "transport": "streamable-http",
+      "category": "commerce",
+      "tags": [
+        "commerce",
+        "marketplace",
+        "latin-america",
+        "remote"
+      ],
+      "icon": "https://www.google.com/s2/favicons?domain=mercadolibre.com&sz=64",
+      "readme": "http://desktop.docker.com/mcp/catalog/v3/readme/mercado-libre.md",
+      "headers": {
+        "Authorization": "Bearer ${MERCADO_LIBRE_API_KEY}"
+      },
+      "auth": {
+        "type": "api_key",
+        "secrets": [
+          {
+            "name": "mercado-libre.api_key",
+            "env": "MERCADO_LIBRE_API_KEY",
+            "example": "<YOUR_API_KEY>"
+          }
+        ]
+      }
+    },
+    {
+      "id": "mercado-pago",
+      "title": "Mercado Pago",
+      "description": "Provides access to Mercado Pago Marketplace API.",
+      "url": "https://mcp.mercadopago.com",
+      "transport": "streamable-http",
+      "category": "payments",
+      "tags": [
+        "payments",
+        "finance",
+        "latin-america",
+        "remote"
+      ],
+      "icon": "https://www.google.com/s2/favicons?domain=mercadopago.com&sz=64",
+      "readme": "http://desktop.docker.com/mcp/catalog/v3/readme/mercado-pago.md",
+      "headers": {
+        "Authorization": "Bearer ${MERCADO_PAGO_API_KEY}"
+      },
+      "auth": {
+        "type": "api_key",
+        "secrets": [
+          {
+            "name": "mercado-pago.api_key",
+            "env": "MERCADO_PAGO_API_KEY",
+            "example": "<YOUR_API_KEY>"
+          }
+        ]
+      }
+    },
+    {
+      "id": "microsoft-learn",
+      "title": "Microsoft Learn",
+      "description": "Add trusted and up-to-date content from Microsoft Learn to your AI agent.",
+      "url": "https://learn.microsoft.com/api/mcp",
+      "transport": "streamable-http",
+      "category": "documentation",
+      "tags": [
+        "microsoft-learn",
+        "documentation",
+        "remote"
+      ],
+      "icon": "https://avatars.githubusercontent.com/microsoft?s=64",
+      "readme": "",
+      "headers": {},
+      "auth": {
+        "type": "none"
+      }
+    },
+    {
+      "id": "miro-remote",
+      "title": "Miro",
+      "description": "Create diagrams, manage documents, and explore board content in collaborative visual workspaces.",
+      "url": "https://mcp.miro.com/mcp",
+      "transport": "streamable-http",
+      "category": "productivity",
+      "tags": [
+        "productivity",
+        "collaboration",
+        "diagramming",
+        "remote"
+      ],
+      "icon": "https://www.google.com/s2/favicons?domain=miro.com&sz=64",
+      "readme": "http://desktop.docker.com/mcp/catalog/v3/readme/miro-remote.md",
+      "headers": {},
+      "auth": {
+        "type": "oauth",
+        "providers": [
+          {
+            "provider": "miro-remote",
+            "env": "MIRO_REMOTE_PERSONAL_ACCESS_TOKEN",
+            "secret": "miro-remote.personal_access_token"
+          }
+        ]
+      }
+    },
+    {
+      "id": "morningstar-mcp-server",
+      "title": "Morningstar",
+      "description": "The Morningstar MCP Server makes it simple to power your AI apps and tools with Morningstars trusted content. It provides access to a growing library of AI-ready capabilities, including global analyst research, market analysis, and key investment data.",
+      "url": "https://mcp.morningstar.com/mcp",
+      "transport": "streamable-http",
+      "category": "Fintech",
+      "tags": [
+        "Fintech",
+        "remote"
+      ],
+      "icon": "https://developer.morningstar.com/logo-brand.svg",
+      "readme": "http://desktop.docker.com/mcp/catalog/v3/readme/morningstar-mcp-server.md",
+      "headers": {},
+      "auth": {
+        "type": "oauth",
+        "providers": [
+          {
+            "provider": "morningstar-mcp-server",
+            "env": "MORNINGSTAR_MCP_SERVER_PERSONAL_ACCESS_TOKEN",
+            "secret": "morningstar-mcp-server.personal_access_token"
+          }
+        ]
+      }
+    },
+    {
+      "id": "needle",
+      "title": "Needle Remote",
+      "description": "Production-ready RAG service to search and retrieve data from your documents.",
+      "url": "https://mcp.needle.app/mcp",
+      "transport": "streamable-http",
+      "category": "ai",
+      "tags": [
+        "ai",
+        "rag",
+        "knowledge-base",
+        "remote"
+      ],
+      "icon": "https://www.google.com/s2/favicons?domain=needle.app&sz=64",
+      "readme": "http://desktop.docker.com/mcp/catalog/v3/readme/needle.md",
+      "headers": {
+        "Authorization": "Bearer ${NEEDLE_API_KEY}"
+      },
+      "auth": {
+        "type": "api_key",
+        "secrets": [
+          {
+            "name": "needle.api_key",
+            "env": "NEEDLE_API_KEY",
+            "example": "<YOUR_API_KEY>"
+          }
+        ]
+      }
+    },
+    {
+      "id": "notion-remote",
+      "title": "Notion",
+      "description": "Manage projects, create documentation, and organize information in collaborative workspaces.",
+      "url": "https://mcp.notion.com/mcp",
+      "transport": "streamable-http",
+      "category": "productivity",
+      "tags": [
+        "productivity",
+        "documentation",
+        "collaboration",
+        "remote"
+      ],
+      "icon": "https://www.google.com/s2/favicons?domain=notion.so&sz=64",
+      "readme": "http://desktop.docker.com/mcp/catalog/v3/readme/notion-remote.md",
+      "headers": {},
+      "auth": {
+        "type": "oauth",
+        "providers": [
+          {
+            "provider": "notion-remote",
+            "env": "NOTION_REMOTE_PERSONAL_ACCESS_TOKEN",
+            "secret": "notion-remote.personal_access_token"
+          }
+        ]
+      }
+    },
+    {
+      "id": "octagon",
+      "title": "Octagon",
+      "description": "Access comprehensive market intelligence, analyze SEC filings, earnings transcripts, and financial data to uncover investment opportunities.",
+      "url": "https://mcp.octagonagents.com/mcp",
+      "transport": "streamable-http",
+      "category": "analytics",
+      "tags": [
+        "analytics",
+        "market-intelligence",
+        "data",
+        "remote"
+      ],
+      "icon": "https://www.google.com/s2/favicons?domain=octagonai.co&sz=64",
+      "readme": "http://desktop.docker.com/mcp/catalog/v3/readme/octagon.md",
+      "headers": {},
+      "auth": {
+        "type": "oauth",
+        "providers": [
+          {
+            "provider": "octagon",
+            "env": "OCTAGON_PERSONAL_ACCESS_TOKEN",
+            "secret": "octagon.personal_access_token"
+          }
+        ]
+      }
+    },
+    {
+      "id": "openmesh",
+      "title": "OpenMesh",
+      "description": "Discover and connect to a curated marketplace of MCP servers for extending AI agent capabilities.",
+      "url": "https://api.openmesh.dev/mcp",
+      "transport": "streamable-http",
+      "category": "infrastructure",
+      "tags": [
+        "infrastructure",
+        "discovery",
+        "mesh",
+        "remote"
+      ],
+      "icon": "https://www.google.com/s2/favicons?domain=openmesh.network&sz=64",
+      "readme": "http://desktop.docker.com/mcp/catalog/v3/readme/openmesh.md",
+      "headers": {},
+      "auth": {
+        "type": "none"
+      }
+    },
+    {
+      "id": "openzeppelin-cairo",
+      "title": "OpenZeppelin Cairo Contracts",
+      "description": "Access to OpenZeppelin Cairo Contracts.",
+      "url": "https://mcp.openzeppelin.com/contracts/cairo/mcp",
+      "transport": "streamable-http",
+      "category": "blockchain",
+      "tags": [
+        "blockchain",
+        "cairo",
+        "smart-contracts",
+        "remote"
+      ],
+      "icon": "https://www.google.com/s2/favicons?domain=openzeppelin.com&sz=64",
+      "readme": "http://desktop.docker.com/mcp/catalog/v3/readme/openzeppelin-cairo.md",
+      "headers": {},
+      "auth": {
+        "type": "none"
+      }
+    },
+    {
+      "id": "openzeppelin-solidity",
+      "title": "OpenZeppelin Solidity Contracts",
+      "description": "Access to OpenZeppelin Solidity Contracts.",
+      "url": "https://mcp.openzeppelin.com/contracts/solidity/mcp",
+      "transport": "streamable-http",
+      "category": "blockchain",
+      "tags": [
+        "blockchain",
+        "solidity",
+        "smart-contracts",
+        "remote"
+      ],
+      "icon": "https://www.google.com/s2/favicons?domain=openzeppelin.com&sz=64",
+      "readme": "http://desktop.docker.com/mcp/catalog/v3/readme/openzeppelin-solidity.md",
+      "headers": {},
+      "auth": {
+        "type": "none"
+      }
+    },
+    {
+      "id": "openzeppelin-stellar",
+      "title": "OpenZeppelin Stellar Contracts",
+      "description": "Access to OpenZeppelin Stellar Contracts.",
+      "url": "https://mcp.openzeppelin.com/contracts/stellar/mcp",
+      "transport": "streamable-http",
+      "category": "blockchain",
+      "tags": [
+        "blockchain",
+        "stellar",
+        "smart-contracts",
+        "remote"
+      ],
+      "icon": "https://www.google.com/s2/favicons?domain=openzeppelin.com&sz=64",
+      "readme": "http://desktop.docker.com/mcp/catalog/v3/readme/openzeppelin-stellar.md",
+      "headers": {},
+      "auth": {
+        "type": "none"
+      }
+    },
+    {
+      "id": "openzeppelin-stylus",
+      "title": "OpenZeppelin Stylus Contracts",
+      "description": "Access to OpenZeppelin Stylus Contracts.",
+      "url": "https://mcp.openzeppelin.com/contracts/stylus/mcp",
+      "transport": "streamable-http",
+      "category": "blockchain",
+      "tags": [
+        "blockchain",
+        "stylus",
+        "smart-contracts",
+        "remote"
+      ],
+      "icon": "https://www.google.com/s2/favicons?domain=openzeppelin.com&sz=64",
+      "readme": "http://desktop.docker.com/mcp/catalog/v3/readme/openzeppelin-stylus.md",
+      "headers": {},
+      "auth": {
+        "type": "none"
+      }
+    },
+    {
+      "id": "polar-signals",
+      "title": "Polar Signals",
+      "description": "MCP server for Polar Signals Cloud continuous profiling platform, enabling AI assistants to analyze CPU performance, memory usage, and identify optimization opportunities in production systems.",
+      "url": "https://api.polarsignals.com/api/mcp/",
+      "transport": "streamable-http",
+      "category": "devops",
+      "tags": [
+        "devops",
+        "profiling",
+        "performance",
+        "remote"
+      ],
+      "icon": "https://www.google.com/s2/favicons?domain=polarsignals.com&sz=64",
+      "readme": "http://desktop.docker.com/mcp/catalog/v3/readme/polar-signals.md",
+      "headers": {
+        "Authorization": "Bearer ${POLAR_SIGNALS_API_KEY}"
+      },
+      "auth": {
+        "type": "api_key",
+        "secrets": [
+          {
+            "name": "polar-signals.api_key",
+            "env": "POLAR_SIGNALS_API_KEY",
+            "example": "<YOUR_API_KEY>"
+          }
+        ]
+      }
+    },
+    {
+      "id": "prisma-postgres",
+      "title": "Prisma Postgres",
+      "description": "Access PostgreSQL databases through Prisma's type-safe ORM with automated migrations and intuitive query building.",
+      "url": "https://mcp.prisma.io/mcp",
+      "transport": "streamable-http",
+      "category": "database",
+      "tags": [
+        "database",
+        "postgres",
+        "orm",
+        "remote"
+      ],
+      "icon": "https://www.google.com/s2/favicons?domain=prisma.io&sz=64",
+      "readme": "http://desktop.docker.com/mcp/catalog/v3/readme/prisma-postgres.md",
+      "headers": {},
+      "auth": {
+        "type": "oauth",
+        "providers": [
+          {
+            "provider": "prisma-postgres",
+            "env": "PRISMA_POSTGRES_PERSONAL_ACCESS_TOKEN",
+            "secret": "prisma-postgres.personal_access_token"
+          }
+        ]
+      }
+    },
+    {
+      "id": "pulumi-remote",
+      "title": "Pulumi",
+      "description": "Create, deploy, and manage cloud infrastructure using your favorite language.",
+      "url": "https://mcp.ai.pulumi.com/mcp",
+      "transport": "streamable-http",
+      "category": "devops",
+      "tags": [
+        "devops",
+        "remote"
+      ],
+      "icon": "https://www.google.com/s2/favicons?domain=pulumi.com&sz=64",
+      "readme": "http://desktop.docker.com/mcp/catalog/v3/readme/pulumi-remote.md",
+      "headers": {},
+      "auth": {
+        "type": "oauth",
+        "providers": [
+          {
+            "provider": "pulumi-remote",
+            "env": "PULUMI_REMOTE_PERSONAL_ACCESS_TOKEN",
+            "secret": "pulumi-remote.personal_access_token"
+          }
+        ]
+      }
+    },
+    {
+      "id": "remote-mcp",
+      "title": "Remote MCP",
+      "description": "Tools for finding remote MCP servers.",
+      "url": "https://mcp.remote-mcp.com",
+      "transport": "streamable-http",
+      "category": "tools",
+      "tags": [
+        "tools",
+        "mcp",
+        "directory",
+        "remote"
+      ],
+      "icon": "https://www.google.com/s2/favicons?domain=remote-mcp.com&sz=64",
+      "readme": "http://desktop.docker.com/mcp/catalog/v3/readme/remote-mcp.md",
+      "headers": {},
+      "auth": {
+        "type": "none"
+      }
+    },
+    {
+      "id": "rube",
+      "title": "Rube",
+      "description": "Access to Rube's catalog of remote MCP servers.",
+      "url": "https://rube.app/mcp",
+      "transport": "streamable-http",
+      "category": "tools",
+      "tags": [
+        "tools",
+        "automation",
+        "remote"
+      ],
+      "icon": "https://www.google.com/s2/favicons?domain=composio.dev&sz=64",
+      "readme": "http://desktop.docker.com/mcp/catalog/v3/readme/rube.md",
+      "headers": {
+        "Authorization": "Bearer ${RUBE_API_KEY}"
+      },
+      "auth": {
+        "type": "api_key",
+        "secrets": [
+          {
+            "name": "rube.api_key",
+            "env": "RUBE_API_KEY",
+            "example": "<YOUR_API_KEY>"
+          }
+        ]
+      }
+    },
+    {
+      "id": "semgrep",
+      "title": "Semgrep",
+      "description": "MCP server for using Semgrep to scan code for security vulnerabilities.",
+      "url": "https://mcp.semgrep.ai/mcp",
+      "transport": "streamable-http",
+      "category": "security",
+      "tags": [
+        "security",
+        "code-analysis",
+        "sast",
+        "remote"
+      ],
+      "icon": "https://www.google.com/s2/favicons?domain=semgrep.ai&sz=64",
+      "readme": "http://desktop.docker.com/mcp/catalog/v3/readme/semgrep.md",
+      "headers": {},
+      "auth": {
+        "type": "none"
+      }
+    },
+    {
+      "id": "short-io",
+      "title": "Short.io",
+      "description": "Access to Short.io's link shortener and analytics tools.",
+      "url": "https://ai-assistant.short.io/mcp",
+      "transport": "streamable-http",
+      "category": "tools",
+      "tags": [
+        "tools",
+        "url-shortener",
+        "analytics",
+        "remote"
+      ],
+      "icon": "https://www.google.com/s2/favicons?domain=short.io&sz=64",
+      "readme": "http://desktop.docker.com/mcp/catalog/v3/readme/short-io.md",
+      "headers": {
+        "Authorization": "Bearer ${SHORT_IO_API_KEY}"
+      },
+      "auth": {
+        "type": "api_key",
+        "secrets": [
+          {
+            "name": "short-io.api_key",
+            "env": "SHORT_IO_API_KEY",
+            "example": "<YOUR_API_KEY>"
+          }
+        ]
+      }
+    },
+    {
+      "id": "stripe-remote",
+      "title": "Stripe",
+      "description": "Interact with Stripe services over the Stripe API.",
+      "url": "https://mcp.stripe.com",
+      "transport": "streamable-http",
+      "category": "payments",
+      "tags": [
+        "payments",
+        "finance",
+        "billing",
+        "remote"
+      ],
+      "icon": "https://www.google.com/s2/favicons?domain=stripe.com&sz=64",
+      "readme": "http://desktop.docker.com/mcp/catalog/v3/readme/stripe-remote.md",
+      "headers": {},
+      "auth": {
+        "type": "oauth",
+        "providers": [
+          {
+            "provider": "stripe-remote",
+            "env": "STRIPE_REMOTE_PERSONAL_ACCESS_TOKEN",
+            "secret": "stripe-remote.personal_access_token"
+          }
+        ]
+      }
+    },
+    {
+      "id": "telnyx",
+      "title": "Telnyx",
+      "description": "Enables interaction with powerful telephony, messaging, and AI assistant APIs.",
+      "url": "https://api.telnyx.com/v2/mcp",
+      "transport": "streamable-http",
+      "category": "communication",
+      "tags": [
+        "communication",
+        "telephony",
+        "sms",
+        "remote"
+      ],
+      "icon": "https://www.google.com/s2/favicons?domain=telnyx.com&sz=64",
+      "readme": "http://desktop.docker.com/mcp/catalog/v3/readme/telnyx.md",
+      "headers": {
+        "Authorization": "Bearer ${TELNYX_API_KEY}"
+      },
+      "auth": {
+        "type": "api_key",
+        "secrets": [
+          {
+            "name": "telnyx.api_key",
+            "env": "TELNYX_API_KEY",
+            "example": "<YOUR_API_KEY>"
+          }
+        ]
+      }
+    },
+    {
+      "id": "waystation",
+      "title": "WayStation",
+      "description": "Connect AI to your productivity ecosystem with integrations across Notion, Slack, Asana, Monday.com, and 50+ other business tools.",
+      "url": "https://waystation.ai/mcp",
+      "transport": "streamable-http",
+      "category": "productivity",
+      "tags": [
+        "productivity",
+        "workflow",
+        "automation",
+        "remote"
+      ],
+      "icon": "https://www.google.com/s2/favicons?domain=waystation.ai&sz=64",
+      "readme": "http://desktop.docker.com/mcp/catalog/v3/readme/waystation.md",
+      "headers": {},
+      "auth": {
+        "type": "oauth",
+        "providers": [
+          {
+            "provider": "waystation",
+            "env": "WAYSTATION_PERSONAL_ACCESS_TOKEN",
+            "secret": "waystation.personal_access_token"
+          }
+        ]
+      }
+    }
+  ]
+}

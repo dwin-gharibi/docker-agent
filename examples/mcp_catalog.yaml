@@ -1,0 +1,33 @@
+#!/usr/bin/env docker agent run
+
+# An agent that can discover, enable and use any remote streamable-http
+# MCP server from the Docker MCP Catalog on demand.
+#
+# How it works:
+#   - The mcp_catalog toolset adds 4 meta-tools:
+#       * search_remote_mcp_servers — find servers by keyword
+#       * enable_remote_mcp_server  — activate one (no network yet)
+#       * list_remote_mcp_servers   — show what's currently active
+#       * disable_remote_mcp_server — turn one off again
+#   - Tools from servers that have not been enabled stay hidden, so the
+#     prompt is not flooded with hundreds of tool definitions.
+#   - When the model first calls a tool from an enabled server, the
+#     underlying connection is established and any required OAuth
+#     authorization URL is surfaced via the elicitation pipeline.
+#   - For api_key servers (e.g. Apify, Brave Search, Tavily, …), make
+#     sure the documented env var is exported before enabling the
+#     server. The catalog tells you exactly which one to set.
+
+agents:
+  root:
+    model: anthropic/claude-sonnet-4-6
+    description: Agent that can on-demand connect to remote MCP servers from the Docker MCP Catalog.
+    instruction: |
+      You can discover and activate remote MCP servers on demand.
+      Use search_remote_mcp_servers to find a server matching the
+      user's intent, then enable_remote_mcp_server to activate it.
+      Be conservative: enable only the servers you actually need for
+      the task at hand. Disable a server with disable_remote_mcp_server
+      once you are done with it.
+    toolsets:
+      - type: mcp_catalog

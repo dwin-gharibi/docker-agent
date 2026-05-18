@@ -1374,6 +1374,7 @@
           "description": "Type of tool",
           "enum": [
             "mcp",
+            "mcp_catalog",
             "script",
             "think",
             "memory",
@@ -1636,6 +1637,7 @@
             "type": {
               "enum": [
                 "mcp",
+                "mcp_catalog",
                 "script",
                 "think",
                 "memory",
