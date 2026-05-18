@@ -147,6 +147,10 @@ func parseCommandValue(v any) (Command, error) {
 		if inst == "" && desc == "" && agent == "" {
 			return Command{}, errors.New("command must have at least 'instruction', 'description' or 'agent'")
 		}
+		// Fallback: if no instruction is provided but we have a description (and no
+		// agent target), use the description as the instruction. This allows shorthand
+		// command definitions like `{"cmd": "Do something"}` where the description
+		// doubles as the instruction text.
 		if inst == "" && agent == "" {
 			inst = desc
 		}

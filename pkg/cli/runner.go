@@ -334,8 +334,11 @@ func PrepareUserMessage(ctx context.Context, rt runtime.Runtime, userInput, glob
 	// This must happen before the message is added to the session so the
 	// next runtime turn runs on the right agent.
 	if cmd, _, ok := runtime.LookupCommand(ctx, rt, userInput); ok && cmd.Agent != "" {
+		// If the agent switch fails, we must not proceed with sending the message
+		// to the wrong agent. Return an empty message to signal the error.
 		if err := rt.SetCurrentAgent(cmd.Agent); err != nil {
 			slog.WarnContext(ctx, "Failed to switch agent for /command", "agent", cmd.Agent, "error", err)
+			return session.UserMessage(""), ""
 		}
 	}
 	// Parse for /attach commands in the message
