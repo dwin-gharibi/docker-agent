@@ -35,7 +35,7 @@ agents:
     num_history_items: int # Optional: limit conversation history
     skills: boolean | [list] # Optional: enable skill discovery (true/false or list of names and/or sources)
     commands: # Optional: named prompts
-      name: "prompt text"
+      name: "prompt text" # or {instruction: "prompt", agent: "sub_agent_name"}
     welcome_message: string # Optional: message shown at session start
     handoffs: [list] # Optional: agent names this agent can hand off to
     hooks: # Optional: lifecycle hooks
@@ -85,7 +85,7 @@ agents:
 | `max_old_tool_call_tokens`  | int     | ✗        | Maximum number of tokens to keep from old tool call arguments and results. Older tool calls beyond this budget have their content replaced with a placeholder, saving context space. Tokens are approximated as `len/4`. Set to `-1` to disable truncation (unlimited). Default: `40000`. |
 | `num_history_items`         | int     | ✗        | Limit the number of conversation history messages sent to the model. Useful for managing context window size with long conversations. Default: unlimited (all messages sent). |
 | `skills`                    | bool/array | ✗     | Enable automatic skill discovery. `true` loads all discovered local skills, `false` disables them. A list can mix skill sources (`local` or `https://…` URLs) and skill names to include — see [Skills]({{ '/features/skills/' | relative_url }}).                                                     |
-| `commands`                  | object  | ✗        | Named prompts that can be run with `docker agent run config.yaml /command_name`.                                                                                              |
+| `commands`                  | object  | ✗        | Named prompts that can be run with `docker agent run config.yaml /command_name`. Can be simple strings or objects with `instruction` and/or `agent` fields for agent switching. See [Named Commands](#named-commands) below. |
 | `welcome_message`           | string  | ✗        | Message displayed to the user when a session starts. Useful for providing context or instructions.                                                                            |
 | `handoffs`                  | array   | ✗        | List of agent names this agent can hand off the conversation to. Enables the `handoff` tool. See [Handoffs Routing]({{ '/concepts/multi-agent/#handoffs-routing' | relative_url }}).                  |
 | `hooks`                     | object  | ✗        | Lifecycle hooks for running commands at various points. See [Hooks]({{ '/configuration/hooks/' | relative_url }}).                                                                                   |
@@ -251,7 +251,7 @@ agents:
 
 ## Named Commands
 
-Define reusable prompt shortcuts:
+Define reusable prompt shortcuts that can send prompts to the current agent or switch to a different sub-agent:
 
 ```yaml
 agents:
@@ -263,7 +263,36 @@ agents:
       logs: "Show me the last 50 lines of system logs"
       greet: "Say hello to ${env.USER}"
       deploy: "Deploy ${env.PROJECT_NAME || 'app'} to ${env.ENV || 'staging'}"
+      
+      # Advanced format with agent switching
+      plan:
+        agent: planner  # Switch to the 'planner' sub-agent
+        instruction: "Create a detailed plan for: $1"  # Optional: send this prompt after switching
+      
+      # Agent switching without instruction - forwards remaining text as prompt
+      review:
+        agent: reviewer  # Any text after /review is sent to the reviewer agent
 ```
+
+
+### Command Formats
+
+Commands support two formats:
+
+1. **Simple string format**: The string becomes the instruction sent to the current agent
+   ```yaml
+   df: "Check disk space"
+   ```
+
+2. **Advanced object format**: Supports agent switching and optional instructions
+   ```yaml
+   plan:
+     agent: planner           # Required: name of sub-agent to switch to
+     instruction: "Plan: $1"  # Optional: prompt to send after switching
+     description: "Switch to planning mode"  # Optional: shown in help text
+   ```
+
+When `agent` is set without `instruction`, any text typed after the slash command (e.g., `/plan build a web app`) is forwarded as a prompt to the target agent. The target agent must be listed in the current agent's `sub_agents` array.
 
 ```bash
 # Run commands from the CLI

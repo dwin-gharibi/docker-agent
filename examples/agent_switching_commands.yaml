@@ -1,0 +1,63 @@
+#!/usr/bin/env docker agent run
+
+# This example demonstrates slash commands that switch the active agent.
+# Type "/plan" in the TUI to hand the conversation off to the planner sub-agent,
+# "/review" to switch to the reviewer, and "/back" to return to the root agent.
+#
+# Anything typed after the slash command (e.g. "/plan add a logout button") is
+# forwarded as the first user prompt to the target agent.
+
+models:
+  claude:
+    provider: anthropic
+    model: claude-sonnet-4-5
+
+agents:
+  root:
+    model: claude
+    description: The default agent. Implements the work once a plan exists.
+    instruction: |
+      You are the implementation agent. You write and edit code.
+      If the user asks for a plan or design discussion, use the /plan command
+      to switch to the planner sub-agent.
+    sub_agents:
+      - planner
+      - reviewer
+    toolsets:
+      - type: filesystem
+      - type: shell
+    commands:
+      plan:
+        description: "Hand off to the planner sub-agent"
+        agent: planner
+      review:
+        description: "Hand off to the reviewer sub-agent"
+        agent: reviewer
+
+  planner:
+    model: claude
+    description: Plans the work before implementation.
+    instruction: |
+      You are the planning agent. Ask clarifying questions, then produce a
+      step-by-step plan in markdown. Do not write code.
+    sub_agents:
+      - root
+    commands:
+      back:
+        description: "Return to the root agent"
+        agent: root
+
+  reviewer:
+    model: claude
+    description: Reviews local changes for quality and security.
+    instruction: |
+      You review the local Git changes and provide concise, actionable feedback
+      on code quality, security, and maintainability.
+    sub_agents:
+      - root
+    toolsets:
+      - type: shell
+    commands:
+      back:
+        description: "Return to the root agent"
+        agent: root

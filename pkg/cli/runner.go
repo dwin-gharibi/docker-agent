@@ -103,7 +103,14 @@ func Run(ctx context.Context, out *Printer, cfg Config, rt runtime.Runtime, sess
 			return nil
 		}
 
-		userMsg, attachedPath := PrepareUserMessage(ctx, rt, userInput, cfg.AttachmentPath)
+		userMsg, attachedPath, err := PrepareUserMessage(ctx, rt, userInput, cfg.AttachmentPath)
+		if err != nil {
+			return fmt.Errorf("failed to prepare message: %w", err)
+		}
+		if userMsg == nil {
+			// Agent-only command with no content - agent switched but no message to send
+			return nil
+		}
 		sess.AddMessage(userMsg)
 		sess.AddAttachedFile(attachedPath)
 
@@ -315,6 +322,10 @@ func Run(ctx context.Context, out *Printer, cfg Config, rt runtime.Runtime, sess
 // a user message with optional image attachment. This is the common flow for
 // both TUI and CLI modes.
 //
+// PrepareUserMessage resolves commands, parses /attach directives, and creates
+// a user message with optional image attachment. This is the common flow for
+// both TUI and CLI modes.
+//
 // Parameters:
 //   - ctx: context for command resolution
 //   - rt: runtime for command resolution
@@ -323,11 +334,27 @@ func Run(ctx context.Context, out *Printer, cfg Config, rt runtime.Runtime, sess
 //
 // Returns the prepared session.Message ready to be added to the session, plus
 // the absolute path of the file that was actually attached (empty when no
-// attachment was used). Callers should pass that path to
-// session.Session.AddAttachedFile so sub-agents inherit the file context.
-func PrepareUserMessage(ctx context.Context, rt runtime.Runtime, userInput, globalAttachPath string) (*session.Message, string) {
-	// Resolve any /command to its prompt text
+// attachment was used), and an error if agent switching fails. Callers should
+// pass the attachment path to session.Session.AddAttachedFile so sub-agents
+// inherit the file context.
+func PrepareUserMessage(ctx context.Context, rt runtime.Runtime, userInput, globalAttachPath string) (*session.Message, string, error) {
+	// Resolve any /command to its prompt text BEFORE switching agents.
+	// This ensures the command is looked up in the original agent's command table.
 	resolvedContent := runtime.ResolveCommand(ctx, rt, userInput)
+
+	// Switch the active agent if the /command targets a sub-agent.
+	// This must happen before the message is added to the session so the
+	// next runtime turn runs on the right agent.
+	if cmd, _, ok := runtime.LookupCommand(ctx, rt, userInput); ok && cmd.Agent != "" {
+		if err := rt.SetCurrentAgent(cmd.Agent); err != nil {
+			slog.WarnContext(ctx, "Failed to switch agent for /command", "agent", cmd.Agent, "error", err)
+			return nil, "", fmt.Errorf("switch agent %q: %w", cmd.Agent, err)
+		}
+		// Agent-only command with no trailing args: switch but send no message.
+		if resolvedContent == "" {
+			return nil, "", nil
+		}
+	}
 
 	// Parse for /attach commands in the message
 	messageText, attachPath := ParseAttachCommand(resolvedContent)
@@ -335,11 +362,10 @@ func PrepareUserMessage(ctx context.Context, rt runtime.Runtime, userInput, glob
 	// Use either the per-message attachment or the global one
 	finalAttachPath := cmp.Or(attachPath, globalAttachPath)
 
-	return CreateUserMessageWithAttachment(ctx, messageText, finalAttachPath)
+	msg, attachedPath := CreateUserMessageWithAttachment(ctx, messageText, finalAttachPath)
+	return msg, attachedPath, nil
 }
 
-// ParseAttachCommand parses user input for /attach commands
-// Returns the message text (with /attach commands removed) and the attachment path
 func ParseAttachCommand(userInput string) (messageText, attachPath string) {
 	lines := strings.Split(userInput, "\n")
 	var messageLines []string

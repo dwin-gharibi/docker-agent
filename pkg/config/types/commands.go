@@ -19,6 +19,12 @@ import (
 //	  instruction: |
 //	    Fix the lint issues reported by: !`golangci-lint run`
 //	    Focus on files: $1
+//
+// Agent-switching format (object value):
+//
+//	plan:
+//	  description: "Hand off to the planner sub-agent"
+//	  agent: planner
 type Command struct {
 	// Description is shown in completion dialogs and help text.
 	// For simple format commands, this is empty and the instruction is used for display.
@@ -29,15 +35,30 @@ type Command struct {
 	// - Bang commands: !`command` (executed and output inserted)
 	// - Positional arguments: $1, $2, etc.
 	Instruction string `json:"instruction,omitempty"`
+
+	// Agent, when set, makes the command switch the active agent to the named
+	// sub-agent before any (optional) instruction is sent. This lets users
+	// hand off to a different agent with a single slash command, e.g. /plan
+	// to switch to the "planner" sub-agent.
+	Agent string `json:"agent,omitempty"`
 }
 
 // DisplayText returns the text to show in completion dialogs.
-// Returns Description if available, otherwise truncates the Instruction.
+// It returns Description when available, otherwise the Instruction. For
+// agent-only commands (no instruction or description), it falls back to a
+// short "switch to <agent>" hint so the completion dialog still has
+// something meaningful to show.
 func (c Command) DisplayText() string {
 	if c.Description != "" {
 		return c.Description
 	}
-	return c.Instruction
+	if c.Instruction != "" {
+		return c.Instruction
+	}
+	if c.Agent != "" {
+		return "Switch to " + c.Agent
+	}
+	return ""
 }
 
 // Commands represents a set of named prompts for quick-starting conversations.
@@ -113,7 +134,7 @@ func (c *Commands) UnmarshalYAML(unmarshal func(any) error) error {
 
 // parseCommandValue parses a command value which can be either:
 // - a simple string (becomes the instruction)
-// - a map with description/instruction fields.
+// - a map with description/instruction/agent fields.
 func parseCommandValue(v any) (Command, error) {
 	switch val := v.(type) {
 	case string:
@@ -121,15 +142,20 @@ func parseCommandValue(v any) (Command, error) {
 	case map[string]any:
 		desc, _ := val["description"].(string)
 		inst, _ := val["instruction"].(string)
+		agent, _ := val["agent"].(string)
 
-		if inst == "" && desc == "" {
-			return Command{}, errors.New("command must have at least 'instruction' or 'description'")
+		if inst == "" && desc == "" && agent == "" {
+			return Command{}, errors.New("command must have at least 'instruction', 'description' or 'agent'")
 		}
-		if inst == "" {
+		// Fallback: if no instruction is provided but we have a description (and no
+		// agent target), use the description as the instruction. This allows shorthand
+		// command definitions like `{"cmd": "Do something"}` where the description
+		// doubles as the instruction text.
+		if inst == "" && agent == "" {
 			inst = desc
 		}
 
-		return Command{Description: desc, Instruction: inst}, nil
+		return Command{Description: desc, Instruction: inst, Agent: agent}, nil
 	default:
 		return Command{}, fmt.Errorf("invalid command value type: %T", v)
 	}

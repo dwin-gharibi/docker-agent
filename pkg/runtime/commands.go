@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/docker/docker-agent/pkg/config/types"
 	"github.com/docker/docker-agent/pkg/js"
 	"github.com/docker/docker-agent/pkg/tools"
 )
@@ -17,6 +18,27 @@ import (
 // argsPlaceholderRegex matches ${args...} patterns to check if args are used.
 // This includes ${args}, ${args[N]}, ${args.join(...)}, ${args.length}, etc.
 var argsPlaceholderRegex = regexp.MustCompile(`\$\{args[^}]*\}`)
+
+// LookupCommand parses userInput as a /command invocation and returns the
+// matching command along with its trailing arguments. The boolean is false
+// when userInput doesn't start with '/' or doesn't match a configured
+// command. Callers that need both the resolved instruction and the original
+// command metadata (e.g. its target agent) typically call LookupCommand to
+// inspect the command before calling ResolveCommand.
+func LookupCommand(ctx context.Context, rt Runtime, userInput string) (cmd types.Command, rest string, ok bool) {
+	if !strings.HasPrefix(userInput, "/") {
+		return types.Command{}, "", false
+	}
+
+	head, tail, _ := strings.Cut(userInput, " ")
+	commandName := head[1:]
+
+	command, found := rt.CurrentAgentInfo(ctx).Commands[commandName]
+	if !found {
+		return types.Command{}, "", false
+	}
+	return command, tail, true
+}
 
 // ResolveCommand transforms a /command into its expanded instruction text.
 // It processes:
@@ -26,20 +48,26 @@ var argsPlaceholderRegex = regexp.MustCompile(`\$\{args[^}]*\}`)
 //   - ${args[0]}, ${args[1]}, etc. for positional arguments
 //   - ${args} or ${args.join(" ")} for all arguments
 //   - ${tool({...})} for tool calls
+//
+// For agent-switching commands (those declaring `agent: <name>` and no
+// instruction), ResolveCommand returns the trailing arguments verbatim so the
+// caller can forward them to the target sub-agent after switching. When the
+// command has no instruction and no arguments, the result is the empty
+// string, signalling "no message to send".
 func ResolveCommand(ctx context.Context, rt Runtime, userInput string) string {
-	if !strings.HasPrefix(userInput, "/") {
-		return userInput
-	}
-
-	cmd, rest, _ := strings.Cut(userInput, " ")
-	commandName := cmd[1:] // Remove leading "/"
-
-	command, found := rt.CurrentAgentInfo(ctx).Commands[commandName]
-	if !found {
+	command, rest, ok := LookupCommand(ctx, rt, userInput)
+	if !ok {
 		return userInput
 	}
 
 	instruction := command.Instruction
+
+	// Agent-only commands (no instruction): forward the trailing args verbatim
+	// so the target sub-agent receives the user's original prompt.
+	if instruction == "" {
+		return rest
+	}
+
 	args := tokenize(rest)
 
 	// Execute JavaScript expressions (${...} syntax) with args array

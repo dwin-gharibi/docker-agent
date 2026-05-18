@@ -156,7 +156,15 @@ func (a *App) SendFirstMessage() tea.Cmd {
 	cmds := []tea.Cmd{
 		func() tea.Msg {
 			// Use the shared PrepareUserMessage function for consistent attachment handling
-			userMsg, attachedPath := cli.PrepareUserMessage(context.Background(), a.runtime, *a.firstMessage, a.firstMessageAttach)
+			userMsg, attachedPath, err := cli.PrepareUserMessage(context.Background(), a.runtime, *a.firstMessage, a.firstMessageAttach)
+			if err != nil {
+				slog.Error("Failed to prepare first message", "error", err)
+				return nil
+			}
+			if userMsg == nil {
+				// Agent-only command with no content - agent switched but no message to send
+				return nil
+			}
 			// Inherit the attachment in any sub-session created by this turn.
 			a.session.AddAttachedFile(attachedPath)
 
@@ -299,6 +307,15 @@ func (a *App) ExecuteMCPPrompt(ctx context.Context, promptName string, arguments
 // ResolveCommand converts /command to its prompt text
 func (a *App) ResolveCommand(ctx context.Context, userInput string) string {
 	return runtime.ResolveCommand(ctx, a.runtime, userInput)
+}
+
+// LookupCommand parses userInput as a /command invocation and returns the
+// matching command, the trailing arguments, and whether a match was found.
+// Callers that want to act on command metadata (for example switching to a
+// sub-agent declared via the `agent:` field) should call this before
+// ResolveCommand to inspect the raw command.
+func (a *App) LookupCommand(ctx context.Context, userInput string) (types.Command, string, bool) {
+	return runtime.LookupCommand(ctx, a.runtime, userInput)
 }
 
 // EmitStartupInfo emits initial agent, team, and toolset information to the provided channel

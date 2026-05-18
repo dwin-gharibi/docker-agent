@@ -623,3 +623,64 @@ func TestResolveCommand_ArgsSlice(t *testing.T) {
 	result := ResolveCommand(t.Context(), rt, "/test first second third")
 	assert.Equal(t, "Rest: second third", result)
 }
+
+func TestLookupCommand_AgentTarget(t *testing.T) {
+	t.Parallel()
+
+	rt := &mockRuntime{
+		commands: types.Commands{
+			"plan": types.Command{
+				Description: "Hand off to the planner",
+				Agent:       "planner",
+			},
+		},
+	}
+
+	cmd, rest, ok := LookupCommand(t.Context(), rt, "/plan add a logout button")
+	assert.True(t, ok)
+	assert.Equal(t, "planner", cmd.Agent)
+	assert.Empty(t, cmd.Instruction)
+	assert.Equal(t, "add a logout button", rest)
+}
+
+func TestLookupCommand_NotACommand(t *testing.T) {
+	t.Parallel()
+
+	rt := &mockRuntime{commands: types.Commands{}}
+
+	_, _, ok := LookupCommand(t.Context(), rt, "hello there")
+	assert.False(t, ok)
+}
+
+func TestResolveCommand_AgentOnlyForwardsArgs(t *testing.T) {
+	t.Parallel()
+
+	rt := &mockRuntime{
+		commands: types.Commands{
+			"plan": types.Command{Agent: "planner"},
+		},
+	}
+
+	// With trailing args: forward verbatim to the target agent.
+	assert.Equal(t, "design a login flow", ResolveCommand(t.Context(), rt, "/plan design a login flow"))
+	// Without trailing args: empty so no message is sent after the switch.
+	assert.Empty(t, ResolveCommand(t.Context(), rt, "/plan"))
+}
+
+func TestResolveCommand_AgentWithInstruction(t *testing.T) {
+	t.Parallel()
+
+	rt := &mockRuntime{
+		commands: types.Commands{
+			"plan": types.Command{
+				Instruction: "Plan the work for: ${args.join(\" \")}",
+				Agent:       "planner",
+			},
+		},
+	}
+
+	// When both instruction and agent are set, the instruction wins (the
+	// caller is responsible for switching the agent before sending it).
+	result := ResolveCommand(t.Context(), rt, "/plan add login")
+	assert.Equal(t, "Plan the work for: add login", result)
+}

@@ -624,8 +624,43 @@ func (m *appModel) handleOpenURL(url string) (tea.Model, tea.Cmd) {
 }
 
 func (m *appModel) handleAgentCommand(command string) (tea.Model, tea.Cmd) {
-	resolvedCommand := m.application.ResolveCommand(context.Background(), command)
-	return m, core.CmdHandler(messages.SendMsg{Content: resolvedCommand})
+	ctx := context.Background()
+
+	// Inspect the command before resolving so we can detect /commands that
+	// switch to a sub-agent. For those, we switch first and only then send
+	// the resolved message — otherwise the message would be processed by
+	// the previous agent.
+	cmd, _, ok := m.application.LookupCommand(ctx, command)
+	resolved := m.application.ResolveCommand(ctx, command)
+
+	var cmds []tea.Cmd
+	switchSucceeded := true
+	if ok && cmd.Agent != "" && cmd.Agent != m.sessionState.CurrentAgentName() {
+		// Attempt to switch agents. If the switch fails, handleSwitchAgent
+		// returns an error notification command. We check if the agent actually
+		// changed to determine success, rather than relying on the command type.
+		prevAgent := m.sessionState.CurrentAgentName()
+		switched, switchCmd := m.handleSwitchAgent(cmd.Agent)
+		var ok bool
+		if m, ok = switched.(*appModel); !ok {
+			// This should never happen, but if it does, log and continue with the original model
+			slog.WarnContext(ctx, "handleSwitchAgent returned unexpected type", "type", fmt.Sprintf("%T", switched))
+			switchSucceeded = false
+		} else {
+			// Check if the agent actually changed to determine if the switch succeeded.
+			// If it failed, we must not send the message to the wrong agent.
+			switchSucceeded = m.sessionState.CurrentAgentName() != prevAgent
+		}
+		if switchCmd != nil {
+			cmds = append(cmds, switchCmd)
+		}
+	}
+
+	if resolved != "" && switchSucceeded {
+		cmds = append(cmds, core.CmdHandler(messages.SendMsg{Content: resolved}))
+	}
+
+	return m, tea.Batch(cmds...)
 }
 
 func (m *appModel) handleAttachFile(filePath string) (tea.Model, tea.Cmd) {
