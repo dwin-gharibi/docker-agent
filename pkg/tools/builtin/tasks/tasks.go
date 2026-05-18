@@ -12,14 +12,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/docker/docker-agent/pkg/tools/toolsetpath"
-
 	"github.com/google/uuid"
 
 	"github.com/docker/docker-agent/pkg/config"
 	"github.com/docker/docker-agent/pkg/config/latest"
 	"github.com/docker/docker-agent/pkg/path"
 	"github.com/docker/docker-agent/pkg/tools"
+	"github.com/docker/docker-agent/pkg/tools/toolsetpath"
 )
 
 const (

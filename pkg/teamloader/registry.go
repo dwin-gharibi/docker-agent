@@ -117,4 +117,3 @@ func (r *toolsetRegistry) CreateTool(ctx context.Context, toolset latest.Toolset
 	}
 	return tools.WithName(ts, cmp.Or(toolset.Name, toolset.Type)), nil
 }
-

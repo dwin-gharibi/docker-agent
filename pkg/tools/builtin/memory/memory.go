@@ -9,13 +9,13 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/docker/docker-agent/pkg/tools/toolsetpath"
 	"github.com/docker/docker-agent/pkg/config"
 	"github.com/docker/docker-agent/pkg/config/latest"
 	"github.com/docker/docker-agent/pkg/memory/database"
 	"github.com/docker/docker-agent/pkg/memory/database/sqlite"
 	"github.com/docker/docker-agent/pkg/paths"
 	"github.com/docker/docker-agent/pkg/tools"
+	"github.com/docker/docker-agent/pkg/tools/toolsetpath"
 )
 
 const (
