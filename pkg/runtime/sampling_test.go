@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -116,6 +117,55 @@ func TestSamplingMessagesToChat(t *testing.T) {
 			req:     &mcp.CreateMessageParams{},
 			wantErr: true,
 		},
+		{
+			name: "system-prompt-only request is rejected",
+			req: &mcp.CreateMessageParams{
+				SystemPrompt: "no messages, only a system prompt",
+			},
+			wantErr: true,
+		},
+		{
+			name: "nil message entry is rejected",
+			req: &mcp.CreateMessageParams{
+				Messages: []*mcp.SamplingMessage{nil},
+			},
+			wantErr: true,
+		},
+		{
+			name: "oversize text block is rejected",
+			req: &mcp.CreateMessageParams{
+				Messages: []*mcp.SamplingMessage{
+					{Role: "user", Content: &mcp.TextContent{Text: strings.Repeat("a", maxSamplingTextBytes+1)}},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "oversize image block is rejected",
+			req: &mcp.CreateMessageParams{
+				Messages: []*mcp.SamplingMessage{
+					{Role: "user", Content: &mcp.ImageContent{Data: make([]byte, maxSamplingBinaryBytes+1), MIMEType: "image/png"}},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "oversize system prompt is rejected",
+			req: &mcp.CreateMessageParams{
+				SystemPrompt: strings.Repeat("a", maxSamplingTextBytes+1),
+				Messages: []*mcp.SamplingMessage{
+					{Role: "user", Content: &mcp.TextContent{Text: "hi"}},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "too many messages is rejected",
+			req: &mcp.CreateMessageParams{
+				Messages: tooManyMessages(maxSamplingMessages + 1),
+			},
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -131,6 +181,14 @@ func TestSamplingMessagesToChat(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func tooManyMessages(n int) []*mcp.SamplingMessage {
+	out := make([]*mcp.SamplingMessage, n)
+	for i := range out {
+		out[i] = &mcp.SamplingMessage{Role: "user", Content: &mcp.TextContent{Text: "x"}}
+	}
+	return out
 }
 
 func TestStopReasonMapping(t *testing.T) {
@@ -153,4 +211,11 @@ func TestStopReasonMapping(t *testing.T) {
 			assert.Equal(t, tt.want, stopReason(tt.in))
 		})
 	}
+}
+
+func TestDataURL(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "data:image/png;base64,UE5HQllURVM=", dataURL("image/png", []byte("PNGBYTES")))
+	assert.Equal(t, "data:application/octet-stream;base64,YQ==", dataURL("", []byte("a")))
 }
