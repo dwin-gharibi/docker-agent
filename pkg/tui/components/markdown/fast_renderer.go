@@ -18,6 +18,7 @@ import (
 	runewidth "github.com/mattn/go-runewidth"
 
 	"github.com/docker/docker-agent/pkg/concurrent"
+	"github.com/docker/docker-agent/pkg/lrucache"
 	"github.com/docker/docker-agent/pkg/tui/styles"
 )
 
@@ -164,7 +165,7 @@ func ResetStyles() {
 	chromaStyleCache.Clear()
 
 	syntaxHighlightCacheMu.Lock()
-	syntaxHighlightCache.clear()
+	syntaxHighlightCache.Clear()
 	syntaxHighlightCacheMu.Unlock()
 }
 
@@ -2375,9 +2376,10 @@ var (
 
 	// Cache for syntax highlighting results to avoid re-tokenizing unchanged code blocks.
 	// Uses an LRU cache bounded to 128 entries to prevent unbounded memory growth
-	// in long-running TUI sessions with many unique code blocks.
-	syntaxHighlightCache   = newLRUCache[syntaxCacheKey, []token](syntaxHighlightCacheSize)
-	syntaxHighlightCacheMu sync.RWMutex
+	// in long-running TUI sessions with many unique code blocks. The mutex is a
+	// regular Mutex (not RWMutex) because LRU.Get mutates the recency list.
+	syntaxHighlightCache   = lrucache.New[syntaxCacheKey, []token](syntaxHighlightCacheSize)
+	syntaxHighlightCacheMu sync.Mutex
 )
 
 const (
@@ -2389,17 +2391,17 @@ const (
 func (p *parser) syntaxHighlight(code, lang string) []token {
 	cacheKey := syntaxCacheKey{lang: lang, code: code}
 
-	syntaxHighlightCacheMu.RLock()
-	if cached, ok := syntaxHighlightCache.get(cacheKey); ok {
-		syntaxHighlightCacheMu.RUnlock()
+	syntaxHighlightCacheMu.Lock()
+	if cached, ok := syntaxHighlightCache.Get(cacheKey); ok {
+		syntaxHighlightCacheMu.Unlock()
 		return cached
 	}
-	syntaxHighlightCacheMu.RUnlock()
+	syntaxHighlightCacheMu.Unlock()
 
 	tokens := p.doSyntaxHighlight(code, lang)
 
 	syntaxHighlightCacheMu.Lock()
-	syntaxHighlightCache.put(cacheKey, tokens)
+	syntaxHighlightCache.Put(cacheKey, tokens)
 	syntaxHighlightCacheMu.Unlock()
 
 	return tokens

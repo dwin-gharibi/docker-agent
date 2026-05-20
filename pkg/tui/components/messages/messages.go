@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/docker/docker-agent/pkg/chat"
+	"github.com/docker/docker-agent/pkg/lrucache"
 	"github.com/docker/docker-agent/pkg/runtime"
 	"github.com/docker/docker-agent/pkg/session"
 	"github.com/docker/docker-agent/pkg/tools"
@@ -91,6 +92,13 @@ type renderedItem struct {
 	height int      // Height in lines
 }
 
+// renderedItemsCacheSize bounds the number of message renderings cached in
+// memory. Each entry can hold large strings (e.g. big tool results), so an
+// unbounded cache grows linearly with session length and message size. When
+// the cap is exceeded, the least recently rendered entry is evicted and will
+// be re-rendered on demand.
+const renderedItemsCacheSize = 500
+
 // blockIDCounter generates unique IDs for reasoning blocks.
 var blockIDCounter atomic.Uint64
 
@@ -107,15 +115,15 @@ type model struct {
 	height   int
 
 	// Height tracking system fields
-	scrollOffset      int                    // Current scroll position in lines
-	bottomSlack       int                    // Extra blank lines added after content shrinks
-	slackAnimationSub animation.Subscription // Subscription to animation ticks while slack > 0
-	renderedLines     []string               // Cached rendered content as lines (avoids split/join per frame)
-	renderedItems     map[int]renderedItem   // Cache of rendered items with positions
-	urlSpans          *urlSpanCache          // Cached URL spans per rendered line
-	lineOffsets       []int                  // Prefix-sum: lineOffsets[i] = starting global line of view i
-	totalHeight       int                    // Total height of all content in lines
-	renderDirty       bool                   // True when rendered content needs rebuild
+	scrollOffset      int                              // Current scroll position in lines
+	bottomSlack       int                              // Extra blank lines added after content shrinks
+	slackAnimationSub animation.Subscription           // Subscription to animation ticks while slack > 0
+	renderedLines     []string                         // Cached rendered content as lines (avoids split/join per frame)
+	renderedItems     *lrucache.LRU[int, renderedItem] // LRU cache of rendered items (bounded to renderedItemsCacheSize)
+	urlSpans          *urlSpanCache                    // Cached URL spans per rendered line
+	lineOffsets       []int                            // Prefix-sum: lineOffsets[i] = starting global line of view i
+	totalHeight       int                              // Total height of all content in lines
+	renderDirty       bool                             // True when rendered content needs rebuild
 
 	selection selectionState
 
@@ -164,7 +172,7 @@ func newModel(width, height int, sessionState *service.SessionState) *model {
 	return &model{
 		width:                width,
 		height:               height,
-		renderedItems:        make(map[int]renderedItem),
+		renderedItems:        lrucache.New[int, renderedItem](renderedItemsCacheSize),
 		urlSpans:             newURLSpanCache(),
 		sessionState:         sessionState,
 		scrollview:           sv,
@@ -1045,7 +1053,7 @@ func (m *model) renderItem(index int, view layout.Model) renderedItem {
 
 	shouldCache := !isSelected && !isHovered && m.shouldCacheMessage(index)
 	if shouldCache {
-		if cached, exists := m.renderedItems[index]; exists {
+		if cached, exists := m.renderedItems.Get(index); exists {
 			return cached
 		}
 	}
@@ -1059,7 +1067,7 @@ func (m *model) renderItem(index int, view layout.Model) renderedItem {
 	item := renderedItem{view: rendered, lines: lines, height: len(lines)}
 
 	if shouldCache {
-		m.renderedItems[index] = item
+		m.renderedItems.Put(index, item)
 	}
 
 	return item
@@ -1162,13 +1170,13 @@ func (m *model) ensureAllItemsRendered() {
 
 func (m *model) invalidateItem(index int) {
 	if m.shouldCacheMessage(index) {
-		delete(m.renderedItems, index)
+		m.renderedItems.Delete(index)
 	}
 	m.renderDirty = true
 }
 
 func (m *model) invalidateAllItems() {
-	m.renderedItems = make(map[int]renderedItem)
+	m.renderedItems.Clear()
 	m.renderedLines = nil
 	m.lineOffsets = nil
 	m.totalHeight = 0
@@ -1308,7 +1316,7 @@ func (m *model) LoadFromSession(sess *session.Session) tea.Cmd {
 
 	m.messages = nil
 	m.views = nil
-	m.renderedItems = make(map[int]renderedItem)
+	m.renderedItems.Clear()
 	m.renderedLines = nil
 	m.scrollOffset = 0
 	m.totalHeight = 0

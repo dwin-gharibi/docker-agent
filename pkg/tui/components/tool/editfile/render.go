@@ -15,6 +15,7 @@ import (
 	"github.com/mattn/go-runewidth"
 
 	"github.com/docker/docker-agent/pkg/concurrent"
+	"github.com/docker/docker-agent/pkg/lrucache"
 	"github.com/docker/docker-agent/pkg/tools"
 	"github.com/docker/docker-agent/pkg/tools/builtin/filesystem"
 	"github.com/docker/docker-agent/pkg/tui/styles"
@@ -25,6 +26,12 @@ const (
 	tabWidth     = 4
 	lineNumWidth = 5
 	minWidth     = 80
+
+	// renderCacheSize bounds the number of cached edit_file renderings to
+	// avoid unbounded memory growth in long sessions where the agent makes
+	// many edits. Each entry holds a fully rendered diff string keyed by the
+	// tool call ID, which is unique per call.
+	renderCacheSize = 64
 )
 
 type toolRenderCache struct {
@@ -42,8 +49,10 @@ type toolRenderCache struct {
 }
 
 var (
-	cache   = make(map[string]*toolRenderCache) // keyed by toolCallID
-	cacheMu sync.RWMutex
+	// cacheMu guards both the LRU and the per-entry fields. A regular Mutex
+	// (not RWMutex) is used because LRU.Get mutates the recency list.
+	cache   = lrucache.New[string, *toolRenderCache](renderCacheSize)
+	cacheMu sync.Mutex
 
 	lexerCache concurrent.Map[string, chroma.Lexer]
 )
@@ -52,9 +61,10 @@ var (
 // Call this when the theme changes to pick up new colors.
 func InvalidateCaches() {
 	cacheMu.Lock()
-	for _, c := range cache {
+	cache.Range(func(_ string, c *toolRenderCache) bool {
 		c.renderCached = false
-	}
+		return true
+	})
 	cacheMu.Unlock()
 }
 
@@ -71,37 +81,29 @@ type linePair struct {
 }
 
 func getOrCreateCache(toolCallID string) *toolRenderCache {
-	cacheMu.RLock()
-	if c, ok := cache[toolCallID]; ok {
-		cacheMu.RUnlock()
-		return c
-	}
-	cacheMu.RUnlock()
-
 	cacheMu.Lock()
 	defer cacheMu.Unlock()
-	// Double-check after acquiring write lock
-	if c, ok := cache[toolCallID]; ok {
+	if c, ok := cache.Get(toolCallID); ok {
 		return c
 	}
 	c := &toolRenderCache{}
-	cache[toolCallID] = c
+	cache.Put(toolCallID, c)
 	return c
 }
 
 func renderEditFile(toolCall tools.ToolCall, width int, splitView bool, toolStatus types.ToolStatus) string {
 	c := getOrCreateCache(toolCall.ID)
 
-	cacheMu.RLock()
+	cacheMu.Lock()
 	if c.renderCached &&
 		c.renderedWidth == width &&
 		c.renderedSplit == splitView &&
 		c.renderedStatus == toolStatus {
 		result := c.rendered
-		cacheMu.RUnlock()
+		cacheMu.Unlock()
 		return result
 	}
-	cacheMu.RUnlock()
+	cacheMu.Unlock()
 
 	result := renderEditFileUncached(toolCall, width, splitView, toolStatus)
 
@@ -148,13 +150,13 @@ func renderEditFileUncached(toolCall tools.ToolCall, width int, splitView bool, 
 func countDiffLines(toolCall tools.ToolCall, _ types.ToolStatus) (added, removed int) {
 	c := getOrCreateCache(toolCall.ID)
 
-	cacheMu.RLock()
+	cacheMu.Lock()
 	if c.lineCounted {
 		added, removed = c.added, c.removed
-		cacheMu.RUnlock()
+		cacheMu.Unlock()
 		return added, removed
 	}
-	cacheMu.RUnlock()
+	cacheMu.Unlock()
 
 	added, removed = countDiffLinesUncached(toolCall)
 
