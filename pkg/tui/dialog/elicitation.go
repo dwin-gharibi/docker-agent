@@ -164,6 +164,7 @@ func (d *ElicitationDialog) Update(msg tea.Msg) (layout.Model, tea.Cmd) {
 		if d.isTextInputField() {
 			var cmd tea.Cmd
 			d.inputs[d.currentField], cmd = d.inputs[d.currentField].Update(msg)
+			d.ensureFocusVisible()
 			return d, cmd
 		}
 		return d, nil
@@ -263,6 +264,10 @@ func (d *ElicitationDialog) updateCurrentInput(msg tea.KeyPressMsg) (layout.Mode
 		delete(d.fieldErrors, d.currentField)
 		var cmd tea.Cmd
 		d.inputs[d.currentField], cmd = d.inputs[d.currentField].Update(msg)
+		// If the field was below the fold (e.g. the dialog opened scrolled to
+		// the top with a tall message), reveal it as soon as the user starts
+		// typing so they can see what they're entering.
+		d.ensureFocusVisible()
 		return d, cmd
 	}
 	return d, nil
@@ -514,11 +519,15 @@ func (d *ElicitationDialog) View() string {
 	// layout, so we accept the mutation as a render-cache compromise.
 	d.fieldStarts = l.fieldStarts //rubocop:disable Lint/TUIViewPurity // click-zone cache consumed by Update()
 
-	// Configure the scrollview viewport, give it the body, and scroll so the
-	// focused field stays visible.
+	// Configure the scrollview viewport and give it the body. Scroll position
+	// is intentionally not adjusted here: the dialog opens scrolled to the top
+	// (so the user can read the full question/message from the start), and
+	// only changes when the user interacts (focus moves, selection changes,
+	// or scroll keys/wheel). Auto-scrolling on every render would prevent the
+	// user from scrolling back up to see the question header above the
+	// initially focused option/field.
 	d.scrollview.SetSize(l.contentWidth, l.viewport)
 	d.scrollview.SetContent(l.bodyLines, len(l.bodyLines))
-	d.ensureFocusVisible()
 
 	// Tell the scrollview where it lives on screen (for scrollbar drag) and
 	// remember the body's top row for our own mouse click hit-testing.
