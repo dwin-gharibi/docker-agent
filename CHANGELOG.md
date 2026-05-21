@@ -3,6 +3,30 @@
 All notable changes to this project will be documented in this file.
 
 
+## [v1.65.0] - 2026-05-21
+
+This release adds a skills dialog to the TUI and improves HTTP configuration options for API tools, along with proxy handling fixes.
+
+## What's New
+- Adds `/skills` slash command to TUI that displays all available skills with their names, sources, and descriptions
+
+## Improvements
+- Adds timeout and allow_private_ips configuration support to api and openapi tools for consistency with fetch tool
+
+## Bug Fixes
+- Fixes HTTP proxy support for private IPs in SSRF transport to allow configured proxies on private addresses
+
+## Technical Changes
+- Updates configuration documentation and applies minor cleanups
+
+### Pull Requests
+
+- [#2860](https://github.com/docker/docker-agent/pull/2860) - docs: update CHANGELOG.md for v1.64.0
+- [#2863](https://github.com/docker/docker-agent/pull/2863) - feat: add skills dialog to TUI
+- [#2864](https://github.com/docker/docker-agent/pull/2864) - fix: allow configured HTTP proxy on private IPs in SSRF transport
+- [#2865](https://github.com/docker/docker-agent/pull/2865) - feat: add timeout and allow_private_ips support to api and openapi tools
+
+
 ## [v1.64.0] - 2026-05-21
 
 This is a maintenance release with dependency updates and internal improvements.
@@ -2904,3 +2928,5 @@ This release improves the terminal user interface with better error handling and
 [v1.62.0]: https://github.com/docker/docker-agent/releases/tag/v1.62.0
 
 [v1.64.0]: https://github.com/docker/docker-agent/releases/tag/v1.64.0
+
+[v1.65.0]: https://github.com/docker/docker-agent/releases/tag/v1.65.0
