@@ -205,6 +205,77 @@ API keys and secrets are read from environment variables — never stored in con
 
 </div>
 
+## Variable Expansion in Config Fields
+
+docker-agent uses **two different expansion syntaxes** depending on the field. They are not interchangeable: using the wrong syntax in a field is currently a silent no-op, so the literal string is passed through. Tracking issue: [#2615](https://github.com/docker/docker-agent/issues/2615).
+
+### JavaScript template literals — `${env.VAR}`
+
+Used wherever the agent prompt or HTTP traffic is templated. Backed by a JS evaluator, so you also get `||` defaults, ternaries, and tool calls (`${tool({...})}`).
+
+Applies to:
+
+- `agents.<name>.description`
+- `agents.<name>.welcome_message`
+- `agents.<name>.instruction`
+- `agents.<name>.commands.*` (string form and `instruction:` field)
+- `toolsets[*].instruction`
+- `toolsets[*].headers` and `toolsets[*].remote.headers` (MCP, A2A, OpenAPI, fetch, API)
+
+For `api` toolsets, `api_config.endpoint` and `api_config.headers` are also rendered through the JS expander (the same syntax applies).
+
+```yaml
+agents:
+  root:
+    description: "Assistant for ${env.USER || 'guest'}"
+    commands:
+      deploy: "Deploy ${env.PROJECT_NAME || 'app'} to ${env.ENV || 'staging'}"
+    toolsets:
+      - type: openapi
+        url: https://api.example.com
+        headers:
+          Authorization: "Bearer ${env.INTERNAL_TOKEN}"
+```
+
+Undefined variables expand to the empty string.
+
+### Shell-style — `$VAR`, `${VAR}`, `~`
+
+Used only for filesystem paths. Backed by `os.ExpandEnv` plus tilde expansion against the current user's home directory.
+
+Applies to:
+
+- `agents.<name>.toolsets[*].working_dir` (MCP, LSP)
+- `agents.<name>.toolsets[*].path` (memory, tasks)
+- `agents.<name>.toolsets[*].env` values (MCP, shell, script, LSP) — these go through `os.Expand`, not the JS evaluator, so `${env.X}` is **not** recognized here either.
+- The `~` prefix is also accepted in any path-like field documented as such.
+
+```yaml
+agents:
+  root:
+    toolsets:
+      - type: memory
+        path: "~/notes/${PROJECT}/memory.db"
+      - type: mcp
+        command: my-server
+        working_dir: "$HOME/work"
+```
+
+The `${env.VAR}` form is **not** recognized in these path fields today.
+
+### Quick reference
+
+| Field                                         | `${env.X}` | `$X` / `${X}` | `~` |
+| --------------------------------------------- | :--------: | :-----------: | :-: |
+| `description`, `welcome_message`              |     ✓      |       ✗       |  ✗  |
+| `instruction` (agent and toolset)             |     ✓      |       ✗       |  ✗  |
+| `commands.*`                                  |     ✓      |       ✗       |  ✗  |
+| `headers`, `remote.headers`, `api_config.headers` |     ✓      |       ✗       |  ✗  |
+| `working_dir`, `path`                         |     ✗      |       ✓       |  ✓  |
+| `env` values                                  |     ✗      |       ✓       |  ✗  |
+
+When in doubt, prefer `${env.X}` for prompts and headers, and `${X}` (or `$X`) for paths.
+
 ## Validation
 
 docker-agent validates your configuration at startup:
