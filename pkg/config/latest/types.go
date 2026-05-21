@@ -883,7 +883,8 @@ type Toolset struct {
 	// For the `lsp` tool
 	FileTypes []string `json:"file_types,omitempty"`
 
-	// For the `fetch` tool
+	// HTTP timeout in seconds for `fetch`, `api`, and `openapi` toolsets.
+	// Defaults to 30 seconds when omitted.
 	Timeout int `json:"timeout,omitempty"`
 
 	// For the `fetch` tool - allow-list of domains the tool is permitted to fetch.
@@ -898,8 +899,8 @@ type Toolset struct {
 	// `allowed_domains`.
 	BlockedDomains []string `json:"blocked_domains,omitempty" yaml:"blocked_domains,omitempty"`
 
-	// For the `fetch` tool and remote `mcp` toolsets — opt in to dialling
-	// non-public IP addresses.
+	// For the `fetch`, `api`, `openapi` and remote `mcp` toolsets — opt in to
+	// dialling non-public IP addresses.
 	//
 	// By default, protected HTTP clients refuse connections (after DNS
 	// resolution, so DNS rebinding is also blocked) to loopback (127/8,

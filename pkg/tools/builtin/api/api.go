@@ -29,6 +29,8 @@ type ToolSet struct {
 	allowPrivateIPs bool
 }
 
+const defaultHTTPTimeout = 30 * time.Second
+
 // Verify interface compliance
 var (
 	_ tools.ToolSet      = (*ToolSet)(nil)
@@ -129,7 +131,7 @@ func New(apiConfig latest.APIToolConfig, expander *js.Expander, opts ...Option) 
 	t := &ToolSet{
 		config:   apiConfig,
 		expander: expander,
-		timeout:  30 * time.Second,
+		timeout:  defaultHTTPTimeout,
 	}
 	for _, opt := range opts {
 		opt(t)

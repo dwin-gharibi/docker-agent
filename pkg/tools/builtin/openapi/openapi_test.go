@@ -468,9 +468,10 @@ func TestOpenAPITool_RejectsLocalSpecServerURL(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, toolsList, 1)
 
-	// Even though the spec was fetched in unsafe mode, the generated
-	// handler still inherits the unsafe flag — so for the real safety
-	// guarantee we re-run the operation through the production path.
+	// The test constructor opted into private IPs for the spec fetch,
+	// and that opt-in propagates to the generated handlers — so to
+	// validate the production guarantee we re-run the operation through
+	// a freshly-constructed production client (default-deny).
 	prod := New(specServer.URL+"/openapi.json", nil)
 	prodTools, err := prod.Tools(t.Context())
 	require.Error(t, err, "production constructor must refuse a loopback spec server")

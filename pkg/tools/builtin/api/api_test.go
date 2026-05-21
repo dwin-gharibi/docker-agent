@@ -253,7 +253,7 @@ func TestAPITool_AllowPrivateIPsRestoresLegacyBehaviour(t *testing.T) {
 func TestAPITool_TimeoutHonoured(t *testing.T) {
 	t.Parallel()
 
-	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	slow := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		<-r.Context().Done()
 	}))
 	t.Cleanup(slow.Close)
