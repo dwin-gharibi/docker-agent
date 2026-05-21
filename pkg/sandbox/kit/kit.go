@@ -48,6 +48,7 @@ import (
 	"github.com/docker/docker-agent/pkg/paths"
 	"github.com/docker/docker-agent/pkg/promptfiles"
 	"github.com/docker/docker-agent/pkg/skills"
+	"github.com/docker/docker-agent/pkg/toolinstall"
 )
 
 // manifestFile is the on-disk name of the kit's table of contents.
@@ -108,6 +109,30 @@ type Result struct {
 	// don't open holes in the sandbox proxy when no agent could
 	// possibly need them.
 	NeedsToolInstall bool
+
+	// ToolInstallHosts is the sorted, deduplicated set of hostnames
+	// the in-sandbox auto-installer needs to reach in order to install
+	// every auto-installable toolset declared by the agent. It is
+	// populated only when NeedsToolInstall is true.
+	//
+	// Each toolset's package is looked up against the aqua registry
+	// and contributes only the hosts its install path actually uses
+	// (Go module proxy + toolchain bootstrap for go_install packages,
+	// GitHub release hosts for github_release packages, plus the
+	// shared registry-lookup hosts in both cases). When a lookup
+	// fails, [toolinstall.FallbackHosts] is folded in instead so the
+	// install can still succeed at the cost of opening every install
+	// host — callers that want to fail closed should inspect
+	// ToolInstallHostsResolutionErr.
+	ToolInstallHosts []string
+
+	// ToolInstallHostsResolutionErr lists the per-toolset registry
+	// lookup errors encountered while computing ToolInstallHosts.
+	// When non-empty, ToolInstallHosts conservatively contains the
+	// fallback union of every install host so the run can still
+	// proceed; callers can choose stricter behaviour (refuse the run,
+	// surface the error to the user) by checking this slice.
+	ToolInstallHostsResolutionErr []ToolHostError
 }
 
 // Manifest is the kit's table of contents.
@@ -232,10 +257,14 @@ func Build(ctx context.Context, opts Options) (*Result, error) {
 		"prompt_files", len(manifest.PromptFiles),
 		"redactions", len(manifest.Redactions))
 
+	hosts, hostErrs := resolveToolInstallHosts(ctx, cfg)
+
 	return &Result{
-		HostDir:          finalDir,
-		Manifest:         manifest,
-		NeedsToolInstall: needsAutoInstall(cfg),
+		HostDir:                       finalDir,
+		Manifest:                      manifest,
+		NeedsToolInstall:              len(hosts) > 0,
+		ToolInstallHosts:              hosts,
+		ToolInstallHostsResolutionErr: hostErrs,
 	}, nil
 }
 
@@ -814,17 +843,7 @@ func needsAutoInstall(cfg *latestcfg.Config) bool {
 	if cfg == nil {
 		return false
 	}
-	for _, m := range cfg.MCPs {
-		if isAutoInstallable(m.Toolset) {
-			return true
-		}
-	}
-	for _, agent := range cfg.Agents {
-		if slices.ContainsFunc(agent.Toolsets, isAutoInstallable) {
-			return true
-		}
-	}
-	return false
+	return len(collectAutoInstallable(cfg)) > 0
 }
 
 // isAutoInstallable returns true if ts is the kind of toolset
@@ -843,4 +862,116 @@ func isAutoInstallable(ts latestcfg.Toolset) bool {
 		return false
 	}
 	return true
+}
+
+// ToolHostError records a single toolset whose package could not be
+// resolved against the aqua registry while computing the sandbox
+// allowlist. Callers can use it to surface a precise diagnostic to
+// the user ("could not resolve gopls; falling back to the union of
+// every install host") instead of silently degrading the network
+// policy.
+type ToolHostError struct {
+	// Command is the toolset's Command field — the same string the
+	// in-sandbox runtime would auto-install.
+	Command string
+	// Version is the toolset's Version field. Empty means "latest /
+	// resolve by command".
+	Version string
+	// Err is the underlying registry / lookup error.
+	Err error
+}
+
+func (e ToolHostError) Error() string {
+	if e.Version == "" {
+		return fmt.Sprintf("resolving install hosts for %q: %v", e.Command, e.Err)
+	}
+	return fmt.Sprintf("resolving install hosts for %q@%q: %v", e.Command, e.Version, e.Err)
+}
+
+func (e ToolHostError) Unwrap() error { return e.Err }
+
+// resolveToolInstallHosts walks every auto-installable toolset in cfg
+// and returns the merged set of hosts the in-sandbox auto-installer
+// must reach to install them, plus any per-toolset resolution errors.
+//
+// On any resolution error, the conservative fallback union (every
+// install host known to the toolinstall package) is folded in so
+// that the run still succeeds — trading minimisation for
+// availability. Callers that want strict failure behaviour can
+// inspect the returned error slice and refuse to launch.
+//
+// Returns (nil, nil) when cfg has no auto-installable toolset —
+// callers use len(hosts)==0 to mean "don't open any holes".
+func resolveToolInstallHosts(ctx context.Context, cfg *latestcfg.Config) ([]string, []ToolHostError) {
+	if cfg == nil {
+		return nil, nil
+	}
+
+	toolsets := collectAutoInstallable(cfg)
+	if len(toolsets) == 0 {
+		return nil, nil
+	}
+
+	seen := make(map[string]bool)
+	var hosts []string
+	var errs []ToolHostError
+
+	for _, ts := range toolsets {
+		resolved, err := toolinstall.ResolveHosts(ctx, ts.Command, ts.Version)
+		if err != nil {
+			errs = append(errs, ToolHostError{Command: ts.Command, Version: ts.Version, Err: err})
+			continue
+		}
+		for _, h := range resolved {
+			if !seen[h] {
+				seen[h] = true
+				hosts = append(hosts, h)
+			}
+		}
+	}
+
+	if len(errs) > 0 {
+		// Fail-open: fold in the fallback union so the run can still
+		// install. Callers that prefer fail-closed inspect errs.
+		for _, h := range toolinstall.FallbackHosts() {
+			if !seen[h] {
+				seen[h] = true
+				hosts = append(hosts, h)
+			}
+		}
+	}
+
+	sort.Strings(hosts)
+	return hosts, errs
+}
+
+// collectAutoInstallable returns every toolset in cfg whose Command
+// the in-sandbox runtime would push through
+// [toolinstall.EnsureCommand]. Order is deterministic (top-level
+// MCPs by map-key, then per-agent toolsets in declaration order)
+// so the resolution loop's slog output is reproducible.
+func collectAutoInstallable(cfg *latestcfg.Config) []latestcfg.Toolset {
+	var out []latestcfg.Toolset
+
+	names := make([]string, 0, len(cfg.MCPs))
+	for name := range cfg.MCPs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		ts := cfg.MCPs[name].Toolset
+		if isAutoInstallable(ts) {
+			out = append(out, ts)
+		}
+	}
+
+	for _, agent := range cfg.Agents {
+		for _, ts := range agent.Toolsets {
+			if isAutoInstallable(ts) {
+				out = append(out, ts)
+			}
+		}
+	}
+
+	return out
 }

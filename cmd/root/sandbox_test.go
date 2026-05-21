@@ -1,6 +1,7 @@
 package root
 
 import (
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -8,6 +9,8 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/docker/docker-agent/pkg/sandbox/kit"
 )
 
 // TestDockerAgentArgs_NoDuplicateArgs is a regression test for a bug where the
@@ -189,39 +192,62 @@ func TestPrintModelsGateway(t *testing.T) {
 	}
 }
 
-func TestAutoInstallHosts(t *testing.T) {
+func TestPrintToolInstallAllowance(t *testing.T) {
 	t.Parallel()
 
-	// Spot-check the static set: the package hosts the auto-installer
-	// reaches at runtime (Go module proxy, GitHub releases, the toolchain
-	// blob storage backing `go install`) must all be in the allowlist
-	// or the inner agent will see "403 Blocked by network policy" with
-	// no other diagnostic.
-	required := []string{
-		"github.com",
-		"api.github.com",
-		"raw.githubusercontent.com",
-		"objects.githubusercontent.com",
-		"proxy.golang.org",
-		"sum.golang.org",
-		// Go toolchain bootstrap: a module pinning a newer Go than
-		// the sandbox image ships triggers a GOTOOLCHAIN=auto switch
-		// that hits go.dev (discovery) and dl.google.com /
-		// storage.googleapis.com (download).
-		"go.dev",
-		"dl.google.com",
-		"storage.googleapis.com",
-	}
-	for _, host := range required {
-		assert.Contains(t, autoInstallHosts, host,
-			"%s must be in autoInstallHosts so auto-install can reach it inside the sandbox", host)
+	tests := []struct {
+		name    string
+		result  *kit.Result
+		want    string
+		wantNot []string
+	}{
+		{
+			name:   "nil result is silent",
+			result: nil,
+			want:   "",
+		},
+		{
+			name:   "no auto-install is silent",
+			result: &kit.Result{NeedsToolInstall: false},
+			want:   "",
+		},
+		{
+			name: "lists every host on its own line",
+			result: &kit.Result{
+				NeedsToolInstall: true,
+				ToolInstallHosts: []string{
+					"api.github.com", "proxy.golang.org", "sum.golang.org",
+				},
+			},
+			want: "Tool install: agent has at least one MCP/LSP toolset, allowlisting 3 package host(s) in the sandbox proxy:\n" +
+				"  - api.github.com\n" +
+				"  - proxy.golang.org\n" +
+				"  - sum.golang.org\n",
+		},
+		{
+			name: "resolution errors are surfaced after the host list",
+			result: &kit.Result{
+				NeedsToolInstall: true,
+				ToolInstallHosts: []string{"api.github.com"},
+				ToolInstallHostsResolutionErr: []kit.ToolHostError{
+					{Command: "gopls", Version: "golang/tools@v0.21.0", Err: errors.New("boom")},
+				},
+			},
+			want: "Tool install: agent has at least one MCP/LSP toolset, allowlisting 1 package host(s) in the sandbox proxy:\n" +
+				"  - api.github.com\n" +
+				"  ! resolving install hosts for \"gopls\"@\"golang/tools@v0.21.0\": boom (using fallback host set)\n",
+			wantNot: []string{},
+		},
 	}
 
-	// And the list itself must be commaless / spaceless: AllowHosts
-	// rejects entries that look like they could smuggle several rules
-	// past the policy engine.
-	for _, host := range autoInstallHosts {
-		assert.NotContains(t, host, ",", "%q must not contain a comma", host)
-		assert.NotContains(t, host, " ", "%q must not contain whitespace", host)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf strings.Builder
+			printToolInstallAllowance(&buf, tt.result)
+			assert.Equal(t, tt.want, buf.String())
+			for _, ne := range tt.wantNot {
+				assert.NotContains(t, buf.String(), ne)
+			}
+		})
 	}
 }
