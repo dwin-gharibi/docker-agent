@@ -68,5 +68,5 @@ See [Tool Config]({{ '/configuration/tools/#mcp-tools' | relative_url }}) for fu
 <div class="callout callout-tip" markdown="1">
 <div class="callout-title">See also
 </div>
-  <p>For full configuration reference, see <a href="{{ '/configuration/tools/' | relative_url }}">Tool Config</a>. For RAG (document retrieval), see <a href="{{ '/tools/rag/' | relative_url }}">RAG</a>.</p>
+  <p>For full configuration reference, see <a href="{{ '/configuration/tools/' | relative_url }}">Tool Config</a>.</p>
 </div>

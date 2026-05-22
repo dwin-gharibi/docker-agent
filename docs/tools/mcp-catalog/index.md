@@ -56,7 +56,7 @@ The catalog distinguishes three auth flavours:
 - **`api_key`** — The server expects one or more env vars to be set in the agent's environment (e.g. `APIFY_API_KEY`, `BRAVE_API_KEY`). `enable_remote_mcp_server` warns if any required variable is missing — set it, then re-enable the server.
 - **`none`** — No authentication. The server is reachable as soon as it is enabled.
 
-The catalog tells the model which env vars each `api_key` server expects, so it can ask the user up front.
+Search results only carry the auth flavour (`oauth` / `api_key` / `none`); the specific env-var names are surfaced by `enable_remote_mcp_server` when it detects an unset variable, so you may need to enable an `api_key` server once just to learn which variable to set.
 
 ## Example
 
