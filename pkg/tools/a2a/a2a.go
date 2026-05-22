@@ -24,10 +24,6 @@ import (
 	"github.com/docker/docker-agent/pkg/upstream"
 )
 
-// defaultHTTPTimeout matches the 30s default used by the other HTTP-based
-// builtin toolsets (`fetch`, `api`, `openapi`).
-const defaultHTTPTimeout = 30 * time.Second
-
 // Toolset implements tools.ToolSet for A2A remote agents.
 type Toolset struct {
 	name            string
@@ -43,8 +39,9 @@ type Toolset struct {
 // Option configures a Toolset.
 type Option func(*Toolset)
 
-// WithTimeout overrides the default 30s HTTP client timeout used both for
-// fetching the agent card and for streaming messages.
+// WithTimeout overrides the default HTTP client timeout (see
+// [httpclient.DefaultToolHTTPTimeout]) used both for fetching the agent
+// card and for streaming messages.
 func WithTimeout(d time.Duration) Option {
 	return func(t *Toolset) { t.timeout = d }
 }
@@ -84,7 +81,7 @@ func NewToolset(name, url string, headers map[string]string, opts ...Option) *To
 		name:    name,
 		url:     url,
 		headers: headers,
-		timeout: defaultHTTPTimeout,
+		timeout: httpclient.DefaultToolHTTPTimeout,
 	}
 	for _, opt := range opts {
 		opt(t)

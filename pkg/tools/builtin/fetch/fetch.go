@@ -480,7 +480,7 @@ func CreateToolSet(ctx context.Context, toolset latest.Toolset, runConfig *confi
 func New(options ...ToolOption) *ToolSet {
 	tool := &ToolSet{
 		handler: &fetchHandler{
-			timeout: 30 * time.Second,
+			timeout: httpclient.DefaultToolHTTPTimeout,
 		},
 	}
 

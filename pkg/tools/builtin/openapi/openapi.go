@@ -27,8 +27,6 @@ import (
 	"github.com/docker/docker-agent/pkg/useragent"
 )
 
-const defaultHTTPTimeout = 30 * time.Second
-
 // CreateToolSet is used by the tools registry.
 func CreateToolSet(ctx context.Context, toolset latest.Toolset, runConfig *config.RuntimeConfig) (tools.ToolSet, error) {
 	expander := js.NewJsExpander(runConfig.EnvProvider())
@@ -64,8 +62,9 @@ var (
 // Option configures an openapi ToolSet.
 type Option func(*ToolSet)
 
-// WithTimeout overrides the default 30s HTTP client timeout used both for
-// fetching the spec and for the generated tools' HTTP calls.
+// WithTimeout overrides the default HTTP client timeout (see
+// [httpclient.DefaultToolHTTPTimeout]) used both for fetching the spec
+// and for the generated tools' HTTP calls.
 func WithTimeout(d time.Duration) Option {
 	return func(t *ToolSet) { t.timeout = d }
 }
@@ -83,7 +82,7 @@ func New(specURL string, headers map[string]string, opts ...Option) *ToolSet {
 	t := &ToolSet{
 		specURL: specURL,
 		headers: headers,
-		timeout: defaultHTTPTimeout,
+		timeout: httpclient.DefaultToolHTTPTimeout,
 	}
 	for _, opt := range opts {
 		opt(t)
