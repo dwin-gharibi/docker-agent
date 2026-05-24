@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/fatih/color"
+	"github.com/mattn/go-isatty"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -134,15 +135,45 @@ func doInstall(ctx context.Context, command, versionRef string) (string, error) 
 
 // announceInstall prints a single user-visible line to stderr right
 // before downloading a tool, so the user understands what the
-// upcoming `go install` / GitHub-release chatter is about. fatih/color
-// auto-disables when stderr isn't a TTY, so logs and CI output stay
-// plain. We intentionally avoid stdout so this never gets piped into
-// the agent's prompt or programmatic output.
+// upcoming `go install` / GitHub-release chatter is about. We
+// intentionally avoid stdout so this never gets piped into the
+// agent's prompt or programmatic output.
+//
+// fatih/color's global NoColor is computed from stdout, so we cannot
+// rely on it: when stderr is redirected (e.g. `agent run ... 2>log`)
+// stdout may still be a TTY and emit escapes into the log, and when
+// stdout is piped (e.g. `agent run ... | tee log`) but stderr is a
+// TTY, NoColor is true and the styled branch silently degrades to
+// plain text. Decide based on stderr explicitly and force colour on
+// the local *color.Color values; honour NO_COLOR / TERM=dumb.
 func announceInstall(command, pkgName, version string) {
-	bold := color.New(color.Bold).SprintFunc()
-	faint := color.New(color.Faint).SprintFunc()
-	fmt.Fprintf(os.Stderr, "Installing %s %s\n",
-		bold(command), faint(fmt.Sprintf("(%s@%s)", pkgName, version)))
+	if stderrSupportsColor() {
+		// fatih/color's package-level NoColor is set from stdout's TTY
+		// state, so when stdout is piped but stderr is still a TTY the
+		// SprintFunc helpers would silently strip ANSI codes. Force the
+		// local colours on after we've decided stderr can handle them.
+		bold := color.New(color.Bold)
+		bold.EnableColor()
+		faint := color.New(color.Faint)
+		faint.EnableColor()
+		fmt.Fprintf(os.Stderr, "Installing %s %s\n",
+			bold.Sprint(command), faint.Sprintf("(%s@%s)", pkgName, version))
+		return
+	}
+	fmt.Fprintf(os.Stderr, "Installing %s (%s@%s)\n", command, pkgName, version)
+}
+
+// stderrSupportsColor reports whether ANSI escapes are safe to write
+// to os.Stderr.
+func stderrSupportsColor() bool {
+	if os.Getenv("NO_COLOR") != "" || os.Getenv("TERM") == "dumb" {
+		return false
+	}
+	if os.Stderr == nil {
+		return false
+	}
+	fd := os.Stderr.Fd()
+	return isatty.IsTerminal(fd) || isatty.IsCygwinTerminal(fd)
 }
 
 // lookupPackage resolves the aqua package for a command.
