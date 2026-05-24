@@ -221,7 +221,7 @@ What people build with Docker Agent today:
     </div>
     <h3>Data &amp; research</h3>
     <p>Persistent memory, web fetch, RAG over local docs, structured output for downstream pipelines.</p>
-    <a href="{{ '/features/rag/' | relative_url }}">RAG guide →</a>
+    <a href="{{ '/tools/rag/' | relative_url }}">RAG guide →</a>
   </div>
   <div class="usecase">
     <div class="usecase-icon">

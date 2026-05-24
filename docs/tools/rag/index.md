@@ -1,16 +1,16 @@
 ---
-title: "RAG (Retrieval-Augmented Generation)"
+title: "RAG Tool"
 description: "Give your agents access to document knowledge bases with background indexing, multiple retrieval strategies, and hybrid search."
-permalink: /features/rag/
+permalink: /tools/rag/
 ---
 
-# RAG (Retrieval-Augmented Generation)
+# RAG Tool
 
 _Give your agents access to document knowledge bases with background indexing, multiple retrieval strategies, and hybrid search._
 
 ## Overview
 
-RAG lets agents search through your documents to find relevant information before responding. docker-agent supports:
+The `rag` toolset lets agents search through your documents to find relevant information before responding. Knowledge bases are declared once at the top of the config under `rag:` and then referenced from any agent via `type: rag, ref: <name>`. docker-agent supports:
 
 - **Background indexing** — Files are indexed automatically and re-indexed on change
 - **Multiple strategies** — Semantic embeddings, BM25 keyword search, and LLM-enhanced search

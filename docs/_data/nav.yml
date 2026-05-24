@@ -79,6 +79,10 @@
       url: /tools/openapi/
     - title: A2A
       url: /tools/a2a/
+    - title: RAG
+      url: /tools/rag/
+    - title: MCP Catalog
+      url: /tools/mcp-catalog/
 
 - section: Features
   items:
@@ -98,8 +102,6 @@
       url: /features/chat-server/
     - title: Evaluation
       url: /features/evaluation/
-    - title: RAG
-      url: /features/rag/
     - title: Skills
       url: /features/skills/
     - title: Remote MCP Servers

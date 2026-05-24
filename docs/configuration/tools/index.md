@@ -25,13 +25,14 @@ Built-in tools are included with docker-agent and require no external dependenci
 | `lsp` | Language Server Protocol integration | [LSP]({{ '/tools/lsp/' | relative_url }}) |
 | `api` | Custom HTTP API tools | [API]({{ '/tools/api/' | relative_url }}) |
 | `openapi` | Import every operation of an OpenAPI 3.x document as tools | [OpenAPI]({{ '/tools/openapi/' | relative_url }}) |
-| `rag` | Retrieval-augmented generation over indexed sources | [RAG]({{ '/features/rag/' | relative_url }}) |
+| `rag` | Retrieval-augmented generation over indexed sources | [RAG]({{ '/tools/rag/' | relative_url }}) |
 | `model_picker` | Let the agent pick between several models per turn | [Model Picker]({{ '/tools/model-picker/' | relative_url }}) |
 | `user_prompt` | Interactive user input | [User Prompt]({{ '/tools/user-prompt/' | relative_url }}) |
 | `transfer_task` | Delegate to sub-agents (auto-enabled) | [Transfer Task]({{ '/tools/transfer-task/' | relative_url }}) |
 | `background_agents` | Parallel sub-agent dispatch | [Background Agents]({{ '/tools/background-agents/' | relative_url }}) |
 | `handoff` | Local conversation handoff to another agent in the same config (auto-enabled by `handoffs:`) | [Handoff]({{ '/tools/handoff/' | relative_url }}) |
 | `a2a` | A2A remote agent connection | [A2A]({{ '/tools/a2a/' | relative_url }}) |
+| `mcp_catalog` | Discover and activate remote MCP servers from the Docker MCP Catalog on demand | [MCP Catalog]({{ '/tools/mcp-catalog/' | relative_url }}) |
 
 **Example:**
 

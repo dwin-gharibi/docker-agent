@@ -78,7 +78,7 @@ More examples in the [`examples/`](examples/README.md) directory.
 - [Installation](https://docker.github.io/docker-agent/getting-started/installation) · [Quick Start](https://docker.github.io/docker-agent/getting-started/quickstart)
 - [Agents](https://docker.github.io/docker-agent/concepts/agents) · [Models](https://docker.github.io/docker-agent/concepts/models) · [Tools](https://docker.github.io/docker-agent/concepts/tools) · [Multi-Agent](https://docker.github.io/docker-agent/concepts/multi-agent)
 - [Configuration Reference](https://docker.github.io/docker-agent/configuration/overview)
-- [TUI](https://docker.github.io/docker-agent/features/tui) · [CLI](https://docker.github.io/docker-agent/features/cli) · [MCP Mode](https://docker.github.io/docker-agent/features/mcp-mode) · [RAG](https://docker.github.io/docker-agent/features/rag)
+- [TUI](https://docker.github.io/docker-agent/features/tui) · [CLI](https://docker.github.io/docker-agent/features/cli) · [MCP Mode](https://docker.github.io/docker-agent/features/mcp-mode) · [RAG](https://docker.github.io/docker-agent/tools/rag)
 - [Model Providers](https://docker.github.io/docker-agent/providers/overview) · [Docker Model Runner](https://docker.github.io/docker-agent/providers/dmr)
 
 ## Contributing
