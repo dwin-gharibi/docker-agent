@@ -3,6 +3,14 @@ runtime:
   # to remember --sandbox on the command line. An explicit
   # --sandbox=false on the CLI still wins.
   sandbox: true
+  # Hosts the agent's tools need to reach. Unioned with the
+  # auto-discovered tool-install hosts and the configured models
+  # gateway, then added to the sandbox proxy's default-deny
+  # allowlist. Use this for endpoints the aqua-based resolver
+  # can't infer.
+  network_allowlist:
+    - api.example.com
+    - registry.npmjs.org
 
 agents:
   root:

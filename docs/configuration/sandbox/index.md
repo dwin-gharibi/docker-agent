@@ -92,6 +92,31 @@ The rule is the same as for aliases: an explicit `--sandbox=false` on the
 CLI overrides the config default, so you can debug an agent on the host
 without editing its YAML.
 
+### Declare a network allowlist
+
+The runner already opens the [tool install hosts](#network-allowlist) and
+the [models gateway](#how-it-works) automatically, but agents that talk
+to endpoints those resolvers can't infer (custom MCP servers, third-party
+APIs, registries not covered by the aqua resolver) would still see a 403
+from the sandbox proxy on first contact.
+
+Declare those hosts in `runtime.network_allowlist` and they are unioned
+with the inferred set, so the agent can reach them on its first request:
+
+```yaml
+# agent.yaml
+runtime:
+  sandbox: true
+  network_allowlist:
+    - api.example.com
+    - registry.npmjs.org
+```
+
+Each entry is a hostname with an optional `:port` suffix. Commas and
+whitespace are rejected to keep a single entry from smuggling several
+rules into the policy engine. The runner prints the resulting allowlist
+before launch so you can audit exactly which hosts the run opens up.
+
 ## Example
 
 ```yaml

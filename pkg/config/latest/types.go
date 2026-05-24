@@ -39,6 +39,21 @@ type RuntimeDefaults struct {
 	// default — equivalent to passing --sandbox on the command line.
 	// Useful for agents that always need filesystem/network isolation.
 	Sandbox bool `json:"sandbox,omitempty" yaml:"sandbox,omitempty"`
+
+	// NetworkAllowlist is the list of hosts that should be added to
+	// the sandbox's default-deny network proxy when this agent runs in
+	// a sandbox. Each entry is a hostname with an optional ":port"
+	// suffix (e.g. "api.example.com", "registry.npmjs.org:443"). The
+	// list is unioned with the gateway and tool-install hosts the
+	// runner already opens automatically; commas and whitespace are
+	// rejected to keep a single entry from smuggling several rules
+	// into the policy engine.
+	//
+	// Use this when an agent's tools call hosts the auto-installer
+	// can't infer (custom MCP endpoints, third-party APIs, registries
+	// not covered by the aqua resolver, etc.) instead of relying on
+	// the wider fallback host set the kit uses on resolution failures.
+	NetworkAllowlist []string `json:"network_allowlist,omitempty" yaml:"network_allowlist,omitempty"`
 }
 
 // MCPToolset is a reusable MCP server definition stored in the top-level

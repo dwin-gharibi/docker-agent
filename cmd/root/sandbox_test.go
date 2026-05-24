@@ -295,3 +295,51 @@ func TestPeekAgentSandbox(t *testing.T) {
 		assert.False(t, peekAgentSandbox(t.Context(), "/nonexistent/agent.yaml"))
 	})
 }
+
+func TestAgentNetworkAllowlist(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agent.yaml")
+	yamlBody := "runtime:\n" +
+		"  network_allowlist:\n" +
+		"    - api.example.com\n" +
+		"    - registry.npmjs.org:443\n" +
+		"agents:\n  root:\n    model: openai/gpt-4o\n    description: t\n    instruction: t\n"
+	require.NoError(t, os.WriteFile(path, []byte(yamlBody), 0o600))
+
+	assert.Equal(t, []string{"api.example.com", "registry.npmjs.org:443"}, agentNetworkAllowlist(t.Context(), path))
+}
+
+func TestPrintAgentNetworkAllowlist(t *testing.T) {
+	tests := []struct {
+		name  string
+		hosts []string
+		want  string
+	}{
+		{
+			name:  "empty",
+			hosts: nil,
+			want:  "",
+		},
+		{
+			name:  "single host",
+			hosts: []string{"api.example.com"},
+			want: "Agent network allowlist: allowlisting 1 host(s) declared in runtime.network_allowlist:\n" +
+				"  - api.example.com\n",
+		},
+		{
+			name:  "multiple",
+			hosts: []string{"a.example.com", "b.example.com"},
+			want: "Agent network allowlist: allowlisting 2 host(s) declared in runtime.network_allowlist:\n" +
+				"  - a.example.com\n" +
+				"  - b.example.com\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf strings.Builder
+			printAgentNetworkAllowlist(&buf, tt.hosts)
+			assert.Equal(t, tt.want, buf.String())
+		})
+	}
+}

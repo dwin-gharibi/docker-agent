@@ -18,6 +18,7 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/docker/docker-agent/pkg/config"
+	latestcfg "github.com/docker/docker-agent/pkg/config/latest"
 	"github.com/docker/docker-agent/pkg/environment"
 	"github.com/docker/docker-agent/pkg/paths"
 	"github.com/docker/docker-agent/pkg/sandbox"
@@ -31,18 +32,38 @@ import (
 // returns false so the caller falls through to the normal path,
 // which will surface a proper error from the eventual load.
 func peekAgentSandbox(ctx context.Context, agentRef string) bool {
+	cfg := loadAgentConfig(ctx, agentRef)
+	return cfg != nil && cfg.Runtime != nil && cfg.Runtime.Sandbox
+}
+
+// agentNetworkAllowlist returns the hostnames the agent declared in
+// runtime.network_allowlist. Same best-effort contract as
+// peekAgentSandbox: any failure to load the config returns nil so
+// the run continues with the inferred host set only.
+func agentNetworkAllowlist(ctx context.Context, agentRef string) []string {
+	cfg := loadAgentConfig(ctx, agentRef)
+	if cfg == nil || cfg.Runtime == nil {
+		return nil
+	}
+	return cfg.Runtime.NetworkAllowlist
+}
+
+// loadAgentConfig is the shared best-effort loader behind
+// peekAgentSandbox / agentNetworkAllowlist. Returns nil on any
+// resolve or load failure.
+func loadAgentConfig(ctx context.Context, agentRef string) *latestcfg.Config {
 	if agentRef == "" {
-		return false
+		return nil
 	}
 	source, err := config.Resolve(agentRef, nil)
 	if err != nil {
-		return false
+		return nil
 	}
 	cfg, err := config.Load(ctx, source)
 	if err != nil {
-		return false
+		return nil
 	}
-	return cfg.Runtime != nil && cfg.Runtime.Sandbox
+	return cfg
 }
 
 // runInSandbox delegates the current command to a Docker sandbox.
@@ -105,8 +126,11 @@ func runInSandbox(ctx context.Context, cmd *cobra.Command, args []string, runCon
 		}
 	}
 
+	agentHosts := agentNetworkAllowlist(ctx, agentRef)
+
 	printModelsGateway(cmd.OutOrStdout(), runConfig.ModelsGateway)
 	printToolInstallAllowance(cmd.OutOrStdout(), kitResult)
+	printAgentNetworkAllowlist(cmd.OutOrStdout(), agentHosts)
 
 	name, err := backend.Ensure(ctx, wd, extras, template, configDir)
 	if err != nil {
@@ -126,7 +150,7 @@ func runInSandbox(ctx context.Context, cmd *cobra.Command, args []string, runCon
 	if kitResult != nil {
 		toolHosts = kitResult.ToolInstallHosts
 	}
-	allowSandboxHosts(ctx, backend, name, runConfig.ModelsGateway, toolHosts)
+	allowSandboxHosts(ctx, backend, name, runConfig.ModelsGateway, toolHosts, agentHosts)
 
 	// Resolve env vars the agent needs and forward them into the sandbox.
 	// Docker Desktop proxies well-known API keys automatically; this handles
@@ -202,11 +226,12 @@ func dockerAgentArgs(cmd *cobra.Command, args []string, configDir string) []stri
 
 // allowSandboxHosts adds per-sandbox allow-network rules for every
 // host the in-sandbox runtime is known to need: the configured
-// models gateway (when set) and the package hosts the auto-installer
+// models gateway (when set), the package hosts the auto-installer
 // reaches for (when the kit build identified at least one
-// auto-installable toolset). The default sandbox proxy denies all of
-// them; without this, the inner agent's first request returns a
-// misleading "403 Blocked by network policy".
+// auto-installable toolset), and any extra hosts the agent author
+// declared in runtime.network_allowlist. The default sandbox proxy
+// denies all of them; without this, the inner agent's first request
+// returns a misleading "403 Blocked by network policy".
 //
 // Holes are punched only when the corresponding feature is in play:
 //   - the gateway host is added only when gatewayURL is non-empty;
@@ -216,15 +241,20 @@ func dockerAgentArgs(cmd *cobra.Command, args []string, configDir string) []stri
 //     module proxy + toolchain bootstrap for go_install packages,
 //     GitHub release hosts for github_release packages). When a
 //     lookup failed, the kit folds in [toolinstall.FallbackHosts]
-//     so the run can still succeed.
+//     so the run can still succeed;
+//   - the agent-declared hosts come straight from the YAML and are
+//     unioned with the inferred set so authors can add hosts the
+//     resolver doesn't know about (custom MCP endpoints, third-party
+//     APIs, ...).
 //
 // Best-effort: a malformed gateway URL or a backend that doesn't
 // support per-sandbox policies is logged at debug level and the run
 // proceeds. The user will then see a network-policy 403 from the
 // inner and we surface that diagnostic verbatim.
-func allowSandboxHosts(ctx context.Context, backend *sandbox.Backend, name, gatewayURL string, toolInstallHosts []string) {
+func allowSandboxHosts(ctx context.Context, backend *sandbox.Backend, name, gatewayURL string, toolInstallHosts, agentHosts []string) {
 	var hosts []string
 	hosts = append(hosts, toolInstallHosts...)
+	hosts = append(hosts, agentHosts...)
 
 	if gatewayURL != "" {
 		if h := gatewayHostPort(gatewayURL); h != "" {
@@ -424,5 +454,20 @@ func printToolInstallAllowance(w io.Writer, kitResult *kit.Result) {
 	}
 	for _, e := range kitResult.ToolInstallHostsResolutionErr {
 		fmt.Fprintf(w, "  ! %s (using fallback host set)\n", e.Error())
+	}
+}
+
+// printAgentNetworkAllowlist prints the host(s) the agent's config
+// asked us to add to the sandbox proxy. Surfacing them next to the
+// kit / gateway lines makes it obvious which holes were punched by
+// the agent author vs auto-discovered, so an unexpected 403 has a
+// short list of suspects.
+func printAgentNetworkAllowlist(w io.Writer, hosts []string) {
+	if len(hosts) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "Agent network allowlist: allowlisting %d host(s) declared in runtime.network_allowlist:\n", len(hosts))
+	for _, h := range hosts {
+		fmt.Fprintf(w, "  - %s\n", h)
 	}
 }
