@@ -28,6 +28,7 @@ require (
 	github.com/clipperhouse/displaywidth v0.11.0
 	github.com/clipperhouse/uax29/v2 v2.7.0
 	github.com/coder/acp-go-sdk v0.13.0
+	github.com/docker/aijson v0.1.0
 	github.com/docker/cli v29.5.2+incompatible
 	github.com/docker/go-units v0.5.0
 	github.com/docker/portcullis v0.0.0-20260526131538-fc97bf12bbdb
