@@ -48,6 +48,16 @@ agents:
 
 ## Properties
 
+The `api` toolset accepts the following toolset-level fields in addition to the `api_config` block:
+
+| Property            | Type    | Required | Description                                                                                                                                                                                                                                                       |
+| ------------------- | ------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `api_config`        | object  | ✓        | The HTTP tool definition. See the table below.                                                                                                                                                                                                                    |
+| `timeout`           | int     | ✗        | HTTP client timeout in seconds (default: `30`). Applies to every call the generated tool makes.                                                                                                                                                                   |
+| `allow_private_ips` | boolean | ✗        | Opt in to dialling **non-public** IP addresses (loopback, RFC1918, link-local — including the cloud-metadata endpoint at `169.254.169.254` — multicast and the unspecified address). Set to `true` only when the configured endpoint legitimately targets internal services. See [Reaching internal services](#reaching-internal-services). |
+
+### `api_config`
+
 | Property        | Type   | Required | Description                                      |
 | --------------- | ------ | -------- | ------------------------------------------------ |
 | `name`          | string | ✓        | Tool name (how the agent references it)          |
@@ -56,8 +66,8 @@ agents:
 | `instruction`   | string | ✗        | Description shown to the agent                   |
 | `args`          | object | ✗        | Parameter definitions (JSON Schema properties)   |
 | `required`      | array  | ✗        | List of required parameter names                 |
-| `headers`       | object | ✗        | HTTP headers to include                          |
-| `output_schema` | object | ✗        | JSON Schema for the response (for documentation) |
+| `headers`       | object | ✗        | HTTP headers to include. Values support `${env.VAR}` and `${headers.NAME}` placeholders (the latter forwards a header from the caller's incoming request, useful when docker agent is itself exposed as an HTTP server). |
+| `output_schema` | object | ✗        | JSON Schema for the response. Used by MCP / Code Mode consumers; tool responses are still returned to the model as raw strings.                                                                                          |
 
 ## HTTP Methods
 
@@ -120,7 +130,7 @@ Use `${param}` syntax to insert parameter values into URLs:
 endpoint: "https://api.example.com/users/${user_id}/posts/${post_id}"
 ```
 
-Parameter values are URL-encoded automatically.
+Parameter values are inserted as strings by the template expansion. Add URL encoding in the template when needed (for example, `${encodeURIComponent(city)}`).
 
 ## Headers
 
@@ -209,9 +219,30 @@ agents:
 
 - Only supports GET and POST methods
 - Response body is limited to 1MB
-- 30 second timeout per request
+- Default 30-second timeout per request (override with the `timeout` field)
 - Only HTTP and HTTPS URLs are supported
 - No support for file uploads or multipart forms
+- By default, requests to non-public IP ranges (loopback, RFC1918, link-local, the cloud-metadata endpoint, multicast, the unspecified address) are refused at dial time — even when DNS for an otherwise-public host resolves there. Set `allow_private_ips: true` to disable that check.
+
+## Reaching internal services
+
+```yaml
+toolsets:
+  - type: api
+    timeout: 60
+    allow_private_ips: true
+    api_config:
+      name: get_local_status
+      method: GET
+      endpoint: "http://localhost:8080/health"
+      instruction: Check the local service health
+```
+
+<div class="callout callout-warning" markdown="1">
+<div class="callout-title">SSRF
+</div>
+  <p>Setting <code>allow_private_ips: true</code> re-exposes the SSRF surface for this tool. Only enable it when the configured <code>endpoint</code> is a trusted internal service — a prompt-injected agent cannot redirect the call elsewhere because the endpoint is fixed in config, but redirects from the configured host can still reach unexpected places.</p>
+</div>
 
 <div class="callout callout-tip" markdown="1">
 <div class="callout-title">For Complex APIs

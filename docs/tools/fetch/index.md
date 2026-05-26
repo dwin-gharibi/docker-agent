@@ -15,7 +15,7 @@ The fetch tool lets agents retrieve content from one or more HTTP/HTTPS URLs. It
 <div class="callout callout-info" markdown="1">
 <div class="callout-title">GET only
 </div>
-  <p>The fetch tool does <strong>not</strong> support <code>POST</code>, <code>PUT</code>, <code>DELETE</code> or other methods, and does not expose request bodies or custom headers. To call REST endpoints with other verbs, use the <a href="{{ '/tools/api/' | relative_url }}">API tool</a> or an <a href="{{ '/tools/openapi/' | relative_url }}">OpenAPI toolset</a>.</p>
+  <p>The fetch tool does <strong>not</strong> support <code>POST</code>, <code>PUT</code>, <code>DELETE</code> or other methods, and does not expose request bodies or per-call custom headers (the toolset can still attach static <a href="#custom-headers">credential headers</a> to every request). To call REST endpoints with other verbs, use the <a href="{{ '/tools/api/' | relative_url }}">API tool</a> or an <a href="{{ '/tools/openapi/' | relative_url }}">OpenAPI toolset</a>.</p>
 
 </div>
 
@@ -34,6 +34,7 @@ toolsets:
 | `allowed_domains`   | array[string] | _none_  | Allow-list of hosts the tool may fetch. When set, every URL whose host is **not** in the list is rejected before any network call is made. Mutually exclusive with `blocked_domains`.                                                                                                                            |
 | `blocked_domains`   | array[string] | _none_  | Deny-list of hosts the tool must not fetch. URLs whose host matches one of these patterns are rejected before any network call (including `robots.txt`) is made. Mutually exclusive with `allowed_domains`.                                                                                                      |
 | `allow_private_ips` | boolean       | `false` | Opt in to dialling **non-public** IP addresses (loopback, RFC1918, link-local — including the cloud-metadata endpoint at `169.254.169.254` — multicast, and the unspecified address). Required to reach `localhost` / internal services. See [SSRF protection](#ssrf-protection-and-reaching-localhost) below. |
+| `headers`           | map[string]string | _none_ | Static HTTP headers attached to **every** request the toolset issues (including `robots.txt`). Values support `${env.VAR}` for secrets. Caller-supplied entries override the default `User-Agent` and the format-driven `Accept` header. Headers are stripped on cross-host redirects so credentials never leak to a third-party host. See [Custom headers](#custom-headers) below. |
 
 ### Domain matching
 
@@ -63,6 +64,26 @@ toolsets:
   - type: fetch
     timeout: 60
 ```
+
+### Custom headers
+
+Attach static headers — typically credentials — to every request. Values support `${env.VAR}` interpolation so secrets stay out of YAML, and headers are dropped on cross-host redirects so a redirect chain cannot leak them to a third-party host:
+
+```yaml
+toolsets:
+  - type: fetch
+    allowed_domains:
+      - docs.internal.example.com
+    headers:
+      Authorization: "Bearer ${env.INTERNAL_DOCS_TOKEN}"
+      X-Internal-Client: "docker-agent"
+```
+
+<div class="callout callout-warning" markdown="1">
+<div class="callout-title">Pair credential headers with an allow-list
+</div>
+  <p>When <code>headers</code> carries credentials (e.g. <code>Authorization</code>), set <code>allowed_domains</code> to the specific hosts that should receive them. Stdlib already strips a small allow-list (<code>Authorization</code>, <code>Cookie</code>, <code>WWW-Authenticate</code>) on cross-domain redirects, and the fetch tool additionally strips every operator-supplied header on cross-host redirects — but an allow-list is the strongest guarantee against accidental exfiltration.</p>
+</div>
 
 ### Restrict to specific domains
 

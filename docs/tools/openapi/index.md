@@ -33,12 +33,36 @@ toolsets:
       X-Custom-Header: "my-value"
 ```
 
+### Custom timeout
+
+Override the default 30-second HTTP timeout (applies both to fetching the spec and to the generated tool calls):
+
+```yaml
+toolsets:
+  - type: openapi
+    url: "https://api.example.com/openapi.json"
+    timeout: 60
+```
+
+### Reaching internal services
+
+By default the OpenAPI tool refuses connections to non-public IP addresses, blocking SSRF attempts even when DNS resolves an otherwise-public host to an internal range. Opt in with `allow_private_ips` when the spec or its `servers` entries legitimately target localhost or your internal network:
+
+```yaml
+toolsets:
+  - type: openapi
+    url: "http://localhost:8080/openapi.json"
+    allow_private_ips: true
+```
+
 ## Properties
 
-| Property  | Type              | Required | Description                                                                 |
-| --------- | ----------------- | -------- | --------------------------------------------------------------------------- |
-| `url`     | string            | ✓        | URL of the OpenAPI specification (JSON format)                              |
-| `headers` | map[string]string |          | Custom HTTP headers sent with every request. Values support `${env.VAR}` and `${headers.NAME}` placeholders. |
+| Property            | Type              | Required | Description                                                                                                                                                                                                                                                       |
+| ------------------- | ----------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `url`               | string            | ✓        | URL of the OpenAPI specification (JSON format). Supports `${env.VAR}` interpolation.                                                                                                                                                                              |
+| `headers`           | map[string]string | ✗        | Custom HTTP headers sent with every request — both the spec fetch and every generated tool call. Values support `${env.VAR}` and `${headers.NAME}` placeholders (the latter forwards a header from the caller's incoming request when docker agent is exposed as a server). |
+| `timeout`           | int               | ✗        | HTTP client timeout in seconds (default: `30`). Applies to both the spec fetch and the generated tools' requests.                                                                                                                                                 |
+| `allow_private_ips` | boolean           | ✗        | Opt in to dialling **non-public** IP addresses (loopback, RFC1918, link-local — including the cloud-metadata endpoint at `169.254.169.254` — multicast and the unspecified address). Set to `true` only when the spec or its servers legitimately target internal services. By default such addresses are refused at dial time, after DNS resolution, so DNS rebinding cannot bypass the check. |
 
 ## How it works
 
