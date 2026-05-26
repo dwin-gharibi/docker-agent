@@ -86,6 +86,36 @@ func TestCommandPaletteFilteringIgnoresCategory(t *testing.T) {
 		"typing 'session' must not surface unrelated commands like 'Attach' just because they share the Session category")
 }
 
+func TestCommandPaletteFilteringRanksLabelPrefixFirst(t *testing.T) {
+	cats := []commands.Category{
+		{
+			Name: "Session",
+			Commands: []commands.Item{
+				{ID: "session.attach", Label: "Attach", SlashCommand: "/attach", Description: "Attach a file to your message", Category: "Session"},
+				{ID: "session.history", Label: "Sessions", SlashCommand: "/sessions", Description: "Browse and load past sessions", Category: "Session"},
+			},
+		},
+		{
+			Name: "Settings",
+			Commands: []commands.Item{
+				{ID: "settings.theme", Label: "Theme", SlashCommand: "/theme", Description: "Change the color theme", Category: "Settings"},
+			},
+		},
+	}
+	dialog := NewCommandPaletteDialog(cats)
+	d := dialog.(*commandPaletteDialog)
+
+	d.textInput.SetValue("the")
+	d.filterCommands()
+
+	var ids []string
+	for _, c := range d.filtered {
+		ids = append(ids, c.ID)
+	}
+	require.Equal(t, []string{"settings.theme", "session.attach"}, ids,
+		"label prefix matches should rank ahead of description matches")
+}
+
 func TestCommandPaletteFiltering(t *testing.T) {
 	dialog := NewCommandPaletteDialog(categories)
 	d := dialog.(*commandPaletteDialog)
