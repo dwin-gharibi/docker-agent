@@ -36,9 +36,11 @@ var (
 )
 
 func (t *ToolSet) callTool(ctx context.Context, toolCall tools.ToolCall) (*tools.ToolCallResult, error) {
+	endpoint := t.expander.Expand(ctx, t.config.Endpoint, nil)
+	headers := t.expander.ExpandMap(ctx, t.config.Headers)
+
 	client := httpclient.NewSafeClient(t.timeout, t.allowPrivateIPs)
 
-	endpoint := t.config.Endpoint
 	var reqBody io.Reader = http.NoBody
 	switch t.config.Method {
 	case http.MethodGet:
@@ -69,7 +71,7 @@ func (t *ToolSet) callTool(ctx context.Context, toolCall tools.ToolCall) (*tools
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	setHeaders(req, t.config.Headers)
+	setHeaders(req, headers)
 	if t.config.Method == http.MethodPost {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -90,14 +92,12 @@ func (t *ToolSet) callTool(ctx context.Context, toolCall tools.ToolCall) (*tools
 }
 
 // CreateToolSet is used by the tools registry.
-func CreateToolSet(ctx context.Context, toolset latest.Toolset, runConfig *config.RuntimeConfig) (tools.ToolSet, error) {
+func CreateToolSet(toolset latest.Toolset, runConfig *config.RuntimeConfig) (tools.ToolSet, error) {
 	if toolset.APIConfig.Endpoint == "" {
 		return nil, errors.New("api tool requires an endpoint in api_config")
 	}
 
 	expander := js.NewJsExpander(runConfig.EnvProvider())
-	toolset.APIConfig.Endpoint = expander.Expand(ctx, toolset.APIConfig.Endpoint, nil)
-	toolset.APIConfig.Headers = expander.ExpandMap(ctx, toolset.APIConfig.Headers)
 
 	var opts []Option
 	if toolset.Timeout > 0 {
@@ -106,6 +106,7 @@ func CreateToolSet(ctx context.Context, toolset latest.Toolset, runConfig *confi
 	if toolset.AllowPrivateIPsEnabled() {
 		opts = append(opts, WithAllowPrivateIPs(true))
 	}
+
 	return New(toolset.APIConfig, expander, opts...), nil
 }
 

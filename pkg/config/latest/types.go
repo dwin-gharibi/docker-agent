@@ -879,7 +879,7 @@ type Toolset struct {
 	// Set to "false" or "off" to disable auto-install for this toolset.
 	Version string `json:"version,omitempty"`
 
-	// For the `a2a` and `openapi` tools
+	// For the `a2a`, `api`, `openapi` and `fetch` tools
 	Name    string            `json:"name,omitempty"`
 	URL     string            `json:"url,omitempty"`
 	Headers map[string]string `json:"headers,omitempty"`
