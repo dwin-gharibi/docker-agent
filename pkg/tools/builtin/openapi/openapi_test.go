@@ -1,6 +1,7 @@
 package openapi
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/docker/docker-agent/pkg/js"
 	"github.com/docker/docker-agent/pkg/tools"
 	"github.com/docker/docker-agent/pkg/useragent"
 	"github.com/docker/docker-agent/pkg/version"
@@ -22,7 +24,7 @@ import (
 // compiled into release binaries. Production callers must use
 // [New].
 func newOpenAPIToolForTest(specURL string, headers map[string]string) *ToolSet {
-	return New(specURL, headers, WithAllowPrivateIPs(true))
+	return New(specURL, headers, WithAllowPrivateIPs(true), WithExpander(js.NewJsExpander(&testEnvProvider{})))
 }
 
 const petStoreSpec = `{
@@ -622,4 +624,11 @@ func TestOpenAPITool_EnumAndDefaultTypes(t *testing.T) {
 	limitProp := props["limit"].(map[string]any)
 	assert.Equal(t, []any{10, 25, 50, 100}, limitProp["enum"])
 	assert.Equal(t, 25, limitProp["default"])
+}
+
+type testEnvProvider map[string]string
+
+func (p *testEnvProvider) Get(_ context.Context, name string) (string, bool) {
+	val, found := (*p)[name]
+	return val, found
 }
