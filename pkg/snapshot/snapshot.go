@@ -73,6 +73,15 @@ func (m *Manager) Open(ctx context.Context, dir string) (*Repo, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Canonicalize symlinks so r.directory uses the same convention as the
+	// worktree path returned by `git rev-parse --show-toplevel` (which always
+	// resolves symlinks). Without this, on hosts where the working directory
+	// is reached through a symlink (e.g. /tmp -> /private/tmp on macOS),
+	// filepath.Rel(worktree, directory) would produce a ".."-prefixed path
+	// and scope() would silently expand to the entire worktree.
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		abs = resolved
+	}
 	worktree, err := gitWorktree(ctx, abs)
 	if err != nil {
 		return nil, err
@@ -127,7 +136,7 @@ func (r *Repo) Track(ctx context.Context) (string, error) {
 	if err := r.add(ctx); err != nil {
 		return "", err
 	}
-	result := r.git(ctx, r.args("write-tree"), gitOpts{cwd: r.directory})
+	result := r.git(ctx, r.args("write-tree"), gitOpts{cwd: r.worktree})
 	if result.err != nil {
 		return "", result.err
 	}
@@ -149,7 +158,7 @@ func (r *Repo) Patch(ctx context.Context, hash string) (Patch, error) {
 	if err := r.add(ctx); err != nil {
 		return Patch{Hash: hash}, err
 	}
-	result := r.git(ctx, append(quoteArgs(), r.args("diff", "--cached", "--no-ext-diff", "--name-only", hash, "--", ".")...), gitOpts{cwd: r.directory})
+	result := r.git(ctx, append(quoteArgs(), r.args(append([]string{"diff", "--cached", "--no-ext-diff", "--name-only", hash, "--"}, r.scope()...)...)...), gitOpts{cwd: r.worktree})
 	if result.err != nil {
 		return Patch{Hash: hash}, result.err
 	}
@@ -179,7 +188,7 @@ func (r *Repo) Diff(ctx context.Context, hash string) (string, error) {
 	if err := r.add(ctx); err != nil {
 		return "", err
 	}
-	result := r.git(ctx, append(quoteArgs(), r.args("diff", "--cached", "--no-ext-diff", hash, "--", ".")...), gitOpts{cwd: r.directory})
+	result := r.git(ctx, append(quoteArgs(), r.args(append([]string{"diff", "--cached", "--no-ext-diff", hash, "--"}, r.scope()...)...)...), gitOpts{cwd: r.worktree})
 	if result.err != nil {
 		return "", result.err
 	}
@@ -344,7 +353,7 @@ func (r *Repo) Cleanup(ctx context.Context) error {
 	if _, err := os.Stat(r.gitdir); errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
-	result := r.git(ctx, r.args("gc", "--prune="+pruneAfter), gitOpts{cwd: r.directory})
+	result := r.git(ctx, r.args("gc", "--prune="+pruneAfter), gitOpts{cwd: r.worktree})
 	if result.err != nil {
 		return result.err
 	}
@@ -361,7 +370,7 @@ func (r *Repo) DiffFull(ctx context.Context, from, to string) ([]FileDiff, error
 	if err := r.ensure(ctx); err != nil {
 		return nil, err
 	}
-	statuses := r.git(ctx, append(quoteArgs(), r.args("diff", "--no-ext-diff", "--name-status", "--no-renames", from, to, "--", ".")...), gitOpts{cwd: r.directory})
+	statuses := r.git(ctx, append(quoteArgs(), r.args(append([]string{"diff", "--no-ext-diff", "--name-status", "--no-renames", from, to, "--"}, r.scope()...)...)...), gitOpts{cwd: r.worktree})
 	if statuses.err != nil {
 		return nil, statuses.err
 	}
@@ -384,7 +393,7 @@ func (r *Repo) DiffFull(ctx context.Context, from, to string) ([]FileDiff, error
 		}
 	}
 
-	numstat := r.git(ctx, append(quoteArgs(), r.args("diff", "--no-ext-diff", "--no-renames", "--numstat", from, to, "--", ".")...), gitOpts{cwd: r.directory})
+	numstat := r.git(ctx, append(quoteArgs(), r.args(append([]string{"diff", "--no-ext-diff", "--no-renames", "--numstat", from, to, "--"}, r.scope()...)...)...), gitOpts{cwd: r.worktree})
 	if numstat.err != nil {
 		return nil, numstat.err
 	}
@@ -424,7 +433,7 @@ func (r *Repo) DiffFull(ctx context.Context, from, to string) ([]FileDiff, error
 		}
 		patch := ""
 		if !row.binary {
-			p := r.git(ctx, append(quoteArgs(), r.args("diff", "--no-ext-diff", "--no-renames", from, to, "--", row.file)...), gitOpts{cwd: r.directory})
+			p := r.git(ctx, append(quoteArgs(), r.args("diff", "--no-ext-diff", "--no-renames", from, to, "--", row.file)...), gitOpts{cwd: r.worktree})
 			if p.err != nil {
 				return nil, p.err
 			}
@@ -482,8 +491,12 @@ func (r *Repo) add(ctx context.Context) error {
 	if err := r.syncExcludes(ctx, nil); err != nil {
 		return err
 	}
-	diff := r.git(ctx, append(quoteArgs(), r.args("diff-files", "--name-only", "-z", "--", ".")...), gitOpts{cwd: r.directory})
-	other := r.git(ctx, append(quoteArgs(), r.args("ls-files", "--others", "--exclude-standard", "-z", "--", ".")...), gitOpts{cwd: r.directory})
+	// Both git plumbing commands emit worktree-root-relative paths here:
+	// diff-files always does so by design, and ls-files is forced to do so
+	// via --full-name. Keeping the conventions aligned is what lets us merge
+	// the two lists and feed them back to git as pathspecs unchanged.
+	diff := r.git(ctx, append(quoteArgs(), r.args(append([]string{"diff-files", "--name-only", "-z", "--"}, r.scope()...)...)...), gitOpts{cwd: r.worktree})
+	other := r.git(ctx, append(quoteArgs(), r.args(append([]string{"ls-files", "--others", "--exclude-standard", "-z", "--full-name", "--"}, r.scope()...)...)...), gitOpts{cwd: r.worktree})
 	if diff.err != nil {
 		return diff.err
 	}
@@ -549,7 +562,7 @@ func (r *Repo) ignore(ctx context.Context, files []string) map[string]bool {
 	if len(files) == 0 {
 		return out
 	}
-	result := command(ctx, []string{"-C", r.worktree, "-c", "core.quotepath=false", "check-ignore", "--no-index", "--stdin", "-z"}, gitOpts{cwd: r.directory, stdin: []byte(strings.Join(files, "\x00") + "\x00")})
+	result := command(ctx, []string{"-C", r.worktree, "-c", "core.quotepath=false", "check-ignore", "--no-index", "--stdin", "-z"}, gitOpts{cwd: r.worktree, stdin: []byte(strings.Join(files, "\x00") + "\x00")})
 	if result.err != nil || (result.code != 0 && result.code != 1) {
 		return out
 	}
@@ -563,7 +576,7 @@ func (r *Repo) drop(ctx context.Context, files []string) error {
 	if len(files) == 0 {
 		return nil
 	}
-	result := r.git(ctx, append(cfgArgs(), r.args("rm", "--cached", "-f", "--ignore-unmatch", "--pathspec-from-file=-", "--pathspec-file-nul")...), gitOpts{cwd: r.directory, stdin: nulList(files)})
+	result := r.git(ctx, append(cfgArgs(), r.args("rm", "--cached", "-f", "--ignore-unmatch", "--pathspec-from-file=-", "--pathspec-file-nul")...), gitOpts{cwd: r.worktree, stdin: nulList(files)})
 	if result.err != nil {
 		return result.err
 	}
@@ -577,7 +590,7 @@ func (r *Repo) stage(ctx context.Context, files []string) error {
 	if len(files) == 0 {
 		return nil
 	}
-	result := r.git(ctx, append(cfgArgs(), r.args("add", "--all", "--sparse", "--pathspec-from-file=-", "--pathspec-file-nul")...), gitOpts{cwd: r.directory, stdin: nulList(files)})
+	result := r.git(ctx, append(cfgArgs(), r.args("add", "--all", "--sparse", "--pathspec-from-file=-", "--pathspec-file-nul")...), gitOpts{cwd: r.worktree, stdin: nulList(files)})
 	if result.err != nil {
 		return result.err
 	}
@@ -621,6 +634,21 @@ func (r *Repo) args(cmd ...string) []string {
 	out = append(out, "--git-dir", r.gitdir, "--work-tree", r.worktree)
 	out = append(out, cmd...)
 	return out
+}
+
+// scope returns the pathspec(s) that restrict operations to the agent's
+// working directory, expressed relative to the worktree root. Returning
+// worktree-relative paths keeps git's output and input conventions aligned
+// regardless of whether r.directory equals r.worktree or is a subdirectory.
+func (r *Repo) scope() []string {
+	rel, err := filepath.Rel(r.worktree, r.directory)
+	if err != nil || rel == "" || rel == "." {
+		return []string{"."}
+	}
+	if strings.HasPrefix(rel, "..") {
+		return []string{"."}
+	}
+	return []string{filepath.ToSlash(rel)}
 }
 
 func (r *Repo) git(ctx context.Context, args []string, opts gitOpts) gitResult {
