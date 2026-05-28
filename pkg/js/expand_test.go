@@ -351,3 +351,24 @@ func TestFindClosingBrace(t *testing.T) {
 		})
 	}
 }
+
+func TestMultiStepExpand(t *testing.T) {
+	t.Parallel()
+
+	env := testEnvProvider(map[string]string{
+		"KEY": "KEY_VALUE",
+	})
+	expander := NewJsExpander(&env)
+
+	value := "PREFIX-[${env.KEY}]-[${PARAM}]-SUFFIX"
+
+	// Expand the environment variables first.
+	value = expander.Expand(t.Context(), value, nil)
+	assert.Equal(t, "PREFIX-[KEY_VALUE]-[${PARAM}]-SUFFIX", value)
+
+	// Expand the parameters.
+	value = expander.Expand(t.Context(), value, map[string]string{
+		"PARAM": "PARAM_VALUE",
+	})
+	assert.Equal(t, "PREFIX-[KEY_VALUE]-[PARAM_VALUE]-SUFFIX", value)
+}

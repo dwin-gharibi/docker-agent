@@ -109,6 +109,7 @@ func CreateToolSet(ctx context.Context, toolset latest.Toolset, runConfig *confi
 	case toolset.Remote.URL != "":
 		expander := js.NewJsExpander(envProvider)
 
+		// TODO: expand headers on each request, not at creation time.
 		headers := expander.ExpandMap(ctx, toolset.Remote.Headers)
 		remoteURL := expander.Expand(ctx, toolset.Remote.URL, nil)
 

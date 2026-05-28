@@ -44,6 +44,7 @@ type fetchHandler struct {
 	blockedDomains  []string
 	headers         map[string]string
 	allowPrivateIPs bool
+	expander        *js.Expander
 }
 
 type ToolArgs struct {
@@ -68,6 +69,8 @@ func (h *fetchHandler) CallTool(ctx context.Context, params ToolArgs) (*tools.To
 		transport = http.DefaultTransport
 	}
 
+	headers := h.expander.ExpandMap(ctx, h.headers)
+
 	client := &http.Client{
 		Timeout:   h.timeout,
 		Transport: transport,
@@ -88,7 +91,7 @@ func (h *fetchHandler) CallTool(ctx context.Context, params ToolArgs) (*tools.To
 			// than the previous hop) guarantees that headers cannot reappear
 			// after a chain like A -> B -> A.
 			if origHost := via[0].URL.Host; origHost != req.URL.Host {
-				for k := range h.headers {
+				for k := range headers {
 					req.Header.Del(k)
 				}
 			}
@@ -105,7 +108,7 @@ func (h *fetchHandler) CallTool(ctx context.Context, params ToolArgs) (*tools.To
 	robotsCache := make(map[string]*robotstxt.RobotsData)
 
 	for _, urlStr := range params.URLs {
-		result := h.fetchURL(ctx, client, urlStr, params.Format, robotsCache)
+		result := h.fetchURL(ctx, client, urlStr, params.Format, headers, robotsCache)
 		results = append(results, result)
 	}
 
@@ -133,7 +136,7 @@ type Result struct {
 	Error         string `json:"error,omitempty"`
 }
 
-func (h *fetchHandler) fetchURL(ctx context.Context, client *http.Client, urlStr, format string, robotsCache map[string]*robotstxt.RobotsData) Result {
+func (h *fetchHandler) fetchURL(ctx context.Context, client *http.Client, urlStr, format string, headers map[string]string, robotsCache map[string]*robotstxt.RobotsData) Result {
 	result := Result{URL: urlStr}
 
 	// Validate URL
@@ -166,7 +169,7 @@ func (h *fetchHandler) fetchURL(ctx context.Context, client *http.Client, urlStr
 	robots, cached := robotsCache[host]
 	if !cached {
 		var err error
-		robots, err = h.fetchRobots(ctx, client, parsedURL)
+		robots, err = h.fetchRobots(ctx, client, parsedURL, headers)
 		if err != nil {
 			result.Error = fmt.Sprintf("robots.txt check failed: %v", err)
 			return result
@@ -190,7 +193,7 @@ func (h *fetchHandler) fetchURL(ctx context.Context, client *http.Client, urlStr
 	useragent.SetIdentity(req)
 	// Apply caller-configured headers last so an operator-supplied
 	// Authorization, User-Agent, Accept, ... wins over the defaults set above.
-	for k, v := range h.headers {
+	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
 
@@ -236,7 +239,7 @@ func (h *fetchHandler) fetchURL(ctx context.Context, client *http.Client, urlStr
 //   - caller-supplied headers (Authorization, X-Api-Key, ...) are stripped
 //     when crossing host boundaries, so credentials never leak to a
 //     third-party host that handles a robots.txt redirect.
-func (h *fetchHandler) fetchRobots(ctx context.Context, client *http.Client, targetURL *url.URL) (*robotstxt.RobotsData, error) {
+func (h *fetchHandler) fetchRobots(ctx context.Context, client *http.Client, targetURL *url.URL, headers map[string]string) (*robotstxt.RobotsData, error) {
 	// Build robots.txt URL
 	robotsURL := &url.URL{
 		Scheme: targetURL.Scheme,
@@ -255,7 +258,7 @@ func (h *fetchHandler) fetchRobots(ctx context.Context, client *http.Client, tar
 	// Apply custom headers to robots.txt requests too, so authenticated
 	// endpoints that also protect robots.txt work correctly. Cross-host
 	// leaks are prevented by the shared client's CheckRedirect.
-	for k, v := range h.headers {
+	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
 
@@ -456,10 +459,9 @@ func htmlToText(html string) string {
 }
 
 // CreateToolSet is used by the tools registry.
-func CreateToolSet(ctx context.Context, toolset latest.Toolset, runConfig *config.RuntimeConfig) (tools.ToolSet, error) {
-	expander := js.NewJsExpander(runConfig.EnvProvider())
-
+func CreateToolSet(toolset latest.Toolset, runConfig *config.RuntimeConfig) (tools.ToolSet, error) {
 	var opts []ToolOption
+
 	if toolset.Timeout > 0 {
 		timeout := time.Duration(toolset.Timeout) * time.Second
 		opts = append(opts, WithTimeout(timeout))
@@ -473,7 +475,10 @@ func CreateToolSet(ctx context.Context, toolset latest.Toolset, runConfig *confi
 	if toolset.AllowPrivateIPsEnabled() {
 		opts = append(opts, WithAllowPrivateIPs(true))
 	}
-	opts = append(opts, WithHeaders(expander.ExpandMap(ctx, toolset.Headers)))
+	opts = append(opts, WithHeaders(toolset.Headers))
+	expander := js.NewJsExpander(runConfig.EnvProvider())
+	opts = append(opts, WithExpander(expander))
+
 	return New(opts...), nil
 }
 
@@ -536,6 +541,12 @@ func WithAllowPrivateIPs(allow bool) ToolOption {
 func WithHeaders(headers map[string]string) ToolOption {
 	return func(t *ToolSet) {
 		t.handler.headers = headers
+	}
+}
+
+func WithExpander(expander *js.Expander) ToolOption {
+	return func(t *ToolSet) {
+		t.handler.expander = expander
 	}
 }
 

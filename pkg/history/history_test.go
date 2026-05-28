@@ -5,8 +5,11 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/docker/portcullis"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/docker/docker-agent/pkg/internal/portcullistest"
 )
 
 func TestNew(t *testing.T) {
@@ -471,4 +474,63 @@ func TestHistory_VeryLongMessage(t *testing.T) {
 	require.Len(t, h2.Messages, 2)
 	assert.Equal(t, longStr, h2.Messages[0])
 	assert.Equal(t, "short message after", h2.Messages[1])
+}
+
+func TestHistory_RedactsOnAdd(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	h, err := New(tmpDir)
+	require.NoError(t, err)
+
+	pat := portcullistest.FakeGitHubPAT("cxLeRrvbJfmYdUtr70xnNE3Q7Gvli4")
+	msg := "deploy with token " + pat
+	require.NoError(t, h.Add(msg))
+
+	require.Len(t, h.Messages, 1)
+	stored := h.Messages[0]
+	assert.NotContains(t, stored, pat, "in-memory history must not contain the secret")
+	assert.Contains(t, stored, portcullis.Marker)
+
+	// On-disk file must also be redacted.
+	data, err := os.ReadFile(filepath.Join(tmpDir, ".cagent", "history"))
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), pat, "persisted history must not contain the secret")
+	assert.Contains(t, string(data), portcullis.Marker)
+}
+
+func TestHistory_RedactsOnLoad(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".cagent"), 0o700))
+	histFile := filepath.Join(tmpDir, ".cagent", "history")
+
+	pat := portcullistest.FakeGitHubPAT("cxLeRrvbJfmYdUtr70xnNE3Q7Gvli4")
+	// Simulate a pre-existing history file written before redaction was wired in.
+	require.NoError(t, os.WriteFile(histFile, []byte(`"deploy with token `+pat+"\"\n"), 0o600))
+
+	h, err := New(tmpDir)
+	require.NoError(t, err)
+
+	require.Len(t, h.Messages, 1)
+	assert.NotContains(t, h.Messages[0], pat, "loaded history must not expose the secret in memory")
+	assert.Contains(t, h.Messages[0], portcullis.Marker)
+}
+
+func TestHistory_RedactsOnMigrate(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, ".cagent"), 0o700))
+	oldHistFile := filepath.Join(tmpDir, ".cagent", "history.json")
+
+	pat := portcullistest.FakeGitHubPAT("cxLeRrvbJfmYdUtr70xnNE3Q7Gvli4")
+	require.NoError(t, os.WriteFile(oldHistFile, []byte(`{"messages":["leak `+pat+`"]}`), 0o600))
+
+	h, err := New(tmpDir)
+	require.NoError(t, err)
+
+	require.Len(t, h.Messages, 1)
+	assert.NotContains(t, h.Messages[0], pat, "migrated history must not expose the secret")
+	assert.Contains(t, h.Messages[0], portcullis.Marker)
+
+	data, err := os.ReadFile(filepath.Join(tmpDir, ".cagent", "history"))
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), pat, "migrated on-disk history must not contain the secret")
 }

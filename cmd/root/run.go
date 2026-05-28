@@ -64,6 +64,7 @@ type runExecFlags struct {
 	// Run only
 	hideToolResults bool
 	lean            bool
+	appName         string
 	listenAddr      string
 	onEventSpecs    []string
 
@@ -138,6 +139,7 @@ func addRunOrExecFlags(cmd *cobra.Command, flags *runExecFlags) {
 	cmd.PersistentFlags().BoolVar(&flags.forceTUI, "force-tui", false, "Force TUI mode even when not in a terminal")
 	_ = cmd.PersistentFlags().MarkHidden("force-tui")
 	cmd.PersistentFlags().BoolVar(&flags.lean, "lean", false, "Use a simplified TUI with minimal chrome")
+	cmd.PersistentFlags().StringVar(&flags.appName, "app-name", "", "Application name shown in the TUI in place of \"docker agent\"")
 	cmd.PersistentFlags().BoolVar(&flags.sandbox, "sandbox", false, "Run the agent inside a Docker sandbox (requires Docker Desktop with sandbox support)")
 	cmd.PersistentFlags().StringVar(&flags.sandboxTemplate, "template", "docker/sandbox-templates:docker-agent", "Template image for the sandbox (passed to docker sandbox create -t)")
 	cmd.PersistentFlags().BoolVar(&flags.sbx, "sbx", true, "Prefer the sbx CLI backend when available (set --sbx=false to force docker sandbox)")
@@ -497,6 +499,9 @@ func (f *runExecFlags) tuiOpts() []tui.Option {
 	var opts []tui.Option
 	if f.lean {
 		opts = append(opts, tui.WithLeanMode())
+	}
+	if f.appName != "" {
+		opts = append(opts, tui.WithAppName(f.appName))
 	}
 	return opts
 }

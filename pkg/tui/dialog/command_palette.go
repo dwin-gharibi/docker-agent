@@ -1,7 +1,10 @@
 package dialog
 
 import (
+	"slices"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textinput"
@@ -124,10 +127,15 @@ func (d *commandPaletteDialog) filterCommands() {
 	d.filtered = d.filtered[:0]
 	for _, cat := range d.categories {
 		for _, cmd := range cat.Commands {
-			if query == "" || matchesCommandQuery(cmd, query) {
+			if query == "" || commandQueryScore(cmd, query) < commandQueryNoMatch {
 				d.filtered = append(d.filtered, cmd)
 			}
 		}
+	}
+	if query != "" {
+		slices.SortStableFunc(d.filtered, func(a, b commands.Item) int {
+			return commandQueryScore(a, query) - commandQueryScore(b, query)
+		})
 	}
 
 	// Clearing the search returns the cursor to the top, matching the file
@@ -138,16 +146,58 @@ func (d *commandPaletteDialog) filterCommands() {
 	d.scrollview.SetScrollOffset(0)
 }
 
-// matchesCommandQuery reports whether the given command matches the lowercase
-// query string by searching label, description, or slash command. The
-// category is intentionally excluded: category names act as section headers
-// and matching them would surface every command in a category, drowning out
-// targeted queries (e.g. typing "session" would otherwise match every
-// command in the Session category).
-func matchesCommandQuery(cmd commands.Item, query string) bool {
-	return strings.Contains(strings.ToLower(cmd.Label), query) ||
-		strings.Contains(strings.ToLower(cmd.Description), query) ||
-		strings.Contains(strings.ToLower(cmd.SlashCommand), query)
+const commandQueryNoMatch = 1 << 30
+
+// commandQueryScore returns a relevance score for matching the given command
+// against the lowercase query string by searching label, slash command, or
+// description. Lower scores indicate stronger matches; commandQueryNoMatch
+// means no match. The category is intentionally excluded: category names act
+// as section headers and matching them would surface every command in a
+// category, drowning out targeted queries (e.g. typing "session" would
+// otherwise match every command in the Session category).
+func commandQueryScore(cmd commands.Item, query string) int {
+	label := strings.ToLower(cmd.Label)
+	description := strings.ToLower(cmd.Description)
+	slashCommand := strings.ToLower(cmd.SlashCommand)
+
+	return min(
+		commandFieldQueryScore(label, query, 0),
+		commandFieldQueryScore(slashCommand, query, 100),
+		commandFieldQueryScore(strings.TrimPrefix(slashCommand, "/"), query, 100),
+		commandFieldQueryScore(description, query, 1000),
+	)
+}
+
+func commandFieldQueryScore(value, query string, base int) int {
+	if value == "" {
+		return commandQueryNoMatch
+	}
+	if value == query {
+		return base
+	}
+	if strings.HasPrefix(value, query) {
+		return base + 10
+	}
+	index := strings.Index(value, query)
+	if index < 0 {
+		return commandQueryNoMatch
+	}
+	if isCommandQueryWordStart(value, index) {
+		return base + 100 + index
+	}
+	return base + 200 + index
+}
+
+func isCommandQueryWordStart(value string, index int) bool {
+	if index == 0 {
+		return true
+	}
+	previous, _ := utf8.DecodeLastRuneInString(value[:index])
+	switch previous {
+	case ' ', '-', '_', '/', '.':
+		return true
+	}
+	return unicode.IsSpace(previous) || unicode.IsPunct(previous)
 }
 
 // buildList builds the visual list of commands grouped by category, with a

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -341,6 +343,53 @@ func TestInitialize_OAuthDefersWhenElicitationBridgeNotReady(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatalf("Initialize blocked for too long: %v", ctx.Err())
 	}
+}
+
+// TestCreateHTTPClient_PersistsCookies verifies that the *http.Client returned
+// by createHTTPClient has a cookie jar, so sticky-session cookies set by the
+// remote MCP ingress are echoed back on subsequent requests.
+func TestCreateHTTPClient_PersistsCookies(t *testing.T) {
+	t.Parallel()
+
+	var requestCount atomic.Int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := requestCount.Add(1)
+		switch n {
+		case 1:
+			if _, err := r.Cookie("mcp_session"); err == nil {
+				t.Errorf("first request must not carry mcp_session cookie, got one")
+			}
+			w.Header().Set("Set-Cookie", "mcp_session=abc123; Path=/")
+			w.WriteHeader(http.StatusOK)
+		default:
+			cookie := r.Header.Get("Cookie")
+			if !strings.Contains(cookie, "mcp_session=abc123") {
+				t.Errorf("subsequent request must carry mcp_session=abc123, got Cookie=%q", cookie)
+			}
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer server.Close()
+
+	client := newRemoteClient(server.URL, "streamable", nil, NewInMemoryTokenStore(), nil, false)
+	httpClient, _, err := client.createHTTPClient()
+	require.NoError(t, err)
+	require.NotNil(t, httpClient.Jar, "createHTTPClient must attach a cookie jar so sticky sessions stick")
+
+	req1, err := http.NewRequestWithContext(t.Context(), http.MethodGet, server.URL, http.NoBody)
+	require.NoError(t, err)
+	resp1, err := httpClient.Do(req1)
+	require.NoError(t, err)
+	_ = resp1.Body.Close()
+
+	req2, err := http.NewRequestWithContext(t.Context(), http.MethodGet, server.URL, http.NoBody)
+	require.NoError(t, err)
+	resp2, err := httpClient.Do(req2)
+	require.NoError(t, err)
+	_ = resp2.Body.Close()
+
+	require.Equal(t, int32(2), requestCount.Load(), "handler should have served both requests")
 }
 
 func TestNewRemoteToolsetWithAllowPrivateIPsPropagatesToClient(t *testing.T) {

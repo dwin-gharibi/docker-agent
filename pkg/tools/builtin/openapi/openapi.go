@@ -30,9 +30,7 @@ import (
 // CreateToolSet is used by the tools registry.
 func CreateToolSet(ctx context.Context, toolset latest.Toolset, runConfig *config.RuntimeConfig) (tools.ToolSet, error) {
 	expander := js.NewJsExpander(runConfig.EnvProvider())
-
 	specURL := expander.Expand(ctx, toolset.URL, nil)
-	headers := expander.ExpandMap(ctx, toolset.Headers)
 
 	var opts []Option
 	if toolset.Timeout > 0 {
@@ -41,7 +39,9 @@ func CreateToolSet(ctx context.Context, toolset latest.Toolset, runConfig *confi
 	if toolset.AllowPrivateIPsEnabled() {
 		opts = append(opts, WithAllowPrivateIPs(true))
 	}
-	return New(specURL, headers, opts...), nil
+	opts = append(opts, WithExpander(expander))
+
+	return New(specURL, toolset.Headers, opts...), nil
 }
 
 // ToolSet generates HTTP tools from an OpenAPI specification.
@@ -51,6 +51,7 @@ type ToolSet struct {
 
 	timeout         time.Duration
 	allowPrivateIPs bool
+	expander        *js.Expander
 }
 
 // Verify interface compliance.
@@ -75,6 +76,10 @@ func WithTimeout(d time.Duration) Option {
 // target internal services. Tests use this to talk to httptest.NewServer.
 func WithAllowPrivateIPs(allow bool) Option {
 	return func(t *ToolSet) { t.allowPrivateIPs = allow }
+}
+
+func WithExpander(expander *js.Expander) Option {
+	return func(t *ToolSet) { t.expander = expander }
 }
 
 // New creates a new OpenAPI toolset from the given spec URL.
@@ -251,6 +256,7 @@ func (t *ToolSet) operationToTool(baseURL, path, method string, op *v3.Operation
 			headers:         t.headers,
 			timeout:         t.timeout,
 			allowPrivateIPs: t.allowPrivateIPs,
+			expander:        t.expander,
 		}).callTool),
 		Annotations: tools.ToolAnnotations{
 			ReadOnlyHint: readOnly,
@@ -441,6 +447,7 @@ type openAPIHandler struct {
 
 	timeout         time.Duration
 	allowPrivateIPs bool
+	expander        *js.Expander
 }
 
 type openAPICallArgs map[string]any
@@ -471,7 +478,9 @@ func (h *openAPIHandler) callTool(ctx context.Context, params openAPICallArgs) (
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("Accept", "application/json")
-	setHeaders(req, h.headers)
+
+	headers := h.expander.ExpandMap(ctx, h.headers)
+	setHeaders(req, headers)
 
 	resp, err := httpclient.NewSafeClient(h.timeout, h.allowPrivateIPs).Do(req)
 	if err != nil {

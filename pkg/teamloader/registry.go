@@ -60,8 +60,8 @@ func NewDefaultToolsetRegistry() ToolsetRegistry {
 			"filesystem": func(_ context.Context, toolset latest.Toolset, _ string, runConfig *config.RuntimeConfig, _ string) (tools.ToolSet, error) {
 				return filesystem.CreateToolSet(toolset, runConfig)
 			},
-			"fetch": func(ctx context.Context, toolset latest.Toolset, _ string, runConfig *config.RuntimeConfig, _ string) (tools.ToolSet, error) {
-				return fetch.CreateToolSet(ctx, toolset, runConfig)
+			"fetch": func(_ context.Context, toolset latest.Toolset, _ string, runConfig *config.RuntimeConfig, _ string) (tools.ToolSet, error) {
+				return fetch.CreateToolSet(toolset, runConfig)
 			},
 			"mcp": func(ctx context.Context, toolset latest.Toolset, _ string, runConfig *config.RuntimeConfig, _ string) (tools.ToolSet, error) {
 				return mcp.CreateToolSet(ctx, toolset, runConfig)
@@ -69,8 +69,8 @@ func NewDefaultToolsetRegistry() ToolsetRegistry {
 			"mcp_catalog": func(_ context.Context, _ latest.Toolset, _ string, runConfig *config.RuntimeConfig, _ string) (tools.ToolSet, error) {
 				return mcpcatalog.New(runConfig.EnvProvider()), nil
 			},
-			"api": func(ctx context.Context, toolset latest.Toolset, _ string, runConfig *config.RuntimeConfig, _ string) (tools.ToolSet, error) {
-				return api.CreateToolSet(ctx, toolset, runConfig)
+			"api": func(_ context.Context, toolset latest.Toolset, _ string, runConfig *config.RuntimeConfig, _ string) (tools.ToolSet, error) {
+				return api.CreateToolSet(toolset, runConfig)
 			},
 			"a2a": func(ctx context.Context, toolset latest.Toolset, _ string, runConfig *config.RuntimeConfig, _ string) (tools.ToolSet, error) {
 				return a2a.CreateToolSet(ctx, toolset, runConfig)

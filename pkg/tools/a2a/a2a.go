@@ -32,6 +32,7 @@ type Toolset struct {
 	headers         map[string]string
 	timeout         time.Duration
 	allowPrivateIPs bool
+	expander        *js.Expander
 	client          *a2aclient.Client
 	card            *a2a.AgentCard
 	mu              sync.RWMutex
@@ -54,6 +55,10 @@ func WithAllowPrivateIPs(allow bool) Option {
 	return func(t *Toolset) { t.allowPrivateIPs = allow }
 }
 
+func WithExpander(expander *js.Expander) Option {
+	return func(t *Toolset) { t.expander = expander }
+}
+
 // Verify interface compliance
 var (
 	_ tools.ToolSet      = (*Toolset)(nil)
@@ -63,17 +68,18 @@ var (
 
 // CreateToolSet is used by the tools registry.
 func CreateToolSet(ctx context.Context, toolset latest.Toolset, runConfig *config.RuntimeConfig) (tools.ToolSet, error) {
-	expander := js.NewJsExpander(runConfig.EnvProvider())
-	headers := expander.ExpandMap(ctx, toolset.Headers)
-
 	var opts []Option
+
 	if toolset.Timeout > 0 {
 		opts = append(opts, WithTimeout(time.Duration(toolset.Timeout)*time.Second))
 	}
 	if toolset.AllowPrivateIPsEnabled() {
 		opts = append(opts, WithAllowPrivateIPs(true))
 	}
-	return NewToolset(toolset.Name, toolset.URL, headers, opts...), nil
+	expander := js.NewJsExpander(runConfig.EnvProvider())
+	opts = append(opts, WithExpander(expander))
+
+	return NewToolset(toolset.Name, toolset.URL, toolset.Headers, opts...), nil
 }
 
 // NewToolset creates a new A2A toolset for the given URL.
@@ -176,7 +182,9 @@ func (t *Toolset) Start(ctx context.Context) error {
 	if base == nil {
 		base = http.DefaultTransport
 	}
-	httpClient.Transport = upstream.NewHeaderTransport(base, t.headers)
+
+	headers := t.expander.ExpandMap(ctx, t.headers)
+	httpClient.Transport = upstream.NewHeaderTransport(base, headers)
 
 	client, err := a2aclient.NewFromCard(ctx, card,
 		a2aclient.WithDefaultsDisabled(),

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/http/cookiejar"
 
 	gomcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -58,7 +59,10 @@ func (c *remoteMCPClient) Initialize(ctx context.Context, _ *gomcp.InitializeReq
 	// oauthTransport so we can enrich Connect errors with the server's own
 	// explanation — without this, a plain `Bad Request` bubbles up and the
 	// user has no idea that, say, the Slack app hasn't been enabled for MCP.
-	httpClient, oauthT := c.createHTTPClient()
+	httpClient, oauthT, err := c.createHTTPClient()
+	if err != nil {
+		return nil, fmt.Errorf("creating HTTP client: %w", err)
+	}
 
 	var transport gomcp.Transport
 
@@ -156,7 +160,7 @@ func (c *remoteMCPClient) SetUnmanagedOAuthRedirectURI(uri string) {
 // The oauthTransport is returned alongside the client so callers can inspect
 // the most recent server-side failure (via lastServerError) when Connect()
 // returns a bare HTTP-status error and we need to surface the actual cause.
-func (c *remoteMCPClient) createHTTPClient() (*http.Client, *oauthTransport) {
+func (c *remoteMCPClient) createHTTPClient() (*http.Client, *oauthTransport, error) {
 	base := c.headerTransport()
 
 	// Then wrap with OAuth support
@@ -171,7 +175,13 @@ func (c *remoteMCPClient) createHTTPClient() (*http.Client, *oauthTransport) {
 		oauthHTTPClient:           oauthHTTPClientForAllowPrivateIPs(c.allowPrivateIPs),
 	}
 
-	return &http.Client{Transport: oauthT}, oauthT
+	// Persist cookies across requests
+	// So sticky sessions work if implemented by the server (e.g. in a multiple replica setup)
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("creating cookie jar: %w", err)
+	}
+	return &http.Client{Transport: oauthT, Jar: jar}, oauthT, nil
 }
 
 func (c *remoteMCPClient) headerTransport() http.RoundTripper {

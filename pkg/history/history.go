@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/docker/portcullis"
 )
 
 // History is the in-memory view of a persistent message history. The cursor
@@ -43,8 +45,12 @@ func New(baseDir string) (*History, error) {
 }
 
 // Add records a new message. Any prior occurrence of the same message is
-// removed and the new one becomes the most recent entry.
+// removed and the new one becomes the most recent entry. The message is
+// scrubbed of secret material via [portcullis.Redact] before being stored
+// in memory or written to disk so secrets pasted into the prompt never
+// linger in the persistent history.
 func (h *History) Add(message string) error {
+	message = portcullis.Redact(message)
 	h.addInMemory(message)
 	h.current = len(h.Messages)
 	return h.append(message)
@@ -162,7 +168,10 @@ func (h *History) load() error {
 		if err := json.Unmarshal(line, &msg); err != nil {
 			continue
 		}
-		h.addInMemory(msg)
+		// Redact on read so a history file that predates redaction
+		// (or was tampered with externally) never exposes secrets to
+		// the in-memory navigation cursor or downstream callers.
+		h.addInMemory(portcullis.Redact(msg))
 	}
 	return nil
 }
@@ -188,7 +197,7 @@ func (h *History) migrateOldHistory(baseDir string) error {
 	}
 
 	for _, msg := range old.Messages {
-		if err := h.append(msg); err != nil {
+		if err := h.append(portcullis.Redact(msg)); err != nil {
 			return err
 		}
 	}

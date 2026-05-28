@@ -1,6 +1,7 @@
 package fetch
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -12,6 +13,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/docker/docker-agent/pkg/config"
+	"github.com/docker/docker-agent/pkg/config/latest"
+	"github.com/docker/docker-agent/pkg/js"
 	"github.com/docker/docker-agent/pkg/tools"
 	"github.com/docker/docker-agent/pkg/useragent"
 	"github.com/docker/docker-agent/pkg/version"
@@ -27,7 +31,7 @@ import (
 // caller options still take precedence (a later option overrides an
 // earlier one).
 func newFetchToolForTest(opts ...ToolOption) *ToolSet {
-	return New(append([]ToolOption{WithAllowPrivateIPs(true)}, opts...)...)
+	return New(append([]ToolOption{WithAllowPrivateIPs(true), WithExpander(js.NewJsExpander(&testEnvProvider{}))}, opts...)...)
 }
 
 func TestFetchToolWithOptions(t *testing.T) {
@@ -910,4 +914,51 @@ func TestFetch_AllowPrivateIPsRestoresLegacyBehaviour(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, result.Output, "internal service response",
 		"WithAllowPrivateIPs(true) must permit dialling 127.0.0.1")
+}
+
+func TestFetch_LazyReplaceHeaders(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprintf(w, `header value: "%s"`, r.Header.Get("Docker-Token"))
+	}))
+	t.Cleanup(server.Close)
+
+	envVariables := map[string]string{
+		"DOCKER_TOKEN": "INITIAL",
+	}
+	env := testEnvProvider(envVariables)
+
+	toolSet, err := CreateToolSet(latest.Toolset{
+		AllowPrivateIPs: new(true),
+		Headers: map[string]string{
+			"Docker-Token": "${env.DOCKER_TOKEN}",
+		},
+	}, &config.RuntimeConfig{
+		EnvProviderForTests: &env,
+	})
+	require.NoError(t, err)
+
+	// Refresh the DOCKER_TOKEN after tool creation.
+	envVariables["DOCKER_TOKEN"] = "REFRESHED"
+
+	allTools, err := toolSet.Tools(t.Context())
+	require.NoError(t, err)
+
+	result, err := allTools[0].Handler(t.Context(), tools.ToolCall{
+		Function: tools.FunctionCall{
+			Arguments: fmt.Sprintf(`{"urls": [%q], "format": "text"}`, server.URL),
+		},
+	})
+
+	require.NoError(t, err)
+	assert.Contains(t, result.Output, `header value: "REFRESHED"`)
+}
+
+type testEnvProvider map[string]string
+
+func (p *testEnvProvider) Get(_ context.Context, name string) (string, bool) {
+	val, found := (*p)[name]
+	return val, found
 }

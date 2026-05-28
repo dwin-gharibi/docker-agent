@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/docker/docker-agent/pkg/config"
 	"github.com/docker/docker-agent/pkg/config/latest"
 	"github.com/docker/docker-agent/pkg/js"
 	"github.com/docker/docker-agent/pkg/tools"
@@ -23,8 +24,8 @@ import (
 // protection so tests can talk to httptest.NewServer (which binds to
 // 127.0.0.1). It is defined in a *_test.go file so it is not compiled
 // into release binaries. Production callers must use [New].
-func newAPIToolForTest(config latest.APIToolConfig, expander *js.Expander) *ToolSet {
-	return New(config, expander, WithAllowPrivateIPs(true))
+func newAPIToolForTest(apiConfig latest.APIToolConfig, expander *js.Expander) *ToolSet {
+	return New(apiConfig, expander, WithAllowPrivateIPs(true))
 }
 
 type testServer struct {
@@ -267,9 +268,54 @@ func TestAPITool_TimeoutHonoured(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestAPITool_LazyReplaceHeaders(t *testing.T) {
+	t.Parallel()
+	ts := getTestServer(t)
+
+	envVariables := map[string]string{
+		"DOCKER_TOKEN": "INITIAL",
+	}
+	env := testEnvProvider(envVariables)
+
+	toolSet, err := CreateToolSet(latest.Toolset{
+		AllowPrivateIPs: new(true),
+		APIConfig: latest.APIToolConfig{
+			Method:   http.MethodGet,
+			Endpoint: ts.serverURL + "/api?token=${env.DOCKER_TOKEN}&value=${value}",
+		},
+	}, &config.RuntimeConfig{
+		EnvProviderForTests: &env,
+	})
+	require.NoError(t, err)
+
+	// Refresh the DOCKER_TOKEN after tool creation.
+	envVariables["DOCKER_TOKEN"] = "REFRESHED"
+
+	allTools, err := toolSet.Tools(t.Context())
+	require.NoError(t, err)
+
+	result, err := allTools[0].Handler(t.Context(), tools.ToolCall{
+		Function: tools.FunctionCall{
+			Arguments: `{"value": "myvalue"}`,
+		},
+	})
+
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"status":"ok"}`, result.Output)
+	assert.Equal(t, http.MethodGet, ts.receivedMethod)
+	assert.Equal(t, "/api?token=REFRESHED&value=myvalue", ts.receivedURL)
+}
+
 type noopEnvProvider struct{}
 
 func (noopEnvProvider) Get(context.Context, string) (string, bool) { return "", false }
+
+type testEnvProvider map[string]string
+
+func (p *testEnvProvider) Get(_ context.Context, name string) (string, bool) {
+	val, found := (*p)[name]
+	return val, found
+}
 
 func testExpander() *js.Expander {
 	return js.NewJsExpander(noopEnvProvider{})
