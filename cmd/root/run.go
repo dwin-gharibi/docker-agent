@@ -62,11 +62,12 @@ type runExecFlags struct {
 	outputJSON    bool
 
 	// Run only
-	hideToolResults bool
-	lean            bool
-	appName         string
-	listenAddr      string
-	onEventSpecs    []string
+	hideToolResults  bool
+	lean             bool
+	appName          string
+	listenAddr       string
+	onEventSpecs     []string
+	disabledCommands []string
 
 	// globalPermissions holds the user-level global permission checker built
 	// from user config settings. Nil when no global permissions are configured.
@@ -140,6 +141,7 @@ func addRunOrExecFlags(cmd *cobra.Command, flags *runExecFlags) {
 	_ = cmd.PersistentFlags().MarkHidden("force-tui")
 	cmd.PersistentFlags().BoolVar(&flags.lean, "lean", false, "Use a simplified TUI with minimal chrome")
 	cmd.PersistentFlags().StringVar(&flags.appName, "app-name", "", "Application name shown in the TUI in place of \"docker agent\"")
+	cmd.PersistentFlags().StringSliceVar(&flags.disabledCommands, "disable-commands", nil, "Comma-separated list of slash commands to hide and disable in the TUI (e.g. /cost,/eval,/model)")
 	cmd.PersistentFlags().BoolVar(&flags.sandbox, "sandbox", false, "Run the agent inside a Docker sandbox (requires Docker Desktop with sandbox support)")
 	cmd.PersistentFlags().StringVar(&flags.sandboxTemplate, "template", "docker/sandbox-templates:docker-agent", "Template image for the sandbox (passed to docker sandbox create -t)")
 	cmd.PersistentFlags().BoolVar(&flags.sbx, "sbx", true, "Prefer the sbx CLI backend when available (set --sbx=false to force docker sandbox)")
@@ -502,6 +504,9 @@ func (f *runExecFlags) tuiOpts() []tui.Option {
 	}
 	if f.appName != "" {
 		opts = append(opts, tui.WithAppName(f.appName))
+	}
+	if len(f.disabledCommands) > 0 {
+		opts = append(opts, tui.WithDisabledCommands(f.disabledCommands))
 	}
 	return opts
 }

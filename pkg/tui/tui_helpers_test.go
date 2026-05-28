@@ -1,11 +1,13 @@
 package tui
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/docker/docker-agent/pkg/tui/commands"
 	"github.com/docker/docker-agent/pkg/tui/components/statusbar"
 	"github.com/docker/docker-agent/pkg/tui/components/tabbar"
 )
@@ -262,4 +264,79 @@ func TestFormatWindowTitle(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCommandCategories_DisabledCommandsFilter(t *testing.T) {
+	t.Parallel()
+
+	build := func(context.Context, tea.Model) []commands.Category {
+		return []commands.Category{
+			{
+				Name: "Session",
+				Commands: []commands.Item{
+					{ID: "a", SlashCommand: "/cost"},
+					{ID: "b", SlashCommand: "/eval"},
+					{ID: "c", SlashCommand: "/exit"},
+				},
+			},
+			{
+				Name: "Settings",
+				Commands: []commands.Item{
+					{ID: "d", SlashCommand: "/theme"},
+				},
+			},
+		}
+	}
+
+	t.Run("no filter keeps everything", func(t *testing.T) {
+		t.Parallel()
+		m := &appModel{buildCommandCategories: build}
+		got := m.commandCategories()
+		if len(got) != 2 {
+			t.Fatalf("len(categories) = %d, want 2", len(got))
+		}
+	})
+
+	t.Run("filters slash commands and drops empty categories", func(t *testing.T) {
+		t.Parallel()
+		m := &appModel{buildCommandCategories: build}
+		WithDisabledCommands([]string{"/cost", "eval", "/theme"})(m)
+
+		got := m.commandCategories()
+		if len(got) != 1 {
+			t.Fatalf("len(categories) = %d, want 1 (Settings dropped, Session kept)", len(got))
+		}
+		if got[0].Name != "Session" {
+			t.Fatalf("category = %q, want Session", got[0].Name)
+		}
+		if len(got[0].Commands) != 1 || got[0].Commands[0].SlashCommand != "/exit" {
+			t.Fatalf("session commands = %+v, want only /exit", got[0].Commands)
+		}
+	})
+
+	t.Run("blank entries are ignored", func(t *testing.T) {
+		t.Parallel()
+		m := &appModel{buildCommandCategories: build}
+		WithDisabledCommands([]string{"", "  "})(m)
+		got := m.commandCategories()
+		if len(got) != 2 {
+			t.Fatalf("len(categories) = %d, want 2", len(got))
+		}
+	})
+
+	t.Run("matching is case-insensitive", func(t *testing.T) {
+		t.Parallel()
+		m := &appModel{buildCommandCategories: build}
+		WithDisabledCommands([]string{"/Cost", "EVAL", "/Theme"})(m)
+		got := m.commandCategories()
+		if len(got) != 1 {
+			t.Fatalf("len(categories) = %d, want 1 (Settings dropped, Session kept)", len(got))
+		}
+		if got[0].Name != "Session" {
+			t.Fatalf("category = %q, want Session", got[0].Name)
+		}
+		if len(got[0].Commands) != 1 || got[0].Commands[0].SlashCommand != "/exit" {
+			t.Fatalf("session commands = %+v, want only /exit", got[0].Commands)
+		}
+	})
 }

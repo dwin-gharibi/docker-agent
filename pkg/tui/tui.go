@@ -188,6 +188,10 @@ type appModel struct {
 
 	appName    string
 	appVersion string
+
+	// disabledCommands holds slash commands to hide and disable.
+	// Normalized to start with "/".
+	disabledCommands map[string]bool
 }
 
 // Transcriber is the speech-to-text interface used by the TUI. It is an
@@ -227,6 +231,32 @@ func WithAppName(name string) Option {
 func WithVersion(v string) Option {
 	return func(m *appModel) {
 		m.appVersion = v
+	}
+}
+
+// WithDisabledCommands hides and disables the given slash commands so they
+// are stripped from the command palette, the slash-command parser, and
+// completion. Each entry is normalized to start with "/" (so "cost" and
+// "/cost" are equivalent) and lower-cased to match the registered slash
+// command names (so "/Cost" and "/cost" are equivalent).
+func WithDisabledCommands(slashCommands []string) Option {
+	return func(m *appModel) {
+		if len(slashCommands) == 0 {
+			return
+		}
+		if m.disabledCommands == nil {
+			m.disabledCommands = make(map[string]bool, len(slashCommands))
+		}
+		for _, c := range slashCommands {
+			c = strings.ToLower(strings.TrimSpace(c))
+			if c == "" {
+				continue
+			}
+			if !strings.HasPrefix(c, "/") {
+				c = "/" + c
+			}
+			m.disabledCommands[c] = true
+		}
 	}
 }
 
@@ -392,7 +422,26 @@ func (m *appModel) reapplyKeyboardEnhancements() {
 }
 
 func (m *appModel) commandCategories() []commands.Category {
-	return m.buildCommandCategories(context.Background(), m)
+	categories := m.buildCommandCategories(context.Background(), m)
+	if len(m.disabledCommands) == 0 {
+		return categories
+	}
+	filtered := make([]commands.Category, 0, len(categories))
+	for _, cat := range categories {
+		items := make([]commands.Item, 0, len(cat.Commands))
+		for _, item := range cat.Commands {
+			if m.disabledCommands[item.SlashCommand] {
+				continue
+			}
+			items = append(items, item)
+		}
+		if len(items) == 0 {
+			continue
+		}
+		cat.Commands = items
+		filtered = append(filtered, cat)
+	}
+	return filtered
 }
 
 // chatPageOpts returns the chat.PageOption slice derived from the current
