@@ -281,8 +281,8 @@ func operationDescription(path, method string, op *v3.Operation) string {
 	}
 
 	if op.Description != "" {
-		if len(op.Description) > 200 {
-			return op.Description[:200] + "..."
+		if r := []rune(op.Description); len(r) > 200 {
+			return string(r[:200]) + "..."
 		}
 		return op.Description
 	}
