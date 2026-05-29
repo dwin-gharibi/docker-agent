@@ -1881,8 +1881,8 @@
           },
           "examples": [
             [
-              "duckduckgo",
-              "fetch"
+              "docker-docs",
+              "microsoft-learn"
             ]
           ]
         },
@@ -1894,7 +1894,7 @@
           },
           "examples": [
             [
-              "shell"
+              "gitmcp"
             ]
           ]
         },
