@@ -27,6 +27,9 @@ $ docker agent run agent.yaml --yolo
 # Enable debug logging
 $ docker agent run agent.yaml --debug
 
+# Override the application name shown in the status bar and window title
+$ docker agent run agent.yaml --app-name "My Project"
+
 # Hide the sidebar (cannot be re-enabled via Ctrl+B)
 $ docker agent run agent.yaml --sidebar=false
 
