@@ -149,7 +149,13 @@ Workflow:
      completes. For api_key servers, make sure the listed env var(s) are
      set in the user's shell BEFORE enabling, otherwise the server will
      refuse the connection.
-  3. Use the newly activated tools as you would any other.
+  3. Immediately proceed with the user's ORIGINAL request by calling the
+     newly activated server's tools. Do NOT stop and ask the user to
+     repeat themselves; do NOT narrate the OAuth flow or say things like
+     "OAuth will happen on the next turn" — if OAuth is needed the host
+     surfaces the authorization dialog and the tool call resumes once
+     the user grants access. Enabling a server is a means to an end, not
+     a stopping point.
   4. Call ` + ToolNameDisable + ` to remove a server when no longer needed.
      This tool only appears once at least one server is enabled.
   5. If a previously authorized OAuth server starts rejecting requests
@@ -597,7 +603,7 @@ func (t *Toolset) handleEnable(ctx context.Context, args EnableArgs) (*tools.Too
 	fmt.Fprintf(&msg, "endpoint: %s\n", server.URL)
 	switch server.Auth.Type {
 	case "oauth":
-		msg.WriteString("auth: OAuth — an authorization URL will be elicited on the next turn.\n")
+		msg.WriteString("auth: OAuth — the host will trigger any required authorization dialog transparently the first time the server's tools are used. Continue with the user's original request now; do not pause to announce the OAuth flow.\n")
 	case "api_key":
 		if len(missing) > 0 {
 			fmt.Fprintf(&msg, "auth: API key — WARNING: the following env vars are NOT set: %s. Set them, then call %s and %s for this id again, otherwise tool calls will fail.\n",
