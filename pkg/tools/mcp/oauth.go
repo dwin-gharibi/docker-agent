@@ -27,6 +27,14 @@ import (
 // resourceMetadataFromWWWAuth extracts resource metadata URL from WWW-Authenticate header
 var re = regexp.MustCompile(`resource="([^"]+)"`)
 
+// unmanagedOAuthWaitTimeout is the upper bound on how long the unmanaged
+// OAuth flow blocks waiting for a reply (elicitation result or
+// out-of-band callback). Generous enough to accommodate a user clicking
+// through an IdP consent screen and any IdP-side prompts; small enough
+// that a silently-disconnected MCP client can't hold the per-session
+// streaming lock indefinitely.
+var unmanagedOAuthWaitTimeout = 10 * time.Minute
+
 // oauth is a simple struct for compatibility with existing code
 type oauth struct {
 	metadataClient *http.Client
@@ -997,12 +1005,22 @@ func (t *oauthTransport) handleUnmanagedOAuthFlow(ctx context.Context, authServe
 	// `elicCtx` -- when the direct callback wins we cancel elicCtx to
 	// release the goroutine, but the surrounding ctx (used for the token
 	// exchange below) stays alive.
+	//
+	// elicCtx also carries an upper bound on how long the flow waits.
+	// `ctx` here is the detached ctx from clientConnector.Connect, whose
+	// Done channel never fires on its own. Without a deadline, a silent
+	// MCP-client disconnect (TCP RST, idle timeout, process kill) leaves
+	// `requestElicitation` blocked forever, holding the per-session
+	// streaming lock at the SessionManager level. Subsequent user
+	// messages would then all return 409 / ErrSessionBusy until a
+	// process restart. unmanagedOAuthWaitTimeout caps that window;
+	// user-initiated cancellation still wins instantly via userCancelCh.
 	type elicResult struct {
 		result tools.ElicitationResult
 		err    error
 	}
 	elicCh := make(chan elicResult, 1)
-	elicCtx, elicCancel := context.WithCancel(ctx)
+	elicCtx, elicCancel := context.WithTimeout(ctx, unmanagedOAuthWaitTimeout)
 	defer elicCancel()
 	go func() {
 		r, e := t.client.requestElicitation(elicCtx, &mcpsdk.ElicitParams{
@@ -1038,7 +1056,10 @@ func (t *oauthTransport) handleUnmanagedOAuthFlow(ctx context.Context, authServe
 		userCancelCh = parentCtx.Done()
 	}
 
-	var content map[string]any
+	var (
+		token      *OAuthToken
+		consumeErr error
+	)
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -1050,6 +1071,14 @@ func (t *oauthTransport) handleUnmanagedOAuthFlow(ctx context.Context, authServe
 		// per-session streaming lock is released by the SessionManager
 		// goroutine's deferred Unlock).
 		return parentCtx.Err()
+	case <-elicCtx.Done():
+		// Defensive timeout: if the MCP client disconnected silently
+		// (TCP RST, idle timeout, process kill) AND requestElicitation
+		// does not honor its ctx, this case prevents the streaming
+		// lock from being held indefinitely. In practice the elicCh
+		// case below usually fires first with a deadline-exceeded
+		// error wrapped from requestElicitation.
+		return fmt.Errorf("OAuth flow timed out waiting for a reply after %s", unmanagedOAuthWaitTimeout)
 	case cb := <-callbackCh:
 		// Direct deeplink callback won. Release the in-flight
 		// elicitation goroutine; any UI the embedder showed for this
@@ -1064,9 +1093,13 @@ func (t *oauthTransport) handleUnmanagedOAuthFlow(ctx context.Context, authServe
 			return fmt.Errorf("OAuth flow declined by provider: %s", msg)
 		}
 		slog.DebugContext(ctx, "OAuth callback received via deeplink, exchanging code for token")
-		// Synthesize the {code, state} payload that
-		// consumeUnmanagedElicitationReply expects.
-		content = map[string]any{"code": cb.Code, "state": expectedState}
+		// State validation is performed by the registry lookup in
+		// mcpOAuthCallback: the only state keys present in the
+		// pending-OAuth registry are ones the runtime itself
+		// generated and is currently awaiting. Re-validating against
+		// `expectedState` here would be a tautology, so we go
+		// straight to the token exchange.
+		token, consumeErr = t.exchangeAuthorizationCode(ctx, cb.Code, authServerMetadata, pkceVerifier, clientID, clientSecret, redirectURI, resourceIndicator)
 	case er := <-elicCh:
 		if er.err != nil {
 			return fmt.Errorf("failed to send elicitation request: %w", er.err)
@@ -1078,24 +1111,24 @@ func (t *oauthTransport) handleUnmanagedOAuthFlow(ctx context.Context, authServe
 		if er.result.Content == nil {
 			return errors.New("no payload received from client")
 		}
-		content = er.result.Content
+		// On the elicitation path the state arrives from the client
+		// and MUST be validated against expectedState; the registry
+		// did not see this delivery.
+		token, consumeErr = t.consumeUnmanagedElicitationReply(
+			ctx,
+			er.result.Content,
+			authServerMetadata,
+			driveFlow,
+			expectedState,
+			pkceVerifier,
+			clientID,
+			clientSecret,
+			redirectURI,
+			resourceIndicator,
+		)
 	}
-
-	token, err := t.consumeUnmanagedElicitationReply(
-		ctx,
-		content,
-		authServerMetadata,
-		resourceMetadata,
-		driveFlow,
-		expectedState,
-		pkceVerifier,
-		clientID,
-		clientSecret,
-		redirectURI,
-		resourceIndicator,
-	)
-	if err != nil {
-		return err
+	if consumeErr != nil {
+		return consumeErr
 	}
 
 	if driveFlow {
@@ -1133,12 +1166,11 @@ func (t *oauthTransport) handleUnmanagedOAuthFlow(ctx context.Context, authServe
 //     the stored PKCE verifier + client credentials to make the exchange).
 //
 // If the client mixes shapes (e.g. supplies both access_token and code), the
-// access_token wins to preserve the legacy behavior.
+// access_token wins to preserve the client-driven behavior.
 func (t *oauthTransport) consumeUnmanagedElicitationReply(
 	ctx context.Context,
 	content map[string]any,
 	authServerMetadata *AuthorizationServerMetadata,
-	resourceMetadata protectedResourceMetadata,
 	driveFlow bool,
 	expectedState, pkceVerifier, clientID, clientSecret, redirectURI, resourceIndicator string,
 ) (*OAuthToken, error) {
@@ -1170,7 +1202,20 @@ func (t *oauthTransport) consumeUnmanagedElicitationReply(
 	if subtle.ConstantTimeCompare([]byte(state), []byte(expectedState)) != 1 {
 		return nil, errors.New("state mismatch in elicitation reply")
 	}
+	return t.exchangeAuthorizationCode(ctx, code, authServerMetadata, pkceVerifier, clientID, clientSecret, redirectURI, resourceIndicator)
+}
 
+// exchangeAuthorizationCode posts to the auth server's token endpoint and
+// returns the resulting token. Shared between the elicitation-reply path
+// (after state validation against the client-supplied state) and the
+// out-of-band callback path (where state was already validated by the
+// pending-OAuth registry lookup, so no in-flow state check is needed).
+func (t *oauthTransport) exchangeAuthorizationCode(
+	ctx context.Context,
+	code string,
+	authServerMetadata *AuthorizationServerMetadata,
+	pkceVerifier, clientID, clientSecret, redirectURI, resourceIndicator string,
+) (*OAuthToken, error) {
 	slog.DebugContext(ctx, "Exchanging authorization code received from client")
 	token, err := exchangeCodeForToken(
 		ctx,
@@ -1186,6 +1231,5 @@ func (t *oauthTransport) consumeUnmanagedElicitationReply(
 	if err != nil {
 		return nil, fmt.Errorf("failed to exchange code for token: %w", err)
 	}
-	_ = resourceMetadata // captured for future audit logging; intentionally unused here
 	return token, nil
 }

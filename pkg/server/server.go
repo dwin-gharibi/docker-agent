@@ -418,10 +418,30 @@ func (s *Server) elicitation(c echo.Context) error {
 // The state value is opaque, high-entropy and was generated in-process by
 // docker-agent's unmanaged OAuth flow (see GenerateState in
 // pkg/tools/mcp). Looking it up in the pending-oauth registry IS the
-// authentication: docker-agent only accepts callbacks for states it is
-// currently awaiting. An unknown state returns 404 (which is the
-// expected outcome for replays and any state value the agent did not
-// itself generate).
+// per-request authorization: docker-agent only accepts callbacks for
+// states it is currently awaiting. An unknown state returns 404 (which
+// is the expected outcome for replays and any state value the agent did
+// not itself generate).
+//
+// Threat model:
+//
+//   - The registry is the primary defence. State values are >=128-bit
+//     opaque tokens from GenerateState; an attacker that has not
+//     observed a live state cannot brute-force one in a useful window.
+//   - State values DO appear in transit: in the elicitation Meta on the
+//     session SSE stream (visible only to the connected client), and in
+//     the authorize URL the user opens (visible to the user's browser
+//     and the authorization server). They are also written to debug
+//     logs when --debug is on.
+//   - If an attacker DOES observe a live state (e.g. via leaked debug
+//     logs or a compromised host), they could POST here with an
+//     attacker-controlled code; the resulting token would be bound to
+//     the attacker's account, not the user's. Setting --auth-token
+//     blocks this regardless of state leakage, because the route then
+//     also requires bearer auth.
+//   - Operators running docker-agent on a network-reachable interface
+//     SHOULD configure --auth-token. Defaults to localhost-only via the
+//     existing socket binding when not overridden.
 //
 // The handler never blocks: it hands the callback to the buffered
 // channel of the waiting flow and returns immediately. The token

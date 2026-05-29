@@ -1764,6 +1764,53 @@ func TestUnmanagedOAuthFlow_DriveFlow_AbortsOnParentCtxCancellation(t *testing.T
 		"token endpoint must NOT be hit when the parent ctx is cancelled before any callback")
 }
 
+// TestUnmanagedOAuthFlow_DriveFlow_TimesOutWhenNoReplyArrives ensures the
+// per-flow deadline releases the streaming lock even when the MCP client
+// disconnects silently and never produces an elicitation reply.
+//
+// Without unmanagedOAuthWaitTimeout, requestElicitation would block on a
+// dead session indefinitely, the per-session lock at the SessionManager
+// level would stay held, and every subsequent message from that session
+// would return 409 / ErrSessionBusy until a process restart.
+func TestUnmanagedOAuthFlow_DriveFlow_TimesOutWhenNoReplyArrives(t *testing.T) {
+	original := unmanagedOAuthWaitTimeout
+	unmanagedOAuthWaitTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { unmanagedOAuthWaitTimeout = original })
+
+	srv := newUnmanagedOAuthTestServer(t)
+	defer srv.Close()
+
+	const redirectURI = "https://example.test/oauth/cb"
+	capture := &elicitCaptured{}
+	// Block until the test's t.Context is cancelled (after the
+	// roundtrip has returned). This emulates a silent client
+	// disconnect: requestElicitation honors its ctx and returns when
+	// elicCtx hits its deadline, surfacing the deadline-exceeded
+	// error on elicCh.
+	capture.replyFn = func(req *gomcp.ElicitParams) tools.ElicitationResult {
+		<-t.Context().Done()
+		return tools.ElicitationResult{Action: tools.ElicitationActionDecline}
+	}
+	transport, _ := newUnmanagedTestTransport(t, srv.URL, redirectURI, capture)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL, strings.NewReader("{}"))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, rtErr := transport.RoundTrip(req)
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
+	require.Error(t, rtErr)
+	assert.True(t,
+		strings.Contains(rtErr.Error(), "timed out") ||
+			strings.Contains(rtErr.Error(), "context deadline exceeded"),
+		"expected timeout error, got: %v", rtErr,
+	)
+	assert.Equal(t, int32(0), srv.tokenCalls.Load(),
+		"token endpoint must NOT be hit on timeout")
+}
+
 // TestUnmanagedRedirectURI_PerToolsetTakesPrecedence verifies the precedence
 // order: per-toolset RemoteOAuthConfig.CallbackRedirectURL overrides the
 // runtime-wide --mcp-oauth-redirect-uri.
