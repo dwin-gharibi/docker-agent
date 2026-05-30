@@ -56,6 +56,7 @@ type runExecFlags struct {
 	sandboxTemplate   string
 	sbx               bool
 	noKit             bool
+	agentPickerSpec   string
 
 	// Exec only
 	exec          bool
@@ -152,6 +153,8 @@ func addRunOrExecFlags(cmd *cobra.Command, flags *runExecFlags) {
 	cmd.PersistentFlags().StringVar(&flags.sandboxTemplate, "template", "docker/sandbox-templates:docker-agent", "Template image for the sandbox (passed to docker sandbox create -t)")
 	cmd.PersistentFlags().BoolVar(&flags.sbx, "sbx", true, "Prefer the sbx CLI backend when available (set --sbx=false to force docker sandbox)")
 	cmd.PersistentFlags().BoolVar(&flags.noKit, "no-kit", false, "Do not stage a docker-agent kit (skills, prompt files) when running in a sandbox")
+	cmd.PersistentFlags().StringVar(&flags.agentPickerSpec, "agent-picker", "", "Show a full-screen picker to choose an agent before launching. Optional comma-separated list of agent refs (defaults to \"default,coder\")")
+	cmd.PersistentFlags().Lookup("agent-picker").NoOptDefVal = strings.Join(defaultAgentPickerRefs, ",")
 	cmd.MarkFlagsMutuallyExclusive("fake", "record")
 	cmd.MarkFlagsMutuallyExclusive("remote", "sandbox")
 	cmd.MarkFlagsMutuallyExclusive("remote", "session-db")
@@ -189,6 +192,33 @@ func (f *runExecFlags) runRunCommand(cmd *cobra.Command, args []string) (command
 		}
 	}
 
+	useTUI := !f.exec && (f.forceTUI || isatty.IsTerminal(os.Stdout.Fd()))
+
+	// When --agent-picker is set, show a full-screen picker up front and use
+	// the chosen ref as the agent to run. Resolving it here (before sandbox
+	// and alias resolution) means the selected agent's own sandbox/alias
+	// defaults are honoured exactly as if it had been passed positionally.
+	// The picker is interactive, so it requires a TUI.
+	if cmd.Flags().Changed("agent-picker") {
+		if !useTUI {
+			return errors.New("--agent-picker requires an interactive terminal and cannot be used with --exec")
+		}
+		refs := parseAgentPickerRefs(f.agentPickerSpec)
+		applyTheme(f.theme)
+		chosen, err := selectAgentRef(ctx, refs, f.runConfig.EnvProvider())
+		if err != nil {
+			if errors.Is(err, errAgentPickerCancelled) {
+				cli.NewPrinter(cmd.OutOrStdout()).Println("Agent selection cancelled.")
+				return nil
+			}
+			return err
+		}
+		// With --agent-picker the agent comes from the picker, so any
+		// positional args are messages. Prepend the chosen ref so the rest
+		// of the pipeline (which expects args[0] to be the agent) is happy.
+		args = prependAgentRef(chosen, args)
+	}
+
 	// Resolve alias / runtime-declared sandbox opt-in before dispatch.
 	// An explicit --sandbox=<bool> on the CLI always wins, so we only
 	// consult the lower-priority sources when the flag wasn't set.
@@ -207,7 +237,6 @@ func (f *runExecFlags) runRunCommand(cmd *cobra.Command, args []string) (command
 
 	out := cli.NewPrinter(cmd.OutOrStdout())
 
-	useTUI := !f.exec && (f.forceTUI || isatty.IsTerminal(os.Stdout.Fd()))
 	return f.runOrExec(ctx, out, args, useTUI)
 }
 
