@@ -13,6 +13,7 @@ import (
 
 	"github.com/docker/docker-agent/pkg/config"
 	"github.com/docker/docker-agent/pkg/environment"
+	"github.com/docker/docker-agent/pkg/tui/components/scrollbar"
 	"github.com/docker/docker-agent/pkg/tui/components/toolcommon"
 	"github.com/docker/docker-agent/pkg/tui/styles"
 )
@@ -143,12 +144,16 @@ type agentPickerModel struct {
 	// currently selected agent.
 	showDetails bool
 	details     viewport.Model
+	detailsBar  *scrollbar.Model
 }
 
 func newAgentPickerModel(choices []agentChoice) *agentPickerModel {
+	vp := viewport.New()
+	vp.FillHeight = true
 	return &agentPickerModel{
-		choices: choices,
-		details: viewport.New(),
+		choices:    choices,
+		details:    vp,
+		detailsBar: scrollbar.New(),
 	}
 }
 
@@ -184,6 +189,7 @@ func (m *agentPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			var cmd tea.Cmd
 			m.details, cmd = m.details.Update(msg)
+			m.syncDetailsBar()
 			return m, cmd
 		}
 
@@ -207,30 +213,48 @@ func (m *agentPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// detailsDialogSize returns the width and height of the YAML dialog, leaving a
-// margin around the screen so it reads as an overlay.
+// Fixed YAML dialog dimensions. Keeping them constant means the dialog never
+// moves or resizes while scrolling. They shrink only when the terminal is too
+// small to hold the preferred size.
+const (
+	detailsDialogWidth  = 90
+	detailsDialogHeight = 28
+
+	// detailsChromeRows is the number of rows used by the dialog around the
+	// scrollable content: border (2) + padding (2) + title (1) + help (1).
+	detailsChromeRows = 6
+	// detailsChromeCols is the number of columns used by the dialog around
+	// the content: border (2) + padding (4) + scrollbar (1).
+	detailsChromeCols = 2 + 4 + scrollbar.Width
+)
+
+// detailsDialogSize returns the outer width and height of the YAML dialog,
+// clamped so it always fits on screen with a small margin.
 func (m *agentPickerModel) detailsDialogSize() (w, h int) {
-	w = m.width - 8
-	h = m.height - 6
-	if w > 100 {
-		w = 100
-	}
-	if w < 20 {
-		w = 20
-	}
-	if h < 5 {
-		h = 5
-	}
+	w = min(detailsDialogWidth, max(m.width-4, 20))
+	h = min(detailsDialogHeight, max(m.height-2, detailsChromeRows+1))
 	return w, h
 }
 
-// resizeDetails keeps the viewport sized to the current dialog dimensions.
-// The viewport content area sits inside the dialog border (1) and padding (2)
-// on each side, plus a title and help line (3 rows).
+// viewportSize returns the inner content dimensions of the YAML viewport.
+func (m *agentPickerModel) viewportSize() (w, h int) {
+	dw, dh := m.detailsDialogSize()
+	return max(dw-detailsChromeCols, 1), max(dh-detailsChromeRows, 1)
+}
+
+// resizeDetails keeps the viewport and its scrollbar sized to the current
+// dialog dimensions.
 func (m *agentPickerModel) resizeDetails() {
-	w, h := m.detailsDialogSize()
-	m.details.SetWidth(w - 2*(1+2))
-	m.details.SetHeight(h - 2*1 - 3)
+	w, h := m.viewportSize()
+	m.details.SetWidth(w)
+	m.details.SetHeight(h)
+	m.syncDetailsBar()
+}
+
+// syncDetailsBar mirrors the viewport's scroll state into the scrollbar.
+func (m *agentPickerModel) syncDetailsBar() {
+	m.detailsBar.SetDimensions(m.details.Height(), m.details.TotalLineCount())
+	m.detailsBar.SetScrollOffset(m.details.YOffset())
 }
 
 // openDetails loads the selected agent's YAML into the viewport and shows the
@@ -242,6 +266,7 @@ func (m *agentPickerModel) openDetails() {
 	m.resizeDetails()
 	m.details.SetContent(m.detailsContent(m.choices[m.cursor]))
 	m.details.GotoTop()
+	m.syncDetailsBar()
 	m.showDetails = true
 }
 
@@ -334,26 +359,38 @@ func (m *agentPickerModel) render() string {
 
 // renderDetails renders the scrollable YAML dialog for the selected agent.
 func (m *agentPickerModel) renderDetails() string {
-	w, _ := m.detailsDialogSize()
-	contentWidth := w - 2*(1+2)
+	dw, _ := m.detailsDialogSize()
+	contentWidth := dw - detailsChromeCols + scrollbar.Width
 
 	ref := m.choices[m.cursor].ref
 	title := styles.DialogTitleStyle.Width(contentWidth).Render(toolcommon.TruncateText(ref, contentWidth))
 
-	scrollHint := ""
-	if !m.details.AtTop() || !m.details.AtBottom() {
-		scrollHint = "  •  " + percentLabel(m.details.ScrollPercent())
+	// Place the scrollbar immediately to the right of the viewport content.
+	// Reserve the column even when the content fits (empty scrollbar view) so
+	// the dialog width stays fixed.
+	_, vh := m.viewportSize()
+	bar := m.detailsBar.View()
+	if bar == "" {
+		bar = strings.TrimRight(strings.Repeat(" \n", vh), "\n")
 	}
-	help := styles.DialogHelpStyle.Render("↑↓ scroll" + scrollHint + "   esc/? close")
+	body := lipgloss.JoinHorizontal(
+		lipgloss.Top,
+		m.details.View(),
+		bar,
+	)
+
+	help := styles.DialogHelpStyle.
+		Width(contentWidth).
+		Render("↑↓ scroll  •  " + percentLabel(m.details.ScrollPercent()) + "   esc/? close")
 
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,
 		title,
-		m.details.View(),
+		body,
 		help,
 	)
 
-	return styles.DialogStyle.Width(w - 2).Render(content)
+	return styles.DialogStyle.Render(content)
 }
 
 // percentLabel formats a scroll fraction (0..1) as a percentage string.

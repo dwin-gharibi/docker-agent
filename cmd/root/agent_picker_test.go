@@ -2,9 +2,11 @@ package root
 
 import (
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 
+	"charm.land/lipgloss/v2"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -91,6 +93,36 @@ func TestPercentLabel(t *testing.T) {
 	assert.Equal(t, "100%", percentLabel(1))
 	assert.Equal(t, "0%", percentLabel(-0.5))
 	assert.Equal(t, "100%", percentLabel(2))
+}
+
+func TestAgentPickerDetailsFixedSize(t *testing.T) {
+	// A long YAML so the viewport is scrollable.
+	var sb strings.Builder
+	for i := range 200 {
+		sb.WriteString("line " + strconv.Itoa(i) + "\n")
+	}
+	m := newAgentPickerModel([]agentChoice{{ref: "default", yaml: sb.String()}})
+	m.width = 120
+	m.height = 40
+	m.openDetails()
+
+	top := m.renderDetails()
+	topW, topH := lipgloss.Size(top)
+
+	// Scroll down a few lines and to the bottom; dimensions must not change.
+	for range 5 {
+		m.details.ScrollDown(1)
+		m.syncDetailsBar()
+		w, h := lipgloss.Size(m.renderDetails())
+		assert.Equal(t, topW, w, "width changed while scrolling")
+		assert.Equal(t, topH, h, "height changed while scrolling")
+	}
+
+	m.details.GotoBottom()
+	m.syncDetailsBar()
+	w, h := lipgloss.Size(m.renderDetails())
+	assert.Equal(t, topW, w, "width changed at bottom")
+	assert.Equal(t, topH, h, "height changed at bottom")
 }
 
 func TestAgentPickerModelNavigation(t *testing.T) {
