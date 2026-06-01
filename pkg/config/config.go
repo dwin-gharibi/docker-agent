@@ -277,5 +277,25 @@ func validateSkillsConfiguration(_ string, agent *latest.AgentConfig) error {
 			return fmt.Errorf("agent '%s' has an empty skills entry", agent.Name)
 		}
 	}
+	seenInline := make(map[string]bool, len(agent.Skills.Inline))
+	for i := range agent.Skills.Inline {
+		inline := &agent.Skills.Inline[i]
+		if strings.TrimSpace(inline.Name) == "" {
+			return fmt.Errorf("agent '%s' has an inline skill with no name", agent.Name)
+		}
+		if strings.TrimSpace(inline.Description) == "" {
+			return fmt.Errorf("agent '%s' inline skill '%s' is missing a description", agent.Name, inline.Name)
+		}
+		if strings.TrimSpace(inline.Instructions) == "" {
+			return fmt.Errorf("agent '%s' inline skill '%s' is missing instructions", agent.Name, inline.Name)
+		}
+		if inline.Context != "" && inline.Context != "fork" {
+			return fmt.Errorf("agent '%s' inline skill '%s' has invalid context '%s' (only 'fork' is supported)", agent.Name, inline.Name, inline.Context)
+		}
+		if seenInline[inline.Name] {
+			return fmt.Errorf("agent '%s' has duplicate inline skill '%s'", agent.Name, inline.Name)
+		}
+		seenInline[inline.Name] = true
+	}
 	return nil
 }

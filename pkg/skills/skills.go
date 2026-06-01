@@ -28,6 +28,16 @@ type Skill struct {
 	// agent config or an inline "provider/model" reference (e.g.
 	// "openai/gpt-4o-mini"). It is ignored for non-fork skills.
 	Model string
+	// InlineContent holds the skill body for skills defined directly in the
+	// agent config rather than loaded from a file or URL. When set, the
+	// skill has no FilePath/BaseDir and its content is served from memory.
+	InlineContent string
+}
+
+// IsInline reports whether the skill is defined inline in the agent config
+// (its body lives in InlineContent rather than on disk or behind a URL).
+func (s Skill) IsInline() bool {
+	return s.InlineContent != ""
 }
 
 // IsFork returns true when the skill should be executed in an isolated

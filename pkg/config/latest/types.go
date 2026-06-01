@@ -477,22 +477,64 @@ type CacheConfig struct {
 const SkillSourceLocal = "local"
 
 // errSkillsFormat is returned when the `skills` value is neither a boolean nor
-// a list of strings.
-var errSkillsFormat = errors.New("skills must be a boolean or a list of skill sources and/or names")
+// a list of strings and/or inline skill definitions.
+var errSkillsFormat = errors.New("skills must be a boolean or a list of skill sources, names, and/or inline skill definitions")
 
-// SkillsConfig controls skill discovery sources and filtering for an agent.
-// Supports three YAML formats:
+// skillsFormatError maps a list-decode failure to a user-facing error. When the
+// failure carries a specific inline-skill diagnostic (an unknown/misspelled
+// field surfaced by skillListItem), that detail is preserved; otherwise the
+// generic shape hint is returned.
+func skillsFormatError(err error) error {
+	if err != nil && strings.Contains(err.Error(), "invalid inline skill") {
+		return err
+	}
+	return errSkillsFormat
+}
+
+// InlineSkill is a skill defined directly in the agent config rather than
+// loaded from the filesystem or a remote URL. It supports the subset of the
+// SKILL.md format that can be expressed in YAML; the skill body lives in
+// Instructions instead of a Markdown file.
+type InlineSkill struct {
+	// Name is the skill identifier used by read_skill / run_skill and the
+	// /<name> slash command. Required.
+	Name string `json:"name" yaml:"name"`
+	// Description is injected into the system prompt so the model knows when
+	// the skill applies. Required.
+	Description string `json:"description" yaml:"description"`
+	// Instructions is the skill body (equivalent to the Markdown content
+	// below the SKILL.md frontmatter). Required.
+	Instructions string `json:"instructions" yaml:"instructions"`
+	// Context, when set to "fork", runs the skill as an isolated sub-agent
+	// (exposed via run_skill) instead of inlining it in the conversation.
+	Context string `json:"context,omitempty" yaml:"context,omitempty"`
+	// Model optionally overrides the model used while a fork-mode skill runs.
+	// Ignored for non-fork skills.
+	Model string `json:"model,omitempty" yaml:"model,omitempty"`
+	// AllowedTools optionally records the tools the skill expects. It mirrors
+	// the SKILL.md `allowed-tools` field.
+	AllowedTools []string `json:"allowed_tools,omitempty" yaml:"allowed_tools,omitempty"`
+}
+
+// SkillsConfig controls skill discovery sources, filtering, and inline
+// definitions for an agent. Supports these YAML formats:
 //   - Boolean: `skills: true` (equivalent to ["local"]) or `skills: false` (disabled)
 //   - List:    `skills: ["local", "http://example.com"]` — sources to load from
 //   - List:    `skills: ["git", "docker"]`               — names of skills to include
 //   - List:    `skills: ["local", "git"]`                — mix of sources and names
+//   - List:    a list may also contain mapping items, each an inline skill
+//     definition (see InlineSkill), freely mixed with the string items above.
 //
-// Items in the list are classified automatically:
+// String items in the list are classified automatically:
 //   - "local" or any HTTP/HTTPS URL → a skill source (added to Sources)
 //   - any other string             → a skill name filter (added to Include)
 //
+// Mapping items are decoded as inline skills (added to Inline).
+//
 // When Include is non-empty but no explicit sources are provided, Sources defaults
 // to ["local"] so that `skills: ["git"]` loads local skills and keeps only "git".
+// Inline skills on their own do not pull in any sources: a list containing only
+// inline definitions enables skills without loading local or remote ones.
 //
 // The special source "local" loads skills from the filesystem (standard locations).
 // HTTP/HTTPS URLs load skills from remote servers per the well-known skills discovery spec.
@@ -502,10 +544,14 @@ type SkillsConfig struct { //nolint:recvcheck // MarshalYAML/MarshalJSON must us
 	// Include optionally filters loaded skills by name. When non-empty, only
 	// skills whose Name matches an entry in this list are exposed to the agent.
 	Include []string
+	// Inline holds skills defined directly in the agent config. They are
+	// always exposed (never subject to the Include filter) and are not
+	// affected by Sources.
+	Inline []InlineSkill
 }
 
 func (s SkillsConfig) Enabled() bool {
-	return len(s.Sources) > 0
+	return len(s.Sources) > 0 || len(s.Inline) > 0
 }
 
 func (s SkillsConfig) HasLocal() bool {
@@ -533,10 +579,50 @@ func isSkillSource(item string) bool {
 	return item == SkillSourceLocal || isRemoteURL(item)
 }
 
+// skillListItem is one entry of the `skills` list, which may be either a
+// plain string (a source or a name filter) or a mapping (an inline skill
+// definition). Exactly one of str/inline is populated after unmarshaling.
+type skillListItem struct {
+	str    string
+	inline *InlineSkill
+}
+
+func (i *skillListItem) UnmarshalYAML(unmarshal func(any) error) error {
+	var s string
+	if err := unmarshal(&s); err == nil {
+		i.str = s
+		return nil
+	}
+	// Not a scalar: the item must be an inline skill definition. Surface the
+	// decode error (e.g. an unknown/misspelled field under strict mode) rather
+	// than the generic errSkillsFormat so the user can see what's wrong.
+	var inline InlineSkill
+	if err := unmarshal(&inline); err != nil {
+		return fmt.Errorf("invalid inline skill: %w", err)
+	}
+	i.inline = &inline
+	return nil
+}
+
+func (i *skillListItem) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); err == nil {
+		i.str = s
+		return nil
+	}
+	var inline InlineSkill
+	if err := json.Unmarshal(data, &inline); err != nil {
+		return fmt.Errorf("invalid inline skill: %w", err)
+	}
+	i.inline = &inline
+	return nil
+}
+
 // setFromBool is the shared "boolean shorthand" logic for YAML and JSON
 // unmarshaling: `true` means load local skills, `false` disables skills.
 func (s *SkillsConfig) setFromBool(b bool) {
 	s.Include = nil
+	s.Inline = nil
 	if b {
 		s.Sources = []string{SkillSourceLocal}
 	} else {
@@ -544,18 +630,23 @@ func (s *SkillsConfig) setFromBool(b bool) {
 	}
 }
 
-// setFromList splits items into Sources ("local" + URLs) and Include (skill
-// name filters). When Include is non-empty and Sources is empty, Sources
-// defaults to ["local"] so that `skills: ["git"]` filters local skills
-// without requiring the user to spell out the source.
-func (s *SkillsConfig) setFromList(items []string) {
+// setFromList splits items into Sources ("local" + URLs), Include (skill name
+// filters), and Inline (mapping items). When Include is non-empty and Sources
+// is empty, Sources defaults to ["local"] so that `skills: ["git"]` filters
+// local skills without requiring the user to spell out the source. Inline
+// skills do not, on their own, pull in any source.
+func (s *SkillsConfig) setFromList(items []skillListItem) {
 	s.Sources = nil
 	s.Include = nil
+	s.Inline = nil
 	for _, item := range items {
-		if isSkillSource(item) {
-			s.Sources = append(s.Sources, item)
-		} else {
-			s.Include = append(s.Include, item)
+		switch {
+		case item.inline != nil:
+			s.Inline = append(s.Inline, *item.inline)
+		case isSkillSource(item.str):
+			s.Sources = append(s.Sources, item.str)
+		default:
+			s.Include = append(s.Include, item.str)
 		}
 	}
 	if len(s.Sources) == 0 && len(s.Include) > 0 {
@@ -565,14 +656,14 @@ func (s *SkillsConfig) setFromList(items []string) {
 
 // marshalValue returns the canonical encoded representation: `false` when
 // disabled, `true` when only the default local source is set, otherwise a
-// flat []string combining Sources and Include. The default local source is
+// list combining Sources, Include, and Inline. The default local source is
 // omitted from the list when Include is non-empty so the output round-trips
 // back through setFromList.
 func (s SkillsConfig) marshalValue() any {
 	switch {
-	case len(s.Sources) == 0 && len(s.Include) == 0:
+	case len(s.Sources) == 0 && len(s.Include) == 0 && len(s.Inline) == 0:
 		return false
-	case len(s.Include) == 0 && len(s.Sources) == 1 && s.Sources[0] == SkillSourceLocal:
+	case len(s.Include) == 0 && len(s.Inline) == 0 && len(s.Sources) == 1 && s.Sources[0] == SkillSourceLocal:
 		return true
 	}
 
@@ -580,9 +671,16 @@ func (s SkillsConfig) marshalValue() any {
 	if len(s.Include) > 0 && len(sources) == 1 && sources[0] == SkillSourceLocal {
 		sources = nil
 	}
-	out := make([]string, 0, len(sources)+len(s.Include))
-	out = append(out, sources...)
-	out = append(out, s.Include...)
+	out := make([]any, 0, len(sources)+len(s.Include)+len(s.Inline))
+	for _, src := range sources {
+		out = append(out, src)
+	}
+	for _, name := range s.Include {
+		out = append(out, name)
+	}
+	for _, inline := range s.Inline {
+		out = append(out, inline)
+	}
 	return out
 }
 
@@ -592,9 +690,9 @@ func (s *SkillsConfig) UnmarshalYAML(unmarshal func(any) error) error {
 		s.setFromBool(b)
 		return nil
 	}
-	var items []string
+	var items []skillListItem
 	if err := unmarshal(&items); err != nil {
-		return errSkillsFormat
+		return skillsFormatError(err)
 	}
 	s.setFromList(items)
 	return nil
@@ -610,9 +708,9 @@ func (s *SkillsConfig) UnmarshalJSON(data []byte) error {
 		s.setFromBool(b)
 		return nil
 	}
-	var items []string
+	var items []skillListItem
 	if err := json.Unmarshal(data, &items); err != nil {
-		return errSkillsFormat
+		return skillsFormatError(err)
 	}
 	s.setFromList(items)
 	return nil

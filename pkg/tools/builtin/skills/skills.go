@@ -107,11 +107,19 @@ func (s *ToolSet) FindSkill(name string) *skills.Skill {
 // ReadSkillContent returns the content of a skill's SKILL.md by name.
 // For local skills, it expands any !`command` patterns in the content by
 // executing the commands and replacing the patterns with their stdout output.
-// Command expansion is disabled for remote skills to prevent arbitrary code execution.
+// Command expansion is disabled for remote and inline skills to prevent
+// arbitrary code execution.
 func (s *ToolSet) ReadSkillContent(ctx context.Context, name string) (string, error) {
 	skill := s.findSkill(name)
 	if skill == nil {
 		return "", fmt.Errorf("skill %q not found", name)
+	}
+
+	// Inline skills carry their body in memory; there is no file to read and
+	// no command expansion (their content comes from the trusted agent config
+	// author, but we keep behaviour identical to remote skills for safety).
+	if skill.IsInline() {
+		return skill.InlineContent, nil
 	}
 
 	content, err := readFileContent(skill.FilePath)
@@ -132,6 +140,14 @@ func (s *ToolSet) ReadSkillFile(skillName, relativePath string) (string, error) 
 	skill := s.findSkill(skillName)
 	if skill == nil {
 		return "", fmt.Errorf("skill %q not found", skillName)
+	}
+
+	// Inline skills live in the agent config and have no backing directory,
+	// so there are no supporting files to read. Reject explicitly rather than
+	// joining against an empty BaseDir (which would resolve against the
+	// process working directory).
+	if skill.IsInline() {
+		return "", fmt.Errorf("skill %q is defined inline and has no supporting files", skillName)
 	}
 
 	if !isValidRelativePath(relativePath) {
@@ -314,7 +330,7 @@ func (s *ToolSet) PrepareForkSubSession(ctx context.Context, args RunSkillArgs) 
 
 	if !skill.IsFork() {
 		return nil, tools.ResultError(fmt.Sprintf(
-			"skill %q is not configured for forked execution (missing context: fork in SKILL.md frontmatter); use read_skill instead",
+			"skill %q is not configured for forked execution (set context: fork); use read_skill instead",
 			args.Name,
 		))
 	}

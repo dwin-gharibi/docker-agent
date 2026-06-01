@@ -83,6 +83,10 @@ func formatSkill(s *skills.Skill, contentWidth int) []string {
 }
 
 func skillLoadedFrom(s *skills.Skill) string {
+	if s.IsInline() {
+		return ""
+	}
+
 	path := s.BaseDir
 	if path == "" {
 		path = s.FilePath
@@ -103,8 +107,12 @@ func skillLoadedFrom(s *skills.Skill) string {
 }
 
 func skillSourceBadge(s *skills.Skill) string {
-	if s.Local {
+	switch {
+	case s.IsInline():
+		return styles.MutedStyle.Render("[inline]")
+	case s.Local:
 		return styles.SuccessStyle.Render("[local]")
+	default:
+		return styles.WarningStyle.Render("[remote]")
 	}
-	return styles.WarningStyle.Render("[remote]")
 }

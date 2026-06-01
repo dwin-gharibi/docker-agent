@@ -6,6 +6,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/docker/docker-agent/pkg/config/latest"
 )
 
 func TestLoadConfig_InvalidPath(t *testing.T) {
@@ -138,6 +140,75 @@ agents:
 	_, err := Load(t.Context(), NewBytesSource("test", []byte(cfgStr)))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "empty skills entry")
+}
+
+func TestInlineSkillsValid(t *testing.T) {
+	t.Parallel()
+
+	cfgStr := `version: "` + latest.Version + `"
+agents:
+  root:
+    model: openai/gpt-4o
+    instruction: test
+    skills:
+      - local
+      - name: changelog
+        description: Write a changelog entry.
+        instructions: Do the thing.
+      - name: triage
+        description: Triage a bug.
+        context: fork
+        instructions: Triage it.
+`
+	cfg, err := Load(t.Context(), NewBytesSource("test", []byte(cfgStr)))
+	require.NoError(t, err)
+	agent, ok := cfg.Agents.Lookup("root")
+	require.True(t, ok)
+	require.Len(t, agent.Skills.Inline, 2)
+	assert.Equal(t, "changelog", agent.Skills.Inline[0].Name)
+	assert.Equal(t, "fork", agent.Skills.Inline[1].Context)
+}
+
+func TestInlineSkillsValidationErrors(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		skills  string
+		wantErr string
+	}{
+		{
+			name:    "missing description",
+			skills:  "      - name: foo\n        instructions: do it\n",
+			wantErr: "missing a description",
+		},
+		{
+			name:    "missing instructions",
+			skills:  "      - name: foo\n        description: a foo\n",
+			wantErr: "missing instructions",
+		},
+		{
+			name:    "invalid context",
+			skills:  "      - name: foo\n        description: a foo\n        instructions: do it\n        context: nope\n",
+			wantErr: "invalid context",
+		},
+		{
+			name:    "duplicate inline skill",
+			skills:  "      - name: foo\n        description: a foo\n        instructions: do it\n      - name: foo\n        description: another foo\n        instructions: do it again\n",
+			wantErr: "duplicate inline skill",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfgStr := "version: \"" + latest.Version + "\"\nagents:\n  root:\n    model: openai/gpt-4o\n    instruction: test\n    skills:\n" + tt.skills
+			_, err := Load(t.Context(), NewBytesSource("test", []byte(cfgStr)))
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
 }
 
 func TestSkillsNameFilter(t *testing.T) {

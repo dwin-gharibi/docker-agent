@@ -706,7 +706,7 @@
           "description": "Optional response cache: when the same user question is asked again, replay the previous answer instead of calling the model."
         },
         "skills": {
-          "description": "Enable skills discovery for this agent. Set to true to load all discovered skills from local filesystem sources; false disables skills. A list can mix sources (\"local\" or an HTTP/HTTPS URL) and/or skill names to include. If only names are given, local sources are loaded and filtered to just those skills.",
+          "description": "Enable skills discovery for this agent. Set to true to load all discovered skills from local filesystem sources; false disables skills. A list can mix sources (\"local\" or an HTTP/HTTPS URL), skill names to include, and inline skill definitions (objects). If only names are given, local sources are loaded and filtered to just those skills.",
           "oneOf": [
             {
               "type": "boolean",
@@ -714,9 +714,16 @@
             },
             {
               "type": "array",
-              "description": "List combining skill sources and/or skill names to include. Items equal to \"local\" or starting with http:// or https:// are treated as sources; any other string is treated as a skill name filter.",
+              "description": "List combining skill sources, skill names to include, and/or inline skill definitions. String items equal to \"local\" or starting with http:// or https:// are treated as sources; any other string is treated as a skill name filter; object items are inline skill definitions.",
               "items": {
-                "type": "string"
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "$ref": "#/definitions/InlineSkill"
+                  }
+                ]
               },
               "examples": [
                 [
@@ -739,6 +746,48 @@
           ]
         }
       },
+      "additionalProperties": false
+    },
+    "InlineSkill": {
+      "type": "object",
+      "description": "A skill defined directly in the agent config instead of a SKILL.md file or remote URL. Supports the subset of the skill format that can be expressed in YAML.",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Skill identifier used by read_skill / run_skill and the /<name> slash command."
+        },
+        "description": {
+          "type": "string",
+          "description": "Short description injected into the system prompt so the model knows when the skill applies."
+        },
+        "instructions": {
+          "type": "string",
+          "description": "The skill body (equivalent to the Markdown content below the SKILL.md frontmatter)."
+        },
+        "context": {
+          "type": "string",
+          "enum": [
+            "fork"
+          ],
+          "description": "When set to \"fork\", the skill runs as an isolated sub-agent (exposed via run_skill) instead of inlining into the conversation."
+        },
+        "model": {
+          "type": "string",
+          "description": "Optional model override applied while a fork-mode skill runs. Ignored for non-fork skills."
+        },
+        "allowed_tools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Tools the skill expects to use (mirrors the SKILL.md allowed-tools field)."
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "instructions"
+      ],
       "additionalProperties": false
     },
     "CommandConfig": {

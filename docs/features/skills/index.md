@@ -68,6 +68,57 @@ agents:
 
 A name that doesn't match any discovered skill is logged as a warning at startup but is otherwise ignored.
 
+## Inline Skills
+
+Instead of (or alongside) loading skills from files and URLs, you can define skills directly in the agent config. An inline skill is a mapping item in the `skills` list, freely mixed with the string items above:
+
+```yaml
+agents:
+  root:
+    model: openai/gpt-4o
+    instruction: You are a helpful assistant.
+    skills:
+      - name: changelog
+        description: Write a concise changelog entry from a diff or description.
+        instructions: |
+          Produce a single changelog entry in Keep a Changelog style.
+          Pick the right category (Added, Changed, Fixed, Removed) and write
+          one imperative sentence summarising the user-visible change.
+
+      # A fork-mode inline skill runs in an isolated sub-agent.
+      - name: triage
+        description: Triage a bug report in an isolated context.
+        context: fork
+        instructions: |
+          Restate the problem, list likely root causes most-probable-first,
+          and propose the smallest reproduction and next concrete action.
+
+      # Inline skills mix freely with sources and name filters.
+      - local
+    toolsets:
+      - type: filesystem
+```
+
+Inline skills carry their body in the config itself, so they need no `SKILL.md` file and require no filesystem source. They are **always exposed** — the name filter only applies to file- and URL-based skills. Because inline skills travel inside the agent YAML, they also work in `--sandbox` mode without any kit staging, and they can be shared with the agent via `share push`.
+
+### Inline Skill Fields
+
+| Field           | Required | Description                                                                |
+| --------------- | -------- | -------------------------------------------------------------------------- |
+| `name`          | Yes      | Skill identifier used by `read_skill` / `run_skill` and the `/<name>` command |
+| `description`   | Yes      | Short description shown to the agent for skill matching                    |
+| `instructions`  | Yes      | The skill body (what a `SKILL.md` would contain below its frontmatter)     |
+| `context`       | No       | Set to `fork` to run the skill as an isolated sub-agent                    |
+| `model`         | No       | Override the model used while running a fork-mode skill                    |
+| `allowed_tools` | No       | Tools the skill expects to use                                             |
+
+<div class="callout callout-info" markdown="1">
+<div class="callout-title">Inline vs. file-based skills
+</div>
+  <p>Inline skills support the subset of the SKILL.md format that fits in YAML. They cannot bundle supporting files (no <code>read_skill_file</code>) or use <code>!`command`</code> expansion. For skills that need bundled resources or executable helpers, use a <code>SKILL.md</code> directory instead.</p>
+
+</div>
+
 ## SKILL.md Format
 
 <!-- yaml-lint:skip -->

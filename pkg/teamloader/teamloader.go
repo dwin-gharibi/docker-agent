@@ -228,6 +228,9 @@ func LoadWithConfig(ctx context.Context, agentSource config.Source, runConfig *c
 		if agentConfig.Skills.Enabled() {
 			loadedSkills := skills.Load(agentConfig.Skills.Sources)
 			loadedSkills = filterSkillsByName(loadedSkills, agentConfig.Skills.Include)
+			// Inline skills are defined in the agent config itself; they are
+			// always exposed and never subject to the include filter.
+			loadedSkills = append(loadedSkills, inlineSkills(agentConfig.Skills.Inline)...)
 			if len(loadedSkills) > 0 {
 				agentTools = append(agentTools, skillstool.New(loadedSkills, runConfig.WorkingDir))
 			}
@@ -494,6 +497,27 @@ func getToolsForAgent(ctx context.Context, a *latest.AgentConfig, parentDir stri
 	}
 
 	return toolSets, warnings
+}
+
+// inlineSkills converts inline skill definitions from the agent config into
+// runtime skills. Their body is carried in memory (InlineContent) so the
+// toolset serves it without touching the filesystem.
+func inlineSkills(defs []latest.InlineSkill) []skills.Skill {
+	if len(defs) == 0 {
+		return nil
+	}
+	out := make([]skills.Skill, 0, len(defs))
+	for _, d := range defs {
+		out = append(out, skills.Skill{
+			Name:          d.Name,
+			Description:   d.Description,
+			InlineContent: d.Instructions,
+			Context:       d.Context,
+			Model:         d.Model,
+			AllowedTools:  d.AllowedTools,
+		})
+	}
+	return out
 }
 
 // filterSkillsByName returns the subset of skills whose Name matches one of

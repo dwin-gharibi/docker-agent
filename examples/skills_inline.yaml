@@ -1,0 +1,50 @@
+#!yaml
+# Inline skills example.
+#
+# Besides loading skills from the local filesystem or remote URLs, the `skills`
+# field can also define skills directly in the agent config. An inline skill is
+# a mapping (object) item in the `skills` list, freely mixed with string items
+# (sources and name filters).
+#
+# Inline skills support the subset of the SKILL.md format that fits in YAML:
+#   - name         (required) identifier used by read_skill / the /<name> command
+#   - description  (required) shown to the model so it knows when the skill applies
+#   - instructions (required) the skill body (what a SKILL.md would contain)
+#   - context      optional; set to "fork" to run the skill as an isolated sub-agent
+#   - model        optional; model override for fork-mode skills
+#   - allowed_tools optional; tools the skill expects to use
+#
+# Inline skills are always exposed and are never affected by name filters.
+agents:
+  root:
+    model: openai/gpt-4o-mini
+    description: An agent that demonstrates inline skill definitions.
+    instruction: |
+      You are a helpful assistant. Use the available skills when the user's
+      request matches one.
+    skills:
+      # A regular, inlined skill: its body is injected when the model reads it.
+      - name: changelog
+        description: Write a concise, well-structured changelog entry from a diff or description.
+        instructions: |
+          Produce a single changelog entry in Keep a Changelog style.
+
+          1. Pick the right category: Added, Changed, Fixed, Removed.
+          2. Write one imperative sentence summarising the user-visible change.
+          3. Avoid implementation detail; focus on what changed for users.
+
+      # A fork-mode skill: runs in an isolated sub-session via run_skill.
+      - name: triage
+        description: Triage a bug report and propose next steps in an isolated context.
+        context: fork
+        instructions: |
+          You are triaging a bug report.
+
+          - Restate the problem in one sentence.
+          - List the most likely root causes, most probable first.
+          - Propose the smallest reproduction and the next concrete action.
+
+      # Inline skills mix freely with sources and name filters.
+      - local
+    toolsets:
+      - type: filesystem

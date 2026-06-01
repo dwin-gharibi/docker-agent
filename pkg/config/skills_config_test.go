@@ -378,6 +378,101 @@ skills: []
 	assert.False(t, agent.Skills.HasLocal())
 }
 
+func TestSkillsConfig_InlineSkills(t *testing.T) {
+	yamlInput := `
+model: openai/gpt-4o
+instruction: test
+skills:
+  - local
+  - changelog
+  - name: triage
+    description: Triage a bug report.
+    context: fork
+    model: openai/gpt-4o-mini
+    instructions: |
+      Restate the problem and propose next steps.
+    allowed_tools:
+      - read_file
+  - name: summary
+    description: Summarize a diff.
+    instructions: Write a concise summary.
+`
+	var agent latest.AgentConfig
+	err := yaml.Unmarshal([]byte(yamlInput), &agent)
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"local"}, agent.Skills.Sources)
+	assert.Equal(t, []string{"changelog"}, agent.Skills.Include)
+	require.Len(t, agent.Skills.Inline, 2)
+
+	assert.Equal(t, "triage", agent.Skills.Inline[0].Name)
+	assert.Equal(t, "Triage a bug report.", agent.Skills.Inline[0].Description)
+	assert.Equal(t, "fork", agent.Skills.Inline[0].Context)
+	assert.Equal(t, "openai/gpt-4o-mini", agent.Skills.Inline[0].Model)
+	assert.Equal(t, []string{"read_file"}, agent.Skills.Inline[0].AllowedTools)
+	assert.Contains(t, agent.Skills.Inline[0].Instructions, "Restate the problem")
+
+	assert.Equal(t, "summary", agent.Skills.Inline[1].Name)
+	assert.True(t, agent.Skills.Enabled())
+}
+
+func TestSkillsConfig_InlineOnlyEnabledWithoutSources(t *testing.T) {
+	yamlInput := `
+model: openai/gpt-4o
+instruction: test
+skills:
+  - name: only
+    description: The only skill.
+    instructions: Do the thing.
+`
+	var agent latest.AgentConfig
+	err := yaml.Unmarshal([]byte(yamlInput), &agent)
+	require.NoError(t, err)
+
+	assert.True(t, agent.Skills.Enabled())
+	assert.Empty(t, agent.Skills.Sources)
+	assert.Empty(t, agent.Skills.Include)
+	require.Len(t, agent.Skills.Inline, 1)
+	assert.Equal(t, "only", agent.Skills.Inline[0].Name)
+}
+
+func TestSkillsConfig_InlineJSONRoundTrip(t *testing.T) {
+	input := latest.SkillsConfig{
+		Sources: []string{"local"},
+		Include: []string{"changelog"},
+		Inline: []latest.InlineSkill{
+			{Name: "triage", Description: "d", Instructions: "i", Context: "fork"},
+		},
+	}
+
+	data, err := json.Marshal(input)
+	require.NoError(t, err)
+
+	var result latest.SkillsConfig
+	require.NoError(t, json.Unmarshal(data, &result))
+	assert.Equal(t, input, result)
+}
+
+func TestSkillsConfig_InlineInvalidFieldError(t *testing.T) {
+	// A misspelled inline-skill field should surface the specific decode
+	// error (which names the unknown field) rather than the generic
+	// "must be a boolean or a list" hint. Strict unknown-field checking
+	// runs on the real Load path, so exercise that.
+	cfgStr := `version: "` + latest.Version + `"
+agents:
+  root:
+    model: openai/gpt-4o
+    instruction: test
+    skills:
+      - name: foo
+        description: bar
+        instructionz: oops
+`
+	_, err := Load(t.Context(), NewBytesSource("test", []byte(cfgStr)))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "instructionz")
+}
+
 func TestSkillsConfig_UnmarshalResetsReceiver(t *testing.T) {
 	skills := latest.SkillsConfig{Sources: []string{"local", "https://old.example.com"}}
 
