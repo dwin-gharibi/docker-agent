@@ -29,6 +29,11 @@ const (
 	AssistantMessageCopyLabel = "⎘"
 )
 
+const (
+	maxLiveToolOutputSize        = 100_000
+	liveToolOutputTruncatedLabel = "[earlier live output truncated]\n"
+)
+
 // ToolStatus represents the status of a tool call
 type ToolStatus int
 
@@ -118,6 +123,24 @@ func ToolCallMessage(agentName string, toolCall tools.ToolCall, toolDef tools.To
 		msg.StartedAt = &now
 	}
 	return msg
+}
+
+func (m *Message) AppendToolOutput(output string) {
+	if output == "" {
+		return
+	}
+	combined := m.Content + strings.ReplaceAll(output, "\t", "    ")
+	if len(combined) <= maxLiveToolOutputSize {
+		m.Content = combined
+		return
+	}
+
+	tailSize := maxLiveToolOutputSize - len(liveToolOutputTruncatedLabel)
+	if tailSize <= 0 {
+		m.Content = combined[len(combined)-maxLiveToolOutputSize:]
+		return
+	}
+	m.Content = liveToolOutputTruncatedLabel + combined[len(combined)-tailSize:]
 }
 
 func Loading(description string) *Message {

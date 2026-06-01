@@ -99,6 +99,34 @@ func (lw *limitedWriter) Write(p []byte) (n int, err error) {
 	return len(p), nil // always report full write
 }
 
+type commandOutput struct {
+	emit tools.ToolOutputEmitter
+	mu   sync.Mutex
+	buf  bytes.Buffer
+}
+
+func newCommandOutput(ctx context.Context) *commandOutput {
+	emit, _ := tools.ToolOutputEmitterFromContext(ctx)
+	return &commandOutput{emit: emit}
+}
+
+func (o *commandOutput) Write(p []byte) (int, error) {
+	o.mu.Lock()
+	o.buf.Write(p) // bytes.Buffer.Write never errors
+	o.mu.Unlock()
+
+	if o.emit != nil {
+		o.emit(string(p))
+	}
+	return len(p), nil
+}
+
+func (o *commandOutput) String() string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.buf.String()
+}
+
 type RunShellArgs struct {
 	Cmd     string `json:"cmd" jsonschema:"Shell command"`
 	Cwd     string `json:"cwd,omitempty" jsonschema:"Working directory (default \".\")"`
@@ -231,9 +259,9 @@ func (h *shellHandler) runNativeCommand(timeoutCtx, ctx context.Context, command
 	cmd.SysProcAttr = platformSpecificSysProcAttr()
 	cmd.WaitDelay = waitDelayAfterShellExit
 
-	var outBuf bytes.Buffer
-	cmd.Stdout = &outBuf
-	cmd.Stderr = &outBuf
+	output := newCommandOutput(ctx)
+	cmd.Stdout = output
+	cmd.Stderr = output
 
 	if err := cmd.Start(); err != nil {
 		return tools.ResultError(fmt.Sprintf("Error starting command: %s", err))
@@ -257,7 +285,7 @@ func (h *shellHandler) runNativeCommand(timeoutCtx, ctx context.Context, command
 	case <-timeoutCtx.Done():
 		_ = kill(cmd.Process, pg)
 		// Wait for cmd.Wait() to complete so that the internal pipe-copy
-		// goroutines finish writing to outBuf before we read it.
+		// goroutines finish writing to output before we read it.
 		// Use a grace period: if SIGTERM is ignored, escalate to SIGKILL.
 		select {
 		case <-done:
@@ -268,8 +296,8 @@ func (h *shellHandler) runNativeCommand(timeoutCtx, ctx context.Context, command
 	case cmdErr = <-done:
 	}
 
-	output := formatCommandOutput(timeoutCtx, ctx, cmdErr, outBuf.String(), timeout)
-	return tools.ResultSuccess(limitOutput(output))
+	formattedOutput := formatCommandOutput(timeoutCtx, ctx, cmdErr, output.String(), timeout)
+	return tools.ResultSuccess(limitOutput(formattedOutput))
 }
 
 func (h *shellHandler) RunShellBackground(_ context.Context, params RunShellBackgroundArgs) (*tools.ToolCallResult, error) {

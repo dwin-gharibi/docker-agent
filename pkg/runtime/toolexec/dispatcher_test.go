@@ -21,11 +21,17 @@ import (
 // don't need to busy-wait.
 type captureEmitter struct {
 	calls         []tools.ToolCall
+	outputs       []outputRecord
 	responses     []responseRecord
 	confirmations []tools.ToolCall
 	hookBlocks    []hookBlockRecord
 	messages      []*session.Message
 	confirmed     chan struct{} // optional; closed after the first confirmation event
+}
+
+type outputRecord struct {
+	ToolCallID string
+	Output     string
 }
 
 type responseRecord struct {
@@ -41,6 +47,10 @@ type hookBlockRecord struct {
 
 func (e *captureEmitter) EmitToolCall(tc tools.ToolCall, _ tools.Tool, _ string) {
 	e.calls = append(e.calls, tc)
+}
+
+func (e *captureEmitter) EmitToolCallOutput(toolCallID string, _ tools.Tool, output, _ string) {
+	e.outputs = append(e.outputs, outputRecord{ToolCallID: toolCallID, Output: output})
 }
 
 func (e *captureEmitter) EmitToolCallResponse(toolCallID string, _ tools.Tool, result *tools.ToolCallResult, output, _ string) {
@@ -103,6 +113,34 @@ func TestDispatcher_RoutesToToolsetHandler(t *testing.T) {
 	require.Len(t, em.responses, 1)
 	assert.Equal(t, `hello {"x":1}`, em.responses[0].Output)
 	assert.False(t, em.responses[0].IsError)
+}
+
+func TestDispatcher_EmitsToolOutputFromHandlerContext(t *testing.T) {
+	a := newAgent()
+	sess := session.New()
+	sess.ToolsApproved = true
+
+	tool := tools.Tool{
+		Name: "streamer",
+		Handler: func(ctx context.Context, _ tools.ToolCall) (*tools.ToolCallResult, error) {
+			tools.EmitOutput(ctx, "first\n")
+			tools.EmitOutput(ctx, "second\n")
+			return tools.ResultSuccess("done"), nil
+		},
+	}
+
+	d := &toolexec.Dispatcher{AgentFor: func(*session.Session) *agent.Agent { return a }}
+	em := &captureEmitter{}
+	d.Process(t.Context(), sess, []tools.ToolCall{{
+		ID:       "call_stream",
+		Function: tools.FunctionCall{Name: "streamer", Arguments: `{}`},
+	}}, []tools.Tool{tool}, em)
+
+	require.Len(t, em.outputs, 2)
+	assert.Equal(t, outputRecord{ToolCallID: "call_stream", Output: "first\n"}, em.outputs[0])
+	assert.Equal(t, outputRecord{ToolCallID: "call_stream", Output: "second\n"}, em.outputs[1])
+	require.Len(t, em.responses, 1)
+	assert.Equal(t, "done", em.responses[0].Output)
 }
 
 func TestDispatcher_RecordsDocumentToolResult(t *testing.T) {

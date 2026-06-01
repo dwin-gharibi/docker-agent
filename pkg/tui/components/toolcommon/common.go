@@ -230,11 +230,9 @@ func RenderTool(msg *types.Message, inProgress spinner.Spinner, args, result str
 		wrappedArgs := wrapTextWithIndent(args, firstLineWidth, subsequentLineWidth)
 		content += " " + wrappedArgs
 	}
-	if result != "" {
+	if result != "" && !hideToolResults {
 		if strings.Count(content, "\n") > 0 || strings.Count(result, "\n") > 0 {
-			if !hideToolResults {
-				content += "\n" + resultStyle.MarginLeft(styles.ToolCompletedIcon.GetMarginLeft()).Render(result)
-			}
+			content += "\n" + resultStyle.MarginLeft(styles.ToolCompletedIcon.GetMarginLeft()).Render(result)
 		} else {
 			remainingWidth := max(width-lipgloss.Width(content)-1, 1)
 			renderedResult := resultStyle.Render(result)

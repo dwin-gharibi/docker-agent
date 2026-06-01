@@ -1053,6 +1053,8 @@ func (a *App) shouldThrottle(msg tea.Msg) bool {
 		return true
 	case *runtime.PartialToolCallEvent:
 		return true
+	case *runtime.ToolCallOutputEvent:
+		return true
 	default:
 		return false
 	}
@@ -1085,6 +1087,11 @@ func (a *App) mergeEvents(events []tea.Msg) []tea.Msg {
 
 		case *runtime.PartialToolCallEvent:
 			merged, consumed := mergePartialToolCallRun(ev, events[i+1:])
+			result = append(result, merged)
+			i += consumed
+
+		case *runtime.ToolCallOutputEvent:
+			merged, consumed := mergeToolCallOutputRun(ev, events[i+1:])
 			result = append(result, merged)
 			i += consumed
 
@@ -1154,6 +1161,38 @@ func mergeAgentChoiceReasoningRun(first *runtime.AgentChoiceReasoningEvent, rest
 		Type:         first.Type,
 		Content:      b.String(),
 		AgentContext: first.AgentContext,
+	}, n
+}
+
+// mergeToolCallOutputRun merges output chunks across consecutive
+// ToolCallOutputEvents that share the same tool call ID.
+func mergeToolCallOutputRun(first *runtime.ToolCallOutputEvent, rest []tea.Msg) (*runtime.ToolCallOutputEvent, int) {
+	n := 0
+	total := len(first.Output)
+	for _, msg := range rest {
+		next, ok := msg.(*runtime.ToolCallOutputEvent)
+		if !ok || next.ToolCallID != first.ToolCallID {
+			break
+		}
+		total += len(next.Output)
+		n++
+	}
+	if n == 0 {
+		return first, 0
+	}
+
+	var b strings.Builder
+	b.Grow(total)
+	b.WriteString(first.Output)
+	for _, msg := range rest[:n] {
+		b.WriteString(msg.(*runtime.ToolCallOutputEvent).Output)
+	}
+	return &runtime.ToolCallOutputEvent{
+		Type:           first.Type,
+		ToolCallID:     first.ToolCallID,
+		ToolDefinition: first.ToolDefinition,
+		Output:         b.String(),
+		AgentContext:   first.AgentContext,
 	}, n
 }
 

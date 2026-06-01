@@ -59,6 +59,7 @@ type Model interface {
 	AddCancelledMessage() tea.Cmd
 	AddWelcomeMessage(content string) tea.Cmd
 	AddOrUpdateToolCall(agentName string, toolCall tools.ToolCall, toolDef tools.Tool, status types.ToolStatus) tea.Cmd
+	AppendToolOutput(msg *runtime.ToolCallOutputEvent) tea.Cmd
 	AddToolResult(msg *runtime.ToolCallResponseEvent, status types.ToolStatus) tea.Cmd
 	AppendToLastMessage(agentName, content string) tea.Cmd
 	AppendReasoning(agentName, content string) tea.Cmd
@@ -1495,6 +1496,40 @@ func (m *model) AddOrUpdateToolCall(agentName string, toolCall tools.ToolCall, t
 	m.renderDirty = true
 
 	return view.Init()
+}
+
+func (m *model) AppendToolOutput(msg *runtime.ToolCallOutputEvent) tea.Cmd {
+	if msg.Output == "" {
+		return nil
+	}
+
+	for i := range slices.Backward(m.messages) {
+		if m.messages[i].Type == types.MessageTypeAssistantReasoningBlock {
+			if block, ok := m.views[i].(*reasoningblock.Model); ok && block.AppendToolOutput(msg.ToolCallID, msg.Output) {
+				m.invalidateItem(i)
+				return nil
+			}
+		}
+	}
+
+	for i := range slices.Backward(m.messages) {
+		toolMessage := m.messages[i]
+		if toolMessage.Type != types.MessageTypeToolCall || toolMessage.ToolCall.ID != msg.ToolCallID {
+			continue
+		}
+		toolMessage.AppendToolOutput(msg.Output)
+		if toolMessage.ToolStatus == types.ToolStatusPending {
+			toolMessage.ToolStatus = types.ToolStatusRunning
+			if toolMessage.StartedAt == nil {
+				now := time.Now()
+				toolMessage.StartedAt = &now
+			}
+		}
+		m.invalidateItem(i)
+		return nil
+	}
+
+	return nil
 }
 
 func (m *model) AddToolResult(msg *runtime.ToolCallResponseEvent, status types.ToolStatus) tea.Cmd {

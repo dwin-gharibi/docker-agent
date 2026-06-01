@@ -45,6 +45,44 @@ func NewHandler[T any](fn func(context.Context, T) (*ToolCallResult, error)) Too
 
 type ToolHandler func(ctx context.Context, toolCall ToolCall) (*ToolCallResult, error)
 
+// ToolOutputEmitter receives incremental output from a running tool. Tool
+// handlers can retrieve the emitter from their context and call it whenever
+// command output or other long-running progress is available.
+type ToolOutputEmitter func(output string)
+
+type toolOutputEmitterKey struct{}
+
+// WithToolOutputEmitter returns a context carrying emit as the callback used
+// by tool handlers to stream incremental output. A nil emitter leaves ctx
+// unchanged.
+func WithToolOutputEmitter(ctx context.Context, emit ToolOutputEmitter) context.Context {
+	if emit == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, toolOutputEmitterKey{}, emit)
+}
+
+// ToolOutputEmitterFromContext returns the incremental-output emitter attached
+// to ctx, if any.
+func ToolOutputEmitterFromContext(ctx context.Context) (ToolOutputEmitter, bool) {
+	emit, ok := ctx.Value(toolOutputEmitterKey{}).(ToolOutputEmitter)
+	return emit, ok
+}
+
+// EmitOutput streams output through the emitter in ctx. It returns false when
+// no emitter is attached or output is empty.
+func EmitOutput(ctx context.Context, output string) bool {
+	if output == "" {
+		return false
+	}
+	emit, ok := ToolOutputEmitterFromContext(ctx)
+	if !ok {
+		return false
+	}
+	emit(output)
+	return true
+}
+
 type ToolCall struct {
 	ID       string       `json:"id,omitempty"`
 	Type     ToolType     `json:"type"`

@@ -227,6 +227,26 @@ func (m *Model) UpdateToolCall(toolCallID string, status types.ToolStatus, args 
 	}
 }
 
+// AppendToolOutput appends incremental output to a running tool call.
+func (m *Model) AppendToolOutput(toolCallID, output string) bool {
+	for i, entry := range m.toolEntries {
+		if entry.msg.ToolCall.ID != toolCallID {
+			continue
+		}
+		entry.msg.AppendToolOutput(output)
+		if entry.msg.ToolStatus == types.ToolStatusPending {
+			entry.msg.ToolStatus = types.ToolStatusRunning
+			if entry.msg.StartedAt == nil {
+				now := time.Now()
+				entry.msg.StartedAt = &now
+			}
+		}
+		m.toolEntries[i] = entry
+		return true
+	}
+	return false
+}
+
 // UpdateToolResult updates tool result for a tool call.
 func (m *Model) UpdateToolResult(toolCallID, content string, status types.ToolStatus, result *tools.ToolCallResult) tea.Cmd {
 	for i, entry := range m.toolEntries {

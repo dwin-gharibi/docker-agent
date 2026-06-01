@@ -191,12 +191,16 @@ func (t *ScriptToolSet) execute(ctx context.Context, toolConfig *latest.ScriptSh
 	}
 	cmd.Env = envCopy
 
-	output, err := cmd.CombinedOutput()
+	output := newCommandOutput(ctx)
+	cmd.Stdout = output
+	cmd.Stderr = output
+
+	err := cmd.Run()
 	if err != nil {
-		return tools.ResultError(fmt.Sprintf("Error executing command '%s': %s\nOutput: %s", toolConfig.Cmd, err, limitOutput(string(output)))), nil
+		return tools.ResultError(fmt.Sprintf("Error executing command '%s': %s\nOutput: %s", toolConfig.Cmd, err, limitOutput(output.String()))), nil
 	}
 
-	return tools.ResultSuccess(limitOutput(string(output))), nil
+	return tools.ResultSuccess(limitOutput(output.String())), nil
 }
 
 // defaultPropertyTypes returns a copy of properties where any property

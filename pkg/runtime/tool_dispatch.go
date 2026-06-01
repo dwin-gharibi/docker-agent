@@ -86,6 +86,10 @@ func (e *sinkEmitter) EmitToolCall(toolCall tools.ToolCall, tool tools.Tool, age
 	e.events.Emit(ToolCall(toolCall, tool, agentName))
 }
 
+func (e *sinkEmitter) EmitToolCallOutput(toolCallID string, tool tools.Tool, output, agentName string) {
+	e.events.Emit(ToolCallOutput(toolCallID, tool, output, agentName))
+}
+
 func (e *sinkEmitter) EmitToolCallResponse(toolCallID string, tool tools.Tool, result *tools.ToolCallResult, output, agentName string) {
 	e.events.Emit(ToolCallResponse(toolCallID, tool, result, output, agentName))
 }

@@ -37,6 +37,7 @@ import (
 //   - PartialToolCallEvent      → Show tool call in progress
 //   - ToolCallEvent             → Tool execution started
 //   - ToolCallConfirmationEvent → Show confirmation dialog
+//   - ToolCallOutputEvent       → Append live tool output
 //   - ToolCallResponseEvent     → Show tool result
 //
 // Sidebar Updates (forwarded):
@@ -98,6 +99,9 @@ func (p *chatPage) handleRuntimeEvent(msg tea.Msg) (bool, tea.Cmd) {
 
 	case *runtime.ToolCallConfirmationEvent:
 		return true, p.handleToolCallConfirmation(msg)
+
+	case *runtime.ToolCallOutputEvent:
+		return true, p.handleToolCallOutput(msg)
 
 	case *runtime.ToolCallResponseEvent:
 		return true, p.handleToolCallResponse(msg)
@@ -302,6 +306,10 @@ func (p *chatPage) handleToolCall(msg *runtime.ToolCallEvent) tea.Cmd {
 	sidebarCmd := p.forwardToSidebar(msg)
 	toolCmd := p.messages.AddOrUpdateToolCall(msg.AgentName, msg.ToolCall, msg.ToolDefinition, types.ToolStatusRunning)
 	return tea.Batch(toolCmd, p.messages.ScrollToBottom(), spinnerCmd, sidebarCmd)
+}
+
+func (p *chatPage) handleToolCallOutput(msg *runtime.ToolCallOutputEvent) tea.Cmd {
+	return tea.Batch(p.messages.AppendToolOutput(msg), p.messages.ScrollToBottom())
 }
 
 func (p *chatPage) handleToolCallResponse(msg *runtime.ToolCallResponseEvent) tea.Cmd {

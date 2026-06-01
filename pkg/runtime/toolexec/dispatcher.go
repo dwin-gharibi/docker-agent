@@ -64,12 +64,12 @@ type CallOutcome struct {
 // batch of tool calls. Runtimes typically implement this by sending typed
 // events to their event channel.
 //
-// The dispatcher only emits the five events below. Runtime-managed
-// handlers (registered via [Dispatcher.Handlers]) emit any additional
-// runtime-specific events directly via the channel they captured at
-// registration time.
+// The dispatcher emits the events below. Runtime-managed handlers
+// (registered via [Dispatcher.Handlers]) emit any additional runtime-specific
+// events directly via the channel they captured at registration time.
 type Emitter interface {
 	EmitToolCall(toolCall tools.ToolCall, tool tools.Tool, agentName string)
+	EmitToolCallOutput(toolCallID string, tool tools.Tool, output, agentName string)
 	EmitToolCallResponse(toolCallID string, tool tools.Tool, result *tools.ToolCallResult, output, agentName string)
 	EmitToolCallConfirmation(toolCall tools.ToolCall, tool tools.Tool, agentName string)
 	EmitHookBlocked(toolCall tools.ToolCall, tool tools.Tool, message, agentName string)
@@ -628,7 +628,11 @@ func (c *call) invoke(ctx context.Context, spanName string, exec func(ctx contex
 
 	c.em.EmitToolCall(c.tc, c.tool, c.a.Name())
 
-	res, duration, err := exec(ctx)
+	toolCtx := tools.WithToolOutputEmitter(ctx, func(output string) {
+		output = c.applyToolResponseTransform(ctx, output, false)
+		c.em.EmitToolCallOutput(c.tc.ID, c.tool, output, c.a.Name())
+	})
+	res, duration, err := exec(toolCtx)
 	telemetry.RecordToolCall(ctx, c.tc.Function.Name, c.sess.ID, c.a.Name(), duration, err)
 
 	if err != nil {

@@ -79,6 +79,7 @@ func NewClient(baseURL string, opts ...ClientOption) (*Client, error) {
 		registry: map[string]func() Event{
 			"user_message":           func() Event { return &UserMessageEvent{} },
 			"tool_call":              func() Event { return &ToolCallEvent{} },
+			"tool_call_output":       func() Event { return &ToolCallOutputEvent{} },
 			"tool_call_response":     func() Event { return &ToolCallResponseEvent{} },
 			"tool_call_confirmation": func() Event { return &ToolCallConfirmationEvent{} },
 			"token_usage":            func() Event { return &TokenUsageEvent{} },

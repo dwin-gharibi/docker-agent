@@ -122,6 +122,25 @@ func ToolCallConfirmation(toolCall tools.ToolCall, toolDefinition tools.Tool, ag
 	}
 }
 
+type ToolCallOutputEvent struct {
+	AgentContext
+
+	Type           string     `json:"type"`
+	ToolCallID     string     `json:"tool_call_id"`
+	ToolDefinition tools.Tool `json:"tool_definition"`
+	Output         string     `json:"output"`
+}
+
+func ToolCallOutput(toolCallID string, toolDefinition tools.Tool, output, agentName string) Event {
+	return &ToolCallOutputEvent{
+		Type:           "tool_call_output",
+		Output:         output,
+		ToolCallID:     toolCallID,
+		ToolDefinition: toolDefinition,
+		AgentContext:   newAgentContext(agentName),
+	}
+}
+
 type ToolCallResponseEvent struct {
 	AgentContext
 

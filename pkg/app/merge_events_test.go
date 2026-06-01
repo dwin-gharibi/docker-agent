@@ -84,6 +84,23 @@ func TestMergeEventsConcatenatesPartialToolCallArguments(t *testing.T) {
 	assert.Equal(t, "shell", got.ToolCall.Function.Name)
 }
 
+func TestMergeEventsConcatenatesToolCallOutput(t *testing.T) {
+	t.Parallel()
+
+	a := &App{}
+	events := []tea.Msg{
+		&runtime.ToolCallOutputEvent{ToolCallID: "call-1", Output: "line 1\n"},
+		&runtime.ToolCallOutputEvent{ToolCallID: "call-1", Output: "line 2\n"},
+		&runtime.ToolCallOutputEvent{ToolCallID: "call-2", Output: "other\n"},
+	}
+
+	merged := a.mergeEvents(events)
+
+	assert.Len(t, merged, 2)
+	assert.Equal(t, "line 1\nline 2\n", merged[0].(*runtime.ToolCallOutputEvent).Output)
+	assert.Equal(t, "other\n", merged[1].(*runtime.ToolCallOutputEvent).Output)
+}
+
 // BenchmarkMergeEventsAgentChoice measures the cost of merging a typical
 // throttle-window's worth of streaming chunks. The pre-fix implementation did
 // `merged.Content + next.Content` repeatedly, which is O(N^2) in chunk count;
