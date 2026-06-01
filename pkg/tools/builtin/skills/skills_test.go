@@ -281,6 +281,41 @@ func TestSkillsToolset_ReadSkillContent_RemoteSkillSkipsExpansion(t *testing.T) 
 	assert.Equal(t, content, result, "commands in remote skills must not be expanded")
 }
 
+func TestSkillsToolset_ReadSkillContent_Inline(t *testing.T) {
+	st := New([]skills.Skill{
+		{Name: "inline", Description: "Inline skill", InlineContent: "# Inline\nDo it."},
+	}, "")
+
+	content, err := st.ReadSkillContent(t.Context(), "inline")
+	require.NoError(t, err)
+	assert.Equal(t, "# Inline\nDo it.", content)
+}
+
+func TestSkillsToolset_ReadSkillContent_InlineSkipsExpansion(t *testing.T) {
+	// Inline content must never be shell-expanded, even when a working dir is set.
+	st := New([]skills.Skill{
+		{Name: "inline", Description: "Inline", InlineContent: "Info: !`echo should-not-run`"},
+	}, t.TempDir())
+
+	content, err := st.ReadSkillContent(t.Context(), "inline")
+	require.NoError(t, err)
+	assert.Equal(t, "Info: !`echo should-not-run`", content)
+}
+
+func TestSkillsToolset_ReadSkillFile_InlineRejected(t *testing.T) {
+	// An inline skill has no backing directory. read_skill_file must reject it
+	// rather than resolving against an empty BaseDir (the process working dir).
+	st := New([]skills.Skill{
+		{Name: "inline", Description: "Inline", InlineContent: "body"},
+	}, "")
+
+	for _, p := range []string{"references/FORMS.md", ".", "SKILL.md"} {
+		_, err := st.ReadSkillFile("inline", p)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "defined inline")
+	}
+}
+
 func TestSkillsToolset_FindSkill(t *testing.T) {
 	st := New([]skills.Skill{
 		{Name: "alpha", Description: "Alpha skill"},

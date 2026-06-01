@@ -142,6 +142,14 @@ func (s *ToolSet) ReadSkillFile(skillName, relativePath string) (string, error) 
 		return "", fmt.Errorf("skill %q not found", skillName)
 	}
 
+	// Inline skills live in the agent config and have no backing directory,
+	// so there are no supporting files to read. Reject explicitly rather than
+	// joining against an empty BaseDir (which would resolve against the
+	// process working directory).
+	if skill.IsInline() {
+		return "", fmt.Errorf("skill %q is defined inline and has no supporting files", skillName)
+	}
+
 	if !isValidRelativePath(relativePath) {
 		return "", fmt.Errorf("invalid file path %q", relativePath)
 	}
@@ -322,7 +330,7 @@ func (s *ToolSet) PrepareForkSubSession(ctx context.Context, args RunSkillArgs) 
 
 	if !skill.IsFork() {
 		return nil, tools.ResultError(fmt.Sprintf(
-			"skill %q is not configured for forked execution (missing context: fork in SKILL.md frontmatter); use read_skill instead",
+			"skill %q is not configured for forked execution (set context: fork); use read_skill instead",
 			args.Name,
 		))
 	}

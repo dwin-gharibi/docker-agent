@@ -453,6 +453,26 @@ func TestSkillsConfig_InlineJSONRoundTrip(t *testing.T) {
 	assert.Equal(t, input, result)
 }
 
+func TestSkillsConfig_InlineInvalidFieldError(t *testing.T) {
+	// A misspelled inline-skill field should surface the specific decode
+	// error (which names the unknown field) rather than the generic
+	// "must be a boolean or a list" hint. Strict unknown-field checking
+	// runs on the real Load path, so exercise that.
+	cfgStr := `version: "` + latest.Version + `"
+agents:
+  root:
+    model: openai/gpt-4o
+    instruction: test
+    skills:
+      - name: foo
+        description: bar
+        instructionz: oops
+`
+	_, err := Load(t.Context(), NewBytesSource("test", []byte(cfgStr)))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "instructionz")
+}
+
 func TestSkillsConfig_UnmarshalResetsReceiver(t *testing.T) {
 	skills := latest.SkillsConfig{Sources: []string{"local", "https://old.example.com"}}
 

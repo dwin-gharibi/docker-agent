@@ -480,6 +480,17 @@ const SkillSourceLocal = "local"
 // a list of strings and/or inline skill definitions.
 var errSkillsFormat = errors.New("skills must be a boolean or a list of skill sources, names, and/or inline skill definitions")
 
+// skillsFormatError maps a list-decode failure to a user-facing error. When the
+// failure carries a specific inline-skill diagnostic (an unknown/misspelled
+// field surfaced by skillListItem), that detail is preserved; otherwise the
+// generic shape hint is returned.
+func skillsFormatError(err error) error {
+	if err != nil && strings.Contains(err.Error(), "invalid inline skill") {
+		return err
+	}
+	return errSkillsFormat
+}
+
 // InlineSkill is a skill defined directly in the agent config rather than
 // loaded from the filesystem or a remote URL. It supports the subset of the
 // SKILL.md format that can be expressed in YAML; the skill body lives in
@@ -582,9 +593,12 @@ func (i *skillListItem) UnmarshalYAML(unmarshal func(any) error) error {
 		i.str = s
 		return nil
 	}
+	// Not a scalar: the item must be an inline skill definition. Surface the
+	// decode error (e.g. an unknown/misspelled field under strict mode) rather
+	// than the generic errSkillsFormat so the user can see what's wrong.
 	var inline InlineSkill
 	if err := unmarshal(&inline); err != nil {
-		return errSkillsFormat
+		return fmt.Errorf("invalid inline skill: %w", err)
 	}
 	i.inline = &inline
 	return nil
@@ -598,7 +612,7 @@ func (i *skillListItem) UnmarshalJSON(data []byte) error {
 	}
 	var inline InlineSkill
 	if err := json.Unmarshal(data, &inline); err != nil {
-		return errSkillsFormat
+		return fmt.Errorf("invalid inline skill: %w", err)
 	}
 	i.inline = &inline
 	return nil
@@ -678,7 +692,7 @@ func (s *SkillsConfig) UnmarshalYAML(unmarshal func(any) error) error {
 	}
 	var items []skillListItem
 	if err := unmarshal(&items); err != nil {
-		return errSkillsFormat
+		return skillsFormatError(err)
 	}
 	s.setFromList(items)
 	return nil
@@ -696,7 +710,7 @@ func (s *SkillsConfig) UnmarshalJSON(data []byte) error {
 	}
 	var items []skillListItem
 	if err := json.Unmarshal(data, &items); err != nil {
-		return errSkillsFormat
+		return skillsFormatError(err)
 	}
 	s.setFromList(items)
 	return nil
