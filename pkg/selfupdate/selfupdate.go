@@ -578,7 +578,14 @@ func confirmUpdate(stdin io.Reader, stderr io.Writer, current, latest string) bo
 		return false
 	}
 
-	switch strings.ToLower(strings.TrimSpace(line)) {
+	return answerIsYes(line)
+}
+
+// answerIsYes reports whether a prompt answer means "proceed". The prompt
+// defaults to yes, so an empty answer confirms; anything other than y/yes
+// declines.
+func answerIsYes(answer string) bool {
+	switch strings.ToLower(strings.TrimSpace(answer)) {
 	case "", "y", "yes":
 		return true
 	default:

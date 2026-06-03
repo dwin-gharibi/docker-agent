@@ -211,6 +211,28 @@ func TestConfirmUpdateNonInteractiveAutoConfirms(t *testing.T) {
 	assert.Empty(t, stderr.String(), "must not prompt in a non-interactive session")
 }
 
+func TestAnswerIsYes(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		in   string
+		want bool
+	}{
+		{"", true}, // default is yes
+		{"\n", true},
+		{"y", true},
+		{"Y", true},
+		{"yes", true},
+		{" YES ", true},
+		{"n", false},
+		{"no", false},
+		{"nope", false},
+		{"x", false},
+	} {
+		assert.Equal(t, tc.want, answerIsYes(tc.in), "input %q", tc.in)
+	}
+}
+
 func TestTryUpdateAlreadyLatest(t *testing.T) {
 	srv := newFakeRelease(t, "v1.0.0", []byte("x"), true)
 
