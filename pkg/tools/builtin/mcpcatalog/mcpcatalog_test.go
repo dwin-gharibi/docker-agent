@@ -79,20 +79,18 @@ func TestSearchTool(t *testing.T) {
 	require.False(t, res.IsError)
 	assert.Contains(t, strings.ToLower(res.Output), "stripe")
 
-	// Empty query returns the catalog truncated to emptyQuerySearchLimit
-	// so we don't dump the full catalog into the LLM context window.
+	// Empty query returns the full catalog so the model can list every
+	// matching server.
 	res, err = ts.handleSearch(ctx, SearchArgs{Query: ""})
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 	first := strings.SplitN(res.Output, "\n", 2)[0]
-	assert.Contains(t, first, "showing ")
-	assert.Contains(t, first, "refine with a keyword")
+	assert.Contains(t, first, "found ")
 	body := strings.SplitN(res.Output, "\n", 2)[1]
 	var parsed []SearchResult
 	require.NoError(t, json.Unmarshal([]byte(body), &parsed))
-	assert.Len(t, parsed, emptyQuerySearchLimit)
-	require.Greater(t, ts.catalog.Count, emptyQuerySearchLimit,
-		"test fixture: catalog should be larger than the empty-query cap")
+	assert.Len(t, parsed, ts.catalog.Count,
+		"empty query must return every catalog server")
 
 	// Unknown query returns an error result (not a Go error).
 	res, err = ts.handleSearch(ctx, SearchArgs{Query: "xxxxxx_no_such_server_xxxxxx"})

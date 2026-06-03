@@ -626,12 +626,6 @@ type SearchResult struct {
 	Enabled     bool     `json:"enabled"`
 }
 
-// emptyQuerySearchLimit caps the result set for an empty query so the
-// catalog (currently 45+ servers) doesn't bloat the LLM's context window.
-// A model exploring "is there anything here?" gets a representative
-// sample with a hint to refine; concrete keywords still return every match.
-const emptyQuerySearchLimit = 25
-
 func (t *Toolset) handleSearch(_ context.Context, args SearchArgs) (*tools.ToolCallResult, error) {
 	q := strings.ToLower(strings.TrimSpace(args.Query))
 
@@ -662,21 +656,11 @@ func (t *Toolset) handleSearch(_ context.Context, args SearchArgs) (*tools.ToolC
 
 	sort.Slice(matches, func(i, j int) bool { return matches[i].ID < matches[j].ID })
 
-	total := len(matches)
-	truncated := q == "" && total > emptyQuerySearchLimit
-	if truncated {
-		matches = matches[:emptyQuerySearchLimit]
-	}
-
 	out, err := json.Marshal(matches)
 	if err != nil {
 		return nil, err
 	}
-	if truncated {
-		return tools.ResultSuccess(fmt.Sprintf("showing %d of %d server(s) (catalog truncated for empty query — refine with a keyword to see more):\n%s",
-			len(matches), total, string(out))), nil
-	}
-	return tools.ResultSuccess(fmt.Sprintf("found %d server(s):\n%s", total, string(out))), nil
+	return tools.ResultSuccess(fmt.Sprintf("found %d server(s):\n%s", len(matches), string(out))), nil
 }
 
 // matchesQuery returns true if any of the searchable string fields contains q.
