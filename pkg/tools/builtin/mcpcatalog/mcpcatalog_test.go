@@ -1322,6 +1322,97 @@ func TestToolsOAuthDeclineRemovesServer(t *testing.T) {
 		"reset_auth must be hidden once the declined server has been removed from the enabled set")
 }
 
+// cancelOnStartToolSet is a minimal ToolSet+Startable whose Start returns
+// context.Canceled on every call. It exists so the catalog's Tools()
+// iteration can be tested for "user stopped the turn while OAuth was
+// parked -> server is removed from the enabled set, no further retries"
+// without driving a real OAuth handshake.
+type cancelOnStartToolSet struct {
+	startCalls atomic.Int32
+	stopCalls  atomic.Int32
+}
+
+func (c *cancelOnStartToolSet) Tools(context.Context) ([]tools.Tool, error) {
+	return nil, errors.New("cancelOnStartToolSet.Tools should never be called")
+}
+
+func (c *cancelOnStartToolSet) Start(context.Context) error {
+	c.startCalls.Add(1)
+	return context.Canceled
+}
+
+func (c *cancelOnStartToolSet) Stop(context.Context) error {
+	c.stopCalls.Add(1)
+	return nil
+}
+
+// TestToolsCancelledStartRemovesServer is the Tools()-path counterpart of
+// TestToolsOAuthDeclineRemovesServer. It pins the user-stop-mid-OAuth
+// scenario reachable when the synchronous handleEnable path didn't drive
+// OAuth itself (e.g. the elicitation bridge wasn't ready and the
+// AuthorizationRequired fallback left the entry to be Started by the
+// next Tools() call). A Start returning context.Canceled must drop the
+// entry so the next Tools() iteration does not silently re-fire the
+// OAuth dialog on an unrelated user message.
+func TestToolsCancelledStartRemovesServer(t *testing.T) {
+	ts := New(stubEnv{vars: map[string]string{}})
+	const id = "cancel-server"
+	server := Server{
+		ID:        id,
+		Title:     "Cancel",
+		URL:       "https://example.test/mcp",
+		Transport: "streamable-http",
+		Auth:      Auth{Type: "oauth"},
+	}
+	ts.catalog.Servers = append(ts.catalog.Servers, server)
+	ts.byID[id] = server
+
+	fake := &cancelOnStartToolSet{}
+	wrapped := tools.NewStartable(fake)
+
+	var changes atomic.Int32
+	ts.SetToolsChangedHandler(func() { changes.Add(1) })
+
+	ts.mu.Lock()
+	ts.enabled[id] = wrapped
+	ts.mu.Unlock()
+
+	ctx := t.Context()
+
+	// First Tools() call: Start() returns context.Canceled. The catalog
+	// must swallow it cleanly (no error to the runtime) and drop the
+	// entry — leaving it would let the next Tools() call silently
+	// re-Start the wrapper and re-pop the dialog the user just abandoned.
+	list, err := ts.Tools(ctx)
+	require.NoError(t, err, "Tools() must not propagate a user-stop as an error")
+
+	names := toolNames(list)
+	for _, meta := range []string{ToolNameSearch, ToolNameList, ToolNameEnable} {
+		assert.Contains(t, names, meta, "meta tools must still be present after a stop-mid-OAuth")
+	}
+
+	ts.mu.RLock()
+	_, stillEnabled := ts.enabled[id]
+	ts.mu.RUnlock()
+	assert.False(t, stillEnabled,
+		"cancelled server must be removed from t.enabled — leaving it would let Tools() re-fire OAuth on the next user message")
+
+	assert.Equal(t, int32(1), fake.startCalls.Load(),
+		"Start() must be called exactly once before the cancellation removes the entry")
+	assert.Equal(t, int32(1), fake.stopCalls.Load(),
+		"the cancelled toolset must be Stop()'d so any partially-initialised session is cleaned up")
+	assert.Equal(t, int32(1), changes.Load(),
+		"tools-changed must fire so the runtime / UI sees the server is no longer enabled")
+
+	// Second Tools() call: the entry is gone, so the fake must not be
+	// touched again. This is the property that breaks the
+	// "dialog re-appears on every user message" loop reported by the user.
+	_, err = ts.Tools(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int32(1), fake.startCalls.Load(),
+		"Start() must NOT be called again after the cancellation: the server is no longer enabled")
+}
+
 // TestToolsOAuthDeclineNoNotifyWhenAlreadyDisabled covers the race where
 // the model called disable_remote_mcp_server (or reset_remote_mcp_server_auth)
 // between the OAuth flow being initiated and the user declining it. In that

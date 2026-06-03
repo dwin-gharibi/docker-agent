@@ -539,6 +539,24 @@ func (t *Toolset) Tools(ctx context.Context) ([]tools.Tool, error) {
 					t.disableAfterDecline(ctx, e.id, e.ts)
 					continue
 				}
+				// User stopped the in-progress turn while OAuth was
+				// parked (browser-side flow failed externally, or the
+				// user simply gave up). Same lifecycle reasoning as
+				// the declined branch above: the catalog Toolset is
+				// owned by the RuntimeSession and outlives the
+				// RunStream, so leaving the entry behind would let
+				// the next user message's Tools() iteration silently
+				// re-Start the wrapper and re-pop the same dialog the
+				// user just abandoned — on a question that may have
+				// nothing to do with this server. The outer ctx.Err()
+				// check at the top of the next iteration will then
+				// propagate the cancellation up.
+				if errors.Is(err, context.Canceled) {
+					slog.InfoContext(ctx, "Remote MCP server start cancelled by user; removing from enabled set",
+						"id", e.id)
+					t.disableAfterDecline(ctx, e.id, e.ts)
+					continue
+				}
 				// Real failure: log once per streak (StartableToolSet
 				// dedupes) so a misbehaving server doesn't flood logs.
 				if e.ts.ShouldReportFailure() {
