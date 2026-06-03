@@ -123,7 +123,7 @@ func (c *Client) createBetaStream(
 			slog.WarnContext(ctx, "Failed to count tokens for retry, skipping", "error", err)
 			return nil
 		}
-		newMaxTokens := clampMaxTokens(anthropicContextLimit(c.ModelConfig.Model), used, maxTokens)
+		newMaxTokens := clampMaxTokens(c.contextLimit(ctx), used, maxTokens)
 		if newMaxTokens >= maxTokens {
 			slog.WarnContext(ctx, "Token count does not require clamping, not retrying")
 			return nil

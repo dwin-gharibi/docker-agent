@@ -23,6 +23,7 @@ import (
 	"github.com/docker/docker-agent/pkg/model/provider/base"
 	"github.com/docker/docker-agent/pkg/model/provider/options"
 	"github.com/docker/docker-agent/pkg/model/provider/providerutil"
+	"github.com/docker/docker-agent/pkg/modelinfo"
 	"github.com/docker/docker-agent/pkg/tools"
 )
 
@@ -298,7 +299,7 @@ func (c *Client) CreateChatCompletionStream(
 			slog.WarnContext(ctx, "Failed to count tokens for retry, skipping", "error", err)
 			return nil
 		}
-		newMaxTokens := clampMaxTokens(anthropicContextLimit(c.ModelConfig.Model), used, maxTokens)
+		newMaxTokens := clampMaxTokens(c.contextLimit(ctx), used, maxTokens)
 		if newMaxTokens >= maxTokens {
 			slog.WarnContext(ctx, "Token count does not require clamping, not retrying")
 			return nil
@@ -757,11 +758,11 @@ func contentArray(m map[string]any) []any {
 	return nil
 }
 
-// anthropicContextLimit returns a reasonable default context window for Anthropic models.
-// We default to 200k tokens, which is what 3.5-4.5 models support; adjust as needed over time.
-func anthropicContextLimit(model string) int64 {
-	_ = model
-	return 200000
+// contextLimit returns the context window for this client's model, sourced
+// from models.dev when available and falling back to the standard Claude
+// 200k window otherwise.
+func (c *Client) contextLimit(ctx context.Context) int64 {
+	return modelinfo.ContextLimit(ctx, c.ModelOptions.ModelsDevStore(), c.ID(), modelinfo.DefaultAnthropicContextLimit)
 }
 
 // clampMaxTokens returns the effective max_tokens value after capping to the

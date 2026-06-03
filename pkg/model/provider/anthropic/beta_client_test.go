@@ -12,7 +12,19 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/docker/docker-agent/pkg/chat"
+	"github.com/docker/docker-agent/pkg/config/latest"
+	"github.com/docker/docker-agent/pkg/model/provider/base"
+	"github.com/docker/docker-agent/pkg/model/provider/options"
+	"github.com/docker/docker-agent/pkg/modelinfo"
+	"github.com/docker/docker-agent/pkg/modelsdev"
 )
+
+// optionsFromStore builds ModelOptions carrying the given models.dev store.
+func optionsFromStore(store *modelsdev.Store) options.ModelOptions {
+	var mo options.ModelOptions
+	options.WithModelsDevStore(store)(&mo)
+	return mo
+}
 
 // TestCountAnthropicTokensBeta_Success tests successful token counting for beta API
 func TestCountAnthropicTokensBeta_Success(t *testing.T) {
@@ -170,10 +182,37 @@ func TestClampMaxTokens_ExactlyAtLimit(t *testing.T) {
 	assert.Equal(t, int64(1), result)
 }
 
-// TestAnthropicContextLimit_ReturnsCorrectLimit tests context limit function
-func TestAnthropicContextLimit_ReturnsCorrectLimit(t *testing.T) {
-	limit := anthropicContextLimit("claude-3-5-sonnet-20241022")
-	assert.Equal(t, int64(200000), limit)
+// TestContextLimit_FromModelsDev verifies the client prefers the models.dev
+// context window and falls back to the Claude 200k default otherwise.
+func TestContextLimit_FromModelsDev(t *testing.T) {
+	store := modelsdev.NewDatabaseStore(&modelsdev.Database{
+		Providers: map[string]modelsdev.Provider{
+			"anthropic": {
+				Models: map[string]modelsdev.Model{
+					"claude-sonnet-4-5": {Limit: modelsdev.Limit{Context: 1000000}},
+				},
+			},
+		},
+	})
+
+	withStore := &Client{Config: base.Config{
+		ModelConfig:  latest.ModelConfig{Provider: "anthropic", Model: "claude-sonnet-4-5"},
+		ModelOptions: optionsFromStore(store),
+	}}
+	assert.Equal(t, int64(1000000), withStore.contextLimit(t.Context()))
+
+	// Unknown model falls back to the default Claude window.
+	unknown := &Client{Config: base.Config{
+		ModelConfig:  latest.ModelConfig{Provider: "anthropic", Model: "claude-future"},
+		ModelOptions: optionsFromStore(store),
+	}}
+	assert.Equal(t, int64(modelinfo.DefaultAnthropicContextLimit), unknown.contextLimit(t.Context()))
+
+	// No store configured: default Claude window.
+	noStore := &Client{Config: base.Config{
+		ModelConfig: latest.ModelConfig{Provider: "anthropic", Model: "claude-sonnet-4-5"},
+	}}
+	assert.Equal(t, int64(modelinfo.DefaultAnthropicContextLimit), noStore.contextLimit(t.Context()))
 }
 
 // TestExtractBetaSystemBlocks_SingleSystemMessage tests extracting system messages

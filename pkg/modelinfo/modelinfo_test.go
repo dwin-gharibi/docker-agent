@@ -350,7 +350,7 @@ func TestLoadCaps_QualifiedIDRequired(t *testing.T) {
 
 	// Bare model name: must fall back to conservative text-only caps.
 	bareID := modelsdev.NewID("", "claude-sonnet-4-6")
-	mcBare := LoadCaps(store, bareID)
+	mcBare := LoadCaps(t.Context(), store, bareID)
 	assert.False(t, mcBare.Supports("image/jpeg"),
 		"bare model name %q must NOT resolve to vision caps", bareID.String())
 	assert.False(t, mcBare.Supports("application/pdf"),
@@ -358,7 +358,7 @@ func TestLoadCaps_QualifiedIDRequired(t *testing.T) {
 
 	// Fully-qualified ID: must resolve to vision+pdf caps.
 	qualifiedID := modelsdev.NewID("anthropic", "claude-sonnet-4-6")
-	mcQualified := LoadCaps(store, qualifiedID)
+	mcQualified := LoadCaps(t.Context(), store, qualifiedID)
 	assert.True(t, mcQualified.Supports("image/jpeg"),
 		"qualified ID %q must resolve to vision caps", qualifiedID.String())
 	assert.True(t, mcQualified.Supports("application/pdf"),
@@ -380,7 +380,7 @@ func TestLoadCaps_VisionModel(t *testing.T) {
 		},
 	}})
 
-	mc := LoadCaps(store, modelsdev.NewID("anthropic", "claude-3-5-sonnet"))
+	mc := LoadCaps(t.Context(), store, modelsdev.NewID("anthropic", "claude-3-5-sonnet"))
 
 	assert.True(t, mc.Supports("image/jpeg"))
 	assert.True(t, mc.Supports("image/png"))
@@ -403,7 +403,7 @@ func TestLoadCaps_TextOnlyModel(t *testing.T) {
 		},
 	}})
 
-	mc := LoadCaps(store, modelsdev.NewID("openai", "gpt-3.5-turbo"))
+	mc := LoadCaps(t.Context(), store, modelsdev.NewID("openai", "gpt-3.5-turbo"))
 
 	assert.False(t, mc.Supports("image/jpeg"))
 	assert.False(t, mc.Supports("application/pdf"))
@@ -414,7 +414,7 @@ func TestLoadCaps_TextOnlyModel(t *testing.T) {
 func TestLoadCaps_ModelNotFound(t *testing.T) {
 	store := modelsdev.NewDatabaseStore(&modelsdev.Database{Providers: map[string]modelsdev.Provider{}})
 
-	mc := LoadCaps(store, modelsdev.NewID("unknown", "nonexistent-model"))
+	mc := LoadCaps(t.Context(), store, modelsdev.NewID("unknown", "nonexistent-model"))
 
 	assert.False(t, mc.Supports("image/jpeg"))
 	assert.False(t, mc.Supports("application/pdf"))
@@ -436,7 +436,7 @@ func TestLoadCaps_OfficeDocsNotAllowed(t *testing.T) {
 		},
 	}})
 
-	mc := LoadCaps(store, modelsdev.NewID("openai", "gpt-4o"))
+	mc := LoadCaps(t.Context(), store, modelsdev.NewID("openai", "gpt-4o"))
 
 	for _, officeMIME := range []string{
 		"application/vnd.openxmlformats-officedocument.wordprocessingml.document",

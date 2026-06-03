@@ -26,7 +26,7 @@ import (
 //   - text MIMEs with InlineText → OfInputText with TXTEnvelope
 //   - unsupported / no content → nil (logged as warning)
 func convertDocumentToResponseInput(ctx context.Context, doc chat.Document, id modelsdev.ID, store *modelsdev.Store) ([]responses.ResponseInputContentUnionParam, error) {
-	mc := modelinfo.LoadCaps(store, id)
+	mc := modelinfo.LoadCaps(ctx, store, id)
 	return convertDocumentToResponseInputWithCaps(ctx, doc, mc)
 }
 
