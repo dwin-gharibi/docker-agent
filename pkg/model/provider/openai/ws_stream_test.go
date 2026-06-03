@@ -134,6 +134,221 @@ func TestWSStream_TextDelta(t *testing.T) {
 	assert.ErrorIs(t, err, io.EOF)
 }
 
+func TestWSStream_ContentPartAddedOutputTextIsStructural(t *testing.T) {
+	t.Parallel()
+
+	events := []map[string]any{
+		{
+			"type":          "response.content_part.added",
+			"item_id":       "msg_123",
+			"output_index":  0,
+			"content_index": 0,
+			"part": map[string]any{
+				"type": "output_text",
+				"text": "Hello",
+			},
+		},
+		{
+			"type":    "response.output_text.delta",
+			"item_id": "msg_123",
+			"delta":   "Hello",
+		},
+		{
+			"type": "response.output_item.done",
+			"item": map[string]any{
+				"id":   "msg_123",
+				"type": "message",
+				"content": []any{
+					map[string]any{"type": "output_text", "text": "Hello"},
+				},
+				"role": "assistant",
+			},
+		},
+		{
+			"type": "response.completed",
+			"response": map[string]any{
+				"id":     "resp_content_part",
+				"output": []any{},
+				"usage": map[string]any{
+					"input_tokens":          4,
+					"output_tokens":         4,
+					"total_tokens":          8,
+					"input_tokens_details":  map[string]any{"cached_tokens": 0},
+					"output_tokens_details": map[string]any{"reasoning_tokens": 0},
+				},
+			},
+		},
+	}
+
+	srv := testWSServer(t, events)
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+	stream, err := dialWebSocket(t.Context(), wsURL, http.Header{}, defaultTestParams())
+	require.NoError(t, err)
+	defer stream.Close()
+
+	adapter := newResponseStreamAdapter(stream, true)
+
+	// content_part.added is structural. Even if it carries a text snapshot,
+	// output_text.delta is the event that should produce streamed content.
+	resp, err := adapter.Recv()
+	require.NoError(t, err)
+	assert.Empty(t, resp.Choices)
+
+	resp, err = adapter.Recv()
+	require.NoError(t, err)
+	require.Len(t, resp.Choices, 1)
+	assert.Equal(t, "Hello", resp.Choices[0].Delta.Content)
+
+	// output_item.done contains the complete text snapshot, but the delta
+	// above already streamed it. It must not be emitted a second time.
+	resp, err = adapter.Recv()
+	require.NoError(t, err)
+	assert.Empty(t, resp.Choices)
+
+	resp, err = adapter.Recv()
+	require.NoError(t, err)
+	require.Len(t, resp.Choices, 1)
+	assert.Equal(t, chat.FinishReasonStop, resp.Choices[0].FinishReason)
+
+	_, err = adapter.Recv()
+	assert.ErrorIs(t, err, io.EOF)
+}
+
+func TestWSStream_OutputItemDoneRecoversMissedOutputText(t *testing.T) {
+	t.Parallel()
+
+	events := []map[string]any{
+		{
+			"type": "response.output_item.done",
+			"item": map[string]any{
+				"id":   "msg_recovered",
+				"type": "message",
+				"content": []any{
+					map[string]any{"type": "output_text", "text": "Recovered"},
+				},
+				"role": "assistant",
+			},
+		},
+		{
+			"type": "response.completed",
+			"response": map[string]any{
+				"id":     "resp_recovered",
+				"output": []any{},
+				"usage": map[string]any{
+					"input_tokens":          4,
+					"output_tokens":         4,
+					"total_tokens":          8,
+					"input_tokens_details":  map[string]any{"cached_tokens": 0},
+					"output_tokens_details": map[string]any{"reasoning_tokens": 0},
+				},
+			},
+		},
+	}
+
+	srv := testWSServer(t, events)
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+	stream, err := dialWebSocket(t.Context(), wsURL, http.Header{}, defaultTestParams())
+	require.NoError(t, err)
+	defer stream.Close()
+
+	adapter := newResponseStreamAdapter(stream, true)
+
+	resp, err := adapter.Recv()
+	require.NoError(t, err)
+	require.Len(t, resp.Choices, 1)
+	assert.Equal(t, "Recovered", resp.Choices[0].Delta.Content)
+
+	resp, err = adapter.Recv()
+	require.NoError(t, err)
+	require.Len(t, resp.Choices, 1)
+	assert.Equal(t, chat.FinishReasonStop, resp.Choices[0].FinishReason)
+
+	_, err = adapter.Recv()
+	assert.ErrorIs(t, err, io.EOF)
+}
+
+func TestWSStream_BuffersArgumentsDeltaBeforeOutputItemAdded(t *testing.T) {
+	t.Parallel()
+
+	events := []map[string]any{
+		{
+			"type":    "response.function_call_arguments.delta",
+			"item_id": "item_early",
+			"delta":   `{"city":"Paris"}`,
+		},
+		{
+			"type":    "response.output_item.added",
+			"item_id": "item_early",
+			"item": map[string]any{
+				"type":    "function_call",
+				"id":      "item_early",
+				"call_id": "call_early",
+				"name":    "get_weather",
+			},
+		},
+		{
+			"type":    "response.function_call_arguments.done",
+			"item_id": "item_early",
+		},
+		{
+			"type": "response.completed",
+			"response": map[string]any{
+				"id": "resp_early_tool_args",
+				"output": []any{
+					map[string]any{"type": "function_call"},
+				},
+				"usage": map[string]any{
+					"input_tokens":          8,
+					"output_tokens":         12,
+					"total_tokens":          20,
+					"input_tokens_details":  map[string]any{"cached_tokens": 0},
+					"output_tokens_details": map[string]any{"reasoning_tokens": 0},
+				},
+			},
+		},
+	}
+
+	srv := testWSServer(t, events)
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+	stream, err := dialWebSocket(t.Context(), wsURL, http.Header{}, defaultTestParams())
+	require.NoError(t, err)
+	defer stream.Close()
+
+	adapter := newResponseStreamAdapter(stream, true)
+
+	// Early arguments are buffered until the corresponding function item arrives.
+	resp, err := adapter.Recv()
+	require.NoError(t, err)
+	assert.Empty(t, resp.Choices)
+
+	resp, err = adapter.Recv()
+	require.NoError(t, err)
+	require.Len(t, resp.Choices, 1)
+	require.Len(t, resp.Choices[0].Delta.ToolCalls, 1)
+	call := resp.Choices[0].Delta.ToolCalls[0]
+	assert.Equal(t, "call_early", call.ID)
+	assert.Equal(t, "get_weather", call.Function.Name)
+	assert.JSONEq(t, `{"city":"Paris"}`, call.Function.Arguments)
+
+	resp, err = adapter.Recv()
+	require.NoError(t, err)
+	assert.Empty(t, resp.Choices)
+
+	resp, err = adapter.Recv()
+	require.NoError(t, err)
+	require.Len(t, resp.Choices, 1)
+	assert.Equal(t, chat.FinishReasonToolCalls, resp.Choices[0].FinishReason)
+
+	_, err = adapter.Recv()
+	assert.ErrorIs(t, err, io.EOF)
+}
+
 func TestWSStream_IgnoresEmptyFrames(t *testing.T) {
 	t.Parallel()
 
