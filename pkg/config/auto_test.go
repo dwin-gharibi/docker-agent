@@ -177,7 +177,7 @@ func TestAutoModelConfig(t *testing.T) {
 				"OPENAI_API_KEY": "test-key",
 			},
 			expectedProvider:  "openai",
-			expectedModel:     "gpt-5-mini",
+			expectedModel:     "gpt-5",
 			expectedMaxTokens: 32000,
 		},
 		{
@@ -186,7 +186,7 @@ func TestAutoModelConfig(t *testing.T) {
 				"GOOGLE_API_KEY": "test-key",
 			},
 			expectedProvider:  "google",
-			expectedModel:     "gemini-2.5-flash",
+			expectedModel:     "gemini-3.5-flash",
 			expectedMaxTokens: 32000,
 		},
 		{
@@ -287,9 +287,9 @@ func TestDefaultModels(t *testing.T) {
 	}
 
 	// Test specific model values
-	assert.Equal(t, "gpt-5-mini", DefaultModels["openai"])
+	assert.Equal(t, "gpt-5", DefaultModels["openai"])
 	assert.Equal(t, "claude-sonnet-4-6", DefaultModels["anthropic"])
-	assert.Equal(t, "gemini-2.5-flash", DefaultModels["google"])
+	assert.Equal(t, "gemini-3.5-flash", DefaultModels["google"])
 	assert.Equal(t, "ai/qwen3:latest", DefaultModels["dmr"])
 	assert.Equal(t, "mistral-small-latest", DefaultModels["mistral"])
 	assert.Equal(t, "global.anthropic.claude-sonnet-4-5-20250929-v1:0", DefaultModels["amazon-bedrock"])
@@ -423,7 +423,7 @@ func TestAutoModelConfig_UserDefaultModel(t *testing.T) {
 			defaultModel:      nil,
 			envVars:           map[string]string{"GOOGLE_API_KEY": "test-key"},
 			expectedProvider:  "google",
-			expectedModel:     "gemini-2.5-flash",
+			expectedModel:     "gemini-3.5-flash",
 			expectedMaxTokens: 32000,
 		},
 		{
