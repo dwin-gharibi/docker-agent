@@ -405,6 +405,17 @@ func TestSamplingMessagesV2ToChat(t *testing.T) {
 			req:     &mcp.CreateMessageWithToolsParams{},
 			wantErr: true,
 		},
+		{
+			name: "tool_use in non-assistant message is rejected",
+			req: &mcp.CreateMessageWithToolsParams{
+				Messages: []*mcp.SamplingMessageV2{
+					{Role: "user", Content: []mcp.Content{
+						&mcp.ToolUseContent{ID: "call_1", Name: "calc", Input: map[string]any{"x": 1}},
+					}},
+				},
+			},
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {

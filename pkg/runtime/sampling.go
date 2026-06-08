@@ -463,8 +463,16 @@ func samplingV2BlocksToMessages(role chat.MessageRole, blocks []mcp.Content) ([]
 		}
 	}
 
+	// The MCP spec places tool_use blocks on assistant turns. A malformed
+	// server sending them under any other role would otherwise be silently
+	// dropped here (the output condition below would skip the message),
+	// leaving the chat history shorter than the server expects.
+	if len(toolCalls) > 0 && role != chat.MessageRoleAssistant {
+		return nil, fmt.Errorf("tool_use blocks in non-assistant message (role=%s)", role)
+	}
+
 	var out []chat.Message
-	if text.Len() > 0 || len(parts) > 0 || (len(toolCalls) > 0 && role == chat.MessageRoleAssistant) {
+	if text.Len() > 0 || len(parts) > 0 || len(toolCalls) > 0 {
 		msg := chat.Message{
 			Role:    role,
 			Content: text.String(),
@@ -472,7 +480,7 @@ func samplingV2BlocksToMessages(role chat.MessageRole, blocks []mcp.Content) ([]
 		if len(parts) > 0 {
 			msg.MultiContent = parts
 		}
-		if role == chat.MessageRoleAssistant && len(toolCalls) > 0 {
+		if len(toolCalls) > 0 {
 			msg.ToolCalls = toolCalls
 		}
 		out = append(out, msg)

@@ -115,6 +115,9 @@ func (c *remoteMCPClient) Initialize(ctx context.Context, _ *gomcp.InitializeReq
 
 	// Sampling: prefer the with-tools handler when registered. The SDK's two
 	// CreateMessage* handlers are mutually exclusive, so populate exactly one.
+	// The handler fields are read here at Initialize time; callers must invoke
+	// SetSamplingHandler / SetSamplingWithToolsHandler before Initialize (and
+	// before any reconnect) or the chosen branch falls back to no handler.
 	opts := &gomcp.ClientOptions{
 		ElicitationHandler:       c.handleElicitationRequest,
 		ToolListChangedHandler:   toolChanged,
