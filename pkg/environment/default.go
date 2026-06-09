@@ -7,6 +7,8 @@ import (
 
 // NewDefaultProvider creates a provider chain with OS env, run secrets,
 // credential helper (if configured), Docker Desktop, pass, and keychain providers.
+// The whole chain is wrapped so that values shaped like "op://..." are resolved
+// as 1Password secret references through the `op` CLI.
 //
 // When running inside a Docker sandbox (detected via SANDBOX_VM_ID), a
 // [SandboxTokenProvider] is prepended so that DOCKER_TOKEN is read from the
@@ -48,5 +50,7 @@ func NewDefaultProvider() Provider {
 		providers = append(providers, keychainProvider)
 	}
 
-	return NewMultiProvider(providers...)
+	// Resolve any "op://" secret references through the 1Password CLI,
+	// regardless of which provider returned the value.
+	return NewOnePasswordProvider(NewMultiProvider(providers...))
 }
