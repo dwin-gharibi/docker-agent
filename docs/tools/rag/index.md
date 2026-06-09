@@ -56,7 +56,7 @@ strategies:
     similarity_metric: cosine_similarity
     threshold: 0.5
     limit: 10
-    batch_size: 50
+    embedding_batch_size: 50
     chunking:
       size: 1000
       overlap: 100
@@ -212,9 +212,9 @@ Look for log tags: `[RAG Manager]`, `[Chunked-Embeddings Strategy]`, `[BM25 Stra
 | `similarity_metric`         | string | `cosine_similarity` | Similarity metric                                            |
 | `threshold`                 | float  | `0.5`               | Minimum similarity score (0–1)                               |
 | `limit`                     | int    | `5`                 | Max results from this strategy                               |
-| `batch_size`                | int    | `50`                | Chunks per embedding request                                 |
+| `embedding_batch_size`      | int    | `50`                | Chunks per embedding request                                 |
 | `max_embedding_concurrency` | int    | `3`                 | Max concurrent embedding requests                            |
-| `chunking.size`             | int    | `1000`              | Chunk size in characters                                     |
+| `chunking.size`             | int    | `1500`              | Chunk size in characters (`4000` when `code_aware` is set)   |
 | `chunking.overlap`          | int    | `75`                | Overlap between chunks in characters                         |
 | `chunking.code_aware`       | bool   | `false`             | AST-based chunking (Go files only)                           |
 
@@ -231,7 +231,7 @@ Look for log tags: `[RAG Manager]`, `[Chunked-Embeddings Strategy]`, `[BM25 Stra
 | `threshold`                | float  | `0.5`      | Minimum similarity score (0–1)                                     |
 | `limit`                    | int    | `5`        | Max results                                                        |
 | `max_indexing_concurrency` | int    | `3`        | Max concurrent file indexing                                       |
-| `chunking.size`            | int    | `1000`     | Chunk size in characters                                           |
+| `chunking.size`            | int    | `1500`     | Chunk size in characters (`4000` when `code_aware` is set)         |
 | `chunking.overlap`         | int    | `75`       | Overlap between chunks                                             |
 | `chunking.code_aware`      | bool   | `false`    | AST-based chunking                                                 |
 
@@ -244,7 +244,7 @@ Look for log tags: `[RAG Manager]`, `[Chunked-Embeddings Strategy]`, `[BM25 Stra
 | `b`                | float  | `0.75`  | Length normalization (0–1)                      |
 | `threshold`        | float  | `0.0`   | Minimum BM25 score                              |
 | `limit`            | int    | `5`     | Max results                                     |
-| `chunking.size`    | int    | `1000`  | Chunk size in characters                        |
+| `chunking.size`    | int    | `1500`  | Chunk size in characters                        |
 | `chunking.overlap` | int    | `75`    | Overlap between chunks                          |
 
 ### Results (Post-Processing)
@@ -258,6 +258,6 @@ Look for log tags: `[RAG Manager]`, `[Chunked-Embeddings Strategy]`, `[BM25 Stra
 | `include_score`       | bool   | `false` | Include relevance scores in results                         |
 | `return_full_content` | bool   | `false` | Return full document content instead of just matched chunks |
 | `reranking.model`     | string | —       | Reranking model reference                                   |
-| `reranking.top_k`     | int    | (all)   | Only rerank top K results                                   |
+| `reranking.top_k`     | int    | (`limit`) | Only rerank top K results. Defaults to the results `limit` when set.  |
 | `reranking.threshold` | float  | `0.5`   | Minimum relevance score after reranking                     |
 | `reranking.criteria`  | string | —       | Custom relevance guidance for the reranking model           |

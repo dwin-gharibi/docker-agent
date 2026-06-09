@@ -126,7 +126,7 @@ thinking_budget: none   # or 0
 
 ### Interleaved thinking
 
-By default, thinking is non-interleaved (the model reasons once before answering). Enable interleaved thinking to allow reasoning during tool calls — useful for complex agentic tasks:
+Interleaved thinking lets the model reason between tool calls — useful for complex agentic tasks. docker-agent auto-enables it whenever a thinking budget is configured on a Claude model, so you only need to set it explicitly to turn it off:
 
 ```yaml
 models:
@@ -134,8 +134,9 @@ models:
     provider: anthropic
     model: claude-sonnet-4-5
     thinking_budget: 16384
+    # interleaved_thinking is auto-enabled; disable it explicitly if needed:
     provider_opts:
-      interleaved_thinking: true
+      interleaved_thinking: false
 ```
 
 <div class="callout callout-info" markdown="1">
@@ -247,13 +248,13 @@ models:
     thinking_budget: high
     provider_opts:
       region: us-east-1
-      interleaved_thinking: true
+      # interleaved_thinking is auto-enabled when thinking_budget is set
 ```
 
 <div class="callout callout-warning" markdown="1">
 <div class="callout-title">Bedrock thinking requirements
 </div>
-  <p>Bedrock Claude requires <code>thinking_budget</code> to be ≥ 1024 and less than <code>max_tokens</code>. docker-agent logs a warning and ignores the budget if either condition is violated. Interleaved thinking requires the <code>interleaved-thinking-2025-05-14</code> beta header, which docker-agent adds automatically when <code>interleaved_thinking: true</code> is set.</p>
+  <p>Bedrock Claude requires <code>thinking_budget</code> to be ≥ 1024 and less than <code>max_tokens</code>. docker-agent logs a warning and ignores the budget if either condition is violated. Interleaved thinking requires the <code>interleaved-thinking-2025-05-14</code> beta header, which docker-agent adds automatically; it is auto-enabled whenever a thinking budget is set on a Bedrock-hosted Claude model.</p>
 </div>
 
 ## xAI (Grok) and Mistral

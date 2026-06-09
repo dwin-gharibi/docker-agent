@@ -70,6 +70,7 @@ Type `/` during a session to see available commands, or press <kbd>Ctrl</kbd>+<k
 | `/eval`            | Create an evaluation report                                                          |
 | `/pause`           | Pause/resume the runtime loop after the current request                              |
 | `/tools`           | Show every toolset (with lifecycle state) and the tools they expose                  |
+| `/skills`          | List skills available to the current agent                                           |
 | `/toolset-restart` | Force a supervisor-driven reconnect of the named toolset (`/toolset-restart <name>`) |
 | `/permissions`     | Inspect and edit tool permission rules                                               |
 | `/split-diff`      | Toggle split-diff view for file edits                                                |

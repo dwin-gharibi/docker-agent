@@ -84,7 +84,7 @@ restriction visible to the model so it can adjust its plan.
 
 ### Post-Edit Hooks
 
-Automatically run formatting, linting, or other commands after the agent edits a file. The command fires once per file after each edit operation (including `write_file`, `patch_file`, and similar mutations). Use `${file}` as a placeholder for the absolute path of the edited file.
+Automatically run formatting, linting, or other commands after the agent edits a file. The command fires once per file after each edit operation (`write_file` and `edit_file`). Use `${file}` as a placeholder for the absolute path of the edited file.
 
 ```yaml
 toolsets:

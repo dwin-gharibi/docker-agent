@@ -37,7 +37,7 @@ $ docker agent serve a2a agentcatalog/pirate
 | Flag                              | Default          | Description                                                                                                          |
 | --------------------------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------- |
 | `-l, --listen <addr>`             | `127.0.0.1:8082` | Address to listen on.                                                                                                |
-| `-a, --agent <name>`              | `root`           | Name of the agent to expose when the config contains multiple agents.                                                |
+| `-a, --agent <name>`              | (first agent)    | Name of the agent to expose when the config contains multiple agents. Defaults to the team's first agent.            |
 | `--working-dir <path>`            | current dir      | Working directory the agent runs in.                                                                                 |
 | `--env-from-file <file>`          | (none)           | Load additional environment variables from a `.env` file (repeatable).                                               |
 | `--models-gateway <url>`          | (none)           | Route all provider traffic through a models gateway URL.                                                             |

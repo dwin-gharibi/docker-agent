@@ -220,14 +220,15 @@ See [`examples/task_budget.yaml`](https://github.com/docker/docker-agent/blob/ma
 
 ## Interleaved Thinking
 
-For Anthropic and Bedrock Claude models, interleaved thinking allows tool calls during model reasoning. This is enabled by default:
+For Anthropic and Bedrock Claude models, interleaved thinking allows tool calls during model reasoning. It is auto-enabled whenever a thinking budget is configured:
 
 ```yaml
 models:
   claude:
     provider: anthropic
     model: claude-sonnet-4-5
-    # interleaved_thinking defaults to true
+    thinking_budget: 8192
+    # interleaved_thinking is auto-enabled when thinking_budget is set
     provider_opts:
       interleaved_thinking: false # disable if needed
 ```

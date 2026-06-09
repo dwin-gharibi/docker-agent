@@ -80,7 +80,7 @@ models:
 | `role_session_name`      | string | docker-agent-bedrock-session | Session name for assumed role        |
 | `external_id`            | string | —                      | External ID for role assumption      |
 | `endpoint_url`           | string | —                      | Custom endpoint (VPC/testing)        |
-| `interleaved_thinking`   | bool   | false                  | Allow reasoning between tool calls (Claude); adds the required beta header automatically |
+| `interleaved_thinking`   | bool   | auto                   | Allow reasoning between tool calls (Claude); auto-enabled when a thinking budget is set on a Claude model; adds the required beta header automatically |
 | `disable_prompt_caching` | bool   | false                  | Disable automatic prompt caching     |
 
 ## Inference Profiles
@@ -144,10 +144,10 @@ models:
     thinking_budget: high
     provider_opts:
       region: us-east-1
-      interleaved_thinking: true
+      # interleaved_thinking is auto-enabled when thinking_budget is set
 ```
 
-docker-agent automatically adds the `interleaved-thinking-2025-05-14` beta header when `interleaved_thinking: true` is set. If you set `interleaved_thinking: false` while a thinking budget is active, a warning is logged because the budget may be ignored by Bedrock without the beta header.
+docker-agent auto-enables `interleaved_thinking` whenever a thinking budget is configured on a Bedrock-hosted Claude model and automatically adds the `interleaved-thinking-2025-05-14` beta header. If you set `interleaved_thinking: false` while a thinking budget is active, a warning is logged because the budget may be ignored by Bedrock without the beta header.
 
 See the [Thinking / Reasoning guide]({{ '/guides/thinking/' | relative_url }}) for a full cross-provider overview.
 

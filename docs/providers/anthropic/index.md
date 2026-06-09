@@ -98,13 +98,13 @@ models:
 | Model ID            | Description                                         |
 | ------------------- | --------------------------------------------------- |
 | `claude-opus-4-7`   | Highest-capability Opus model; supports task budget |
-| `claude-sonnet-4-5` | Most capable Sonnet, extended thinking (default)    |
+| `claude-sonnet-4-5` | Most capable Sonnet; supports extended thinking     |
 | `claude-sonnet-4-0` | Previous Sonnet generation, still supported         |
 | `claude-haiku-4-5`  | Fast and inexpensive, good for tight loops          |
 
 ## Thinking Budget
 
-Anthropic uses integer token budgets (1024–32768). Defaults to 8192 with interleaved thinking enabled:
+Anthropic uses integer token budgets (1024–32768). Thinking is off unless you set `thinking_budget`; when set, interleaved thinking is auto-enabled:
 
 ```yaml
 models:
@@ -116,7 +116,7 @@ models:
 
 ## Interleaved Thinking
 
-Enabled by default. Allows tool calls during model reasoning for more integrated problem-solving:
+Auto-enabled whenever a thinking budget is configured on a Claude model. Allows tool calls during model reasoning for more integrated problem-solving:
 
 ```yaml
 models:

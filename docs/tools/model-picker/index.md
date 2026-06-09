@@ -31,7 +31,7 @@ toolsets:
 
 ## How It Works
 
-When the model picker toolset is enabled, the agent gets a `pick_model` tool it can call to switch to a different model for the next turn. The agent decides which model to use based on the complexity of the task, cost considerations, or other factors you describe in its instruction.
+When the model picker toolset is enabled, the agent gets two tools: `change_model` to switch to one of the configured models, and `revert_model` to return to its default model. The agent decides which model to use based on the complexity of the task, cost considerations, or other factors you describe in its instruction.
 
 ## Example
 
@@ -59,10 +59,16 @@ agents:
 
 ## Tool Interface
 
-The toolset exposes a single tool, `pick_model`, with one parameter:
+The toolset exposes two tools:
+
+### `change_model`
 
 | Parameter | Type   | Required | Description                                                                 |
 | --------- | ------ | -------- | --------------------------------------------------------------------------- |
-| `model`   | string | ✓        | The model to use for the next turn. Must be one of the configured models.   |
+| `model`   | string | ✓        | The model to switch to. Must be one of the configured models.               |
 
-The model switch takes effect on the **next** turn — the current turn continues with the model that was active when `pick_model` was called.
+### `revert_model`
+
+Takes no parameters. Reverts the agent to its original/default model.
+
+The switch takes effect immediately: the next inference call — including the remainder of the current agentic loop — uses the new model.

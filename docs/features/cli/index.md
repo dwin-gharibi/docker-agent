@@ -41,6 +41,8 @@ $ docker agent run [config] [message...] [flags]
 | `--app-name <name>`                     | Override the application name label shown in the TUI (status bar, window title, "/exit" notifications).                                   |
 | `--sidebar`                             | Control sidebar visibility. Set to `--sidebar=false` to hide the sidebar and disable the Ctrl+B toggle (default: `true`).                 |
 | `--disable-commands <list>`             | Hide and disable specific slash commands in the TUI. Accepts a comma-separated list of command names (leading slash optional, case-insensitive). E.g. `--disable-commands="/cost,/eval,/model"`. |
+| `--theme <name>`                        | Preselect a TUI theme by name (overrides the theme from user config; ignored outside the interactive TUI)                                 |
+| `--on-event <type>=<cmd>`               | Run a shell command when an event of the given type fires (`*=<cmd>` matches any event). Repeatable.                                      |
 | `--json`                                | Output results as newline-delimited JSON (use with `--exec`)                                                                              |
 | `--hide-tool-calls`                     | Hide tool calls in the output                                                                                                             |
 | `--hide-tool-results`                   | Hide tool call results in the output                                                                                                      |
@@ -220,8 +222,11 @@ $ docker agent serve mcp <config> [flags]
 | Flag                   | Default            | Description                                                                                       |
 | ---------------------- | ------------------ | ------------------------------------------------------------------------------------------------- |
 | `-a, --agent <name>`   | (all agents)       | Name of the agent to expose. If omitted, every agent in the config is exposed as a separate tool. |
+| `--tool-name <name>`   | (agent name)       | Override the MCP tool identifier clients call; only valid when exposing a single agent.           |
 | `--http`               | `false`            | Use streaming HTTP transport instead of stdio.                                                    |
 | `-l, --listen <addr>`  | `127.0.0.1:8081`   | Address to listen on (only used with `--http`).                                                   |
+| `--mcp-keepalive <dur>`| `0` (disabled)     | Interval between MCP keep-alive pings (e.g. `30s`).                                               |
+| `--attach [target]`    | (none)             | Attach to a running TUI run by pid, address, or session id; given without a value, selects the most recent run.   |
 
 All [runtime configuration flags](#runtime-configuration-flags) are also accepted.
 
