@@ -3,7 +3,7 @@
   "source_url": "https://desktop.docker.com/mcp/catalog/v3/catalog.json",
   "schema_version": 3,
   "filter": "type=remote AND remote.transport_type=streamable-http",
-  "count": 39,
+  "count": 35,
   "servers": [
     {
       "id": "astro-docs",
@@ -81,33 +81,6 @@
       }
     },
     {
-      "id": "carbon-voice",
-      "title": "Carbon Voice",
-      "description": "Communicate asynchronously with voice messages featuring AI transcription, summaries, and automated action item extraction.",
-      "url": "https://mcp.carbonvoice.app",
-      "transport": "streamable-http",
-      "category": "productivity",
-      "tags": [
-        "productivity",
-        "voice",
-        "automation",
-        "remote"
-      ],
-      "icon": "https://www.google.com/s2/favicons?domain=carbonvoice.app&sz=64",
-      "readme": "http://desktop.docker.com/mcp/catalog/v3/readme/carbon-voice.md",
-      "headers": {},
-      "auth": {
-        "type": "oauth",
-        "providers": [
-          {
-            "provider": "carbon-voice",
-            "env": "CARBON_VOICE_PERSONAL_ACCESS_TOKEN",
-            "secret": "carbon-voice.personal_access_token"
-          }
-        ]
-      }
-    },
-    {
       "id": "cloudflare",
       "title": "Cloudflare",
       "description": "Manage Cloudflare workers, DNS, security and platform resources via the Cloudflare API.",
@@ -165,25 +138,6 @@
       "headers": {},
       "auth": {
         "type": "none"
-      }
-    },
-    {
-      "id": "figma",
-      "title": "Figma",
-      "description": "Read design files, components, frames and metadata directly from Figma.",
-      "url": "https://mcp.figma.com/mcp",
-      "transport": "streamable-http",
-      "category": "design",
-      "tags": [
-        "design",
-        "ui",
-        "collaboration",
-        "remote"
-      ],
-      "icon": "https://www.google.com/s2/favicons?domain=figma.com&sz=64",
-      "headers": {},
-      "auth": {
-        "type": "oauth"
       }
     },
     {
@@ -458,58 +412,6 @@
       "headers": {},
       "auth": {
         "type": "none"
-      }
-    },
-    {
-      "id": "miro-remote",
-      "title": "Miro",
-      "description": "Create diagrams, manage documents, and explore board content in collaborative visual workspaces.",
-      "url": "https://mcp.miro.com/mcp",
-      "transport": "streamable-http",
-      "category": "productivity",
-      "tags": [
-        "productivity",
-        "collaboration",
-        "diagramming",
-        "remote"
-      ],
-      "icon": "https://www.google.com/s2/favicons?domain=miro.com&sz=64",
-      "readme": "http://desktop.docker.com/mcp/catalog/v3/readme/miro-remote.md",
-      "headers": {},
-      "auth": {
-        "type": "oauth",
-        "providers": [
-          {
-            "provider": "miro-remote",
-            "env": "MIRO_REMOTE_PERSONAL_ACCESS_TOKEN",
-            "secret": "miro-remote.personal_access_token"
-          }
-        ]
-      }
-    },
-    {
-      "id": "morningstar-mcp-server",
-      "title": "Morningstar",
-      "description": "The Morningstar MCP Server makes it simple to power your AI apps and tools with Morningstars trusted content. It provides access to a growing library of AI-ready capabilities, including global analyst research, market analysis, and key investment data.",
-      "url": "https://mcp.morningstar.com/mcp",
-      "transport": "streamable-http",
-      "category": "Fintech",
-      "tags": [
-        "Fintech",
-        "remote"
-      ],
-      "icon": "https://developer.morningstar.com/logo-brand.svg",
-      "readme": "http://desktop.docker.com/mcp/catalog/v3/readme/morningstar-mcp-server.md",
-      "headers": {},
-      "auth": {
-        "type": "oauth",
-        "providers": [
-          {
-            "provider": "morningstar-mcp-server",
-            "env": "MORNINGSTAR_MCP_SERVER_PERSONAL_ACCESS_TOKEN",
-            "secret": "morningstar-mcp-server.personal_access_token"
-          }
-        ]
       }
     },
     {
