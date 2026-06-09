@@ -3,6 +3,7 @@ package compactor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -76,15 +77,19 @@ func TestExtractMessages(t *testing.T) {
 			wantConversationMsgCount: 4,
 		},
 		{
-			name: "truncation when context limit is very small",
+			name: "older messages dropped when they exceed the summarization budget",
 			messages: []session.Item{
-				newMsg(chat.MessageRoleUser, "first message with lots of content that takes tokens"),
-				newMsg(chat.MessageRoleAssistant, "first response with lots of content that takes tokens"),
+				newMsg(chat.MessageRoleUser, strings.Repeat("a", 80_000)),      // ~20k tokens
+				newMsg(chat.MessageRoleAssistant, strings.Repeat("b", 80_000)), // ~20k tokens
 				newMsg(chat.MessageRoleUser, "second message"),
 				newMsg(chat.MessageRoleAssistant, "second response"),
 			},
-			contextLimit:             MaxSummaryTokens + 50,
-			wantConversationMsgCount: 0,
+			// The two small messages form the kept tail (keep budget
+			// 32k/5). Of the two ~20k-token compact candidates only the
+			// newest fits contextAvailable ≈ 0.75×32k − prompts ≈ 23.8k;
+			// the older one is dropped from the summarizer's input.
+			contextLimit:             32_000,
+			wantConversationMsgCount: 1,
 		},
 		{
 			name: "additional prompt is appended",
@@ -183,7 +188,7 @@ func TestComputeFirstKeptEntry(t *testing.T) {
 	t.Run("empty session returns 0", func(t *testing.T) {
 		t.Parallel()
 		sess := session.New()
-		assert.Equal(t, 0, ComputeFirstKeptEntry(sess))
+		assert.Equal(t, 0, ComputeFirstKeptEntry(sess, 100_000))
 	})
 
 	t.Run("short conversation: split at end (compact everything)", func(t *testing.T) {
@@ -193,7 +198,7 @@ func TestComputeFirstKeptEntry(t *testing.T) {
 			session.NewMessageItem(&session.Message{Message: chat.Message{Role: chat.MessageRoleUser, Content: "hi"}}),
 			session.NewMessageItem(&session.Message{Message: chat.Message{Role: chat.MessageRoleAssistant, Content: "hello"}}),
 		}))
-		assert.Equal(t, len(sess.Messages), ComputeFirstKeptEntry(sess))
+		assert.Equal(t, len(sess.Messages), ComputeFirstKeptEntry(sess, 100_000))
 	})
 }
 
@@ -343,6 +348,90 @@ func TestGatherCompactionInput_PriorSummaryWithoutFirstKeptEntry(t *testing.T) {
 	// prior summary and FirstKeptEntry is zero.
 	require.Len(t, messages, 3)
 	assert.Equal(t, []int{2, 3, 4}, sessIndices)
+}
+
+// TestRunLLM_SmallContextWindow is a regression test for issue #2871:
+// with a small context window (e.g. a local model whose size comes from
+// provider_opts.context_size), the fixed MaxSummaryTokens budget used to
+// consume the whole window, so the summarizer received zero conversation
+// messages, fabricated an "I see no conversation history" reply, and that
+// text then replaced the entire session history. The budgets must scale
+// with the window so the summarizer always sees real conversation.
+func TestRunLLM_SmallContextWindow(t *testing.T) {
+	t.Parallel()
+
+	big := strings.Repeat("x", 4_000) // ~1k estimated tokens per tool result
+	sess := session.New(session.WithUserMessage("please do the big task"))
+	for i := range 8 {
+		id := fmt.Sprintf("tc%d", i)
+		sess.AddMessage(session.NewAgentMessage("root", &chat.Message{
+			Role:      chat.MessageRoleAssistant,
+			ToolCalls: []tools.ToolCall{{ID: id, Function: tools.FunctionCall{Name: "shell", Arguments: `{"cmd":"ls"}`}}},
+		}))
+		sess.AddMessage(session.NewAgentMessage("root", &chat.Message{
+			Role:       chat.MessageRoleTool,
+			ToolCallID: id,
+			Content:    big,
+		}))
+	}
+	a := agent.New("root", "instr", agent.WithModel(fakeProvider{id: modelsdev.NewID("fake", "model")}))
+
+	var conversationCount int
+	result, err := RunLLM(t.Context(), LLMArgs{
+		Session:      sess,
+		Agent:        a,
+		ContextLimit: 8_192,
+		RunAgent: func(_ context.Context, _ *agent.Agent, cs *session.Session) error {
+			msgs := cs.GetAllMessages()
+			// All non-system messages minus the trailing compaction user
+			// prompt are the conversation handed to the summarizer.
+			conversationCount = len(msgs) - 1
+			cs.AddMessage(session.NewAgentMessage("root", &chat.Message{
+				Role:    chat.MessageRoleAssistant,
+				Content: "the summary",
+			}))
+			return nil
+		},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Positive(t, conversationCount, "summarizer must receive conversation messages even on small context windows")
+	assert.Equal(t, "the summary", result.Summary)
+	assert.Less(t, result.FirstKeptEntry, len(sess.Messages), "a recent tail must be kept verbatim")
+	assert.Positive(t, result.FirstKeptEntry)
+}
+
+// TestRunLLM_NoConversationFits_NoOps pins the safety net behind the
+// scaled budgets: when not a single conversation message fits the
+// summarization budget (e.g. one giant tool result), RunLLM must no-op
+// instead of running the summarizer on an empty conversation — the
+// resulting non-summary would otherwise wipe the session history.
+func TestRunLLM_NoConversationFits_NoOps(t *testing.T) {
+	t.Parallel()
+
+	sess := session.New(session.WithMessages([]session.Item{
+		session.NewMessageItem(&session.Message{Message: chat.Message{
+			Role:    chat.MessageRoleUser,
+			Content: strings.Repeat("x", 200_000), // ~50k tokens, exceeds the whole window
+		}}),
+	}))
+	a := agent.New("root", "instr", agent.WithModel(fakeProvider{id: modelsdev.NewID("fake", "model")}))
+
+	runAgentCalled := false
+	result, err := RunLLM(t.Context(), LLMArgs{
+		Session:      sess,
+		Agent:        a,
+		ContextLimit: 8_192,
+		RunAgent: func(context.Context, *agent.Agent, *session.Session) error {
+			runAgentCalled = true
+			return nil
+		},
+	})
+
+	require.NoError(t, err)
+	assert.Nil(t, result, "compaction must be a no-op when nothing fits the budget")
+	assert.False(t, runAgentCalled, "the summarizer must not run on an empty conversation")
 }
 
 func TestRunLLM_DoesNotDuplicateSystemPrompt(t *testing.T) {

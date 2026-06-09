@@ -22,6 +22,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/docker/docker-agent/pkg/agent"
@@ -35,14 +36,42 @@ import (
 // MaxSummaryTokens caps the summary's output length when using the
 // default LLM strategy. Exposed because the runtime subtracts it from
 // the model's context budget when deciding whether the model lookup
-// produced a workable limit.
+// produced a workable limit. For small context windows the effective
+// cap is scaled down via [summaryTokenBudget] so the summary call
+// never consumes more than a quarter of the window.
 const MaxSummaryTokens = 16_000
 
 // maxKeepTokens is the runtime's policy for how much recent
 // conversation to preserve verbatim across a compaction. Messages
 // fitting in this window are kept aside; the rest are the candidates
-// to summarize.
+// to summarize. For small context windows the effective budget is
+// scaled down via [keepTokenBudget] so the kept tail never occupies
+// more than a fifth of the window.
 const maxKeepTokens = 20_000
+
+// summaryTokenBudget returns the output-token cap for the summary
+// call, scaled to the context window. The fixed [MaxSummaryTokens]
+// cap works for large windows but exceeds small ones entirely (e.g. a
+// local model with provider_opts.context_size of 8k), which used to
+// leave no room for the conversation being summarized — the
+// summarizer then received an empty conversation and produced a
+// confused non-summary that wiped the session history.
+func summaryTokenBudget(contextLimit int64) int64 {
+	return min(MaxSummaryTokens, contextLimit/4)
+}
+
+// keepTokenBudget returns the verbatim-keep budget for a compaction,
+// scaled to the context window so that the kept tail plus the summary
+// always leave the post-compaction session well under the compaction
+// threshold. A non-positive contextLimit (hook-supplied summaries may
+// run without a resolvable model definition) falls back to the
+// unscaled policy.
+func keepTokenBudget(contextLimit int64) int64 {
+	if contextLimit <= 0 {
+		return maxKeepTokens
+	}
+	return min(maxKeepTokens, contextLimit/5)
+}
 
 // Result is the structural outcome of running a compaction strategy.
 // The runtime applies it to the parent session by appending a
@@ -120,11 +149,23 @@ func RunLLM(ctx context.Context, args LLMArgs) (*Result, error) {
 
 	summaryModel := provider.CloneWithOptions(ctx, args.Agent.Model(ctx),
 		options.WithStructuredOutput(nil),
-		options.WithMaxTokens(MaxSummaryTokens),
+		options.WithMaxTokens(summaryTokenBudget(args.ContextLimit)),
 	)
 	compactionAgent := agent.New("root", "", agent.WithModel(summaryModel))
 
 	messages, firstKeptEntry := extractMessages(args.Session, compactionAgent, args.ContextLimit, args.AdditionalPrompt)
+
+	// The first and last entries are the synthesized compaction
+	// system/user prompts; anything between them is the conversation to
+	// summarize. Running the summarizer without a conversation would
+	// make it fabricate a "there is no history" reply that then
+	// REPLACES the real session history, so treat this as a no-op
+	// instead (the session is left untouched).
+	if len(messages) <= 2 {
+		slog.WarnContext(ctx, "Compaction skipped: no conversation messages fit the summarization budget",
+			"session_id", args.Session.ID, "context_limit", args.ContextLimit)
+		return nil, nil
+	}
 
 	compactionSession := session.New(
 		session.WithTitle("Generating summary"),
@@ -150,12 +191,12 @@ func RunLLM(ctx context.Context, args LLMArgs) (*Result, error) {
 
 // ComputeFirstKeptEntry returns the index in sess.Messages of the
 // first message preserved verbatim after compaction, given the
-// [maxKeepTokens] window. Used by the runtime when a hook supplies
-// its own summary so the kept-tail policy stays consistent across
-// the two strategies.
-func ComputeFirstKeptEntry(sess *session.Session) int {
+// [keepTokenBudget] window for contextLimit. Used by the runtime when
+// a hook supplies its own summary so the kept-tail policy stays
+// consistent across the two strategies.
+func ComputeFirstKeptEntry(sess *session.Session, contextLimit int64) int {
 	messages, sessIndices := gatherCompactionInput(sess)
-	return firstKeptSessionIndex(sess, sessIndices, compaction.SplitIndexForKeep(messages, maxKeepTokens))
+	return firstKeptSessionIndex(sess, sessIndices, compaction.SplitIndexForKeep(messages, keepTokenBudget(contextLimit)))
 }
 
 // gatherCompactionInput is a thin wrapper around
@@ -197,12 +238,12 @@ func gatherCompactionInput(sess *session.Session) ([]chat.Message, []int) {
 // a cache checkpoint or accrue duplicate cost.
 //
 // If the conversation tail itself doesn't fit in
-// (contextLimit − MaxSummaryTokens − prompt-overhead), older messages
+// (contextLimit − summary budget − prompt-overhead), older messages
 // are dropped from the front of the to-compact list to make room.
 func extractMessages(sess *session.Session, _ *agent.Agent, contextLimit int64, additionalPrompt string) ([]chat.Message, int) {
 	messages, sessIndices := gatherCompactionInput(sess)
 
-	splitIdx := compaction.SplitIndexForKeep(messages, maxKeepTokens)
+	splitIdx := compaction.SplitIndexForKeep(messages, keepTokenBudget(contextLimit))
 	firstKeptEntry := firstKeptSessionIndex(sess, sessIndices, splitIdx)
 	messages = messages[:splitIdx]
 
@@ -222,7 +263,7 @@ func extractMessages(sess *session.Session, _ *agent.Agent, contextLimit int64, 
 	}
 
 	contextAvailable := max(int64(0),
-		contextLimit-MaxSummaryTokens-
+		contextLimit-summaryTokenBudget(contextLimit)-
 			compaction.EstimateMessageTokens(&systemPromptMessage)-
 			compaction.EstimateMessageTokens(&userPromptMessage))
 	firstIndex := compaction.FirstIndexInBudget(messages, contextAvailable)
