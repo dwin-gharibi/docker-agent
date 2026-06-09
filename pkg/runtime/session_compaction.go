@@ -76,7 +76,7 @@ func (r *LocalRuntime) doCompact(ctx context.Context, sess *session.Session, a *
 
 	// Choose the strategy: a hook-supplied summary if before_compaction
 	// returned one, otherwise the default LLM strategy.
-	result := summaryFromHook(sess, a, pre)
+	result := summaryFromHook(sess, a, pre, contextLimit)
 	if result == nil {
 		if contextLimit <= 0 {
 			slog.ErrorContext(ctx, "Failed to generate session summary",
@@ -143,7 +143,7 @@ func (r *LocalRuntime) doCompact(ctx context.Context, sess *session.Session, a *
 // summary's token count for session bookkeeping. The Result.Cost is
 // left at its zero value because no LLM call ran — the hook produced
 // the summary itself, so there's nothing to bill.
-func summaryFromHook(sess *session.Session, a *agent.Agent, pre *hooks.Result) *compactor.Result {
+func summaryFromHook(sess *session.Session, a *agent.Agent, pre *hooks.Result, contextLimit int64) *compactor.Result {
 	if pre == nil || pre.Summary == "" {
 		return nil
 	}
@@ -151,7 +151,7 @@ func summaryFromHook(sess *session.Session, a *agent.Agent, pre *hooks.Result) *
 		"session_id", sess.ID, "agent", a.Name(), "summary_length", len(pre.Summary))
 	return &compactor.Result{
 		Summary:        pre.Summary,
-		FirstKeptEntry: compactor.ComputeFirstKeptEntry(sess),
+		FirstKeptEntry: compactor.ComputeFirstKeptEntry(sess, contextLimit),
 		// Estimate the summary's token count for session bookkeeping;
 		// no LLM was called so Cost stays at the zero value.
 		InputTokens: compaction.EstimateMessageTokens(&chat.Message{
