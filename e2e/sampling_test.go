@@ -3,11 +3,13 @@ package e2e_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -159,7 +161,7 @@ func askWithCalculator(ctx context.Context, req *gomcp.CallToolRequest, in askIn
 		})
 	}
 
-	return nil, nil, fmt.Errorf("sampling loop did not terminate within 4 rounds")
+	return nil, nil, errors.New("sampling loop did not terminate within 4 rounds")
 }
 
 func runCalculator(tu *gomcp.ToolUseContent) (string, error) {
@@ -172,7 +174,7 @@ func runCalculator(tu *gomcp.ToolUseContent) (string, error) {
 		raw, _ := json.Marshal(tu.Input)
 		return "", fmt.Errorf("calculator expects integer x and y, got %s", raw)
 	}
-	return fmt.Sprintf("%d", x+y), nil
+	return strconv.FormatInt(x+y, 10), nil
 }
 
 func toInt(v any) (int64, error) {
