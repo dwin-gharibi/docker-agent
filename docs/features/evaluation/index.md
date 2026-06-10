@@ -165,10 +165,19 @@ $ docker agent eval <agent-file>|<registry-ref> [<eval-dir>|./evals]
 | `--judge-model`     | `anthropic/claude-opus-4-5-20251101` | Model for LLM-as-a-judge relevance scoring                        |
 | `--output`          | `&lt;eval-dir&gt;/results`  | Directory for results, logs, and session databases                |
 | `--only`            | (all)                       | Only run evals with file names matching these patterns            |
-| `--base-image`      | (default)                   | Custom base Docker image for eval containers                      |
+| `--base-image`      | (default)                   | Custom base Docker image for eval containers (see [Custom Base Images](#custom-base-images)) |
 | `--keep-containers` | `false`                     | Keep containers after evaluation (don't remove with `--rm`)       |
 | `-e, --env`         | (none)                      | Environment variables to pass to container (`KEY` or `KEY=VALUE`) |
 | `--repeat`          | `1`                         | Number of times to repeat each evaluation (useful for computing baselines) |
+
+### Custom Base Images
+
+When `--base-image` is set, the eval harness builds a derived image on top of your base image at evaluation time. Two things happen automatically:
+
+1. **The docker-agent binary is injected** — it is copied from `docker/docker-agent:edge` into the derived image at build time, so you don't need to include it in your base image.
+2. **The entrypoint is overridden** — docker-agent replaces your base image's entrypoint with its own `/run.sh` wrapper.
+
+Your base image therefore only needs to provide the runtime environment: language runtimes, installed dependencies, test fixtures, the appropriate working directory, and so on. Any `ENTRYPOINT` or `CMD` defined in your base image is ignored.
 
 ## Output
 
