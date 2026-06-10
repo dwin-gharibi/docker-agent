@@ -726,46 +726,6 @@
       }
     },
     {
-      "id": "supabase",
-      "title": "Supabase",
-      "description": "Manage Supabase projects, run database queries, edit schemas and configure edge functions and storage.",
-      "url": "https://mcp.supabase.com/mcp",
-      "transport": "streamable-http",
-      "category": "database",
-      "tags": [
-        "database",
-        "postgres",
-        "backend",
-        "auth",
-        "storage",
-        "remote"
-      ],
-      "icon": "https://www.google.com/s2/favicons?domain=supabase.com&sz=64",
-      "headers": {},
-      "auth": {
-        "type": "oauth"
-      }
-    },
-    {
-      "id": "tally",
-      "title": "Tally",
-      "description": "Build forms and inspect Tally form submissions and respondent data.",
-      "url": "https://api.tally.so/mcp",
-      "transport": "streamable-http",
-      "category": "productivity",
-      "tags": [
-        "productivity",
-        "forms",
-        "surveys",
-        "remote"
-      ],
-      "icon": "https://www.google.com/s2/favicons?domain=tally.so&sz=64",
-      "headers": {},
-      "auth": {
-        "type": "oauth"
-      }
-    },
-    {
       "id": "waystation",
       "title": "WayStation",
       "description": "Connect AI to your productivity ecosystem with integrations across Notion, Slack, Asana, Monday.com, and 50+ other business tools.",
