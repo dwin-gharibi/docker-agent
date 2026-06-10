@@ -87,6 +87,7 @@ func createTestWorktree(t *testing.T) *worktree.Worktree {
 		{"init"},
 		{"config", "user.email", "test@example.com"},
 		{"config", "user.name", "Test User"},
+		{"config", "commit.gpgsign", "false"},
 	} {
 		cmd := exec.CommandContext(t.Context(), "git", append([]string{"-C", dir}, args...)...)
 		out, err := cmd.CombinedOutput()

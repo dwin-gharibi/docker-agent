@@ -203,6 +203,7 @@ func snapshotBuiltinRepo(t *testing.T) string {
 	runGitForSnapshotBuiltin(t, dir, "init")
 	runGitForSnapshotBuiltin(t, dir, "config", "user.email", "test@example.com")
 	runGitForSnapshotBuiltin(t, dir, "config", "user.name", "Test User")
+	runGitForSnapshotBuiltin(t, dir, "config", "commit.gpgsign", "false")
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "base.txt"), []byte("base"), 0o644))
 	runGitForSnapshotBuiltin(t, dir, "add", ".")
 	runGitForSnapshotBuiltin(t, dir, "commit", "-m", "init")
