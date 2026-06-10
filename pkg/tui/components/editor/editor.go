@@ -177,6 +177,13 @@ func WithReadOnly() Option {
 	}
 }
 
+// WithPlaceholder sets the editor's placeholder text (shown while empty).
+func WithPlaceholder(placeholder string) Option {
+	return func(e *editor) {
+		e.textarea.Placeholder = placeholder
+	}
+}
+
 // New creates a new editor component
 func New(hist *history.History, opts ...Option) Editor {
 	ta := textarea.New()
