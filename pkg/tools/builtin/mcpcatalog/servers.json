@@ -3,7 +3,7 @@
   "source_url": "https://desktop.docker.com/mcp/catalog/v3/catalog.json",
   "schema_version": 3,
   "filter": "type=remote AND remote.transport_type=streamable-http",
-  "count": 35,
+  "count": 33,
   "servers": [
     {
       "id": "astro-docs",
