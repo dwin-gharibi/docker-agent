@@ -5,11 +5,61 @@ All notable changes to this project will be documented in this file.
 
 ## [v1.76.0] - 2026-06-10
 
-This is a maintenance release with dependency updates and internal improvements.
+This release adds Claude Fable 5 support, a dedicated model for session-title generation, and checksum verification for tool installs, along with session compaction and TUI fixes.
+
+## What's New
+
+- Adds `title_model` field for delegating session-title generation to a dedicated model
+- Adds Claude Fable 5 support with refusal handling and server-side fallbacks via `provider_opts`
+- Surfaces model refusals as a distinct finish reason
+- Adds asset checksum verification to tool installation and supports aqua `version_overrides`
+
+## Improvements
+
+- Allows models.dev in the sandbox proxy for model catalog metadata resolution
+- Makes the TUI editor component embeddable by other modules, with a new `editor.WithPlaceholder` option
+- Shows a toast error when opening a URL fails
+- Removes MCP catalog entries with broken OAuth
+
+## Bug Fixes
+
+- Fixes agent losing context and halting after the first session compaction by scaling compaction budgets to the context window
+- Fixes sub-session tokens being counted in the compaction trigger
+- Fixes Anthropic parallel tool calls by routing input_json deltas by content-block index
+- Adds a max_tokens floor for Anthropic when thinking is disabled
+- Fixes sidebar token usage panel flickering during sub-agent transfers
+- Surfaces useful errors when session title generation fails and honors the agent `title_model` in the debug title command
+- Fixes fork-mode skill commands looping in the TUI
+- Fixes cell alignment when the suggestion overlay cuts a wide rune
+- Fixes the configured placeholder not being restored when voice recording stops
 
 ## Technical Changes
-- Maintenance release with dependency updates
 
+- Disables git commit signing in test helpers
+- Bumps github.com/anthropics/anthropic-sdk-go to v1.49.0
+
+### Pull Requests
+
+- [#3009](https://github.com/docker/docker-agent/pull/3009) - fix(anthropic): route input_json deltas by content-block index
+- [#3038](https://github.com/docker/docker-agent/pull/3038) - docs: update CHANGELOG.md for v1.74.0
+- [#3039](https://github.com/docker/docker-agent/pull/3039) - bump github.com/anthropics/anthropic-sdk-go to v1.49.0
+- [#3040](https://github.com/docker/docker-agent/pull/3040) - Show toast error when opening URL fails
+- [#3041](https://github.com/docker/docker-agent/pull/3041) - Allow models.dev in sandbox proxy for model catalog resolution
+- [#3042](https://github.com/docker/docker-agent/pull/3042) - fix: agent loses context and halts after first session compaction
+- [#3043](https://github.com/docker/docker-agent/pull/3043) - docs: fix stale defaults, wrong tool names, and missing CLI flags
+- [#3044](https://github.com/docker/docker-agent/pull/3044) - docs: update evaluation and compaction documentation
+- [#3045](https://github.com/docker/docker-agent/pull/3045) - Reusable editor
+- [#3046](https://github.com/docker/docker-agent/pull/3046) - toolinstall: verify asset checksums and support aqua version_overrides
+- [#3047](https://github.com/docker/docker-agent/pull/3047) - Reusable editor (More)
+- [#3048](https://github.com/docker/docker-agent/pull/3048) - Remove MCP non-working servers
+- [#3049](https://github.com/docker/docker-agent/pull/3049) - fix: stop sidebar token usage panel flickering during sub-agent transfers
+- [#3050](https://github.com/docker/docker-agent/pull/3050) - fix: add max_tokens floor for Anthropic when thinking is disabled
+- [#3051](https://github.com/docker/docker-agent/pull/3051) - feat: add title_model for delegating session-title generation
+- [#3052](https://github.com/docker/docker-agent/pull/3052) - fix: surface useful errors when session title generation fails
+- [#3053](https://github.com/docker/docker-agent/pull/3053) - feat: add Claude Fable 5 support with refusal handling and server-side fallbacks
+- [#3057](https://github.com/docker/docker-agent/pull/3057) - fix: prevent fork-mode skill commands from looping in TUI
+- [#3059](https://github.com/docker/docker-agent/pull/3059) - expose embeddable tui components
+- [#3060](https://github.com/docker/docker-agent/pull/3060) - test: disable git commit signing in test helpers
 
 
 ## [v1.74.0] - 2026-06-09
