@@ -15,16 +15,15 @@ func TestIsTrustedDockerURL(t *testing.T) {
 		url      string
 		expected bool
 	}{
-		// Valid Docker URLs
+		// Valid Docker URLs (HTTPS only for remote)
 		{"https://docker.com/some/path", true},
 		{"https://desktop.docker.com/mcp/catalog/v3/catalog.yaml", true},
 		{"https://api.docker.com/events/v1/track", true},
 		{"https://api-stage.docker.com/events/v1/track", true},
 		{"https://hub.docker.com/mcp/server", true},
 		{"https://sub.sub.docker.com/path", true},
-		{"http://docker.com/path", true},
 
-		// Localhost URLs (local development)
+		// Localhost URLs (local development, HTTP or HTTPS)
 		{"http://localhost:8080/agent.yaml", true},
 		{"https://localhost/agent.yaml", true},
 		{"http://localhost/v1/models", true},
@@ -37,6 +36,14 @@ func TestIsTrustedDockerURL(t *testing.T) {
 		{"https://example.com/agent.yaml", false},
 		{"https://github.com/docker/repo", false},
 		{"", false},
+
+		// Scheme enforcement: plain HTTP to remote .docker.com is rejected
+		{"http://docker.com/path", false},
+		{"http://desktop.docker.com/agent.yaml", false},
+
+		// Non-HTTP(S) schemes are rejected
+		{"ftp://docker.com/file.yaml", false},
+		{"ftp://localhost/file.yaml", false},
 
 		// Security: malicious URLs that should NOT be treated as Docker URLs
 		{"https://evil.com/docker.com/file.yaml", false},     // docker.com in path

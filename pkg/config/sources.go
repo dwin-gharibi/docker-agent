@@ -366,7 +366,7 @@ func (a urlSource) addGitHubAuth(ctx context.Context, req *http.Request) {
 }
 
 // addDockerAuth adds the Docker Desktop JWT to the request if:
-// - The URL targets a .docker.com domain
+// - The URL targets a .docker.com domain or localhost
 // - An environment provider is configured
 // - DOCKER_TOKEN is available in the environment
 func (a urlSource) addDockerAuth(ctx context.Context, req *http.Request) {
