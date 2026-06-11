@@ -47,12 +47,13 @@ var errNoElicitationChannel = errors.New("no events channel available for elicit
 //
 // The bridge encapsulates a non-trivial concurrency contract: while a
 // caller holds a reference to the current channel and is in the middle
-// of sending an elicitation request, the swap-back must not race with
+// of sending an elicitation request, stream teardown must not race with
 // close(channel) on the inner stream. We achieve this by serializing
-// send and swap with an RWMutex held across the send. Pushing this into
-// a small standalone type keeps the contract testable in isolation
-// (with the race detector) without spinning up a runtime, and keeps
-// LocalRuntime free of the two raw fields it used to expose.
+// send, swap, and close with an RWMutex held across the channel
+// operation. Pushing this into a small standalone type keeps the
+// contract testable in isolation (with the race detector) without
+// spinning up a runtime, and keeps LocalRuntime free of the two raw
+// fields it used to expose.
 type elicitationBridge struct {
 	mu sync.RWMutex
 	ch chan Event
@@ -69,19 +70,34 @@ func (b *elicitationBridge) swap(ch chan Event) chan Event {
 }
 
 // send delivers ev to the current channel, holding the read lock across
-// the send. This blocks any concurrent swap until the send completes,
+// the send. This blocks concurrent teardown until the send completes,
 // preserving the invariant that the channel reference held by an
 // in-flight sender stays open until that sender finishes.
 //
-// Returns errNoElicitationChannel when no channel is configured.
-func (b *elicitationBridge) send(ev Event) error {
+// Returns errNoElicitationChannel when no channel is configured or when
+// a defensive recover catches an externally closed channel.
+func (b *elicitationBridge) send(ev Event) (err error) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
+	defer func() {
+		if recover() != nil {
+			err = errNoElicitationChannel
+		}
+	}()
 	if b.ch == nil {
 		return errNoElicitationChannel
 	}
 	b.ch <- ev
 	return nil
+}
+
+// restoreAndClose restores the previous stream channel and closes the current
+// stream channel under the bridge write lock.
+func (b *elicitationBridge) restoreAndClose(current, previous chan Event) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.ch = previous
+	close(current)
 }
 
 // ResumeElicitation sends an elicitation response back to a waiting
