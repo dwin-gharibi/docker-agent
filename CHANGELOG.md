@@ -3,6 +3,53 @@
 All notable changes to this project will be documented in this file.
 
 
+## [v1.78.0] - 2026-06-11
+
+This release improves MCP server connectivity, adds model thinking level controls, and enhances tool installation safety with checksum verification.
+
+## What's New
+- Adds ability to cycle model thinking level with Shift+Tab in the TUI
+- Adds `title_model` configuration field for delegating session title generation to a different model
+- Adds checksum verification for tool auto-install downloads to ensure binary integrity
+- Adds support for `version_overrides` in tool auto-install for better package configuration
+
+## Improvements
+- Updates remote MCP examples to prefer Streamable HTTP transport over SSE
+- Exposes embeddable TUI components (toolconfirm, StaticSessionState, Stopper) for downstream integration
+- Allows loading agent from localhost HTTP URLs for local development
+- Adds Docker Desktop JWT authentication when pulling agent from .docker.com URLs
+
+## Bug Fixes
+- Fixes reconnection of remote MCP toolsets after clean idle SSE connection closes
+- Fixes crash during elicitation channel close by guarding against in-flight sends
+- Fixes panic in ScriptToolSet.Instructions() when tool argument descriptions are missing
+- Fixes GitHub transport change that was causing test assertion failures
+
+## Technical Changes
+- Always allowlists models.dev in sandbox proxy for model catalog resolution
+- Restricts localhost HTTP redirects to localhost-only targets for security
+- Removes non-working Supabase and Tally entries from MCP catalog documentation
+
+### Pull Requests
+
+- [#3041](https://github.com/docker/docker-agent/pull/3041) - Allow models.dev in sandbox proxy for model catalog resolution
+- [#3046](https://github.com/docker/docker-agent/pull/3046) - toolinstall: verify asset checksums and support aqua version_overrides
+- [#3048](https://github.com/docker/docker-agent/pull/3048) - Remove MCP non-working servers 
+- [#3051](https://github.com/docker/docker-agent/pull/3051) - feat: add title_model for delegating session-title generation
+- [#3059](https://github.com/docker/docker-agent/pull/3059) - expose embeddable tui components
+- [#3061](https://github.com/docker/docker-agent/pull/3061) - docs: update CHANGELOG.md for v1.76.0
+- [#3062](https://github.com/docker/docker-agent/pull/3062) - docs: update CHANGELOG.md for v1.77.0
+- [#3064](https://github.com/docker/docker-agent/pull/3064) - fix: reconnect remote MCP toolsets after clean idle SSE close
+- [#3065](https://github.com/docker/docker-agent/pull/3065) - docs: update remote MCP examples to prefer Streamable HTTP over SSE
+- [#3067](https://github.com/docker/docker-agent/pull/3067) - Cycle model thinking level with shift+tab
+- [#3068](https://github.com/docker/docker-agent/pull/3068) - docs: update configuration, sandbox, tools, Go SDK, and MCP catalog docs
+- [#3070](https://github.com/docker/docker-agent/pull/3070) - fix: guard elicitation channel close against in-flight sends
+- [#3072](https://github.com/docker/docker-agent/pull/3072) - fix: guard type assertions in ScriptToolSet.Instructions() against missing description
+- [#3075](https://github.com/docker/docker-agent/pull/3075) - Allow pulling agent from localhost http URL for local dev
+- [#3076](https://github.com/docker/docker-agent/pull/3076) - Bump Go dependencies
+- [#3077](https://github.com/docker/docker-agent/pull/3077) - Add Docker Desktop JWT when pulling agent from a .docker.com URL
+
+
 ## [v1.77.0] - 2026-06-10
 
 This release is identical to v1.76.0. It was tagged from the same commit to complete a release pipeline run and contains no code changes.
@@ -3430,3 +3477,5 @@ This release improves the terminal user interface with better error handling and
 [v1.76.0]: https://github.com/docker/docker-agent/releases/tag/v1.76.0
 
 [v1.77.0]: https://github.com/docker/docker-agent/releases/tag/v1.77.0
+
+[v1.78.0]: https://github.com/docker/docker-agent/releases/tag/v1.78.0
