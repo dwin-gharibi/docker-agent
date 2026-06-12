@@ -3,6 +3,57 @@
 All notable changes to this project will be documented in this file.
 
 
+## [v1.79.0] - 2026-06-12
+
+This release adds TUI embedding capabilities, gateway model discovery, and HTTP transport middleware support, along with various fixes and improvements.
+
+## What's New
+
+- Adds embeddable transcript component for TUI integration
+- Adds gateway model discovery to automatically populate the model picker with models served by configured gateways
+- Adds HTTP transport wrapper support to inject middleware into provider clients
+- Adds Shift+Tab keyboard shortcut to cycle through model thinking levels in the TUI
+- Adds support for pulling agent from localhost HTTP URLs for local development
+- Adds automatic Docker Desktop JWT authentication when pulling from .docker.com URLs
+
+## Improvements
+
+- Makes theme application self-contained with ApplyThemeRef and change hooks
+- Exposes read access to transcript messages for embedders
+- Adds SetRoot function to re-home all agent state in one call
+- Adds NewAtDir function for embedders with custom state layouts
+- Centralizes tool-confirmation decision dispatch in toolconfirm
+
+## Bug Fixes
+
+- Fixes remote MCP toolset reconnection after clean idle SSE close
+- Fixes gateway discovery implementation issues
+- Fixes SSE fallback when transport wrapper is set and transport=websocket
+- Fixes Semgrep MCP server authentication configuration to use OAuth
+
+## Technical Changes
+
+- Wires TransportWrapper into Bedrock provider
+- Updates lint findings in TUI embedding helpers
+- Adds double-check for gateway cache inside singleflight closure
+- Rewrites Gemini client if-else chain as switch statement for better code quality
+
+### Pull Requests
+
+- [#3064](https://github.com/docker/docker-agent/pull/3064) - fix: reconnect remote MCP toolsets after clean idle SSE close
+- [#3067](https://github.com/docker/docker-agent/pull/3067) - Cycle model thinking level with shift+tab
+- [#3075](https://github.com/docker/docker-agent/pull/3075) - Allow pulling agent from localhost http URL for local dev
+- [#3077](https://github.com/docker/docker-agent/pull/3077) - Add Docker Desktop JWT when pulling agent from a .docker.com URL
+- [#3079](https://github.com/docker/docker-agent/pull/3079) - docs: update CHANGELOG.md for v1.78.0
+- [#3080](https://github.com/docker/docker-agent/pull/3080) - Board/tui embedding helpers
+- [#3081](https://github.com/docker/docker-agent/pull/3081) - feat(tui): expose read access to transcript messages
+- [#3084](https://github.com/docker/docker-agent/pull/3084) - docs: update remote MCP reconnect, thinking runtime cycling, distribution, and Go SDK docs
+- [#3085](https://github.com/docker/docker-agent/pull/3085) - fix(mcpcatalog): mark semgrep server as oauth
+- [#3086](https://github.com/docker/docker-agent/pull/3086) - feat(runtime): discover gateway-served models for the model picker
+- [#3087](https://github.com/docker/docker-agent/pull/3087) - docs: require GPG/SSH commit signing in Git Practices
+- [#3090](https://github.com/docker/docker-agent/pull/3090) - feat: add options.WithHTTPTransportWrapper to inject HTTP middleware in provider clients
+
+
 ## [v1.78.0] - 2026-06-11
 
 This release improves MCP server connectivity, adds model thinking level controls, and enhances tool installation safety with checksum verification.
@@ -3479,3 +3530,5 @@ This release improves the terminal user interface with better error handling and
 [v1.77.0]: https://github.com/docker/docker-agent/releases/tag/v1.77.0
 
 [v1.78.0]: https://github.com/docker/docker-agent/releases/tag/v1.78.0
+
+[v1.79.0]: https://github.com/docker/docker-agent/releases/tag/v1.79.0
