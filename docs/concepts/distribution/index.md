@@ -120,6 +120,12 @@ $ docker agent run docker.io/myorg/private-agent:latest
 ```
 
 <div class="callout callout-info" markdown="1">
+<div class="callout-title">Docker Desktop credentials
+</div>
+  <p>When pulling or running an agent from a <code>.docker.com</code> URL (e.g. <code>hub.docker.com</code>, <code>registry-1.docker.com</code>), docker-agent automatically forwards your Docker Desktop JWT for authentication — no <code>docker login</code> required as long as Docker Desktop is running and signed in.</p>
+</div>
+
+<div class="callout callout-info" markdown="1">
 <div class="callout-title">Troubleshooting
 </div>
   <p>Having issues with push/pull? See <a href="{{ '/community/troubleshooting/' | relative_url }}">Troubleshooting</a> for common registry issues.</p>
