@@ -1,0 +1,30 @@
+#!/usr/bin/env cagent run
+# Deterministic pipeline using force_handoff:
+#
+#   extractor ──(always)──> summarizer
+#
+# Unlike `handoffs` (where the LLM decides whether to call the handoff
+# tool), `force_handoff` is enforced by the runtime: whenever the agent
+# produces a final response, the conversation is unconditionally routed
+# to the named agent, carrying over the full context. This guarantees
+# the pipeline order even when the model would otherwise "forget" to
+# hand off.
+
+agents:
+  root:
+    model: anthropic/claude-sonnet-4-5
+    description: Extracts the key facts and entities from the user's input
+    instruction: |
+      You are the first stage of a two-stage pipeline.
+      Extract the key facts, entities, and figures from the user's input
+      as a concise bullet list. Do not summarize or editorialize - the
+      next agent in the pipeline will do that.
+    force_handoff: summarizer
+
+  summarizer:
+    model: anthropic/claude-sonnet-4-5
+    description: Produces the final summary from the extracted facts
+    instruction: |
+      You are the final stage of a two-stage pipeline.
+      Using the extracted facts from the conversation history, write a
+      short, well-structured summary for the user.

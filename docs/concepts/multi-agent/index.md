@@ -147,6 +147,34 @@ agents:
 
 </div>
 
+### Forced Handoffs
+
+With `handoffs`, the **model decides** whether to call the `handoff` tool — which means it can forget to, breaking pipelines that depend on a strict order. `force_handoff` removes that uncertainty: whenever the agent produces a final response, the **runtime itself** routes the conversation to the named agent, bypassing the LLM's tool-calling entirely. The full conversation context carries over.
+
+```yaml
+agents:
+  root:
+    model: anthropic/claude-sonnet-4-5
+    description: Extracts key facts from the input
+    instruction: |
+      Extract the key facts from the user's input as a bullet list.
+    force_handoff: summarizer
+
+  summarizer:
+    model: anthropic/claude-sonnet-4-5
+    description: Produces the final summary
+    instruction: |
+      Summarize the extracted facts for the user.
+```
+
+Rules enforced at config load time:
+
+- The target must be an agent defined in the config (or an external reference)
+- An agent cannot `force_handoff` to itself
+- Chains of `force_handoff` edges must not form a cycle (A → B → A is rejected)
+
+See <a href="https://github.com/docker/docker-agent/blob/main/examples/force_handoff.yaml"><code>examples/force_handoff.yaml</code></a> for a runnable example.
+
 ## Parallel Delegation with Background Agents
 
 `transfer_task` is **sequential** — the coordinator waits for the sub-agent to finish before continuing. When you need to fan out work to multiple agents at the same time, use the `background_agents` toolset instead.

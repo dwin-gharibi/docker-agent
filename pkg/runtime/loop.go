@@ -705,6 +705,19 @@ func (r *LocalRuntime) runTurn(
 		slog.DebugContext(ctx, "Conversation stopped", "agent", a.Name())
 		r.executeStopHooks(ctx, sess, a, res.Content, events)
 
+		// --- FORCED HANDOFF: deterministic routing on natural stop ---
+		// When the agent's config names a force_handoff target, the
+		// runtime intercepts the finish state and routes the conversation
+		// to that agent without involving the LLM. Skipped for pinned
+		// sessions (background agents): resolveSessionAgent would keep
+		// returning the pinned agent, turning the forced switch into an
+		// infinite stop/handoff loop.
+		if next := a.ForceHandoff(); next != nil && sess.AgentName == "" {
+			r.applyForceHandoff(ctx, sess, a, next)
+			endReason = turnEndReasonForceHandoff
+			return turnContinue
+		}
+
 		// Re-check steer queue: closes the race between the mid-loop drain and this stop.
 		if sr := r.drainAndEmitSteered(ctx, sess, a, events); sr.drained {
 			if sr.stop {

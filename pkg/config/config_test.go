@@ -673,6 +673,82 @@ func TestValidateConfig_ExternalSubAgentReferences(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "force_handoff to another local agent passes",
+			cfg: &latest.Config{
+				Agents: []latest.AgentConfig{
+					{Name: "root", Model: "openai/gpt-4o", ForceHandoff: "helper"},
+					{Name: "helper", Model: "openai/gpt-4o"},
+				},
+			},
+		},
+		{
+			name: "force_handoff chain passes",
+			cfg: &latest.Config{
+				Agents: []latest.AgentConfig{
+					{Name: "a", Model: "openai/gpt-4o", ForceHandoff: "b"},
+					{Name: "b", Model: "openai/gpt-4o", ForceHandoff: "c"},
+					{Name: "c", Model: "openai/gpt-4o"},
+				},
+			},
+		},
+		{
+			name: "force_handoff to non-existent agent fails",
+			cfg: &latest.Config{
+				Agents: []latest.AgentConfig{
+					{Name: "root", Model: "openai/gpt-4o", ForceHandoff: "does_not_exist"},
+				},
+			},
+			wantErr: "non-existent force_handoff agent 'does_not_exist'",
+		},
+		{
+			name: "force_handoff to self fails",
+			cfg: &latest.Config{
+				Agents: []latest.AgentConfig{
+					{Name: "root", Model: "openai/gpt-4o", ForceHandoff: "root"},
+				},
+			},
+			wantErr: "cannot force_handoff to itself",
+		},
+		{
+			name: "force_handoff cycle fails",
+			cfg: &latest.Config{
+				Agents: []latest.AgentConfig{
+					{Name: "a", Model: "openai/gpt-4o", ForceHandoff: "b"},
+					{Name: "b", Model: "openai/gpt-4o", ForceHandoff: "a"},
+				},
+			},
+			wantErr: "force_handoff cycle detected",
+		},
+		{
+			name: "force_handoff three-agent cycle fails",
+			cfg: &latest.Config{
+				Agents: []latest.AgentConfig{
+					{Name: "a", Model: "openai/gpt-4o", ForceHandoff: "b"},
+					{Name: "b", Model: "openai/gpt-4o", ForceHandoff: "c"},
+					{Name: "c", Model: "openai/gpt-4o", ForceHandoff: "a"},
+				},
+			},
+			wantErr: "force_handoff cycle detected",
+		},
+		{
+			name: "external force_handoff reference is allowed",
+			cfg: &latest.Config{
+				Agents: []latest.AgentConfig{
+					{Name: "root", Model: "openai/gpt-4o", ForceHandoff: "agentcatalog/pirate"},
+				},
+			},
+		},
+		{
+			name: "external force_handoff name collides with local agent",
+			cfg: &latest.Config{
+				Agents: []latest.AgentConfig{
+					{Name: "root", Model: "openai/gpt-4o", ForceHandoff: "agentcatalog/pirate"},
+					{Name: "pirate", Model: "openai/gpt-4o"},
+				},
+			},
+			wantErr: "conflicts with a locally-defined agent",
+		},
 	}
 
 	for _, tt := range tests {

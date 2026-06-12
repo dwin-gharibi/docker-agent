@@ -289,6 +289,17 @@ func LoadWithConfig(ctx context.Context, agentSource config.Source, runConfig *c
 		if len(handoffs) > 0 {
 			agent.WithHandoffs(handoffs...)(a)
 		}
+
+		if agentConfig.ForceHandoff != "" {
+			targets, err := resolveAgentRefs(ctx, []string{agentConfig.ForceHandoff}, agentsByName, externalAgents, &agents, runConfig, &loadOpts)
+			if err != nil {
+				return nil, fmt.Errorf("agent '%s': resolving force_handoff: %w", agentConfig.Name, err)
+			}
+			if len(targets) == 0 {
+				return nil, fmt.Errorf("agent '%s': force_handoff '%s' did not resolve to an agent", agentConfig.Name, agentConfig.ForceHandoff)
+			}
+			agent.WithForceHandoff(targets[0])(a)
+		}
 	}
 
 	// Create permissions checker from config

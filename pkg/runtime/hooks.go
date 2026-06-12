@@ -185,6 +185,10 @@ const (
 	// turnEndReasonLoopDetected — the consecutive-tool-call loop
 	// detector terminated the turn.
 	turnEndReasonLoopDetected = "loop_detected"
+	// turnEndReasonForceHandoff — the turn finished cleanly and the
+	// runtime routed the conversation to the agent's configured
+	// force_handoff target, prompting a new iteration.
+	turnEndReasonForceHandoff = "force_handoff"
 )
 
 // executeTurnEndHooks fires turn_end once per turn — symmetric to
@@ -273,6 +277,7 @@ const (
 	agentSwitchKindTransferTask       = "transfer_task"
 	agentSwitchKindTransferTaskReturn = "transfer_task_return"
 	agentSwitchKindHandoff            = "handoff"
+	agentSwitchKindForceHandoff       = "force_handoff"
 )
 
 // executeOnAgentSwitchHooks fires on_agent_switch when the runtime

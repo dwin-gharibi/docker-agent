@@ -32,6 +32,7 @@ type Agent struct {
 	modelOverrides          atomic.Pointer[[]provider.Provider] // Optional model override(s) set at runtime (supports alloy)
 	subAgents               []*Agent
 	handoffs                []*Agent
+	forceHandoff            *Agent
 	parents                 []*Agent
 	addDate                 bool
 	addEnvironmentInfo      bool
@@ -136,6 +137,13 @@ func (a *Agent) SubAgents() []*Agent {
 // Handoffs returns the list of handoff agents
 func (a *Agent) Handoffs() []*Agent {
 	return a.handoffs
+}
+
+// ForceHandoff returns the agent that unconditionally receives the
+// conversation when this agent produces a final response, or nil when
+// no forced handoff is configured.
+func (a *Agent) ForceHandoff() *Agent {
+	return a.forceHandoff
 }
 
 // Parents returns the list of parent agent names

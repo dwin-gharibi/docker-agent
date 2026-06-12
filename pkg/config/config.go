@@ -186,6 +186,59 @@ func validateConfig(cfg *latest.Config) error {
 		}
 	}
 
+	if err := validateForceHandoffs(cfg, allNames); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// validateForceHandoffs checks every agent's force_handoff reference:
+// the target must exist (or be an external reference), an agent cannot
+// force-hand off to itself, and chains of force_handoff edges between
+// local agents must not form a cycle — a cycle would make the run loop
+// bounce between agents until max_iterations trips, which is never what
+// the user intended.
+func validateForceHandoffs(cfg *latest.Config, allNames map[string]bool) error {
+	for _, agent := range cfg.Agents {
+		ref := agent.ForceHandoff
+		if ref == "" {
+			continue
+		}
+		if ref == agent.Name {
+			return fmt.Errorf("agent '%s' cannot force_handoff to itself", agent.Name)
+		}
+		if _, exists := allNames[ref]; !exists && !IsExternalReference(ref) {
+			return fmt.Errorf("agent '%s' references non-existent force_handoff agent '%s'", agent.Name, ref)
+		}
+		if IsExternalReference(ref) {
+			name, _ := ParseExternalAgentRef(ref)
+			if allNames[name] {
+				return fmt.Errorf("agent '%s': external force_handoff '%s' resolves to name '%s' which conflicts with a locally-defined agent", agent.Name, ref, name)
+			}
+		}
+	}
+
+	// Cycle detection: each agent has at most one outgoing force_handoff
+	// edge, so walking the chain from every agent with a visited set is
+	// linear overall. External references are leaves — they can't point
+	// back into this config.
+	edges := make(map[string]string, len(cfg.Agents))
+	for _, agent := range cfg.Agents {
+		if agent.ForceHandoff != "" && !IsExternalReference(agent.ForceHandoff) {
+			edges[agent.Name] = agent.ForceHandoff
+		}
+	}
+	for start := range edges {
+		visited := map[string]bool{start: true}
+		for cur, ok := edges[start], true; ok; cur, ok = edges[cur] {
+			if visited[cur] {
+				return fmt.Errorf("force_handoff cycle detected involving agent '%s'", cur)
+			}
+			visited[cur] = true
+		}
+	}
+
 	return nil
 }
 

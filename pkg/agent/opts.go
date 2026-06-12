@@ -106,6 +106,15 @@ func WithHandoffs(handoffs ...*Agent) Opt {
 	}
 }
 
+// WithForceHandoff sets the agent that unconditionally receives the
+// conversation when this agent produces a final response. The runtime
+// performs the switch itself, bypassing the LLM's tool-calling.
+func WithForceHandoff(target *Agent) Opt {
+	return func(a *Agent) {
+		a.forceHandoff = target
+	}
+}
+
 func WithAddDate(addDate bool) Opt {
 	return func(a *Agent) {
 		a.addDate = addDate

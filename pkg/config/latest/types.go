@@ -430,6 +430,14 @@ type AgentConfig struct {
 	Harness        *HarnessConfig  `json:"harness,omitempty"`
 	SubAgents      []string        `json:"sub_agents,omitempty"`
 	Handoffs       []string        `json:"handoffs,omitempty"`
+	// ForceHandoff names an agent that unconditionally receives the
+	// conversation whenever this agent produces a final response,
+	// bypassing the LLM's tool-calling entirely. Unlike Handoffs (which
+	// rely on the model choosing to call the handoff tool), the runtime
+	// intercepts the natural stop and routes deterministically, making
+	// strict pipelines reliable. The full conversation context carries
+	// over to the target agent.
+	ForceHandoff string `json:"force_handoff,omitempty" yaml:"force_handoff,omitempty"`
 
 	AddDate            bool `json:"add_date,omitempty"`
 	AddEnvironmentInfo bool `json:"add_environment_info,omitempty"`
@@ -2063,9 +2071,9 @@ type HooksConfig struct {
 	OnMaxIterations []HookDefinition `json:"on_max_iterations,omitempty" yaml:"on_max_iterations,omitempty"`
 
 	// OnAgentSwitch hooks run whenever the runtime moves the active
-	// agent to a new one — transfer_task, handoff, or the return
-	// after a transferred task completes. Observational; useful for
-	// audit, transcript, and metrics pipelines.
+	// agent to a new one — transfer_task, handoff, force_handoff, or
+	// the return after a transferred task completes. Observational;
+	// useful for audit, transcript, and metrics pipelines.
 	OnAgentSwitch []HookDefinition `json:"on_agent_switch,omitempty" yaml:"on_agent_switch,omitempty"`
 
 	// OnSessionResume hooks run when the user explicitly approves the
