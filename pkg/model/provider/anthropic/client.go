@@ -74,8 +74,16 @@ func NewClient(ctx context.Context, cfg *latest.ModelConfig, env environment.Pro
 			slog.ErrorContext(ctx, "Anthropic client creation failed", "error", err)
 			return nil, err
 		}
+		httpClient := httpclient.NewHTTPClient(ctx)
+		if w := globalOptions.TransportWrapper(); w != nil {
+			if wrapped := w(httpClient.Transport); wrapped != nil {
+				httpClient.Transport = wrapped
+			} else {
+				slog.WarnContext(ctx, "HTTP transport wrapper returned nil; using original transport")
+			}
+		}
 		requestOptions := append([]option.RequestOption{
-			option.WithHTTPClient(httpclient.NewHTTPClient(ctx)),
+			option.WithHTTPClient(httpClient),
 		}, authOpts...)
 		if cfg.BaseURL != "" {
 			requestOptions = append(requestOptions, option.WithBaseURL(cfg.BaseURL))
@@ -127,9 +135,17 @@ func NewClient(ctx context.Context, cfg *latest.ModelConfig, env environment.Pro
 				httpOptions = append(httpOptions, httpclient.WithHeader("X-Cagent-GeneratingTitle", "1"))
 			}
 
+			gatewayHTTPClient := httpclient.NewHTTPClient(ctx, httpOptions...)
+			if w := globalOptions.TransportWrapper(); w != nil {
+				if wrapped := w(gatewayHTTPClient.Transport); wrapped != nil {
+					gatewayHTTPClient.Transport = wrapped
+				} else {
+					slog.WarnContext(ctx, "HTTP transport wrapper returned nil; using original transport")
+				}
+			}
 			clientOptions := []option.RequestOption{
 				option.WithBaseURL(baseURL),
-				option.WithHTTPClient(httpclient.NewHTTPClient(ctx, httpOptions...)),
+				option.WithHTTPClient(gatewayHTTPClient),
 			}
 			if authToken != "" {
 				clientOptions = append(clientOptions, option.WithAuthToken(authToken), option.WithAPIKey(authToken))

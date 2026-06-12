@@ -61,8 +61,20 @@ func NewClient(ctx context.Context, cfg *latest.ModelConfig, env environment.Pro
 			project    string
 			location   string
 		)
-		// project/location take priority over API key, like in the genai client.
-		if cfg.ProviderOpts["project"] != nil || cfg.ProviderOpts["location"] != nil {
+		// Determine whether Vertex AI would normally be used, then check whether
+		// an HTTP transport wrapper forces a fallback to BackendGeminiAPI.
+		// The Vertex AI backend relies on ADC-managed HTTP clients that bypass
+		// http.RoundTripper, so the wrapper cannot be applied there.
+		_, useVertexAIEnv := env.Get(ctx, "GOOGLE_GENAI_USE_VERTEXAI")
+		wantVertexAI := cfg.ProviderOpts["project"] != nil || cfg.ProviderOpts["location"] != nil || useVertexAIEnv
+		useVertexAI := wantVertexAI && globalOptions.TransportWrapper() == nil
+
+		if wantVertexAI && !useVertexAI {
+			slog.DebugContext(ctx, "Vertex AI requested but HTTP transport wrapper is set, falling back to GeminiAPI backend")
+		}
+
+		switch {
+		case useVertexAI && (cfg.ProviderOpts["project"] != nil || cfg.ProviderOpts["location"] != nil):
 			var err error
 
 			project, err = environment.Expand(ctx, providerOption(cfg, "project"), env)
@@ -82,13 +94,13 @@ func NewClient(ctx context.Context, cfg *latest.ModelConfig, env environment.Pro
 			}
 
 			backend = genai.BackendVertexAI
-			httpClient = nil // Use default client
-		} else if _, exist := env.Get(ctx, "GOOGLE_GENAI_USE_VERTEXAI"); exist {
+			httpClient = nil // Use ADC-managed client
+		case useVertexAI:
 			project, _ = env.Get(ctx, "GOOGLE_CLOUD_PROJECT")
 			location, _ = env.Get(ctx, "GOOGLE_CLOUD_LOCATION")
 			backend = genai.BackendVertexAI
-			httpClient = nil // Use default client
-		} else {
+			httpClient = nil // Use ADC-managed client
+		default:
 			if value, exist := env.Get(ctx, "GEMINI_API_KEY"); exist {
 				apiKey = value
 			}
@@ -101,6 +113,14 @@ func NewClient(ctx context.Context, cfg *latest.ModelConfig, env environment.Pro
 
 			backend = genai.BackendGeminiAPI
 			httpClient = httpclient.NewHTTPClient(ctx)
+		}
+
+		if w := globalOptions.TransportWrapper(); w != nil {
+			if wrapped := w(httpClient.Transport); wrapped != nil {
+				httpClient.Transport = wrapped
+			} else {
+				slog.WarnContext(ctx, "HTTP transport wrapper returned nil; using original transport")
+			}
 		}
 
 		client, err := genai.NewClient(ctx, &genai.ClientConfig{
@@ -168,10 +188,19 @@ func NewClient(ctx context.Context, cfg *latest.ModelConfig, env environment.Pro
 				}
 			}
 
+			gatewayHTTPClient := httpclient.NewHTTPClient(ctx, httpOptions...)
+			if w := globalOptions.TransportWrapper(); w != nil {
+				if wrapped := w(gatewayHTTPClient.Transport); wrapped != nil {
+					gatewayHTTPClient.Transport = wrapped
+				} else {
+					slog.WarnContext(ctx, "HTTP transport wrapper returned nil; using original transport")
+				}
+			}
+
 			return genai.NewClient(ctx, &genai.ClientConfig{
 				APIKey:      authToken,
 				Backend:     genai.BackendGeminiAPI,
-				HTTPClient:  httpclient.NewHTTPClient(ctx, httpOptions...),
+				HTTPClient:  gatewayHTTPClient,
 				HTTPOptions: httpOpts,
 			})
 		}

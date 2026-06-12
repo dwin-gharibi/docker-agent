@@ -103,6 +103,13 @@ func NewClient(ctx context.Context, cfg *latest.ModelConfig, env environment.Pro
 		clientOptions = append(clientOptions, option.WithMiddleware(oaistream.ErrorBodyMiddleware()))
 
 		httpClient := httpclient.NewHTTPClient(ctx)
+		if w := globalOptions.TransportWrapper(); w != nil {
+			if wrapped := w(httpClient.Transport); wrapped != nil {
+				httpClient.Transport = wrapped
+			} else {
+				slog.WarnContext(ctx, "HTTP transport wrapper returned nil; using original transport")
+			}
+		}
 		clientOptions = append(clientOptions, option.WithHTTPClient(httpClient))
 
 		client := openai.NewClient(clientOptions...)
@@ -149,9 +156,17 @@ func NewClient(ctx context.Context, cfg *latest.ModelConfig, env environment.Pro
 				httpOptions = append(httpOptions, httpclient.WithHeader("X-Cagent-GeneratingTitle", "1"))
 			}
 
+			gatewayHTTPClient := httpclient.NewHTTPClient(ctx, httpOptions...)
+			if w := globalOptions.TransportWrapper(); w != nil {
+				if wrapped := w(gatewayHTTPClient.Transport); wrapped != nil {
+					gatewayHTTPClient.Transport = wrapped
+				} else {
+					slog.WarnContext(ctx, "HTTP transport wrapper returned nil; using original transport")
+				}
+			}
 			clientOptions := []option.RequestOption{
 				option.WithBaseURL(baseURL),
-				option.WithHTTPClient(httpclient.NewHTTPClient(ctx, httpOptions...)),
+				option.WithHTTPClient(gatewayHTTPClient),
 				option.WithMiddleware(oaistream.ErrorBodyMiddleware()),
 			}
 			if authToken != "" {
@@ -177,7 +192,10 @@ func NewClient(ctx context.Context, cfg *latest.ModelConfig, env environment.Pro
 	// Pre-create the WebSocket pool when the transport is configured.
 	// The pool is cheap (no connections opened until the first Stream call)
 	// and eager init avoids a data race on the lazy path.
-	if getTransport(cfg) == "websocket" && globalOptions.Gateway() == "" {
+	// WebSocket is also skipped when an HTTP transport wrapper is registered:
+	// gorilla/websocket dials raw TCP and never calls http.RoundTripper, so the
+	// wrapper cannot be applied. Fall back to SSE so the wrapper covers all calls.
+	if getTransport(cfg) == "websocket" && globalOptions.Gateway() == "" && globalOptions.TransportWrapper() == nil {
 		baseURL := cmp.Or(cfg.BaseURL, "https://api.openai.com/v1")
 		client.wsPool = newWSPool(httpToWSURL(baseURL), client.buildWSHeaderFn())
 	}
@@ -512,10 +530,14 @@ func (c *Client) CreateResponseStream(
 
 	// Choose transport: WebSocket or SSE (default).
 	// WebSocket is disabled when using a Gateway since most gateways don't support it.
+	// WebSocket is also disabled when an HTTP transport wrapper is registered: gorilla/websocket
+	// dials raw TCP and never calls http.RoundTripper, so the wrapper cannot intercept those
+	// connections. Fall back to SSE so the wrapper applies to all requests.
 	transport := getTransport(&c.ModelConfig)
 	trackUsage := c.ModelConfig.TrackUsage == nil || *c.ModelConfig.TrackUsage
 
-	if transport == "websocket" && c.ModelOptions.Gateway() == "" {
+	switch {
+	case transport == "websocket" && c.ModelOptions.Gateway() == "" && c.ModelOptions.TransportWrapper() == nil:
 		stream, err := c.createWebSocketStream(ctx, params)
 		if err != nil {
 			slog.WarnContext(ctx, "WebSocket stream failed, falling back to SSE", "error", err)
@@ -524,10 +546,13 @@ func (c *Client) CreateResponseStream(
 			slog.DebugContext(ctx, "OpenAI responses WebSocket stream created successfully", "model", c.ModelConfig.Model)
 			return newResponseStreamAdapter(stream, trackUsage), nil
 		}
-	} else if transport == "websocket" {
+	case transport == "websocket" && c.ModelOptions.Gateway() != "":
 		slog.DebugContext(ctx, "WebSocket transport requested but Gateway is configured, using SSE",
 			"model", c.ModelConfig.Model,
 			"gateway", c.ModelOptions.Gateway())
+	case transport == "websocket":
+		slog.DebugContext(ctx, "WebSocket transport requested but HTTP transport wrapper is set, using SSE",
+			"model", c.ModelConfig.Model)
 	}
 
 	client, err := c.clientFn(ctx)
