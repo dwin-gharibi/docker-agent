@@ -103,6 +103,13 @@ func NewClient(ctx context.Context, cfg *latest.ModelConfig, env environment.Pro
 		clientOptions = append(clientOptions, option.WithMiddleware(oaistream.ErrorBodyMiddleware()))
 
 		httpClient := httpclient.NewHTTPClient(ctx)
+		if w := globalOptions.TransportWrapper(); w != nil {
+			if wrapped := w(httpClient.Transport); wrapped != nil {
+				httpClient.Transport = wrapped
+			} else {
+				slog.WarnContext(ctx, "HTTP transport wrapper returned nil; using original transport")
+			}
+		}
 		clientOptions = append(clientOptions, option.WithHTTPClient(httpClient))
 
 		client := openai.NewClient(clientOptions...)
@@ -149,9 +156,17 @@ func NewClient(ctx context.Context, cfg *latest.ModelConfig, env environment.Pro
 				httpOptions = append(httpOptions, httpclient.WithHeader("X-Cagent-GeneratingTitle", "1"))
 			}
 
+			gatewayHTTPClient := httpclient.NewHTTPClient(ctx, httpOptions...)
+			if w := globalOptions.TransportWrapper(); w != nil {
+				if wrapped := w(gatewayHTTPClient.Transport); wrapped != nil {
+					gatewayHTTPClient.Transport = wrapped
+				} else {
+					slog.WarnContext(ctx, "HTTP transport wrapper returned nil; using original transport")
+				}
+			}
 			clientOptions := []option.RequestOption{
 				option.WithBaseURL(baseURL),
-				option.WithHTTPClient(httpclient.NewHTTPClient(ctx, httpOptions...)),
+				option.WithHTTPClient(gatewayHTTPClient),
 				option.WithMiddleware(oaistream.ErrorBodyMiddleware()),
 			}
 			if authToken != "" {

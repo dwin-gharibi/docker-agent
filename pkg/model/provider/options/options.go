@@ -1,6 +1,8 @@
 package options
 
 import (
+	"net/http"
+
 	"github.com/docker/docker-agent/pkg/config/latest"
 	"github.com/docker/docker-agent/pkg/modelsdev"
 )
@@ -13,6 +15,7 @@ type ModelOptions struct {
 	maxTokens        int64
 	providers        map[string]latest.ProviderConfig
 	modelsDevStore   *modelsdev.Store
+	transportWrapper func(http.RoundTripper) http.RoundTripper
 }
 
 func (c *ModelOptions) Gateway() string {
@@ -41,6 +44,12 @@ func (c *ModelOptions) Providers() map[string]latest.ProviderConfig {
 
 func (c *ModelOptions) ModelsDevStore() *modelsdev.Store {
 	return c.modelsDevStore
+}
+
+// TransportWrapper returns the HTTP transport wrapper function registered via
+// WithHTTPTransportWrapper, or nil if none was set.
+func (c *ModelOptions) TransportWrapper() func(http.RoundTripper) http.RoundTripper {
+	return c.transportWrapper
 }
 
 type Opt func(*ModelOptions)
@@ -87,6 +96,42 @@ func WithModelsDevStore(store *modelsdev.Store) Opt {
 	}
 }
 
+// WithHTTPTransportWrapper registers a function that wraps the HTTP transport
+// used by provider clients (Anthropic, OpenAI, and Gemini with the Gemini API
+// backend). The function receives the transport that docker-agent built
+// (including OTel instrumentation, SSE decompression fix, and Desktop proxy
+// support) and must return a new RoundTripper that delegates to it. The wrapper
+// is applied in both direct mode and gateway/proxy mode.
+//
+// Call-frequency note: in direct mode the wrapper is invoked once at client
+// construction time; in gateway mode it is invoked on every LLM request
+// (because gateway clients are rebuilt on each call to refresh short-lived
+// auth tokens). Wrappers with per-call side effects (metrics, token rotation)
+// will therefore be called more frequently in gateway mode.
+//
+// Limitations:
+//   - OpenAI clients configured with transport=websocket bypass the HTTP
+//     transport layer entirely; the wrapper is not applied in that mode.
+//   - Gemini clients using the Vertex AI backend (project/location config or
+//     GOOGLE_GENAI_USE_VERTEXAI) rely on the genai SDK's default HTTP client;
+//     the wrapper is not applied and a warning is logged.
+//   - The Bedrock provider uses the AWS SDK's own HTTP client; the wrapper is
+//     not applied and a warning is logged.
+//
+// The wrapper function must return a non-nil RoundTripper; returning nil is a
+// no-op (a warning is logged and the original transport is kept).
+//
+// Example — inject a bearer token on every outbound LLM request:
+//
+//	options.WithHTTPTransportWrapper(func(base http.RoundTripper) http.RoundTripper {
+//	    return &bearerTransport{token: myToken, base: base}
+//	})
+func WithHTTPTransportWrapper(fn func(base http.RoundTripper) http.RoundTripper) Opt {
+	return func(cfg *ModelOptions) {
+		cfg.transportWrapper = fn
+	}
+}
+
 // FromModelOptions converts a concrete ModelOptions value into a slice of
 // Opt configuration functions. Later Opts override earlier ones when applied.
 func FromModelOptions(m ModelOptions) []Opt {
@@ -111,6 +156,9 @@ func FromModelOptions(m ModelOptions) []Opt {
 	}
 	if m.modelsDevStore != nil {
 		out = append(out, WithModelsDevStore(m.modelsDevStore))
+	}
+	if m.transportWrapper != nil {
+		out = append(out, WithHTTPTransportWrapper(m.transportWrapper))
 	}
 	return out
 }

@@ -103,6 +103,16 @@ func NewClient(ctx context.Context, cfg *latest.ModelConfig, env environment.Pro
 			httpClient = httpclient.NewHTTPClient(ctx)
 		}
 
+		if w := globalOptions.TransportWrapper(); w != nil {
+			if httpClient == nil {
+				slog.WarnContext(ctx, "HTTP transport wrapper is set but not applied: Gemini Vertex AI backend uses an SDK-managed HTTP client")
+			} else if wrapped := w(httpClient.Transport); wrapped != nil {
+				httpClient.Transport = wrapped
+			} else {
+				slog.WarnContext(ctx, "HTTP transport wrapper returned nil; using original transport")
+			}
+		}
+
 		client, err := genai.NewClient(ctx, &genai.ClientConfig{
 			APIKey:     apiKey,
 			Project:    project,
@@ -168,10 +178,19 @@ func NewClient(ctx context.Context, cfg *latest.ModelConfig, env environment.Pro
 				}
 			}
 
+			gatewayHTTPClient := httpclient.NewHTTPClient(ctx, httpOptions...)
+			if w := globalOptions.TransportWrapper(); w != nil {
+				if wrapped := w(gatewayHTTPClient.Transport); wrapped != nil {
+					gatewayHTTPClient.Transport = wrapped
+				} else {
+					slog.WarnContext(ctx, "HTTP transport wrapper returned nil; using original transport")
+				}
+			}
+
 			return genai.NewClient(ctx, &genai.ClientConfig{
 				APIKey:      authToken,
 				Backend:     genai.BackendGeminiAPI,
-				HTTPClient:  httpclient.NewHTTPClient(ctx, httpOptions...),
+				HTTPClient:  gatewayHTTPClient,
 				HTTPOptions: httpOpts,
 			})
 		}
