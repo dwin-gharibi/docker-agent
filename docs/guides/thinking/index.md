@@ -304,6 +304,15 @@ models:
 | Research, difficult math/logic   | `xhigh` / `max`         |
 | Long agentic tasks (Anthropic)   | `adaptive`              |
 
+## Changing Thinking Level at Runtime
+
+While running in the TUI, press **Shift+Tab** to cycle the thinking effort level for the current model without editing your YAML config:
+
+- The level steps through the model's supported range (provider-specific), wrapping around — for example `off → minimal → low → medium → high → xhigh → off` on OpenAI.
+- The current level is shown in the sidebar next to the model name (e.g. `openai/gpt-5 • high`).
+- This applies as a session override — it is **not** saved to the config file. The next session starts from the level defined in your YAML.
+- For models that don't support reasoning, and for remote runtimes, Shift+Tab is a no-op and an informational message is displayed.
+
 ## Sharing Thinking Config Across Models
 
 Define a provider with a default `thinking_budget` and all models that reference it inherit it:
