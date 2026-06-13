@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"sync"
 
 	"github.com/docker/docker-agent/pkg/config"
@@ -27,6 +28,14 @@ type backend interface {
 
 	CreateSessionRequest(workingDir string) runtime.CreateSessionRequest
 	CreateSession(ctx context.Context, loaded *teamloader.LoadResult, req runtime.CreateSessionRequest) (runtime.Runtime, *session.Session, func(), error)
+
+	// ResumeWorkingDir returns the working directory stored on the session
+	// this run would resume (--session naming an existing session), so a
+	// resumed run can reattach to the worktree it was created in without the
+	// caller re-passing --worktree (which would fail since the worktree
+	// already exists). Returns ok=false when there is no resumable session,
+	// it has no stored working directory, or that directory no longer exists.
+	ResumeWorkingDir(ctx context.Context) (dir string, ok bool)
 
 	Spawner(rt runtime.Runtime) tui.SessionSpawner
 
@@ -126,6 +135,36 @@ func (b *localBackend) Spawner(rt runtime.Runtime) tui.SessionSpawner {
 	return b.flags.createSessionSpawner(b.agentSource, rt.SessionStore())
 }
 
+// ResumeWorkingDir looks up the session named by --session and returns the
+// working directory it was created with. It opens (and shares) the same
+// session store CreateSession uses, so this peek does not pay for a second
+// connection. Any lookup miss — no --session, a relative ref, an unknown ID,
+// an empty stored dir, or a dir that no longer exists — returns ok=false and
+// leaves the run to its normal working-directory resolution.
+func (b *localBackend) ResumeWorkingDir(ctx context.Context) (string, bool) {
+	if b.flags.sessionID == "" || session.IsRelativeSessionRef(b.flags.sessionID) {
+		return "", false
+	}
+
+	store, err := b.sessionStore(b.flags.createSessionRequest(""))
+	if err != nil {
+		return "", false
+	}
+
+	resolvedID, err := session.ResolveSessionID(ctx, store, b.flags.sessionID)
+	if err != nil {
+		return "", false
+	}
+	sess, err := store.GetSession(ctx, resolvedID)
+	if err != nil || sess.WorkingDir == "" {
+		return "", false
+	}
+	if fi, err := os.Stat(sess.WorkingDir); err != nil || !fi.IsDir() {
+		return "", false
+	}
+	return sess.WorkingDir, true
+}
+
 func (b *localBackend) Close() error {
 	// Ensure any in-progress sessionStore initialization is observed
 	// before reading b.store. If sessionStore was never called, the Do
@@ -195,6 +234,12 @@ func (b *remoteBackend) CreateSession(ctx context.Context, _ *teamloader.LoadRes
 
 func (b *remoteBackend) Spawner(runtime.Runtime) tui.SessionSpawner {
 	return nil
+}
+
+// ResumeWorkingDir never resolves remotely: --remote is mutually exclusive
+// with --session (and with --worktree), so there is no local session to peek.
+func (b *remoteBackend) ResumeWorkingDir(context.Context) (string, bool) {
+	return "", false
 }
 
 func (b *remoteBackend) Close() error {

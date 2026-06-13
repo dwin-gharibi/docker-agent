@@ -390,6 +390,19 @@ func (f *runExecFlags) runOrExec(ctx context.Context, out *cli.Printer, args []s
 	// before the run. That is what lets --worktree and --working-dir compose —
 	// --working-dir selects the repository the worktree is branched from.
 	baseDir, _ := os.Getwd()
+
+	// Resuming a session that ran in a worktree: reattach to that worktree's
+	// directory so the shell and every other tool operate inside it again,
+	// without the caller re-passing --worktree (which would fail because the
+	// worktree already exists). An explicit --worktree/--worktree-pr on this
+	// run takes precedence and creates a new one as usual.
+	if !f.worktree && f.worktreePR == "" {
+		if resumeDir, ok := b.ResumeWorkingDir(ctx); ok {
+			baseDir = resumeDir
+			f.runConfig.WorkingDir = resumeDir
+		}
+	}
+
 	loadResult, createdWorktree, wd, err := f.loadTeamInWorktree(ctx, b, baseDir)
 	if err != nil {
 		return err

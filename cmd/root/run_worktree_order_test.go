@@ -47,6 +47,10 @@ func (b *workdirRecordingBackend) CreateSession(context.Context, *teamloader.Loa
 func (b *workdirRecordingBackend) Spawner(runtime.Runtime) tui.SessionSpawner { return nil }
 func (b *workdirRecordingBackend) Close() error                               { return nil }
 
+func (b *workdirRecordingBackend) ResumeWorkingDir(context.Context) (string, bool) {
+	return "", false
+}
+
 // TestLoadTeamInWorktreeSetsWorkingDirBeforeLoad is the regression test for
 // the ordering bug: the worktree must be created and installed as the working
 // directory BEFORE LoadTeam builds the toolsets, otherwise the shell tool ends
