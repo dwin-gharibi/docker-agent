@@ -3,11 +3,13 @@ package sidebar
 import (
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/docker/docker-agent/pkg/runtime"
 	"github.com/docker/docker-agent/pkg/session"
 	"github.com/docker/docker-agent/pkg/tui/service"
+	"github.com/docker/docker-agent/pkg/tui/styles"
 )
 
 func TestActiveSessionTokens_SingleSession(t *testing.T) {
@@ -209,4 +211,18 @@ func TestTokenUsageSummary_Empty(t *testing.T) {
 	m := New(sessionState).(*model)
 
 	assert.Empty(t, m.tokenUsageSummary())
+}
+
+// TestTokenUsageTab_ShowsTokenGlyph verifies the vertical Token Usage tab line
+// is prefixed with the shared token glyph (◉).
+func TestTokenUsageTab_ShowsTokenGlyph(t *testing.T) {
+	t.Parallel()
+
+	m := newTestSidebar()
+	m.startStream("session-1", "root")
+	m.recordUsageTokens("session-1", "root", 5000, 3000)
+
+	out := ansi.Strip(m.tokenUsage(40))
+	assert.Contains(t, out, styles.TokenGlyph)
+	assert.Contains(t, out, "8.0K")
 }

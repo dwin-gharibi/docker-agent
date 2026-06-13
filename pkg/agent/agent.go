@@ -324,6 +324,16 @@ func (a *Agent) HasHarness() bool {
 	return a.harness != nil
 }
 
+// HarnessType returns the external harness provider type (e.g. "claude-code"),
+// or an empty string when the agent is not harness-backed. It exposes the
+// harness type without leaking the config struct to callers.
+func (a *Agent) HarnessType() string {
+	if a.harness == nil {
+		return ""
+	}
+	return a.harness.Type
+}
+
 // Hooks returns the hooks configuration for this agent.
 func (a *Agent) Hooks() *latest.HooksConfig {
 	return a.hooks
