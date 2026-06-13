@@ -40,7 +40,7 @@ type activeRuntimes struct {
 type SessionManager struct {
 	runtimeSessions *concurrent.Map[string, *activeRuntimes]
 	deletedSessions *concurrent.Map[string, *activeRuntimes]
-	eventSources    *concurrent.Map[string, EventSource]
+	eventLogs       *concurrent.Map[string, *pumpedEventLog]
 	sessionStore    session.Store
 	Sources         config.Sources
 
@@ -86,7 +86,7 @@ func NewSessionManager(ctx context.Context, sources config.Sources, sessionStore
 	sm := &SessionManager{
 		runtimeSessions:   concurrent.NewMap[string, *activeRuntimes](),
 		deletedSessions:   concurrent.NewMap[string, *activeRuntimes](),
-		eventSources:      concurrent.NewMap[string, EventSource](),
+		eventLogs:         concurrent.NewMap[string, *pumpedEventLog](),
 		followUpInjectors: concurrent.NewMap[string, FollowUpInjector](),
 		sessionStore:      sessionStore,
 		Sources:           loaders,
@@ -113,11 +113,50 @@ func (sm *SessionManager) WaitReady(ctx context.Context) error {
 	}
 }
 
-// RegisterEventSource attaches an event source for sessionID. It is used by
+// pumpedEventLog couples an [eventLog] with the goroutine (the pump) that
+// feeds it from a registered [EventSource]. cancel stops the pump; the log
+// keeps buffering events for the session's lifetime so reconnecting clients
+// can replay.
+type pumpedEventLog struct {
+	log    *eventLog
+	cancel context.CancelFunc
+}
+
+// RegisterEventSource attaches an event source for sessionID and immediately
+// starts pumping its events into a per-session [eventLog]. It is used by
 // callers that own a runtime out-of-band (e.g. the TUI) so that HTTP clients
-// can subscribe to events via GET /api/sessions/:id/events.
+// can subscribe to events — with sequence numbers and replay — via
+// GET /api/sessions/:id/events.
+//
+// The pump runs for the session's lifetime (until DeleteSession or the source
+// returns), buffering events even when no client is connected, so a client
+// that connects or reconnects later can replay what it missed.
 func (sm *SessionManager) RegisterEventSource(sessionID string, src EventSource) {
-	sm.eventSources.Store(sessionID, src)
+	pumpCtx, cancel := context.WithCancel(context.Background())
+	log := newEventLog(defaultEventLogCapacity)
+	sm.eventLogs.Store(sessionID, &pumpedEventLog{log: log, cancel: cancel})
+
+	go func() {
+		defer log.close()
+		src(pumpCtx, log.append)
+	}()
+}
+
+// HasEventSource reports whether an event log is registered for sessionID.
+func (sm *SessionManager) HasEventSource(sessionID string) bool {
+	_, ok := sm.eventLogs.Load(sessionID)
+	return ok
+}
+
+// LastEventSeq returns the most recent event sequence number for sessionID,
+// so a snapshot can advertise the exact point from which a client should tail.
+// Returns 0 and false when no event log exists.
+func (sm *SessionManager) LastEventSeq(sessionID string) (uint64, bool) {
+	pe, ok := sm.eventLogs.Load(sessionID)
+	if !ok {
+		return 0, false
+	}
+	return pe.log.lastSeq(), true
 }
 
 // RegisterFollowUpInjector registers fn as the follow-up delivery path for an
@@ -128,35 +167,18 @@ func (sm *SessionManager) RegisterFollowUpInjector(sessionID string, fn FollowUp
 	sm.followUpInjectors.Store(sessionID, fn)
 }
 
-// GetEventSource returns the registered event source for sessionID.
-func (sm *SessionManager) GetEventSource(sessionID string) (EventSource, bool) {
-	return sm.eventSources.Load(sessionID)
-}
-
-// StreamEvents drives the EventSource registered for sessionID, sending each
-// event through send. It blocks until the source returns, the caller's ctx is
-// cancelled, or the session is detached via [SessionManager.DeleteSession].
-// Returns false when no source is registered.
-func (sm *SessionManager) StreamEvents(ctx context.Context, sessionID string, send func(any)) bool {
-	src, ok := sm.eventSources.Load(sessionID)
+// StreamEvents replays and tails the events buffered for sessionID, calling
+// send for each one with its sequence number. When since is non-nil only
+// events newer than *since are replayed before tailing (see [eventLog.stream]
+// for the gap semantics). It blocks until ctx is cancelled, the session is
+// detached via [SessionManager.DeleteSession], or the source ends. Returns
+// false when no event log is registered.
+func (sm *SessionManager) StreamEvents(ctx context.Context, sessionID string, since *uint64, send func(seq uint64, event any)) bool {
+	pe, ok := sm.eventLogs.Load(sessionID)
 	if !ok {
 		return false
 	}
-
-	if rs, ok := sm.runtimeSessions.Load(sessionID); ok && rs.done != nil {
-		derived, cancel := context.WithCancel(ctx)
-		defer cancel()
-		go func() {
-			select {
-			case <-rs.done:
-				cancel()
-			case <-derived.Done():
-			}
-		}()
-		ctx = derived
-	}
-
-	src(ctx, send)
+	pe.log.stream(ctx, since, send)
 	return true
 }
 
@@ -316,7 +338,10 @@ func (sm *SessionManager) DeleteSession(ctx context.Context, sessionID string) e
 			}
 		}()
 	}
-	sm.eventSources.Delete(sess.ID)
+	if pe, ok := sm.eventLogs.Load(sess.ID); ok {
+		pe.cancel()
+		sm.eventLogs.Delete(sess.ID)
+	}
 	sm.followUpInjectors.Delete(sess.ID)
 
 	return nil
@@ -1126,7 +1151,10 @@ func (sm *SessionManager) BatchDeleteSessions(ctx context.Context, sessionIDs []
 				sessionRuntime.cancel()
 				sm.runtimeSessions.Delete(sessionID)
 			}
-			sm.eventSources.Delete(sessionID)
+			if pe, ok := sm.eventLogs.Load(sessionID); ok {
+				pe.cancel()
+				sm.eventLogs.Delete(sessionID)
+			}
 			sm.followUpInjectors.Delete(sessionID)
 		}
 	}

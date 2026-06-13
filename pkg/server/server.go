@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -499,10 +500,21 @@ func (s *Server) steerSession(c echo.Context) error {
 
 // sessionEvents streams events for a session as Server-Sent Events. The
 // stream lasts until the client disconnects or the session ends.
+//
+// Each delivered event carries its monotonic sequence number in the SSE
+// "id:" field. A client that reconnects may resume from where it left off by
+// supplying the last sequence number it saw, either as the standard
+// Last-Event-ID request header (sent automatically by EventSource clients) or
+// as a ?since=<seq> query parameter. Buffered events newer than that point are
+// replayed before live tailing resumes. If the resume point has already been
+// evicted from the buffer, a {"type":"gap"} event is sent first so the client
+// knows to re-snapshot (GET /api/sessions/:id/snapshot) before continuing.
 func (s *Server) sessionEvents(c echo.Context) error {
-	if _, ok := s.sm.GetEventSource(c.Param("id")); !ok {
+	if !s.sm.HasEventSource(c.Param("id")) {
 		return echo.NewHTTPError(http.StatusNotFound, "no event source for session")
 	}
+
+	since := parseSinceParam(c)
 
 	c.Response().Header().Set("Content-Type", "text/event-stream")
 	c.Response().Header().Set("Cache-Control", "no-cache")
@@ -510,15 +522,39 @@ func (s *Server) sessionEvents(c echo.Context) error {
 	c.Response().WriteHeader(http.StatusOK)
 	c.Response().Flush()
 
-	s.sm.StreamEvents(c.Request().Context(), c.Param("id"), func(event any) {
+	s.sm.StreamEvents(c.Request().Context(), c.Param("id"), since, func(seq uint64, event any) {
 		data, err := json.Marshal(event)
 		if err != nil {
 			return
+		}
+		// seq 0 marks a per-connection control event (e.g. gap) that is not
+		// part of the sequenced stream, so it carries no id.
+		if seq > 0 {
+			fmt.Fprintf(c.Response(), "id: %d\n", seq)
 		}
 		fmt.Fprintf(c.Response(), "data: %s\n\n", data)
 		c.Response().Flush()
 	})
 	return nil
+}
+
+// parseSinceParam resolves the resume point for an /events stream from the
+// ?since=<seq> query parameter, falling back to the Last-Event-ID header that
+// SSE clients replay automatically on reconnect. Returns nil when neither is
+// present or parseable, meaning "replay the current buffer, then tail".
+func parseSinceParam(c echo.Context) *uint64 {
+	raw := c.QueryParam("since")
+	if raw == "" {
+		raw = c.Request().Header.Get("Last-Event-ID")
+	}
+	if raw == "" {
+		return nil
+	}
+	seq, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		return nil
+	}
+	return &seq
 }
 
 func (s *Server) followUpSession(c echo.Context) error {

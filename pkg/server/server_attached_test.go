@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -81,9 +82,24 @@ func TestAttachedServer_EventStreamEmitsRegisteredEvents(t *testing.T) {
 
 	events <- map[string]string{"type": "hello", "msg": "world"}
 
-	line, err := bufio.NewReader(resp.Body).ReadString('\n')
-	require.NoError(t, err)
-	assert.Contains(t, line, `"type":"hello"`)
+	// Each event is delivered as an "id: <seq>" line followed by a "data:"
+	// line. Scan until we see the data payload.
+	reader := bufio.NewReader(resp.Body)
+	var sawID bool
+	var dataLine string
+	for {
+		line, err := reader.ReadString('\n')
+		require.NoError(t, err)
+		if strings.HasPrefix(line, "id: ") {
+			sawID = true
+		}
+		if strings.HasPrefix(line, "data: ") {
+			dataLine = line
+			break
+		}
+	}
+	assert.True(t, sawID, "event must carry an SSE id (sequence number)")
+	assert.Contains(t, dataLine, `"type":"hello"`)
 }
 
 func httpDoTCP(t *testing.T, ctx context.Context, method, url string, payload any) []byte {
@@ -159,8 +175,9 @@ func TestAttachedServer_DeleteSessionStopsEventStream(t *testing.T) {
 		t.Fatal("event source ctx was not cancelled when session was deleted")
 	}
 
-	_, ok := sm.GetEventSource(sess.ID)
-	assert.False(t, ok, "event source must be removed from the registry on delete")
+	_, ok := sm.runtimeSessions.Load(sess.ID)
+	assert.False(t, ok, "runtime must be removed from the registry on delete")
+	assert.False(t, sm.HasEventSource(sess.ID), "event source must be removed from the registry on delete")
 
 	req2, err := http.NewRequestWithContext(ctx, http.MethodGet, addr+"/api/sessions/"+sess.ID+"/events", http.NoBody)
 	require.NoError(t, err)
@@ -315,4 +332,128 @@ func TestAttachedServer_DeleteWithWaitBlocksUntilStreamStops(t *testing.T) {
 	// Stream channel should be drained by now.
 	for range ch {
 	}
+}
+
+// TestAttachedServer_EventStreamReplaysFromLastEventID verifies that an
+// /events client which reconnects with a Last-Event-ID (or ?since=) replays
+// only the events newer than that sequence number, each tagged with an SSE id.
+func TestAttachedServer_EventStreamReplaysFromLastEventID(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	store := session.NewInMemorySessionStore()
+	sess := session.New()
+	require.NoError(t, store.AddSession(ctx, sess))
+
+	sm := NewSessionManager(ctx, config.Sources{}, store, 0, &config.RuntimeConfig{})
+	sm.AttachRuntime(sess.ID, &fakeRuntime{}, sess)
+
+	events := make(chan any, 8)
+	sm.RegisterEventSource(sess.ID, func(ctx context.Context, send func(any)) {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case ev := <-events:
+				send(ev)
+			}
+		}
+	})
+
+	srv := NewWithManager(sm, "")
+	ln, err := Listen(ctx, "127.0.0.1:0")
+	require.NoError(t, err)
+	go func() { _ = srv.Serve(ctx, ln) }()
+	addr := "http://" + ln.Addr().String()
+
+	// Buffer three events before any client connects.
+	events <- map[string]string{"type": "one"}
+	events <- map[string]string{"type": "two"}
+	events <- map[string]string{"type": "three"}
+	require.Eventually(t, func() bool {
+		seq, ok := sm.LastEventSeq(sess.ID)
+		return ok && seq == 3
+	}, 2*time.Second, time.Millisecond)
+
+	// Reconnect requesting everything after seq 1: expect only two & three.
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, addr+"/api/sessions/"+sess.ID+"/events?since=1", http.NoBody)
+	require.NoError(t, err)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	ids, types := readSSE(t, resp.Body, 2)
+	assert.Equal(t, []string{"2", "3"}, ids)
+	assert.Equal(t, []string{"two", "three"}, types)
+}
+
+// TestAttachedServer_EventStreamSignalsGapWhenResumePointEvicted verifies a
+// reconnect whose resume point has fallen out of the buffer receives a
+// {"type":"gap"} marker (with no id) before the replay.
+func TestAttachedServer_EventStreamSignalsGapWhenResumePointEvicted(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	store := session.NewInMemorySessionStore()
+	sess := session.New()
+	require.NoError(t, store.AddSession(ctx, sess))
+
+	sm := NewSessionManager(ctx, config.Sources{}, store, 0, &config.RuntimeConfig{})
+	sm.AttachRuntime(sess.ID, &fakeRuntime{}, sess)
+
+	// Tiny buffer so early events are evicted.
+	_, pumpCancel := context.WithCancel(t.Context())
+	defer pumpCancel()
+	log := newEventLog(2)
+	sm.eventLogs.Store(sess.ID, &pumpedEventLog{log: log, cancel: pumpCancel})
+
+	for _, ty := range []string{"a", "b", "c", "d"} { // seqs 1..4; only 3,4 remain
+		log.append(map[string]string{"type": ty})
+	}
+
+	srv := NewWithManager(sm, "")
+	ln, err := Listen(ctx, "127.0.0.1:0")
+	require.NoError(t, err)
+	go func() { _ = srv.Serve(ctx, ln) }()
+	addr := "http://" + ln.Addr().String()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, addr+"/api/sessions/"+sess.ID+"/events?since=1", http.NoBody)
+	require.NoError(t, err)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	// First payload is the gap marker with no id, then events 3 and 4.
+	ids, types := readSSE(t, resp.Body, 3)
+	assert.Equal(t, []string{"", "3", "4"}, ids)
+	assert.Equal(t, []string{"gap", "c", "d"}, types)
+}
+
+// readSSE reads n SSE "data:" payloads (each optionally preceded by an "id:"
+// line) and returns the ids and the JSON "type" field of each payload.
+func readSSE(t *testing.T, r io.Reader, n int) (ids, types []string) {
+	t.Helper()
+	reader := bufio.NewReader(r)
+	pendingID := ""
+	for len(types) < n {
+		line, err := reader.ReadString('\n')
+		require.NoError(t, err)
+		switch {
+		case strings.HasPrefix(line, "id: "):
+			pendingID = strings.TrimSpace(strings.TrimPrefix(line, "id: "))
+		case strings.HasPrefix(line, "data: "):
+			var payload struct {
+				Type string `json:"type"`
+			}
+			require.NoError(t, json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &payload))
+			ids = append(ids, pendingID)
+			types = append(types, payload.Type)
+			pendingID = ""
+		}
+	}
+	return ids, types
 }
