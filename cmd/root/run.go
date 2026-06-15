@@ -69,6 +69,7 @@ type runExecFlags struct {
 	worktree          bool
 	worktreeName      string
 	worktreePR        string
+	worktreeBase      string
 	sessionReadOnly   bool
 
 	// Exec only
@@ -171,6 +172,7 @@ func addRunOrExecFlags(cmd *cobra.Command, flags *runExecFlags) {
 	cmd.PersistentFlags().StringVarP(&flags.worktreeName, "worktree", "w", "", "Run the agent in a fresh git worktree of the working directory (isolates changes from your checkout). Optionally name it: --worktree=my-name")
 	cmd.PersistentFlags().Lookup("worktree").NoOptDefVal = worktreeAutoName
 	cmd.PersistentFlags().StringVar(&flags.worktreePR, "worktree-pr", "", "Run the agent in a git worktree checked out on an existing GitHub pull request (number or URL). Continues the PR's branch; requires the GitHub CLI (gh).")
+	cmd.PersistentFlags().StringVar(&flags.worktreeBase, "worktree-base", "", "Branch the --worktree from this ref instead of the current HEAD (e.g. main, origin/main). A remote-tracking ref is fetched first so the worktree starts from the latest remote state.")
 	cmd.PersistentFlags().BoolVar(&flags.sessionReadOnly, "session-read-only", false, "Open the session in read-only mode (view conversation history but prevent new messages)")
 	cmd.MarkFlagsMutuallyExclusive("fake", "record")
 	cmd.MarkFlagsMutuallyExclusive("remote", "sandbox")
@@ -185,6 +187,12 @@ func addRunOrExecFlags(cmd *cobra.Command, flags *runExecFlags) {
 	cmd.MarkFlagsMutuallyExclusive("remote", "worktree-pr")
 	cmd.MarkFlagsMutuallyExclusive("sandbox", "worktree-pr")
 	cmd.MarkFlagsMutuallyExclusive("worktree", "worktree-pr")
+	// --worktree-base picks the start-point of the branch --worktree creates,
+	// so it is meaningless for a PR worktree (which continues the PR's branch)
+	// or a remote/sandbox run (which has no local worktree).
+	cmd.MarkFlagsMutuallyExclusive("worktree-base", "worktree-pr")
+	cmd.MarkFlagsMutuallyExclusive("remote", "worktree-base")
+	cmd.MarkFlagsMutuallyExclusive("sandbox", "worktree-base")
 
 	// --exec only
 	cmd.PersistentFlags().BoolVar(&flags.exec, "exec", false, "Execute without a TUI")
@@ -266,6 +274,12 @@ func (f *runExecFlags) runRunCommand(cmd *cobra.Command, args []string) (command
 	// users name the worktree (--worktree=my-name); without a value cobra
 	// stores the sentinel that triggers a random name.
 	f.worktree = cmd.Flags().Changed("worktree")
+
+	// --worktree-base only selects the start-point of the branch --worktree
+	// creates; on its own it would silently do nothing, so reject it.
+	if f.worktreeBase != "" && !f.worktree {
+		return errors.New("--worktree-base requires --worktree")
+	}
 
 	out := cli.NewPrinter(cmd.OutOrStdout())
 
@@ -366,12 +380,13 @@ func (f *runExecFlags) runOrExec(ctx context.Context, out *cli.Printer, args []s
 		}
 	}()
 
-	loadResult, err := b.LoadTeam(ctx, b.LoadTeamRequest())
-	if err != nil {
-		return err
-	}
-
 	if f.dryRun {
+		// A dry run initializes the team but runs nothing, so it never
+		// creates a worktree.
+		loadResult, err := b.LoadTeam(ctx, b.LoadTeamRequest())
+		if err != nil {
+			return err
+		}
 		if loadResult != nil {
 			stopToolSets(loadResult.Team)
 		}
@@ -379,17 +394,34 @@ func (f *runExecFlags) runOrExec(ctx context.Context, out *cli.Printer, args []s
 		return nil
 	}
 
-	wd, _ := os.Getwd()
-	createdWorktree, err := f.setupWorktree(ctx, wd)
-	if err != nil {
-		if loadResult != nil {
-			stopToolSets(loadResult.Team)
+	// Create the worktree BEFORE loading the team. Toolsets capture the
+	// working directory when they are built, so the worktree must already be
+	// the working directory by then for every tool — the shell included — to
+	// operate inside it rather than the user's checkout.
+	//
+	// The base directory is the process working directory, which already
+	// reflects --working-dir: addGatewayFlags' PersistentPreRunE chdirs there
+	// before the run. That is what lets --worktree and --working-dir compose —
+	// --working-dir selects the repository the worktree is branched from.
+	baseDir, _ := os.Getwd()
+
+	// Resuming a session that ran in a worktree: reattach to that worktree's
+	// directory so the shell and every other tool operate inside it again,
+	// without the caller re-passing --worktree (which would fail because the
+	// worktree already exists). An explicit --worktree/--worktree-pr on this
+	// run takes precedence and creates a new one as usual.
+	if !f.worktree && f.worktreePR == "" {
+		if resumeDir, ok := b.ResumeWorkingDir(ctx); ok {
+			baseDir = resumeDir
+			f.runConfig.WorkingDir = resumeDir
 		}
+	}
+
+	loadResult, createdWorktree, wd, err := f.loadTeamInWorktree(ctx, b, baseDir)
+	if err != nil {
 		return err
 	}
 	if createdWorktree != nil {
-		wd = createdWorktree.Dir
-		f.runConfig.WorkingDir = createdWorktree.Dir
 		out.Println("Using git worktree: " + createdWorktree.Dir + " (branch " + createdWorktree.Branch + ")")
 		// loadResult is nil for the remote backend; worktrees are mutually
 		// exclusive with --remote so this is belt-and-suspenders, matching
@@ -458,6 +490,42 @@ func (f *runExecFlags) runOrExec(ctx context.Context, out *cli.Printer, args []s
 	return nil
 }
 
+// loadTeamInWorktree creates the requested worktree (if any) and then loads
+// the team with the worktree as its working directory. The ordering matters:
+// toolsets capture runConfig.WorkingDir when they are constructed during
+// LoadTeam, so the worktree must be settled first for every tool — the shell
+// included — to operate inside the worktree instead of the user's checkout.
+//
+// It returns the loaded team, the created worktree (nil when neither
+// --worktree nor --worktree-pr was given) and the working directory to run in
+// (the worktree's directory when one was created, otherwise wd unchanged).
+func (f *runExecFlags) loadTeamInWorktree(ctx context.Context, b backend, wd string) (*teamloader.LoadResult, *worktree.Worktree, string, error) {
+	createdWorktree, err := f.setupWorktree(ctx, wd)
+	if err != nil {
+		return nil, nil, wd, err
+	}
+	if createdWorktree != nil {
+		wd = createdWorktree.Dir
+		f.runConfig.WorkingDir = createdWorktree.Dir
+	}
+
+	loadResult, err := b.LoadTeam(ctx, b.LoadTeamRequest())
+	if err != nil {
+		// The worktree was created before the load; tear it down so a load
+		// failure doesn't leave an orphaned worktree behind. A fresh context
+		// is used because the load may have failed on a cancelled ctx (Ctrl-C),
+		// which would otherwise kill the git removal subprocess and orphan the
+		// worktree.
+		if createdWorktree != nil {
+			if rmErr := createdWorktree.Remove(context.WithoutCancel(ctx)); rmErr != nil {
+				slog.WarnContext(ctx, "Failed to remove worktree after load error", "dir", createdWorktree.Dir, "error", rmErr)
+			}
+		}
+		return nil, nil, wd, err
+	}
+	return loadResult, createdWorktree, wd, nil
+}
+
 // setupWorktree creates the git worktree requested by --worktree or
 // --worktree-pr, returning nil when neither was given. The returned worktree
 // (when non-nil) becomes the session's working directory and is cleaned up
@@ -485,13 +553,15 @@ func (f *runExecFlags) setupWorktree(ctx context.Context, wd string) (*worktree.
 		if name == worktreeAutoName {
 			name = ""
 		}
-		wt, err := worktree.Create(ctx, wd, name)
+		wt, err := worktree.Create(ctx, wd, name, worktree.WithBase(f.worktreeBase))
 		if err != nil {
 			switch {
 			case errors.Is(err, worktree.ErrNotGitRepository):
 				return nil, fmt.Errorf("--worktree requires %s to be inside a git repository", wd)
 			case errors.Is(err, worktree.ErrInvalidName):
 				return nil, fmt.Errorf("invalid --worktree name: %w", err)
+			case errors.Is(err, worktree.ErrInvalidBase):
+				return nil, fmt.Errorf("invalid --worktree-base: %w", err)
 			default:
 				return nil, err
 			}
