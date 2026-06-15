@@ -785,6 +785,12 @@ func (m *appModel) startShell() (tea.Model, tea.Cmd) {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	// Run the shell in the active session's working directory so it matches
+	// where the tools operate (e.g. the worktree created by --worktree),
+	// rather than inheriting the process CWD.
+	if runner := m.supervisor.GetRunner(m.supervisor.ActiveID()); runner != nil && runner.WorkingDir != "" {
+		cmd.Dir = runner.WorkingDir
+	}
 	return m, tea.ExecProcess(cmd, nil)
 }
 
