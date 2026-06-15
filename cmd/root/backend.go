@@ -138,11 +138,13 @@ func (b *localBackend) Spawner(rt runtime.Runtime) tui.SessionSpawner {
 // ResumeWorkingDir looks up the session named by --session and returns the
 // working directory it was created with. It opens (and shares) the same
 // session store CreateSession uses, so this peek does not pay for a second
-// connection. Any lookup miss — no --session, a relative ref, an unknown ID,
-// an empty stored dir, or a dir that no longer exists — returns ok=false and
-// leaves the run to its normal working-directory resolution.
+// connection. Both explicit IDs and relative refs (e.g. "-1" for the last
+// session) are honoured, so resuming the previous run reattaches to the
+// worktree it ran in. Any lookup miss — no --session, an unknown ID, an empty
+// stored dir, or a dir that no longer exists — returns ok=false and leaves the
+// run to its normal working-directory resolution.
 func (b *localBackend) ResumeWorkingDir(ctx context.Context) (string, bool) {
-	if b.flags.sessionID == "" || session.IsRelativeSessionRef(b.flags.sessionID) {
+	if b.flags.sessionID == "" {
 		return "", false
 	}
 
@@ -151,6 +153,8 @@ func (b *localBackend) ResumeWorkingDir(ctx context.Context) (string, bool) {
 		return "", false
 	}
 
+	// Relative refs (-1, -2, ...) resolve against the shared store here, which
+	// is already open at this point, so they reattach to their worktree too.
 	resolvedID, err := session.ResolveSessionID(ctx, store, b.flags.sessionID)
 	if err != nil {
 		return "", false
