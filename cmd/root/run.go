@@ -512,9 +512,12 @@ func (f *runExecFlags) loadTeamInWorktree(ctx context.Context, b backend, wd str
 	loadResult, err := b.LoadTeam(ctx, b.LoadTeamRequest())
 	if err != nil {
 		// The worktree was created before the load; tear it down so a load
-		// failure doesn't leave an orphaned worktree behind.
+		// failure doesn't leave an orphaned worktree behind. A fresh context
+		// is used because the load may have failed on a cancelled ctx (Ctrl-C),
+		// which would otherwise kill the git removal subprocess and orphan the
+		// worktree.
 		if createdWorktree != nil {
-			if rmErr := createdWorktree.Remove(ctx); rmErr != nil {
+			if rmErr := createdWorktree.Remove(context.WithoutCancel(ctx)); rmErr != nil {
 				slog.WarnContext(ctx, "Failed to remove worktree after load error", "dir", createdWorktree.Dir, "error", rmErr)
 			}
 		}
