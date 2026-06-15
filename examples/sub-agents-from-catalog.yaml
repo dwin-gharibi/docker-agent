@@ -6,6 +6,11 @@
 # (e.g., "agentcatalog/pirate" becomes "pirate"). You can also give them
 # an explicit name using the "name:reference" syntax:
 #   - reviewer:agentcatalog/review-pr
+#
+# Tag references (like "agentcatalog/pirate" below) are re-resolved against the
+# registry on every run, even when the sub-agent is never used. Pin to a digest
+# to serve from cache and skip that lookup:
+#   - agentcatalog/pirate@sha256:<digest>
 
 models:
   model:

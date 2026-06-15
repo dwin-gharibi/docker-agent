@@ -22,6 +22,7 @@ import (
 	"github.com/docker/docker-agent/pkg/model/provider/options"
 	"github.com/docker/docker-agent/pkg/modelsdev"
 	"github.com/docker/docker-agent/pkg/permissions"
+	"github.com/docker/docker-agent/pkg/remote"
 	"github.com/docker/docker-agent/pkg/skills"
 	"github.com/docker/docker-agent/pkg/team"
 	"github.com/docker/docker-agent/pkg/tools"
@@ -722,6 +723,14 @@ func loadExternalAgent(ctx context.Context, ref string, runConfig *config.Runtim
 	depth := externalDepthFromContext(ctx)
 	if depth >= maxExternalDepth {
 		return nil, fmt.Errorf("maximum external agent nesting depth (%d) exceeded — check for circular references", maxExternalDepth)
+	}
+
+	// Tag references (including the implicit ":latest") are re-resolved against
+	// the registry every time the config is loaded, adding a digest lookup to
+	// startup even when the agent is never invoked. Digest-pinned references are
+	// served from the local cache with no network call, so nudge users to pin.
+	if config.IsOCIReference(ref) && !remote.IsDigestReference(ref) {
+		slog.WarnContext(ctx, "External agent reference uses a tag, not a digest; it is re-resolved against the registry on every run. Pin it to a digest (ref@sha256:...) to avoid the per-run registry lookup.", "ref", ref)
 	}
 
 	source, err := config.Resolve(ref, runConfig.EnvProvider())

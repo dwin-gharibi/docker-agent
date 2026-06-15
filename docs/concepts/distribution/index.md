@@ -83,7 +83,9 @@ agents:
 
 External sub-agents are automatically named after their last path segment. Use the `name:reference` syntax to give them a custom name.
 
-See [External Sub-Agents]({{ '/concepts/multi-agent/#external-sub-agents-from-registries' | relative_url }}) for details.
+Tag references are checked against the registry on every `docker agent run`, which adds a network round-trip per sub-agent at startup. Pin them to a digest (`agentcatalog/pirate@sha256:…`) to serve them from cache instead.
+
+See [Pin external sub-agents to a digest]({{ '/concepts/multi-agent/#pin-external-sub-agents-to-a-digest' | relative_url }}) and [External Sub-Agents]({{ '/concepts/multi-agent/#external-sub-agents-from-registries' | relative_url }}) for details.
 
 ## Using with Aliases
 

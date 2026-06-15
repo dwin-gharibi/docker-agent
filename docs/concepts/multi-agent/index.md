@@ -240,6 +240,21 @@ External sub-agents are automatically named after their last path segment — fo
       - reviewer:docker.io/myorg/review-agent:latest
 ```
 
+### Pin external sub-agents to a digest
+
+External references use a tag by default: `agentcatalog/pirate` is shorthand for `agentcatalog/pirate:latest`. Tag references are re-resolved against the registry on **every** `docker agent run`: each unpinned external sub-agent triggers a digest lookup at startup, even when that sub-agent is never invoked in the session. On a healthy connection this typically adds a second or two per reference (it depends on your network and registry), and it is one of the paths that can stall if the registry or credential helper misbehaves.
+
+Pinning a reference to an immutable digest (`@sha256:…`) makes the runtime serve it straight from the local cache with no network round-trip, so startup stays fast and your team is fully reproducible:
+
+```yaml
+    sub_agents:
+      - reviewer:docker.io/myorg/review-agent@sha256:44117e73263afa5c861bdf3730dae7925918ffdd146827eee5bcff20bc55e8fa
+```
+
+Copy the digest from your registry (Docker Hub shows it next to the tag) or read it with a standard OCI tool such as `docker buildx imagetools inspect <reference>`. Docker Agent logs a startup warning for any external OCI reference that still uses a tag instead of a digest.
+
+External references in `handoffs` and `force_handoff` carry the same per-run cost, so pin those to a digest too.
+
 <div class="callout callout-tip" markdown="1">
 <div class="callout-title">Tip
 </div>
