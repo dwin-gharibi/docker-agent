@@ -8,6 +8,7 @@ import (
 	"github.com/docker/docker-agent/pkg/config/latest"
 	"github.com/docker/docker-agent/pkg/teamloader"
 	"github.com/docker/docker-agent/pkg/tools"
+	"github.com/docker/docker-agent/pkg/tools/builtin/filesystem"
 )
 
 // createToolsetRegistry creates a custom toolset registry with ACP-specific filesystem toolset
@@ -34,8 +35,38 @@ func (r *acpToolsetRegistry) CreateTool(ctx context.Context, toolset latest.Tool
 			}
 		}
 
-		return NewFilesystemToolset(r.agent, wd), nil
+		return NewFilesystemToolset(r.agent, wd, filesystemOptions(toolset)...), nil
 	}
 
 	return r.registry.CreateTool(ctx, toolset, parentDir, runConfig, agentName)
+}
+
+func filesystemOptions(toolset latest.Toolset) []filesystem.Opt {
+	opts := []filesystem.Opt{}
+
+	ignoreVCS := true
+	if toolset.IgnoreVCS != nil {
+		ignoreVCS = *toolset.IgnoreVCS
+	}
+	opts = append(opts, filesystem.WithIgnoreVCS(ignoreVCS))
+
+	if len(toolset.AllowList) > 0 {
+		opts = append(opts, filesystem.WithAllowList(toolset.AllowList))
+	}
+	if len(toolset.DenyList) > 0 {
+		opts = append(opts, filesystem.WithDenyList(toolset.DenyList))
+	}
+
+	if len(toolset.PostEdit) > 0 {
+		postEditConfigs := make([]filesystem.PostEditConfig, len(toolset.PostEdit))
+		for i, pe := range toolset.PostEdit {
+			postEditConfigs[i] = filesystem.PostEditConfig{
+				Path: pe.Path,
+				Cmd:  pe.Cmd,
+			}
+		}
+		opts = append(opts, filesystem.WithPostEditCommands(postEditConfigs))
+	}
+
+	return opts
 }

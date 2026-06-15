@@ -14,12 +14,15 @@ func TestResolvePath(t *testing.T) {
 	t.Parallel()
 
 	workingDir := t.TempDir()
+	outsideDir := t.TempDir()
 
 	ts := &FilesystemToolset{
 		workingDir: workingDir,
 	}
 
 	absWorkingDir, err := filepath.EvalSymlinks(workingDir)
+	require.NoError(t, err)
+	absOutsideDir, err := filepath.EvalSymlinks(outsideDir)
 	require.NoError(t, err)
 
 	tests := []struct {
@@ -58,6 +61,16 @@ func TestResolvePath(t *testing.T) {
 			userPath: "subdir/../file.txt",
 			wantPath: filepath.Join(absWorkingDir, "file.txt"),
 		},
+		{
+			name:     "absolute path inside working dir is allowed",
+			userPath: filepath.Join(absWorkingDir, "file.txt"),
+			wantPath: filepath.Join(absWorkingDir, "file.txt"),
+		},
+		{
+			name:      "absolute path outside working dir is blocked",
+			userPath:  filepath.Join(absOutsideDir, "file.txt"),
+			wantError: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -74,6 +87,33 @@ func TestResolvePath(t *testing.T) {
 			assert.Equal(t, tt.wantPath, resolved)
 		})
 	}
+}
+
+func TestResolvePath_AdditionalDirectories(t *testing.T) {
+	t.Parallel()
+
+	workingDir := t.TempDir()
+	additionalDir := t.TempDir()
+	outsideDir := t.TempDir()
+
+	absWorkingDir, err := filepath.EvalSymlinks(workingDir)
+	require.NoError(t, err)
+	absAdditionalDir, err := filepath.EvalSymlinks(additionalDir)
+	require.NoError(t, err)
+	absOutsideDir, err := filepath.EvalSymlinks(outsideDir)
+	require.NoError(t, err)
+
+	resolved, err := resolvePathInRoots("relative.txt", workingDir, []string{workingDir, additionalDir})
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(absWorkingDir, "relative.txt"), resolved)
+
+	resolved, err = resolvePathInRoots(filepath.Join(additionalDir, "attached.txt"), workingDir, []string{workingDir, additionalDir})
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(absAdditionalDir, "attached.txt"), resolved)
+
+	_, err = resolvePathInRoots(filepath.Join(absOutsideDir, "blocked.txt"), workingDir, []string{workingDir, additionalDir})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "escapes the working directory")
 }
 
 func TestNormalizePathForComparison(t *testing.T) {

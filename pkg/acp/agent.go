@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/coder/acp-go-sdk"
 
 	"github.com/docker/docker-agent/pkg/agent"
+	"github.com/docker/docker-agent/pkg/chat"
 	"github.com/docker/docker-agent/pkg/config"
 	"github.com/docker/docker-agent/pkg/runtime"
 	"github.com/docker/docker-agent/pkg/session"
@@ -29,20 +31,22 @@ type Agent struct {
 	sessionStore session.Store
 	sessions     map[string]*Session
 
-	conn *acp.AgentSideConnection
-	team *team.Team
-	mu   sync.Mutex
+	conn     *acp.AgentSideConnection
+	clientFS acp.FileSystemCapabilities
+	team     *team.Team
+	mu       sync.Mutex
 }
 
 var _ acp.Agent = (*Agent)(nil)
 
 // Session represents an ACP session.
 type Session struct {
-	id         string
-	sess       *session.Session
-	rt         runtime.Runtime
-	cancel     context.CancelFunc
-	workingDir string
+	id             string
+	sess           *session.Session
+	rt             runtime.Runtime
+	cancel         context.CancelFunc
+	workingDir     string
+	additionalDirs []string
 }
 
 // NewAgent creates a new ACP agent.
@@ -76,6 +80,7 @@ func (a *Agent) Initialize(ctx context.Context, params acp.InitializeRequest) (a
 	slog.DebugContext(ctx, "ACP Initialize called", "client_version", params.ProtocolVersion)
 
 	a.mu.Lock()
+	a.clientFS = params.ClientCapabilities.Fs
 	defer a.mu.Unlock()
 	t, err := teamloader.Load(ctx, a.agentSource, a.runConfig, teamloader.WithToolsetRegistry(createToolsetRegistry(a)))
 	if err != nil {
@@ -95,13 +100,14 @@ func (a *Agent) Initialize(ctx context.Context, params acp.InitializeRequest) (a
 		AgentCapabilities: acp.AgentCapabilities{
 			LoadSession: false,
 			SessionCapabilities: acp.SessionCapabilities{
-				Close:  &acp.SessionCloseCapabilities{},
-				List:   &acp.SessionListCapabilities{},
-				Resume: &acp.SessionResumeCapabilities{},
+				AdditionalDirectories: &acp.SessionAdditionalDirectoriesCapabilities{},
+				Close:                 &acp.SessionCloseCapabilities{},
+				List:                  &acp.SessionListCapabilities{},
+				Resume:                &acp.SessionResumeCapabilities{},
 			},
 			PromptCapabilities: acp.PromptCapabilities{
 				EmbeddedContext: true,
-				Image:           false, // Not yet supported
+				Image:           true,
 				Audio:           false, // Not yet supported
 			},
 			McpCapabilities: acp.McpCapabilities{
@@ -113,7 +119,7 @@ func (a *Agent) Initialize(ctx context.Context, params acp.InitializeRequest) (a
 }
 
 // newRuntime creates a new runtime using the default agent.
-func (a *Agent) newRuntime() (runtime.Runtime, *agent.Agent, error) {
+func (a *Agent) newRuntime(workingDir string) (runtime.Runtime, *agent.Agent, error) {
 	if a.team == nil {
 		return nil, nil, errors.New("agent not initialized")
 	}
@@ -123,10 +129,15 @@ func (a *Agent) newRuntime() (runtime.Runtime, *agent.Agent, error) {
 		return nil, nil, fmt.Errorf("failed to resolve default agent: %w", err)
 	}
 
-	rt, err := runtime.New(a.team,
+	opts := []runtime.Opt{
 		runtime.WithCurrentAgent(defaultAgent.Name()),
 		runtime.WithSessionStore(a.sessionStore),
-	)
+	}
+	if workingDir != "" {
+		opts = append(opts, runtime.WithWorkingDir(workingDir))
+	}
+
+	rt, err := runtime.New(a.team, opts...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -171,17 +182,16 @@ func (a *Agent) NewSession(ctx context.Context, params acp.NewSessionRequest) (a
 	// An empty cwd is allowed: clients (e.g. zed) may not always supply a
 	// working directory at session creation. We persist it as empty and
 	// later prompts/tools fall back to the agent's default working dir.
-	if workingDir != "" {
-		info, err := os.Stat(workingDir)
-		if err != nil {
-			return acp.NewSessionResponse{}, fmt.Errorf("working directory does not exist: %w", err)
-		}
-		if !info.IsDir() {
-			return acp.NewSessionResponse{}, errors.New("working directory must be a directory")
-		}
+	if err := validateWorkingDir(workingDir); err != nil {
+		return acp.NewSessionResponse{}, err
 	}
 
-	rt, defaultAgent, err := a.newRuntime()
+	additionalDirs, err := resolveAdditionalDirectories(params.AdditionalDirectories)
+	if err != nil {
+		return acp.NewSessionResponse{}, err
+	}
+
+	rt, defaultAgent, err := a.newRuntime(workingDir)
 	if err != nil {
 		return acp.NewSessionResponse{}, err
 	}
@@ -201,10 +211,11 @@ func (a *Agent) NewSession(ctx context.Context, params acp.NewSessionRequest) (a
 	slog.DebugContext(ctx, "ACP session created", "session_id", sess.ID)
 
 	a.registerSession(&Session{
-		id:         sess.ID,
-		sess:       sess,
-		rt:         rt,
-		workingDir: workingDir,
+		id:             sess.ID,
+		sess:           sess,
+		rt:             rt,
+		workingDir:     workingDir,
+		additionalDirs: additionalDirs,
 	})
 
 	return acp.NewSessionResponse{SessionId: acp.SessionId(sess.ID)}, nil
@@ -225,7 +236,7 @@ func (a *Agent) Logout(ctx context.Context, _ acp.LogoutRequest) (acp.LogoutResp
 // LoadSession implements [acp.AgentLoader] (optional, not supported).
 func (a *Agent) LoadSession(ctx context.Context, _ acp.LoadSessionRequest) (acp.LoadSessionResponse, error) {
 	slog.DebugContext(ctx, "ACP LoadSession called (not supported)")
-	return acp.LoadSessionResponse{}, errors.New("load session not supported")
+	return acp.LoadSessionResponse{}, acp.NewMethodNotFound(acp.AgentMethodSessionLoad)
 }
 
 // CloseSession implements [acp.Agent].
@@ -258,9 +269,12 @@ func (a *Agent) ListSessions(ctx context.Context, _ acp.ListSessionsRequest) (ac
 
 	sessions := make([]acp.SessionInfo, 0, len(summaries))
 	for _, s := range summaries {
+		cwd, additionalDirs := a.sessionListPaths(ctx, s.ID)
 		info := acp.SessionInfo{
-			SessionId: acp.SessionId(s.ID),
-			Title:     &s.Title,
+			SessionId:             acp.SessionId(s.ID),
+			Title:                 &s.Title,
+			Cwd:                   cwd,
+			AdditionalDirectories: additionalDirs,
 		}
 		if !s.CreatedAt.IsZero() {
 			// We don't track session updates yet, so report CreatedAt in
@@ -295,11 +309,19 @@ func (a *Agent) ResumeSession(ctx context.Context, params acp.ResumeSessionReque
 	if err != nil {
 		return acp.ResumeSessionResponse{}, err
 	}
+	if err := validateWorkingDir(workingDir); err != nil {
+		return acp.ResumeSessionResponse{}, err
+	}
 	if workingDir != "" {
 		sess.WorkingDir = workingDir
 	}
 
-	rt, _, err := a.newRuntime()
+	additionalDirs, err := resolveAdditionalDirectories(params.AdditionalDirectories)
+	if err != nil {
+		return acp.ResumeSessionResponse{}, err
+	}
+
+	rt, _, err := a.newRuntime(sess.WorkingDir)
 	if err != nil {
 		return acp.ResumeSessionResponse{}, err
 	}
@@ -308,10 +330,11 @@ func (a *Agent) ResumeSession(ctx context.Context, params acp.ResumeSessionReque
 	// the same session id between our initial check and now, drop the
 	// runtime we just built and reuse the existing registration.
 	_, stored := a.registerSessionIfAbsent(&Session{
-		id:         sid,
-		sess:       sess,
-		rt:         rt,
-		workingDir: workingDir,
+		id:             sid,
+		sess:           sess,
+		rt:             rt,
+		workingDir:     sess.WorkingDir,
+		additionalDirs: additionalDirs,
 	})
 	if !stored {
 		slog.DebugContext(ctx, "ACP session already registered, reusing existing", "session_id", sid)
@@ -326,7 +349,7 @@ func (a *Agent) ResumeSession(ctx context.Context, params acp.ResumeSessionReque
 // SetSessionConfigOption implements [acp.Agent] (optional, not advertised in capabilities).
 func (a *Agent) SetSessionConfigOption(ctx context.Context, _ acp.SetSessionConfigOptionRequest) (acp.SetSessionConfigOptionResponse, error) {
 	slog.DebugContext(ctx, "ACP SetSessionConfigOption called (not supported)")
-	return acp.SetSessionConfigOptionResponse{}, nil
+	return acp.SetSessionConfigOptionResponse{}, acp.NewMethodNotFound(acp.AgentMethodSessionSetConfigOption)
 }
 
 // Cancel implements [acp.Agent].
@@ -373,9 +396,9 @@ func (a *Agent) Prompt(ctx context.Context, params acp.PromptRequest) (acp.Promp
 	acpSess.cancel = cancel
 	a.mu.Unlock()
 
-	userContent := a.buildUserContent(ctx, sid, params.Prompt)
-	if userContent != "" {
-		acpSess.sess.AddMessage(session.UserMessage(userContent))
+	userMsg := a.buildUserMessage(ctx, sid, params.Prompt)
+	if userMsg != nil && (userMsg.Message.Content != "" || len(userMsg.Message.MultiContent) > 0) {
+		acpSess.sess.AddMessage(userMsg)
 	}
 
 	if err := a.runAgent(turnCtx, acpSess); err != nil {
@@ -394,74 +417,146 @@ func (a *Agent) Prompt(ctx context.Context, params acp.PromptRequest) (acp.Promp
 
 // buildUserContent constructs user message text from ACP content blocks.
 func (a *Agent) buildUserContent(ctx context.Context, sessionID string, prompt []acp.ContentBlock) string {
-	var parts []string
+	msg := a.buildUserMessage(ctx, sessionID, prompt)
+	if msg == nil {
+		return ""
+	}
+	return msg.Message.Content
+}
+
+func (a *Agent) buildUserMessage(ctx context.Context, sessionID string, prompt []acp.ContentBlock) *session.Message {
+	var (
+		parts          []string
+		multiContent   []chat.MessagePart
+		hasRichContent bool
+	)
+
+	appendText := func(text string) {
+		if text == "" {
+			return
+		}
+		parts = append(parts, text)
+		multiContent = append(multiContent, chat.MessagePart{Type: chat.MessagePartTypeText, Text: text})
+	}
 
 	for _, content := range prompt {
 		switch {
 		case content.Text != nil:
-			parts = append(parts, content.Text.Text)
+			appendText(content.Text.Text)
 
 		case content.ResourceLink != nil:
 			rl := content.ResourceLink
 			slog.DebugContext(ctx, "Processing resource link", "uri", rl.Uri, "name", rl.Name)
 
-			if fileContent := a.readResourceLink(ctx, sessionID, rl); fileContent != "" {
-				parts = append(parts, fmt.Sprintf("\n\n--- File: %s ---\n%s\n--- End File ---\n", rl.Name, fileContent))
+			if fileContent, ok := a.readResourceLink(ctx, sessionID, rl); ok {
+				appendText(fmt.Sprintf("\n\n--- File: %s ---\n%s\n--- End File ---\n", resourceLinkName(rl), fileContent))
 			} else {
-				parts = append(parts, fmt.Sprintf("\n[Referenced file: %s (URI: %s)]\n", rl.Name, rl.Uri))
+				appendText(fmt.Sprintf("\n[Referenced file: %s (content unavailable)]\n", resourceLinkName(rl)))
 			}
 
 		case content.Resource != nil:
 			res := content.Resource.Resource
 			if res.TextResourceContents != nil {
 				slog.DebugContext(ctx, "Processing embedded text resource", "uri", res.TextResourceContents.Uri)
-				parts = append(parts, fmt.Sprintf("\n\n--- Resource: %s ---\n%s\n--- End Resource ---\n",
+				appendText(fmt.Sprintf("\n\n--- Resource: %s ---\n%s\n--- End Resource ---\n",
 					res.TextResourceContents.Uri, res.TextResourceContents.Text))
 			} else if res.BlobResourceContents != nil {
 				slog.DebugContext(ctx, "Processing embedded blob resource", "uri", res.BlobResourceContents.Uri)
-				parts = append(parts, fmt.Sprintf("\n[Binary resource: %s (type: %s)]\n",
+				appendText(fmt.Sprintf("\n[Binary resource: %s (type: %s)]\n",
 					res.BlobResourceContents.Uri, stringOrDefault(res.BlobResourceContents.MimeType, "unknown")))
 			}
 
 		case content.Image != nil:
-			slog.DebugContext(ctx, "Image content received but not yet fully supported")
-			parts = append(parts, "[Image content provided]")
+			img := content.Image
+			slog.DebugContext(ctx, "Processing image content", "mime_type", img.MimeType)
+			hasRichContent = true
+			multiContent = append(multiContent, chat.MessagePart{
+				Type: chat.MessagePartTypeImageURL,
+				ImageURL: &chat.MessageImageURL{
+					URL:    imageDataURL(img.MimeType, img.Data),
+					Detail: chat.ImageURLDetailAuto,
+				},
+			})
 
 		case content.Audio != nil:
 			slog.DebugContext(ctx, "Audio content received but not yet supported")
-			parts = append(parts, "[Audio content provided]")
+			appendText("[Audio content provided]")
 		}
 	}
 
-	return strings.Join(parts, "")
+	content := strings.Join(parts, "")
+	if !hasRichContent {
+		return session.UserMessage(content)
+	}
+	return session.UserMessage(content, multiContent...)
 }
 
 // readResourceLink attempts to read a text file referenced by an ACP resource link.
-//
-// For security reasons, this function applies basic path hardening:
-//   - Only relative paths are allowed
-//   - Path traversal (e.g. "../") is blocked
-//
-// If the path is unsafe or the file cannot be read, an empty string is returned.
-func (a *Agent) readResourceLink(ctx context.Context, sessionID string, rl *acp.ContentBlockResourceLink) string {
-	path := strings.TrimPrefix(rl.Uri, "file://")
-	clean := filepath.Clean(path)
+func (a *Agent) readResourceLink(ctx context.Context, sessionID string, rl *acp.ContentBlockResourceLink) (string, bool) {
+	if !a.supportsClientReadTextFile() {
+		slog.DebugContext(ctx, "ACP client does not support reading resource links")
+		return "", false
+	}
 
-	if filepath.IsAbs(clean) || strings.HasPrefix(clean, "..") {
-		slog.WarnContext(ctx, "Blocked unsafe file resource link", "path", path)
-		return ""
+	path, ok := resourceLinkPath(rl.Uri)
+	if !ok {
+		slog.DebugContext(ctx, "Unsupported ACP resource link URI", "uri", rl.Uri)
+		return "", false
+	}
+
+	resolvedPath, err := a.resolveSessionPath(sessionID, path)
+	if err != nil {
+		slog.WarnContext(ctx, "Blocked unsafe file resource link", "path", path, "error", err)
+		return "", false
 	}
 
 	resp, err := a.conn.ReadTextFile(ctx, acp.ReadTextFileRequest{
 		SessionId: acp.SessionId(sessionID),
-		Path:      clean,
+		Path:      resolvedPath,
 	})
 	if err != nil {
-		slog.DebugContext(ctx, "Failed to read resource link", "path", clean, "error", err)
-		return ""
+		slog.DebugContext(ctx, "Failed to read resource link", "path", resolvedPath, "error", err)
+		return "", false
 	}
 
-	return resp.Content
+	return resp.Content, true
+}
+
+func resourceLinkName(rl *acp.ContentBlockResourceLink) string {
+	if rl.Name != "" {
+		return rl.Name
+	}
+	if path, ok := resourceLinkPath(rl.Uri); ok {
+		if base := filepath.Base(path); base != "." && base != string(filepath.Separator) {
+			return base
+		}
+	}
+	return "resource"
+}
+
+func resourceLinkPath(rawURI string) (string, bool) {
+	u, err := url.Parse(rawURI)
+	if err != nil || u.Scheme == "" {
+		return rawURI, rawURI != ""
+	}
+	if u.Scheme != "file" {
+		return "", false
+	}
+	if u.Host != "" && u.Host != "localhost" {
+		return "", false
+	}
+	path, err := url.PathUnescape(u.Path)
+	if err != nil {
+		return "", false
+	}
+	return path, path != ""
+}
+
+func imageDataURL(mimeType, data string) string {
+	if strings.HasPrefix(data, "data:") {
+		return data
+	}
+	return fmt.Sprintf("data:%s;base64,%s", mimeType, data)
 }
 
 func stringOrDefault(s *string, def string) string {
@@ -472,8 +567,9 @@ func stringOrDefault(s *string, def string) string {
 }
 
 // SetSessionMode implements acp.Agent (optional).
-func (a *Agent) SetSessionMode(context.Context, acp.SetSessionModeRequest) (acp.SetSessionModeResponse, error) {
-	return acp.SetSessionModeResponse{}, nil
+func (a *Agent) SetSessionMode(ctx context.Context, _ acp.SetSessionModeRequest) (acp.SetSessionModeResponse, error) {
+	slog.DebugContext(ctx, "ACP SetSessionMode called (not supported)")
+	return acp.SetSessionModeResponse{}, acp.NewMethodNotFound(acp.AgentMethodSessionSetMode)
 }
 
 // sendUpdate sends a session update notification to the ACP client.
@@ -702,7 +798,100 @@ func (a *Agent) emitAvailableCommands(ctx context.Context, acpSess *Session) err
 	})
 }
 
-// resolveWorkingDir validates and normalizes a working directory path.
+func (a *Agent) supportsClientReadTextFile() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.clientFS.ReadTextFile && a.conn != nil
+}
+
+func (a *Agent) supportsClientWriteTextFile() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.clientFS.WriteTextFile && a.conn != nil
+}
+
+func (a *Agent) resolveSessionPath(sessionID, userPath string) (string, error) {
+	a.mu.Lock()
+	acpSess := a.sessions[sessionID]
+	a.mu.Unlock()
+	if acpSess == nil {
+		return "", fmt.Errorf("session %s not found", sessionID)
+	}
+
+	workingDir, roots := acpSess.pathRoots(a.defaultWorkingDir())
+	return resolvePathInRoots(userPath, workingDir, roots)
+}
+
+func (a *Agent) sessionListPaths(ctx context.Context, sessionID string) (string, []string) {
+	a.mu.Lock()
+	acpSess := a.sessions[sessionID]
+	a.mu.Unlock()
+	if acpSess != nil {
+		cwd, _ := acpSess.pathRoots(a.defaultWorkingDir())
+		return cwd, append([]string(nil), acpSess.additionalDirs...)
+	}
+
+	cwd := a.defaultWorkingDir()
+	if a.sessionStore != nil {
+		if sess, err := a.sessionStore.GetSession(ctx, sessionID); err == nil && sess.WorkingDir != "" {
+			cwd = sess.WorkingDir
+		}
+	}
+	return cwd, nil
+}
+
+func (a *Agent) defaultWorkingDir() string {
+	if a.runConfig != nil && a.runConfig.WorkingDir != "" {
+		if wd, err := resolveWorkingDir(a.runConfig.WorkingDir); err == nil {
+			return wd
+		}
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	wd, err := resolveWorkingDir(cwd)
+	if err != nil {
+		return cwd
+	}
+	return wd
+}
+
+func (s *Session) pathRoots(fallbackWorkingDir string) (string, []string) {
+	workingDir := s.workingDir
+	if workingDir == "" && s.sess != nil {
+		workingDir = s.sess.WorkingDir
+	}
+	if workingDir == "" {
+		workingDir = fallbackWorkingDir
+	}
+
+	roots := make([]string, 0, 1+len(s.additionalDirs))
+	if workingDir != "" {
+		roots = append(roots, workingDir)
+	}
+	roots = append(roots, s.additionalDirs...)
+	return workingDir, dedupePaths(roots)
+}
+
+func dedupePaths(paths []string) []string {
+	seen := make(map[string]struct{}, len(paths))
+	result := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if path == "" {
+			continue
+		}
+		key := normalizePathForComparison(filepath.Clean(path))
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, filepath.Clean(path))
+	}
+	return result
+}
+
+// resolveWorkingDir normalizes a working directory path.
 func resolveWorkingDir(cwd string) (string, error) {
 	wd := strings.TrimSpace(cwd)
 	if wd == "" {
@@ -712,5 +901,41 @@ func resolveWorkingDir(cwd string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("invalid working directory: %w", err)
 	}
-	return absWd, nil
+	return filepath.Clean(absWd), nil
+}
+
+func validateWorkingDir(workingDir string) error {
+	if workingDir == "" {
+		return nil
+	}
+	info, err := os.Stat(workingDir)
+	if err != nil {
+		return fmt.Errorf("working directory does not exist: %w", err)
+	}
+	if !info.IsDir() {
+		return errors.New("working directory must be a directory")
+	}
+	return nil
+}
+
+func resolveAdditionalDirectories(dirs []string) ([]string, error) {
+	resolved := make([]string, 0, len(dirs))
+	for _, dir := range dirs {
+		dir = strings.TrimSpace(dir)
+		if dir == "" {
+			continue
+		}
+		if !filepath.IsAbs(dir) {
+			return nil, fmt.Errorf("additional directory must be absolute: %s", dir)
+		}
+		absDir, err := resolveWorkingDir(dir)
+		if err != nil {
+			return nil, err
+		}
+		if err := validateWorkingDir(absDir); err != nil {
+			return nil, fmt.Errorf("invalid additional directory %q: %w", dir, err)
+		}
+		resolved = append(resolved, absDir)
+	}
+	return dedupePaths(resolved), nil
 }

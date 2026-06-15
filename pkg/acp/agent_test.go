@@ -53,6 +53,77 @@ func (m *mockProvider) BaseConfig() base.Config { return base.Config{} }
 
 func (m *mockProvider) MaxTokens() int { return 0 }
 
+func TestBuildUserContent_ResourceLinkFallbackDoesNotExposeAbsoluteURI(t *testing.T) {
+	t.Parallel()
+
+	acpAgent := &Agent{sessions: make(map[string]*Session)}
+	uri := "file:///var/folders/40/w2lqxd4564132ydf4v_7s5wh0000gn/T/TemporaryItems/Screenshot%202026-06-15.png"
+
+	content := acpAgent.buildUserContent(t.Context(), "missing-session", []acpsdk.ContentBlock{
+		acpsdk.ResourceLinkBlock("Screenshot 2026-06-15.png", uri),
+	})
+
+	assert.Contains(t, content, "Screenshot 2026-06-15.png")
+	assert.Contains(t, content, "content unavailable")
+	assert.NotContains(t, content, uri)
+	assert.NotContains(t, content, "/var/folders")
+}
+
+func TestBuildUserMessage_ImageContent(t *testing.T) {
+	t.Parallel()
+
+	acpAgent := &Agent{sessions: make(map[string]*Session)}
+	msg := acpAgent.buildUserMessage(t.Context(), "session-id", []acpsdk.ContentBlock{
+		acpsdk.TextBlock("look at this"),
+		acpsdk.ImageBlock("AAAA", "image/png"),
+	})
+
+	require.NotNil(t, msg)
+	assert.Equal(t, "look at this", msg.Message.Content)
+	require.Len(t, msg.Message.MultiContent, 2)
+	assert.Equal(t, chat.MessagePartTypeText, msg.Message.MultiContent[0].Type)
+	assert.Equal(t, "look at this", msg.Message.MultiContent[0].Text)
+	assert.Equal(t, chat.MessagePartTypeImageURL, msg.Message.MultiContent[1].Type)
+	require.NotNil(t, msg.Message.MultiContent[1].ImageURL)
+	assert.Equal(t, "data:image/png;base64,AAAA", msg.Message.MultiContent[1].ImageURL.URL)
+}
+
+func TestResolveSessionPathUsesSessionRoots(t *testing.T) {
+	t.Parallel()
+
+	workingDir := t.TempDir()
+	additionalDir := t.TempDir()
+	outsideDir := t.TempDir()
+	absWorkingDir, err := filepath.EvalSymlinks(workingDir)
+	require.NoError(t, err)
+	absAdditionalDir, err := filepath.EvalSymlinks(additionalDir)
+	require.NoError(t, err)
+
+	acpAgent := &Agent{
+		runConfig: &config.RuntimeConfig{},
+		sessions: map[string]*Session{
+			"session-id": {
+				id:             "session-id",
+				sess:           session.New(session.WithWorkingDir(workingDir)),
+				workingDir:     workingDir,
+				additionalDirs: []string{additionalDir},
+			},
+		},
+	}
+
+	resolved, err := acpAgent.resolveSessionPath("session-id", "relative.txt")
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(absWorkingDir, "relative.txt"), resolved)
+
+	resolved, err = acpAgent.resolveSessionPath("session-id", filepath.Join(additionalDir, "attached.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(absAdditionalDir, "attached.txt"), resolved)
+
+	_, err = acpAgent.resolveSessionPath("session-id", filepath.Join(outsideDir, "blocked.txt"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "escapes the working directory")
+}
+
 // TestACPSessionPersistence verifies that ACP sessions are persisted to the SQLite store.
 func TestACPSessionPersistence(t *testing.T) {
 	t.Parallel()

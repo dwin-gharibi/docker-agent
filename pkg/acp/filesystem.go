@@ -3,6 +3,7 @@ package acp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -75,11 +76,41 @@ func (t *FilesystemToolset) Tools(ctx context.Context) ([]tools.Tool, error) {
 // It follows symlinks to prevent a symlink inside the working directory from
 // pointing outside it.
 func (t *FilesystemToolset) resolvePath(userPath string) (string, error) {
-	resolved := filepath.Clean(filepath.Join(t.workingDir, userPath))
-	absWorkingDir, err := filepath.Abs(t.workingDir)
-	if err != nil {
-		return "", fmt.Errorf("failed to resolve working directory: %w", err)
+	return resolvePathInRoots(userPath, t.workingDir, []string{t.workingDir})
+}
+
+func (t *FilesystemToolset) resolvePathForSession(ctx context.Context, userPath string) (string, error) {
+	sessionID, ok := getSessionID(ctx)
+	if !ok {
+		return "", errors.New("session ID not found in context")
 	}
+	if t.agent == nil {
+		return "", errors.New("ACP agent not configured")
+	}
+
+	t.agent.mu.Lock()
+	acpSess := t.agent.sessions[sessionID]
+	t.agent.mu.Unlock()
+	if acpSess == nil {
+		return "", fmt.Errorf("session %s not found", sessionID)
+	}
+
+	workingDir, roots := acpSess.pathRoots(t.workingDir)
+	return resolvePathInRoots(userPath, workingDir, roots)
+}
+
+func resolvePathInRoots(userPath, workingDir string, roots []string) (string, error) {
+	if workingDir == "" {
+		return "", errors.New("working directory is not configured")
+	}
+
+	var resolved string
+	if filepath.IsAbs(userPath) {
+		resolved = filepath.Clean(userPath)
+	} else {
+		resolved = filepath.Clean(filepath.Join(workingDir, userPath))
+	}
+
 	absResolved, err := filepath.Abs(resolved)
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve path: %w", err)
@@ -92,19 +123,38 @@ func (t *FilesystemToolset) resolvePath(userPath string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to evaluate symlinks: %w", err)
 	}
-	realWorkingDir, err := filepath.EvalSymlinks(absWorkingDir)
-	if err != nil {
-		return "", fmt.Errorf("failed to evaluate symlinks for working directory: %w", err)
+
+	for _, root := range roots {
+		if root == "" {
+			continue
+		}
+		absRoot, err := filepath.Abs(root)
+		if err != nil {
+			return "", fmt.Errorf("failed to resolve working directory: %w", err)
+		}
+		realRoot, err := filepath.EvalSymlinks(absRoot)
+		if err != nil {
+			return "", fmt.Errorf("failed to evaluate symlinks for working directory: %w", err)
+		}
+		if pathWithinRoot(realResolved, realRoot) {
+			return realResolved, nil
+		}
 	}
 
-	// Normalize paths for comparison to prevent bypasses on case-insensitive
-	// filesystems (macOS, Windows) where differing case could defeat the check.
-	normResolved := normalizePathForComparison(realResolved)
-	normWorkingDir := normalizePathForComparison(realWorkingDir)
-	if !strings.HasPrefix(normResolved, normWorkingDir+string(filepath.Separator)) && normResolved != normWorkingDir {
-		return "", fmt.Errorf("path %q escapes the working directory", userPath)
+	return "", fmt.Errorf("path %q escapes the working directory", userPath)
+}
+
+func pathWithinRoot(path, root string) bool {
+	normPath := normalizePathForComparison(filepath.Clean(path))
+	normRoot := normalizePathForComparison(filepath.Clean(root))
+	if normPath == normRoot {
+		return true
 	}
-	return realResolved, nil
+	rel, err := filepath.Rel(normRoot, normPath)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
 }
 
 // evalSymlinksAllowMissing resolves symlinks for a path that may not fully
@@ -142,8 +192,11 @@ func (t *FilesystemToolset) handleReadFile(ctx context.Context, toolCall tools.T
 	if !ok {
 		return tools.ResultError("Error: session ID not found in context"), nil
 	}
+	if !t.agent.supportsClientReadTextFile() {
+		return tools.ResultError("Error: ACP client does not support reading files"), nil
+	}
 
-	resolvedPath, err := t.resolvePath(args.Path)
+	resolvedPath, err := t.resolvePathForSession(ctx, args.Path)
 	if err != nil {
 		return tools.ResultError(fmt.Sprintf("Error: %s", err)), nil
 	}
@@ -169,8 +222,11 @@ func (t *FilesystemToolset) handleWriteFile(ctx context.Context, toolCall tools.
 	if !ok {
 		return tools.ResultError("Error: session ID not found in context"), nil
 	}
+	if !t.agent.supportsClientWriteTextFile() {
+		return tools.ResultError("Error: ACP client does not support writing files"), nil
+	}
 
-	resolvedPath, err := t.resolvePath(args.Path)
+	resolvedPath, err := t.resolvePathForSession(ctx, args.Path)
 	if err != nil {
 		return tools.ResultError(fmt.Sprintf("Error: %s", err)), nil
 	}
@@ -201,8 +257,11 @@ func (t *FilesystemToolset) handleEditFile(ctx context.Context, toolCall tools.T
 	if !ok {
 		return tools.ResultError("Error: session ID not found in context"), nil
 	}
+	if !t.agent.supportsClientReadTextFile() || !t.agent.supportsClientWriteTextFile() {
+		return tools.ResultError("Error: ACP client does not support editing files"), nil
+	}
 
-	resolvedPath, err := t.resolvePath(args.Path)
+	resolvedPath, err := t.resolvePathForSession(ctx, args.Path)
 	if err != nil {
 		return tools.ResultError(fmt.Sprintf("Error: %s", err)), nil
 	}

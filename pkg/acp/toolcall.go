@@ -47,7 +47,7 @@ func buildToolCallComplete(arguments string, event *runtime.ToolCallResponseEven
 		status = acp.ToolCallStatusFailed
 	}
 
-	if isFileEditTool(event.ToolDefinition.Name) {
+	if status == acp.ToolCallStatusCompleted && isFileEditTool(event.ToolDefinition.Name) {
 		if diffContent := extractDiffContent(event.ToolDefinition.Name, arguments); diffContent != nil {
 			return acp.UpdateToolCall(
 				acp.ToolCallId(event.ToolCallID),
