@@ -38,7 +38,7 @@ $ docker agent run [config] [message...] [flags]
 | `--dry-run`                             | Initialize the agent without executing anything (useful for validating a config)                                                          |
 | `--remote <addr>`                       | Use a remote runtime at the given address instead of running the agent locally                                                            |
 | `--listen <addr>`                       | Expose this run's control plane over HTTP so an external process can drive the running TUI (send follow-ups, stream events, read the title). Accepts `host:port` or `unix://`, `npipe://`, `fd://`. See the [API Server]({{ '/features/api-server/' | relative_url }}#listen). |
-| `--lean`                                | Use a simplified TUI with minimal chrome                                                                                                  |
+| `--lean`                                | Use a simplified, non-alternate-screen TUI. Unlike the default full-screen TUI, this renders inline in the normal terminal buffer — useful in environments where an alternate screen is unwanted (e.g. inside tmux panes, CI with a tty, or log-friendly pipelines). |
 | `--app-name <name>`                     | Override the application name label shown in the TUI (status bar, window title, "/exit" notifications).                                   |
 | `--sidebar`                             | Control sidebar visibility. Set to `--sidebar=false` to hide the sidebar and disable the Ctrl+B toggle (default: `true`).                 |
 | `--disable-commands <list>`             | Hide and disable specific slash commands in the TUI. Accepts a comma-separated list of command names (leading slash optional, case-insensitive). E.g. `--disable-commands="/cost,/eval,/model"`. |
@@ -99,6 +99,12 @@ $ docker agent run agent.yaml --disable-commands="/cost,/eval,/model"
 $ docker agent run --agent-picker
 $ docker agent run --agent-picker=agentcatalog/coder,agentcatalog/researcher
 ```
+
+<div class="callout callout-tip" markdown="1">
+<div class="callout-title">Lean, inline TUI
+</div>
+  <p>Pass <code>--lean</code> to get a lightweight TUI that renders inline in your terminal (no alternate screen). It supports the same slash commands and streaming output as the full TUI, making it handy inside tmux, scripts, or any context where a full-screen takeover is unwanted.</p>
+</div>
 
 <div class="callout callout-tip" markdown="1">
 <div class="callout-title">Isolate a run in a git worktree
