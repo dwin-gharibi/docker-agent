@@ -326,9 +326,14 @@ func (r *LocalRuntime) runStreamLoop(ctx context.Context, sess *session.Session,
 
 	for {
 		// Pause the loop here if /pause has been toggled on. Any in-flight
-		// LLM request and its tool calls have already completed.
-		if err := r.waitIfPaused(ctx); err != nil {
-			return
+		// LLM request and its tool calls have already completed. Emit a
+		// RuntimePaused event right before blocking so the TUI can flip its
+		// indicator from "Pausing…" to "Paused".
+		if r.isPaused() {
+			sink.Emit(Paused(sess.ID, a.Name()))
+			if err := r.waitIfPaused(ctx); err != nil {
+				return
+			}
 		}
 
 		a = r.resolveSessionAgent(sess)
