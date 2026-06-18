@@ -42,6 +42,7 @@ var (
 	_ tools.ToolSet      = (*ToolSet)(nil)
 	_ tools.Startable    = (*ToolSet)(nil)
 	_ tools.Instructable = (*ToolSet)(nil)
+	_ tools.Elicitable   = (*ToolSet)(nil)
 )
 
 type shellHandler struct {
@@ -52,6 +53,15 @@ type shellHandler struct {
 	workingDir      string
 	jobs            *concurrent.Map[string, *backgroundJob]
 	jobCounter      atomic.Int64
+
+	// sudoAskpass opts this toolset into the one-time sudo privilege
+	// escalation flow (SUDO_ASKPASS bridged to the elicitation handler).
+	sudoAskpass        bool
+	elicitationMu      sync.RWMutex
+	elicitationHandler tools.ElicitationHandler
+	askpassMu          sync.Mutex
+	askpassStarted     bool
+	askpass            *askpassServer
 }
 
 // Job status constants
@@ -253,8 +263,9 @@ func (h *shellHandler) runNativeCommand(timeoutCtx, ctx context.Context, command
 	// Cancellation is handled manually below (timeoutCtx + Process.Kill +
 	// process group + WaitDelay), so we use exec.Command rather than
 	// exec.CommandContext to keep that flow in one place.
+	command, cmdEnv := h.applyAskpass(command)
 	cmd := exec.Command(h.shell, append(h.shellArgsPrefix, command)...) //nolint:noctx // see comment above
-	cmd.Env = h.env
+	cmd.Env = cmdEnv
 	cmd.Dir = cwd
 	cmd.SysProcAttr = platformSpecificSysProcAttr()
 	cmd.WaitDelay = waitDelayAfterShellExit
@@ -308,8 +319,9 @@ func (h *shellHandler) RunShellBackground(_ context.Context, params RunShellBack
 	counter := h.jobCounter.Add(1)
 	jobID := fmt.Sprintf("job_%d_%d", time.Now().Unix(), counter)
 
-	cmd := exec.Command(h.shell, append(h.shellArgsPrefix, params.Cmd)...) //nolint:noctx // RunShellBackground intentionally outlives the request context
-	cmd.Env = h.env
+	bgCmd, bgEnv := h.applyAskpass(params.Cmd)
+	cmd := exec.Command(h.shell, append(h.shellArgsPrefix, bgCmd)...) //nolint:noctx // RunShellBackground intentionally outlives the request context
+	cmd.Env = bgEnv
 	cmd.Dir = h.resolveWorkDir(params.Cwd)
 	cmd.SysProcAttr = platformSpecificSysProcAttr()
 
@@ -492,7 +504,11 @@ func CreateToolSet(ctx context.Context, toolset latest.Toolset, runConfig *confi
 
 	env = append(env, os.Environ()...)
 
-	return New(env, runConfig), nil
+	ts := New(env, runConfig)
+	if toolset.SudoAskpass != nil && *toolset.SudoAskpass {
+		ts.handler.sudoAskpass = true
+	}
+	return ts, nil
 }
 
 // New creates a new shell toolset.
@@ -615,6 +631,14 @@ func (t *ToolSet) Tools(context.Context) ([]tools.Tool, error) {
 	}, nil
 }
 
+// SetElicitationHandler wires the runtime's elicitation handler into the shell
+// toolset. It is used by the sudo askpass flow to prompt the user for their
+// password. The handler is re-applied at the start of every turn, so this must
+// stay idempotent.
+func (t *ToolSet) SetElicitationHandler(handler tools.ElicitationHandler) {
+	t.handler.setElicitationHandler(handler)
+}
+
 func (t *ToolSet) Start(context.Context) error {
 	return nil
 }
@@ -627,6 +651,9 @@ func (t *ToolSet) Stop(context.Context) error {
 		}
 		return true
 	})
+
+	// Tear down the sudo askpass helper (socket + wrapper script), if started.
+	t.handler.stopAskpass()
 
 	return nil
 }
