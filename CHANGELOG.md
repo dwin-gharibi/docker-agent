@@ -3,6 +3,46 @@
 All notable changes to this project will be documented in this file.
 
 
+## [v1.82.0] - 2026-06-18
+
+This release adds visual pause state indicators to the TUI, expands MCP catalog and OAuth support, and fixes several runtime, provider, and memory issues.
+
+## What's New
+
+- Adds a banner to the lean TUI on startup
+- Adds Grafana Cloud as a remote streamable-http MCP server to the catalog (monitoring category, OAuth 2.1 authentication)
+- Adds pausing/paused visual state indicators to the TUI when the `/pause` command is active
+
+## Bug Fixes
+
+- Fixes reserved character sanitization in the memory toolset's default-path config segment, preventing initialization failures on Windows when agents are loaded from OCI references containing `:` in the image tag
+- Fixes sub-session transcript not being persisted when the run loop exits via an error path in `runForwarding`
+- Fixes sub-session transcript not being persisted on error path in `runCollecting` (background agent path)
+- Fixes startup tool listing hanging indefinitely when a toolset's `Tools()` call blocks; adds a per-toolset timeout so the sidebar no longer gets stuck on "Loading tools..."
+- Exempts `list_background_agents` from the runtime loop-killer, which previously flagged it as a repeated identical call
+- Fixes `delta.reasoning` field being dropped in the OpenAI-compatible chat-completions stream adapter, resolving silent/empty responses with Qwen3 thinking mode
+- Fixes configured headers not being forwarded to OAuth discovery requests for remote MCP servers, resolving repeated auth prompts for servers like Grafana Cloud that require instance-scoping headers
+- Fixes OAuth default port normalization in MCP header host scoping
+### Pull Requests
+
+- [#3137](https://github.com/docker/docker-agent/pull/3137) - fix(runtime): bound per-toolset tool listing during startup (#3137)
+- [#3139](https://github.com/docker/docker-agent/pull/3139) - feat(mcpcatalog): add Grafana Cloud remote MCP server
+- [#3143](https://github.com/docker/docker-agent/pull/3143) - docs: update CHANGELOG.md for v1.81.2
+- [#3146](https://github.com/docker/docker-agent/pull/3146) - fix(memory): sanitise reserved characters in default-path config segment
+- [#3147](https://github.com/docker/docker-agent/pull/3147) - Add a banner in the lean tui
+- [#3149](https://github.com/docker/docker-agent/pull/3149) - chore: bump Go dependencies
+- [#3151](https://github.com/docker/docker-agent/pull/3151) - fix(runtime): persist sub-session transcript on error path
+- [#3152](https://github.com/docker/docker-agent/pull/3152) - fix(runtime): persist sub-session transcript on error path in runCollecting
+- [#3153](https://github.com/docker/docker-agent/pull/3153) - docs: sync /docs with main — Grafana Cloud catalog, lean TUI banner, memory path sanitization
+- [#3154](https://github.com/docker/docker-agent/pull/3154) - fix(runtime): bound per-toolset tool listing during startup (#3137)
+- [#3155](https://github.com/docker/docker-agent/pull/3155) - chore: bump github.com/alecthomas/chroma/v2 to v2.27.0
+- [#3156](https://github.com/docker/docker-agent/pull/3156) - feat(tui): show pausing/paused state for /pause
+- [#3157](https://github.com/docker/docker-agent/pull/3157) - fix(runtime): exempt list_background_agents from the loop-killer
+- [#3158](https://github.com/docker/docker-agent/pull/3158) - fix(providers): consume delta.reasoning in chat-completions stream adapter
+- [#3159](https://github.com/docker/docker-agent/pull/3159) - fix(mcp): forward configured headers to OAuth discovery on the server host
+- [#3160](https://github.com/docker/docker-agent/pull/3160) - docs: update documentation for recent merged PRs
+
+
 ## [v1.81.2] - 2026-06-16
 
 This release adds Grafana Cloud to the MCP server catalog.
@@ -3545,3 +3585,5 @@ This release improves the terminal user interface with better error handling and
 [v1.79.0]: https://github.com/docker/docker-agent/releases/tag/v1.79.0
 
 [v1.81.2]: https://github.com/docker/docker-agent/releases/tag/v1.81.2
+
+[v1.82.0]: https://github.com/docker/docker-agent/releases/tag/v1.82.0
