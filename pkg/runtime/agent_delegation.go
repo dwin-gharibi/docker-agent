@@ -363,19 +363,39 @@ func (r *LocalRuntime) runCollecting(ctx context.Context, parent *session.Sessio
 	// Persist the sub-session unconditionally — the partial transcript is
 	// the most valuable artifact for debugging a failed background agent.
 	// AddSubSession records it in-memory on both the success and error paths.
-	//
-	// Note: SubSessionCompletedEvent cannot be emitted here because
-	// runCollecting has no EventSink — the persistence observer pipeline
-	// (PersistenceObserver.OnEvent) is not triggered and the sub-session is
-	// not written to the store. Fixing that requires threading EventSink
-	// through RunParams / the Runner interface.
 	parent.AddSubSession(s)
+
+	// Mirror runForwarding's persistence, but write to the store directly
+	// instead of emitting SubSessionCompleted: runCollecting runs on a
+	// detached background goroutine, so routing through the shared observer
+	// chain would race the parent's live RunStream (the PersistenceObserver
+	// keeps unsynchronised streaming state). Without this the background
+	// sub-session never reaches the store — its tokens and cost are recorded
+	// as $0 and escape any spend accounting that reads the store. Use
+	// WithoutCancel so a cancelled/stopped task still persists its transcript.
+	r.persistBackgroundSubSession(context.WithoutCancel(ctx), parent.ID, s)
 
 	if errMsg != "" {
 		return &agenttool.RunResult{ErrMsg: errMsg}
 	}
 
 	return &agenttool.RunResult{Result: s.GetLastAssistantMessageContent()}
+}
+
+// persistBackgroundSubSession writes a completed background sub-session to the
+// session store, linking it under parentID. It is the runCollecting analogue
+// of the SubSessionCompletedEvent that runForwarding emits: background tasks
+// have no live EventSink, so the persistence observer never sees them. Errors
+// are logged rather than surfaced — a failed persist must not change the tool
+// result the caller returns to the model.
+func (r *LocalRuntime) persistBackgroundSubSession(ctx context.Context, parentID string, sub *session.Session) {
+	if r.sessionStore == nil {
+		return
+	}
+	if err := r.sessionStore.AddSubSession(ctx, parentID, sub); err != nil {
+		slog.WarnContext(ctx, "Failed to persist background sub-session",
+			"parent_id", parentID, "sub_session_id", sub.ID, "error", err)
+	}
 }
 
 // CurrentAgentSubAgentNames implements agenttool.Runner.
