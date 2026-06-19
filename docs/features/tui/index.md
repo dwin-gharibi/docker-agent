@@ -41,7 +41,22 @@ $ docker agent run agent.yaml --disable-commands="/cost,/eval,/model"
 
 # Open in read-only mode to review a past session without sending new messages
 $ docker agent run agent.yaml --session -1 --session-read-only
+
+# Use the lean TUI for this run
+$ docker agent run agent.yaml --lean
 ```
+
+### Lean TUI
+
+The lean TUI uses a simplified terminal interface with minimal chrome. To make it the default for interactive runs, set `lean` in your user config:
+
+```yaml
+# ~/.config/cagent/config.yaml
+settings:
+  lean: true
+```
+
+Omit `lean` or set it to `false` to keep the full TUI as the default. You can still use `--lean` for a single run, or `--lean=false` to use the full TUI when `settings.lean` is enabled.
 
 ## Slash Commands
 

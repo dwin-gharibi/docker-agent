@@ -258,7 +258,7 @@ func dockerAgentArgs(cmd *cobra.Command, args []string, configDir string) []stri
 		}
 
 		if f.Value.Type() == "bool" {
-			dockerAgentArgs = append(dockerAgentArgs, "--"+f.Name)
+			dockerAgentArgs = append(dockerAgentArgs, "--"+f.Name+"="+f.Value.String())
 		} else {
 			dockerAgentArgs = append(dockerAgentArgs, "--"+f.Name, f.Value.String())
 		}
