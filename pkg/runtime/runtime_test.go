@@ -3612,6 +3612,70 @@ func TestElicitationHandler_Interactive_NoChannel(t *testing.T) {
 	assert.ErrorIs(t, err, errNoElicitationChannel)
 }
 
+// TestRunAgentPersistsSubSessionToStore is the regression test for the
+// background-agent spend leak: run_background_agent sub-sessions were added to
+// the parent's in-memory object but never written to the session store, so
+// their tokens and cost were invisible to anything reading the store ($0
+// recorded for work that actually ran). The fix persists the completed
+// sub-session directly from runCollecting. This asserts the sub-session row
+// reaches the store and carries the worker's recorded usage.
+func TestRunAgentPersistsSubSessionToStore(t *testing.T) {
+	t.Parallel()
+
+	// Worker produces real output and usage so the sub-session has a transcript.
+	workerStream := newStreamBuilder().AddContent("worker done").AddStopWithUsage(100, 50).Build()
+	parentProv := &mockProvider{id: "test/mock-model", stream: &mockStream{}}
+	workerProv := &mockProvider{id: "test/mock-model", stream: workerStream}
+
+	worker := agent.New("worker", "Worker agent", agent.WithModel(workerProv))
+	root := agent.New("root", "Root agent", agent.WithModel(parentProv))
+	agent.WithSubAgents(worker)(root)
+
+	tm := team.New(team.WithAgents(root, worker))
+
+	store := session.NewInMemorySessionStore()
+	rt, err := NewLocalRuntime(tm,
+		WithSessionCompaction(false),
+		WithModelStore(mockModelStore{}),
+		WithSessionStore(store),
+	)
+	require.NoError(t, err)
+
+	// The parent must exist in the store before a sub-session can be linked
+	// to it. Use UpdateSession (what OnRunStart calls) so the store holds its
+	// own copy of the parent — exactly as in the real flow — rather than
+	// aliasing the runtime's in-memory object.
+	sess := session.New(session.WithUserMessage("Test"), session.WithToolsApproved(true))
+	require.NoError(t, store.UpdateSession(t.Context(), sess))
+
+	result := rt.RunAgent(t.Context(), agenttool.RunParams{
+		AgentName:     "worker",
+		Task:          "do something",
+		ParentSession: sess,
+	})
+	require.Empty(t, result.ErrMsg, "RunAgent should succeed")
+
+	// The store's copy of the parent must now contain the sub-session — not
+	// just the runtime's in-memory object. Before the fix this was empty,
+	// so the background agent's work was recorded nowhere durable.
+	stored, err := store.GetSession(t.Context(), sess.ID)
+	require.NoError(t, err)
+
+	var storedSubSessions []*session.Session
+	for _, item := range stored.Messages {
+		if item.SubSession != nil {
+			storedSubSessions = append(storedSubSessions, item.SubSession)
+		}
+	}
+	require.Len(t, storedSubSessions, 1,
+		"the background sub-session must be persisted to the store, not just held in memory")
+
+	// The persisted sub-session must carry the worker's token usage so spend
+	// accounting that reads the store sees real numbers, not nothing.
+	assert.Positive(t, storedSubSessions[0].InputTokens+storedSubSessions[0].OutputTokens,
+		"persisted sub-session must carry the worker's recorded token usage")
+}
+
 // TestRunAgentPersistsSubSessionOnError covers the background-agent path
 // (runCollecting) when the sub-agent's model stream fails. Before the fix,
 // runCollecting returned early on ErrorEvent without calling
