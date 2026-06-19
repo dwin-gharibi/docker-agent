@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"maps"
 
 	"github.com/docker/docker-agent/pkg/config"
 	"github.com/docker/docker-agent/pkg/config/latest"
@@ -18,7 +19,6 @@ import (
 	"github.com/docker/docker-agent/pkg/tools/builtin/memory"
 	"github.com/docker/docker-agent/pkg/tools/builtin/modelpicker"
 	"github.com/docker/docker-agent/pkg/tools/builtin/openapi"
-	builtinrag "github.com/docker/docker-agent/pkg/tools/builtin/rag"
 	"github.com/docker/docker-agent/pkg/tools/builtin/shell"
 	"github.com/docker/docker-agent/pkg/tools/builtin/tasks"
 	"github.com/docker/docker-agent/pkg/tools/builtin/think"
@@ -31,13 +31,32 @@ import (
 // configName identifies the agent config file (e.g. "memory_agent" from "memory_agent.yaml").
 type ToolsetCreator func(ctx context.Context, toolset latest.Toolset, parentDir string, runConfig *config.RuntimeConfig, configName string) (tools.ToolSet, error)
 
+// extraCreators holds toolset creators contributed by packages that opt in via
+// RegisterToolsetCreator. This keeps optional toolsets (e.g. "rag", which pulls
+// in a cgo tree-sitter dependency) out of teamloader's static import graph:
+// they are linked only when the owning package is blank-imported by the binary.
+var extraCreators = map[string]ToolsetCreator{}
+
+// RegisterToolsetCreator registers a creator for the given toolset type, to be
+// included in every registry returned by NewDefaultToolsetRegistry. Packages
+// call it from an init() so that a blank import is enough to make their toolset
+// available; binaries that don't import the package don't pay for its
+// dependencies. It panics on a duplicate registration to surface wiring bugs at
+// startup. Not safe for concurrent use; call only from init().
+func RegisterToolsetCreator(toolsetType string, creator ToolsetCreator) {
+	if _, exists := extraCreators[toolsetType]; exists {
+		panic(fmt.Sprintf("teamloader: toolset creator %q already registered", toolsetType))
+	}
+	extraCreators[toolsetType] = creator
+}
+
 // ToolsetRegistry manages the registration of toolset creators by type.
 type ToolsetRegistry interface {
 	CreateTool(ctx context.Context, toolset latest.Toolset, parentDir string, runConfig *config.RuntimeConfig, agentName string) (tools.ToolSet, error)
 }
 
 func NewDefaultToolsetRegistry() ToolsetRegistry {
-	return &toolsetRegistry{
+	r := &toolsetRegistry{
 		creators: map[string]ToolsetCreator{
 			"todo": func(_ context.Context, toolset latest.Toolset, _ string, _ *config.RuntimeConfig, _ string) (tools.ToolSet, error) {
 				return todo.CreateToolSet(toolset)
@@ -97,11 +116,11 @@ func NewDefaultToolsetRegistry() ToolsetRegistry {
 			"background_agents": func(_ context.Context, _ latest.Toolset, _ string, _ *config.RuntimeConfig, _ string) (tools.ToolSet, error) {
 				return agenttool.CreateToolSet()
 			},
-			"rag": func(ctx context.Context, toolset latest.Toolset, parentDir string, runConfig *config.RuntimeConfig, _ string) (tools.ToolSet, error) {
-				return builtinrag.CreateToolSet(ctx, toolset, parentDir, runConfig)
-			},
 		},
 	}
+	// Merge in creators contributed via RegisterToolsetCreator (e.g. "rag").
+	maps.Copy(r.creators, extraCreators)
+	return r
 }
 
 // toolsetRegistry manages the registration of toolset creators by type.

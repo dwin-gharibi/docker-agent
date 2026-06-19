@@ -18,13 +18,13 @@ import (
 	"github.com/docker/docker-agent/pkg/httpclient"
 	"github.com/docker/docker-agent/pkg/model/provider"
 	"github.com/docker/docker-agent/pkg/modelsdev"
+	ragtypes "github.com/docker/docker-agent/pkg/rag/types"
 	"github.com/docker/docker-agent/pkg/runtime/toolexec"
 	"github.com/docker/docker-agent/pkg/session"
 	"github.com/docker/docker-agent/pkg/tools"
 	bgagent "github.com/docker/docker-agent/pkg/tools/builtin/agent"
 	"github.com/docker/docker-agent/pkg/tools/builtin/handoff"
 	"github.com/docker/docker-agent/pkg/tools/builtin/modelpicker"
-	builtinrag "github.com/docker/docker-agent/pkg/tools/builtin/rag"
 	"github.com/docker/docker-agent/pkg/tools/builtin/shell"
 	"github.com/docker/docker-agent/pkg/tools/builtin/skills"
 	"github.com/docker/docker-agent/pkg/tools/builtin/transfertask"
@@ -983,7 +983,7 @@ func (r *LocalRuntime) configureToolsetHandlers(a *agent.Agent, events EventSink
 		// channel; a blocking send after the channel is closed would
 		// crash, and a blocking send when the consumer has gone away
 		// would deadlock.
-		if ragTool, ok := tools.As[*builtinrag.ToolSet](toolset); ok {
+		if ragTool, ok := tools.As[ragtypes.EventForwarder](toolset); ok {
 			ragTool.SetEventCallback(ragEventForwarder(ragTool.Name(), r, nonBlocking(events).Emit))
 		}
 	}
