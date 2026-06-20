@@ -3,6 +3,16 @@
 All notable changes to this project will be documented in this file.
 
 
+## [Unreleased]
+
+## What's New
+
+- Adds `settings.lean: true` user config option (`~/.config/cagent/config.yaml`) to make the lean TUI the default interface for all interactive runs, without needing to pass `--lean` each time
+
+### Pull Requests
+
+- [#3181](https://github.com/docker/docker-agent/pull/3181) - feat(tui): add lean user config setting
+
 ## [v1.83.0] - 2026-06-19
 
 This release adds an opt-in sudo askpass flow for shell commands, a headless embedded chat session API, and several bug fixes for cost accounting, session handling, and custom provider model resolution.
