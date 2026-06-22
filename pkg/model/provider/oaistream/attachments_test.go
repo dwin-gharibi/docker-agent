@@ -39,6 +39,97 @@ func TestConvertDocument_StrategyB64_Image(t *testing.T) {
 	assert.Contains(t, parts[0].OfImageURL.ImageURL.URL, wantB64)
 }
 
+// TestConvertDocument_StrategyB64_PDF verifies that a PDF document with
+// InlineData and a PDF-capable model produces a `file` content part carrying a
+// base64 data URI, rather than being dropped.
+func TestConvertDocument_StrategyB64_PDF(t *testing.T) {
+	pdf := []byte("%PDF-1.4 minimal")
+	doc := chat.Document{
+		Name:     "spec.pdf",
+		MimeType: "application/pdf",
+		Source:   chat.DocumentSource{InlineData: pdf},
+	}
+
+	pdfCaps := modelinfo.CapsWith(false, true)
+	parts, err := convertDocumentWithCaps(t.Context(), doc, pdfCaps)
+	require.NoError(t, err)
+	require.Len(t, parts, 1, "expected exactly one file part")
+	require.NotNil(t, parts[0].OfFile, "expected file part for PDF, got non-file")
+	assert.Nil(t, parts[0].OfImageURL, "PDF must not be an image part")
+
+	wantB64 := base64.StdEncoding.EncodeToString(pdf)
+	assert.Equal(t, "spec.pdf", parts[0].OfFile.File.Filename.Value)
+	assert.Contains(t, parts[0].OfFile.File.FileData.Value, "data:application/pdf;base64,")
+	assert.Contains(t, parts[0].OfFile.File.FileData.Value, wantB64)
+}
+
+// TestConvertDocument_StrategyB64_PDFDropped verifies that a PDF is dropped when
+// the model does not declare PDF support.
+func TestConvertDocument_StrategyB64_PDFDropped(t *testing.T) {
+	doc := chat.Document{
+		Name:     "spec.pdf",
+		MimeType: "application/pdf",
+		Source:   chat.DocumentSource{InlineData: []byte("%PDF-1.4")},
+	}
+
+	parts, err := convertDocumentWithCaps(t.Context(), doc, modelinfo.CapsWith(true, false))
+	require.NoError(t, err)
+	assert.Nil(t, parts, "pdf should be dropped when the model does not support PDF")
+}
+
+// TestConvertMessagesWithCaps verifies the caps-injectable message path: an
+// image attachment is forwarded when the injected caps allow it and dropped
+// otherwise, independent of any models.dev store.
+func TestConvertMessagesWithCaps(t *testing.T) {
+	messages := []chat.Message{{
+		Role: chat.MessageRoleUser,
+		MultiContent: []chat.MessagePart{{
+			Type: chat.MessagePartTypeDocument,
+			Document: &chat.Document{
+				Name:     "photo.jpg",
+				MimeType: "image/jpeg",
+				Source:   chat.DocumentSource{InlineData: minJPEG},
+			},
+		}},
+	}}
+
+	withVision := ConvertMessagesWithCaps(t.Context(), messages, modelinfo.CapsWith(true, false))
+	require.Len(t, withVision, 1)
+	require.NotNil(t, withVision[0].OfUser)
+	require.Len(t, withVision[0].OfUser.Content.OfArrayOfContentParts, 1)
+	assert.NotNil(t, withVision[0].OfUser.Content.OfArrayOfContentParts[0].OfImageURL)
+
+	textOnly := ConvertMessagesWithCaps(t.Context(), messages, modelinfo.ModelCapabilities{})
+	require.Len(t, textOnly, 1)
+	require.NotNil(t, textOnly[0].OfUser)
+	assert.Empty(t, textOnly[0].OfUser.Content.OfArrayOfContentParts, "image should be dropped for text-only caps")
+
+	// Symmetric PDF case: a PDF is forwarded as a file part when PDF caps are
+	// injected, and dropped otherwise.
+	pdfMessages := []chat.Message{{
+		Role: chat.MessageRoleUser,
+		MultiContent: []chat.MessagePart{{
+			Type: chat.MessagePartTypeDocument,
+			Document: &chat.Document{
+				Name:     "spec.pdf",
+				MimeType: "application/pdf",
+				Source:   chat.DocumentSource{InlineData: []byte("%PDF-1.4")},
+			},
+		}},
+	}}
+
+	withPDF := ConvertMessagesWithCaps(t.Context(), pdfMessages, modelinfo.CapsWith(false, true))
+	require.Len(t, withPDF, 1)
+	require.NotNil(t, withPDF[0].OfUser)
+	require.Len(t, withPDF[0].OfUser.Content.OfArrayOfContentParts, 1)
+	assert.NotNil(t, withPDF[0].OfUser.Content.OfArrayOfContentParts[0].OfFile)
+
+	pdfDropped := ConvertMessagesWithCaps(t.Context(), pdfMessages, modelinfo.ModelCapabilities{})
+	require.Len(t, pdfDropped, 1)
+	require.NotNil(t, pdfDropped[0].OfUser)
+	assert.Empty(t, pdfDropped[0].OfUser.Content.OfArrayOfContentParts, "pdf should be dropped for text-only caps")
+}
+
 // TestConvertDocument_StrategyB64_ImageDropped verifies that an image is
 // dropped when the model does not support vision.
 func TestConvertDocument_StrategyB64_ImageDropped(t *testing.T) {

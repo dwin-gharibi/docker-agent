@@ -21,6 +21,7 @@ import (
 	"github.com/docker/docker-agent/pkg/model/provider/base"
 	"github.com/docker/docker-agent/pkg/model/provider/oaistream"
 	"github.com/docker/docker-agent/pkg/model/provider/options"
+	"github.com/docker/docker-agent/pkg/modelinfo"
 	"github.com/docker/docker-agent/pkg/tools"
 )
 
@@ -55,6 +56,13 @@ type Client struct {
 	client     openai.Client
 	httpClient *http.Client
 	engine     string
+
+	// attachmentCaps records the document MIME types this DMR-hosted model is
+	// declared to accept natively, parsed from provider_opts.supports_images /
+	// supports_pdf. models.dev has no "dmr" provider, so capabilities cannot be
+	// detected there and must be declared explicitly; the zero value is
+	// text-only, matching the previous conservative behavior.
+	attachmentCaps modelinfo.ModelCapabilities
 }
 
 // NewClient creates a new DMR client from the provided configuration
@@ -138,16 +146,21 @@ func NewClient(ctx context.Context, cfg *latest.ModelConfig, opts ...options.Opt
 			ModelOptions: globalOptions,
 			BaseURL:      baseURL,
 		},
-		client:     openai.NewClient(clientOptions...),
-		httpClient: httpClient,
-		engine:     engine,
+		client:         openai.NewClient(clientOptions...),
+		httpClient:     httpClient,
+		engine:         engine,
+		attachmentCaps: modelinfo.CapsWith(parsed.supportsImages, parsed.supportsPDF),
 	}, nil
 }
 
 // convertMessages converts chat messages to OpenAI format and merges consecutive
 // system/user messages, which is needed by some local models run by DMR.
+//
+// Attachment capabilities are injected explicitly from provider_opts rather than
+// resolved from models.dev: DMR is not a models.dev provider, so a store lookup
+// would always miss and silently drop image/PDF attachments.
 func (c *Client) convertMessages(ctx context.Context, messages []chat.Message) []openai.ChatCompletionMessageParamUnion {
-	openaiMessages := oaistream.ConvertMessages(ctx, messages, c.ID(), c.ModelOptions.ModelsDevStore())
+	openaiMessages := oaistream.ConvertMessagesWithCaps(ctx, messages, c.attachmentCaps)
 	return oaistream.MergeConsecutiveMessages(openaiMessages)
 }
 

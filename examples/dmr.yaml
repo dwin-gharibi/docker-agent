@@ -23,3 +23,14 @@ models:
       speculative_draft_model: ai/qwen3:0.6B-Q4_K_M
       speculative_num_tokens: 16 # (this is the llama.cpp default if omitted)
       speculative_acceptance_rate: 0.8 # (this is the llama.cpp default if omitted)
+
+  # A vision-capable local model. DMR-hosted models are not in the models.dev
+  # catalog, so docker-agent cannot detect multimodal support automatically and
+  # defaults to text-only (image/PDF attachments are dropped). Declare the
+  # capabilities explicitly so attachments are forwarded to the model.
+  qwen_vision:
+    provider: dmr
+    model: ai/qwen2.5-vl
+    provider_opts:
+      supports_images: true
+      supports_pdf: false

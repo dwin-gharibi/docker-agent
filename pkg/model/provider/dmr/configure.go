@@ -211,6 +211,32 @@ func parseInt(v any) (int, bool) {
 	return 0, false
 }
 
+// parseBoolOpt extracts a boolean provider_opts value. It accepts a native
+// bool or a string parseable by strconv.ParseBool ("true", "false", "1", "0",
+// ...) and returns false when the key is absent. An unparseable or wrong-typed
+// value is reported as an error so the caller can fail fast.
+func parseBoolOpt(opts map[string]any, key string) (bool, error) {
+	if len(opts) == 0 {
+		return false, nil
+	}
+	v, ok := opts[key]
+	if !ok {
+		return false, nil
+	}
+	switch t := v.(type) {
+	case bool:
+		return t, nil
+	case string:
+		b, perr := strconv.ParseBool(strings.TrimSpace(t))
+		if perr != nil {
+			return false, fmt.Errorf("provider_opts: %q must be a boolean, got %q", key, t)
+		}
+		return b, nil
+	default:
+		return false, fmt.Errorf("provider_opts: %q must be a boolean, got %T", key, v)
+	}
+}
+
 // parseInt64Value parses an int64 from YAML/JSON-decoded values (int, float64, string).
 func parseInt64Value(v any) (int64, bool) {
 	switch t := v.(type) {
@@ -354,6 +380,8 @@ type dmrParseResult struct {
 	vllm            *vllmConfig
 	keepAlive       *string
 	mode            *string
+	supportsImages  bool
+	supportsPDF     bool
 }
 
 // parseDMRProviderOpts extracts DMR-specific provider options from the model
@@ -403,6 +431,18 @@ func parseDMRProviderOpts(engine string, cfg *latest.ModelConfig) (dmrParseResul
 	} else {
 		res.rawRuntimeFlags = raw
 	}
+
+	supportsImages, err := parseBoolOpt(cfg.ProviderOpts, "supports_images")
+	if err != nil {
+		return res, err
+	}
+	res.supportsImages = supportsImages
+
+	supportsPDF, err := parseBoolOpt(cfg.ProviderOpts, "supports_pdf")
+	if err != nil {
+		return res, err
+	}
+	res.supportsPDF = supportsPDF
 
 	slog.Debug("DMR provider opts", "provider_opts", cfg.ProviderOpts, "engine", engine)
 
