@@ -8,6 +8,7 @@ import (
 
 	"github.com/docker/docker-agent/pkg/config"
 	"github.com/docker/docker-agent/pkg/environment"
+	"github.com/docker/docker-agent/pkg/model/provider/providers"
 )
 
 // TestCreateJudgeModelKnownProvider reproduces issue #3219: creating the eval
@@ -23,6 +24,9 @@ func TestCreateJudgeModelKnownProvider(t *testing.T) {
 			"OPENAI_API_KEY":    "test-key",
 			"GOOGLE_API_KEY":    "test-key",
 		}),
+		// Mirror how the eval command wires the full provider set; the package
+		// default registry is empty (see pkg/model/provider/providers).
+		ProviderRegistry: providers.NewDefaultRegistry(),
 	}
 
 	for _, judgeModel := range []string{

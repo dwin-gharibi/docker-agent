@@ -26,7 +26,6 @@ import (
 	"github.com/docker/docker-agent/pkg/environment"
 	"github.com/docker/docker-agent/pkg/model/provider"
 	"github.com/docker/docker-agent/pkg/model/provider/options"
-	"github.com/docker/docker-agent/pkg/model/provider/providers"
 	"github.com/docker/docker-agent/pkg/session"
 )
 
@@ -668,7 +667,7 @@ func createJudgeModel(ctx context.Context, judgeModel string, runConfig *config.
 		opts = append(opts, options.WithGateway(runConfig.ModelsGateway))
 	}
 
-	judge, err := providers.NewDefaultRegistry().New(ctx, &cfg, runConfig.EnvProvider(), opts...)
+	judge, err := runConfig.ProviderRegistryOrDefault().New(ctx, &cfg, runConfig.EnvProvider(), opts...)
 	if err != nil {
 		return nil, fmt.Errorf("creating judge model: %w", err)
 	}

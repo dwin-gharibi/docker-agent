@@ -24,6 +24,12 @@ type RuntimeConfig struct {
 	modelsDevStore         *modelsdev.Store
 	modelsDevStoreErr      error
 	modelsDevStoreOnce     sync.Once
+
+	// ProviderRegistry instantiates model providers for toolsets that build
+	// providers at load time (e.g. RAG embeddings/reranking). It is populated
+	// by the team loader with the same registry used for agent models. When
+	// nil, ProviderRegistryOrDefault falls back to provider.DefaultRegistry.
+	ProviderRegistry *provider.Registry
 }
 
 type Config struct {
@@ -78,6 +84,7 @@ func (runConfig *RuntimeConfig) Clone() *RuntimeConfig {
 		ModelsDevStoreOverride: runConfig.ModelsDevStoreOverride,
 		modelsDevStore:         store,
 		modelsDevStoreErr:      storeErr,
+		ProviderRegistry:       runConfig.ProviderRegistry,
 	}
 	clone.envProviderOnce.Do(func() {})    // mark as resolved
 	clone.modelsDevStoreOnce.Do(func() {}) // mark as resolved
@@ -107,6 +114,18 @@ func (runConfig *RuntimeConfig) ModelsDevStore() (*modelsdev.Store, error) {
 		)
 	})
 	return runConfig.modelsDevStore, runConfig.modelsDevStoreErr
+}
+
+// ProviderRegistryOrDefault returns the configured provider registry, or the
+// package default registry when none was set (including when the receiver is
+// nil). The default registry only contains providers the core package can
+// expose without optional SDK dependencies, so callers that need the full
+// provider set must ensure the team loader populated ProviderRegistry.
+func (runConfig *RuntimeConfig) ProviderRegistryOrDefault() *provider.Registry {
+	if runConfig != nil && runConfig.ProviderRegistry != nil {
+		return runConfig.ProviderRegistry
+	}
+	return provider.DefaultRegistry()
 }
 
 func (runConfig *RuntimeConfig) EnvProvider() environment.Provider {

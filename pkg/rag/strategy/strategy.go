@@ -26,9 +26,11 @@ type BuildContext struct {
 }
 
 // NewProvider creates a model provider using the build context's environment,
-// gateway, and custom provider settings.
+// gateway, and custom provider settings. It uses the provider registry carried
+// by RuntimeConfig (populated by the team loader with the full provider set);
+// without it, model creation fails with "unknown provider type".
 func (c BuildContext) NewProvider(ctx context.Context, cfg *latest.ModelConfig) (provider.Provider, error) {
-	return provider.New(ctx, cfg, c.Env,
+	return c.RuntimeConfig.ProviderRegistryOrDefault().New(ctx, cfg, c.Env,
 		options.WithGateway(c.ModelsGateway),
 		options.WithProviders(c.Providers))
 }

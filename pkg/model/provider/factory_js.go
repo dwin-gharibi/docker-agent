@@ -10,6 +10,9 @@ import (
 
 	"github.com/docker/docker-agent/pkg/config/latest"
 	"github.com/docker/docker-agent/pkg/environment"
+	"github.com/docker/docker-agent/pkg/model/provider/anthropic"
+	"github.com/docker/docker-agent/pkg/model/provider/gemini"
+	"github.com/docker/docker-agent/pkg/model/provider/openai"
 	"github.com/docker/docker-agent/pkg/model/provider/options"
 	"github.com/docker/docker-agent/pkg/model/provider/rulebased"
 )
@@ -26,9 +29,35 @@ func NewRegistry(factories map[string]Factory) *Registry {
 	return &Registry{factories: copied}
 }
 
-var defaultFactories map[string]Factory
+// defaultFactories is the js/wasm provider set. dmr (os/exec), amazon-bedrock
+// and vertex AI (cloud SDKs that don't compile to wasm) are deliberately
+// absent; the remaining providers reach their APIs over plain net/http, which
+// the Go runtime maps to fetch in the browser. Unlike the non-js build (whose
+// DefaultRegistry is empty so applications must wire providers explicitly via
+// pkg/model/provider/providers), the wasm build has no such wiring point —
+// pkg/model/provider/providers pulls in the cloud SDKs — so the slim set is
+// registered here.
+var defaultFactories = map[string]Factory{
+	"openai":                 openaiFactory,
+	"openai_chatcompletions": openaiFactory,
+	"openai_responses":       openaiFactory,
+	"anthropic":              anthropicFactory,
+	"google":                 googleFactory,
+}
 
 func DefaultRegistry() *Registry { return NewRegistry(defaultFactories) }
+
+func openaiFactory(ctx context.Context, cfg *latest.ModelConfig, env environment.Provider, opts ...options.Opt) (Provider, error) {
+	return openai.NewClient(ctx, cfg, env, opts...)
+}
+
+func anthropicFactory(ctx context.Context, cfg *latest.ModelConfig, env environment.Provider, opts ...options.Opt) (Provider, error) {
+	return anthropic.NewClient(ctx, cfg, env, opts...)
+}
+
+func googleFactory(ctx context.Context, cfg *latest.ModelConfig, env environment.Provider, opts ...options.Opt) (Provider, error) {
+	return gemini.NewClient(ctx, cfg, env, opts...)
+}
 
 func (r *Registry) New(ctx context.Context, cfg *latest.ModelConfig, env environment.Provider, opts ...options.Opt) (Provider, error) {
 	return r.NewWithModels(ctx, cfg, nil, env, opts...)

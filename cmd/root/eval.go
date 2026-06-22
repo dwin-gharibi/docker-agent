@@ -14,6 +14,7 @@ import (
 
 	"github.com/docker/docker-agent/pkg/config"
 	"github.com/docker/docker-agent/pkg/evaluation"
+	"github.com/docker/docker-agent/pkg/model/provider/providers"
 	"github.com/docker/docker-agent/pkg/telemetry"
 )
 
@@ -116,6 +117,10 @@ func (f *evalFlags) runEvalCommand(cmd *cobra.Command, args []string) (commandEr
 	// Set remaining config fields
 	f.AgentFilename = agentFilename
 	f.EvalsDir = evalsDir
+
+	// Wire the full provider set so the judge model can be built (the package
+	// default registry is empty; see pkg/model/provider/providers).
+	f.runConfig.ProviderRegistry = providers.NewDefaultRegistry()
 
 	// Run evaluation
 	// Pass consoleOut for TTY progress bar, teeOut for results that should go to both console and log
