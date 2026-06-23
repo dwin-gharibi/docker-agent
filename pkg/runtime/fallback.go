@@ -301,8 +301,14 @@ func (e *fallbackExecutor) execute(
 				"in_cooldown", startIndex > 0,
 				"attempt", attempt+1)
 
-			stream, err := modelEntry.provider.CreateChatCompletionStream(ctx, messages, agentTools)
+			// Create a per-attempt cancellable child context so that the idle
+			// timeout in handleStream can cancel the HTTP request and unblock
+			// the goroutine reading the response body.
+			streamCtx, streamCancel := context.WithCancelCause(ctx)
+
+			stream, err := modelEntry.provider.CreateChatCompletionStream(streamCtx, messages, agentTools)
 			if err != nil {
+				streamCancel(nil)
 				lastErr = err
 				decision, retErr := e.classifyAttemptError(ctx, err, a, modelEntry, attempt, hasFallbacks, &primaryFailedWithNonRetryable)
 				if retErr != nil {
@@ -327,7 +333,8 @@ func (e *fallbackExecutor) execute(
 				}
 			}
 
-			res, err := handleStream(ctx, stream, a, agentTools, sess, m, e.telemetry, events)
+			res, err := handleStream(streamCtx, streamCancel, stream, a, agentTools, sess, m, e.telemetry, events)
+			streamCancel(nil) // always release the child context
 			if err != nil {
 				lastErr = err
 				decision, retErr := e.classifyAttemptError(ctx, err, a, modelEntry, attempt, hasFallbacks, &primaryFailedWithNonRetryable)
