@@ -148,6 +148,18 @@ func (s *Supervisor) subscribeWithRouting(ctx context.Context, a *app.App, sessi
 	a.SubscribeWith(ctx, send)
 }
 
+// isTopLevelStream reports whether a stream lifecycle event belongs to the
+// runner's own top-level session rather than a forwarded nested sub-session
+// (e.g. transfer_task or a fork-mode run_skill). Sub-session streams share
+// the parent's event channel but carry a different SessionID; they must not
+// toggle IsRunning or clear a pending attention event on the parent runner.
+//
+// An empty SessionID is treated as top-level for backward compatibility with
+// emitters that omit it (matching the convention in handleTokenUsage). (#3217)
+func isTopLevelStream(runnerID, evSessionID string) bool {
+	return evSessionID == "" || evSessionID == runnerID
+}
+
 // handleRuntimeEvent updates runner state based on runtime events.
 func (s *Supervisor) handleRuntimeEvent(sessionID string, msg tea.Msg) {
 	s.mu.Lock()
@@ -160,15 +172,19 @@ func (s *Supervisor) handleRuntimeEvent(sessionID string, msg tea.Msg) {
 
 	switch ev := msg.(type) {
 	case *runtime.StreamStartedEvent:
-		runner.IsRunning = true
-		runner.PendingEvent = nil // New stream supersedes any stale pending event
-		s.notifyTabsUpdated()
+		if isTopLevelStream(runner.ID, ev.SessionID) {
+			runner.IsRunning = true
+			runner.PendingEvent = nil // New top-level stream supersedes any stale pending event
+			s.notifyTabsUpdated()
+		}
 
 	case *runtime.StreamStoppedEvent:
-		runner.IsRunning = false
-		runner.PendingEvent = nil // Clear any pending attention event since stream ended
-		runner.NeedsAttn = false
-		s.notifyTabsUpdated()
+		if isTopLevelStream(runner.ID, ev.SessionID) {
+			runner.IsRunning = false
+			runner.PendingEvent = nil // Clear any pending attention event since the top-level stream ended
+			runner.NeedsAttn = false
+			s.notifyTabsUpdated()
+		}
 
 	case *runtime.SessionTitleEvent:
 		runner.Title = ev.Title
