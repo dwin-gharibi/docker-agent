@@ -1,0 +1,85 @@
+name: Bug Report
+description: Report a defect, crash, or unexpected behavior
+title: "<short description>"
+type: Bug
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: A clear and concise description of what the bug is.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What you expected to happen.
+    validations:
+      required: false
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What actually happened instead.
+    validations:
+      required: false
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to Reproduce
+      description: Detailed steps to reproduce the bug.
+      placeholder: |
+        1.
+        2.
+        3.
+    validations:
+      required: false
+  - type: input
+    id: version
+    attributes:
+      label: Docker Agent version
+      description: Output of `docker agent --version`.
+    validations:
+      required: false
+  - type: input
+    id: os-terminal
+    attributes:
+      label: OS & terminal
+      description: e.g. macOS / Linux / Windows + terminal app.
+    validations:
+      required: false
+  - type: input
+    id: model
+    attributes:
+      label: Model used
+      description: e.g. claude-opus-4-1, gpt-4, etc.
+    validations:
+      required: false
+  - type: textarea
+    id: error-output
+    attributes:
+      label: Error output
+      description: If applicable, paste the full error message or stack trace.
+      render: shell
+    validations:
+      required: false
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots
+      description: If this is a visual issue (TUI rendering, output formatting, etc.), add screenshots.
+    validations:
+      required: false
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: |
+        Any other information that might help us debug:
+        - Recent changes to your agent config
+        - Tools or MCPs being used
+        - Whether this is a regression (used to work in a previous version)
+        - Links to related issues
+    validations:
+      required: false
