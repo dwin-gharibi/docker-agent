@@ -27,10 +27,15 @@ func WithoutInteractivePrompts(ctx context.Context) context.Context {
 	return context.WithValue(ctx, noInteractivePromptsKey{}, true)
 }
 
-// interactivePromptsAllowed reports whether the context allows blocking on
+// InteractivePromptsAllowed reports whether the context allows blocking on
 // user-driven flows. The default is true so existing callers (RunStream,
 // tests) keep working without changes.
-func interactivePromptsAllowed(ctx context.Context) bool {
+//
+// It is the read-side companion to [WithoutInteractivePrompts]: the runtime
+// sets the marker on non-interactive sessions (background agents, MCP serve,
+// A2A) so the OAuth transport can fail fast instead of raising an elicitation
+// that no one can answer.
+func InteractivePromptsAllowed(ctx context.Context) bool {
 	v, _ := ctx.Value(noInteractivePromptsKey{}).(bool)
 	return !v
 }

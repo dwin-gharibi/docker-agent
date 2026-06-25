@@ -526,7 +526,7 @@ func (t *oauthTransport) roundTrip(req *http.Request, isRetry bool) (*http.Respo
 			// the toolset can be flagged "needs auth" without freezing
 			// the agent and without making Ctrl-C wait for a user response
 			// that will never come.
-			if !interactivePromptsAllowed(req.Context()) {
+			if !InteractivePromptsAllowed(req.Context()) {
 				slog.Debug("Skipping OAuth elicitation in non-interactive context", "url", t.baseURL)
 				resp.Body.Close()
 				t.mu.Lock()

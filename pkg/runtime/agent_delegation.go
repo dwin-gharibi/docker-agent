@@ -18,6 +18,7 @@ import (
 	"github.com/docker/docker-agent/pkg/tools"
 	agenttool "github.com/docker/docker-agent/pkg/tools/builtin/agent"
 	"github.com/docker/docker-agent/pkg/tools/builtin/handoff"
+	mcptools "github.com/docker/docker-agent/pkg/tools/mcp"
 )
 
 // agentNames returns the names of the given agents.
@@ -380,7 +381,50 @@ func (r *LocalRuntime) runCollecting(ctx context.Context, parent *session.Sessio
 		return &agenttool.RunResult{ErrMsg: errMsg}
 	}
 
-	return &agenttool.RunResult{Result: s.GetLastAssistantMessageContent()}
+	result := s.GetLastAssistantMessageContent()
+	// A remote MCP toolset that needs first-time interactive OAuth fails fast
+	// in a background (non-interactive) session instead of hanging on an
+	// unanswerable elicitation (issue #3200). The resulting "needs auth" state
+	// never reaches the orchestrating model on its own — runCollecting drops
+	// warning events — so the sub-agent would silently lack a capability with
+	// no explanation. Prepend an actionable note so the model (and, through it,
+	// the user) learns the server must be authorized interactively first.
+	if note := backgroundAuthRequiredNote(child); note != "" {
+		if result != "" {
+			result = note + "\n\n" + result
+		} else {
+			result = note
+		}
+	}
+	return &agenttool.RunResult{Result: result}
+}
+
+// backgroundAuthRequiredNote returns a model-readable note naming the child
+// agent's MCP toolsets that could not start because they require first-time
+// interactive OAuth authorization, which a background agent cannot complete
+// (issue #3200). It returns "" when no toolset is in that state. Detection is
+// typed (mcptools.IsAuthorizationRequired against the toolset's recorded
+// LastError) rather than string-matched, so it stays correct if the user-facing
+// error text changes.
+func backgroundAuthRequiredNote(child *agent.Agent) string {
+	var needAuth []string
+	for _, ts := range child.ToolSets() {
+		status := toolsetStatusFor(ts)
+		if mcptools.IsAuthorizationRequired(status.LastError) {
+			needAuth = append(needAuth, status.Name)
+		}
+	}
+	if len(needAuth) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(
+		"Note: the following MCP tool server(s) could not be used because they "+
+			"require first-time interactive OAuth authorization, which cannot be "+
+			"completed by a background agent: %s. Ask the user to authorize them "+
+			"once from an interactive session (run the agent in the foreground and "+
+			"approve the OAuth prompt), then retry this task.",
+		strings.Join(needAuth, ", "),
+	)
 }
 
 // persistBackgroundSubSession writes a completed background sub-session to the

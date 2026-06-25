@@ -29,6 +29,7 @@ import (
 	"github.com/docker/docker-agent/pkg/tools/builtin/shell"
 	"github.com/docker/docker-agent/pkg/tools/builtin/skills"
 	"github.com/docker/docker-agent/pkg/tools/builtin/transfertask"
+	mcptools "github.com/docker/docker-agent/pkg/tools/mcp"
 )
 
 // registerDefaultTools wires up the built-in tool handlers (delegation,
@@ -224,6 +225,21 @@ func (r *LocalRuntime) runStreamLoop(ctx context.Context, sess *session.Session,
 	// rides over W3C `baggage` so it crosses MCP / sandbox /
 	// HTTP boundaries too.
 	ctx = genai.WithConversationID(ctx, sess.ID)
+
+	// A non-interactive session (background_agents via runCollecting, MCP
+	// serve, A2A, evals) has no live UI that can answer an OAuth elicitation,
+	// and runCollecting drops events rather than forwarding them. If a remote
+	// MCP toolset needs first-time OAuth, blocking on an elicitation that
+	// nobody can answer hangs the sub-agent forever (issue #3200): the
+	// connection context is detached with context.WithoutCancel, so not even
+	// cancellation can unblock it. Mark the context so toolset Start() fails
+	// fast with an AuthorizationRequiredError — the same fast-fail the startup
+	// tool probe uses (see EmitStartupInfo) — instead of eliciting. A real user
+	// authorizes such servers from an interactive turn (or transfer_task, which
+	// keeps NonInteractive=false and forwards the dialog to the TUI).
+	if sess.NonInteractive {
+		ctx = mcptools.WithoutInteractivePrompts(ctx)
+	}
 
 	// runtime.session is the root span for one stream. gen_ai.* keys
 	// are emitted alongside the legacy `agent` / `session.id` keys
