@@ -677,7 +677,7 @@ func TestLoadRetainsAgentConfig(t *testing.T) {
         tools: [shell]
 `)
 
-	team, err := Load(t.Context(), config.NewBytesSource("inspector.yaml", data), &config.RuntimeConfig{})
+	team, err := Load(t.Context(), config.NewBytesSource("inspector.yaml", data), &config.RuntimeConfig{}, withTestProviderRegistry()...)
 	require.NoError(t, err)
 
 	cfg, ok := team.AgentConfig("root")
