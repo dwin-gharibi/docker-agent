@@ -19,9 +19,13 @@ type exitConfirmationKeyMap struct {
 }
 
 func defaultExitConfirmationKeyMap() exitConfirmationKeyMap {
+	// Pressing the quit key again confirms exit, so fold the configured quit
+	// keys into the Yes binding.
+	yesKeys := append([]string{"y", "Y"}, core.GetKeys().Quit.Keys()...)
+
 	return exitConfirmationKeyMap{
 		Yes: key.NewBinding(
-			key.WithKeys("y", "Y", "ctrl+c"),
+			key.WithKeys(yesKeys...),
 			key.WithHelp("Y", "yes"),
 		),
 		No: key.NewBinding(

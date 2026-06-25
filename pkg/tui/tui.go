@@ -1768,57 +1768,28 @@ func (m *appModel) Help() help.KeyMap {
 
 // AllBindings returns ALL available key bindings for the help dialog (comprehensive list).
 func (m *appModel) AllBindings() []key.Binding {
-	quitBinding := key.NewBinding(
-		key.WithKeys("ctrl+c"),
-		key.WithHelp("Ctrl+c", "quit"),
-	)
+	keys := core.GetKeys()
+	quitBinding := keys.Quit
 
 	if m.leanMode {
 		return []key.Binding{quitBinding}
 	}
 
-	tabBinding := key.NewBinding(
-		key.WithKeys("tab"),
-		key.WithHelp("Tab", "switch focus"),
-	)
+	tabBinding := keys.SwitchFocus
 
 	bindings := []key.Binding{quitBinding, tabBinding}
 	bindings = append(bindings, m.tabBar.Bindings()...)
 
-	// Additional global shortcuts
+	// Additional global shortcuts. shift+tab is not user-configurable.
 	bindings = append(bindings,
-		key.NewBinding(
-			key.WithKeys("ctrl+k"),
-			key.WithHelp("Ctrl+k", "commands"),
-		),
-		key.NewBinding(
-			key.WithKeys("ctrl+h"),
-			key.WithHelp("Ctrl+h", "help"),
-		),
-		key.NewBinding(
-			key.WithKeys("ctrl+y"),
-			key.WithHelp("Ctrl+y", "toggle yolo mode"),
-		),
-		key.NewBinding(
-			key.WithKeys("ctrl+o"),
-			key.WithHelp("Ctrl+o", "toggle hide tool results"),
-		),
-		key.NewBinding(
-			key.WithKeys("ctrl+s"),
-			key.WithHelp("Ctrl+s", "cycle agent"),
-		),
-		key.NewBinding(
-			key.WithKeys("ctrl+m"),
-			key.WithHelp("Ctrl+m", "model picker"),
-		),
-		key.NewBinding(
-			key.WithKeys("ctrl+x"),
-			key.WithHelp("Ctrl+x", "clear queue"),
-		),
-		key.NewBinding(
-			key.WithKeys("ctrl+z"),
-			key.WithHelp("Ctrl+z", "suspend"),
-		),
+		keys.Commands,
+		keys.Help,
+		keys.ToggleYolo,
+		keys.ToggleHideToolResults,
+		keys.CycleAgent,
+		keys.ModelPicker,
+		keys.ClearQueue,
+		keys.Suspend,
 		key.NewBinding(
 			key.WithKeys("shift+tab"),
 			key.WithHelp("Shift+Tab", "cycle thinking level"),
@@ -1827,22 +1798,21 @@ func (m *appModel) AllBindings() []key.Binding {
 
 	// leanMode already returned above, so only hideSidebar matters here.
 	if !m.hideSidebar {
-		bindings = append(bindings, key.NewBinding(
-			key.WithKeys("ctrl+b"),
-			key.WithHelp("Ctrl+b", "toggle sidebar"),
-		))
+		bindings = append(bindings, keys.ToggleSidebar)
 	}
 
-	// Show newline help based on keyboard enhancement support
+	// Show newline help based on keyboard enhancement support. shift+enter is
+	// detected at runtime; otherwise fall back to the configured newline key.
 	if m.keyboardEnhancementsSupported {
 		bindings = append(bindings, key.NewBinding(
 			key.WithKeys("shift+enter"),
 			key.WithHelp("Shift+Enter", "newline"),
 		))
 	} else {
+		nl := keys.EditorNewline
 		bindings = append(bindings, key.NewBinding(
-			key.WithKeys("ctrl+j"),
-			key.WithHelp("Ctrl+j", "newline"),
+			key.WithKeys(nl.Keys()...),
+			key.WithHelp(nl.Help().Key, "newline"),
 		))
 	}
 
@@ -1850,15 +1820,12 @@ func (m *appModel) AllBindings() []key.Binding {
 		bindings = append(bindings, m.chatPage.Bindings()...)
 	} else {
 		editorName := editorname.FromEnv(os.Getenv("VISUAL"), os.Getenv("EDITOR"))
+		editExternal := keys.EditExternal
+		// Keep the binding's capitalized key label; only swap the description.
+		editExternal.SetHelp(editExternal.Help().Key, "edit in "+editorName)
 		bindings = append(bindings,
-			key.NewBinding(
-				key.WithKeys("ctrl+g"),
-				key.WithHelp("Ctrl+g", "edit in "+editorName),
-			),
-			key.NewBinding(
-				key.WithKeys("ctrl+r"),
-				key.WithHelp("Ctrl+r", "history search"),
-			),
+			editExternal,
+			keys.HistorySearch,
 		)
 	}
 	return bindings
@@ -1870,19 +1837,20 @@ func (m *appModel) Bindings() []key.Binding {
 	all := m.AllBindings()
 
 	// Define which keys should appear in the status bar
+	keys := core.GetKeys()
 	statusBarKeys := map[string]bool{
-		"ctrl+c":      true, // quit
-		"tab":         true, // switch focus
-		"ctrl+t":      true, // new tab (from tabBar)
-		"ctrl+w":      true, // close tab (from tabBar)
-		"ctrl+p":      true, // prev tab (from tabBar)
-		"ctrl+n":      true, // next tab (from tabBar)
-		"ctrl+k":      true, // commands
-		"ctrl+h":      true, // help
-		"shift+enter": true, // newline
-		"ctrl+j":      true, // newline fallback
-		"ctrl+g":      true, // edit in external editor (editor context)
-		"ctrl+r":      true, // history search (editor context)
+		keys.Quit.Keys()[0]:          true, // quit
+		keys.SwitchFocus.Keys()[0]:   true, // switch focus
+		"ctrl+t":                     true, // new tab (from tabBar)
+		"ctrl+w":                     true, // close tab (from tabBar)
+		"ctrl+p":                     true, // prev tab (from tabBar)
+		"ctrl+n":                     true, // next tab (from tabBar)
+		keys.Commands.Keys()[0]:      true, // commands
+		keys.Help.Keys()[0]:          true, // help
+		"shift+enter":                true, // newline
+		keys.EditorNewline.Keys()[0]: true, // newline fallback
+		keys.EditExternal.Keys()[0]:  true, // edit in external editor (editor context)
+		keys.HistorySearch.Keys()[0]: true, // history search (editor context)
 		// Content panel bindings (↑↓, c, e, d) are always included
 		"up":   true,
 		"down": true,
@@ -1920,15 +1888,17 @@ func (m *appModel) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// Ctrl+c is intercepted before any dialog handling so that every dialog
-	// reacts to it consistently:
+	keys := core.GetKeys()
+
+	// The quit key is intercepted before any dialog handling so that every
+	// dialog reacts to it consistently:
 	//   - With no dialog open: open the exit confirmation dialog.
 	//   - With any other dialog open: stack the exit confirmation on top so
-	//     that the user can confirm exit (a second ctrl+c or Y exits) or
+	//     that the user can confirm exit (a second quit key or Y exits) or
 	//     cancel it (N/Esc) and return to the original dialog.
 	//   - With the exit confirmation already on top: forward the key so it
 	//     can exit the program via its own Yes binding.
-	if msg.String() == "ctrl+c" {
+	if key.Matches(msg, keys.Quit) {
 		if m.dialogMgr.TopIsExitConfirmation() {
 			return m.forwardDialog(msg)
 		}
@@ -1972,31 +1942,31 @@ func (m *appModel) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	// Global keyboard shortcuts (active even during history search)
 	switch {
-	case key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+z"))):
+	case key.Matches(msg, keys.Suspend):
 		return m, tea.Suspend
 
-	case key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+k"))):
+	case key.Matches(msg, keys.Commands):
 		categories := m.commandCategories()
 		return m, core.CmdHandler(dialog.OpenDialogMsg{
 			Model: dialog.NewCommandPaletteDialog(categories),
 		})
 
-	case key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+y"))):
+	case key.Matches(msg, keys.ToggleYolo):
 		return m, core.CmdHandler(messages.ToggleYoloMsg{})
 
-	case key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+o"))):
+	case key.Matches(msg, keys.ToggleHideToolResults):
 		return m, core.CmdHandler(messages.ToggleHideToolResultsMsg{})
 
-	case key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+s"))):
+	case key.Matches(msg, keys.CycleAgent):
 		return m.handleCycleAgent()
 
-	case key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+m"))):
+	case key.Matches(msg, keys.ModelPicker):
 		return m.handleOpenModelPicker()
 
-	case key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+x"))):
+	case key.Matches(msg, keys.ClearQueue):
 		return m, core.CmdHandler(messages.ClearQueueMsg{})
 
-	case key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+h", "f1", "ctrl+?"))):
+	case key.Matches(msg, keys.Help):
 		// Show contextual help dialog with ALL available key bindings
 		return m, core.CmdHandler(dialog.OpenDialogMsg{
 			Model: dialog.NewHelpDialog(m.AllBindings()),
@@ -2009,10 +1979,10 @@ func (m *appModel) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch {
-	case key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+g"))):
+	case key.Matches(msg, keys.EditExternal):
 		return m.openExternalEditor()
 
-	case key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+r"))):
+	case key.Matches(msg, keys.HistorySearch):
 		if m.focusedPanel == PanelEditor && !m.editor.IsRecording() {
 			model, cmd := m.editor.EnterHistorySearch()
 			m.editor = model.(editor.Editor)
@@ -2020,7 +1990,7 @@ func (m *appModel) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 
 	// Toggle sidebar (propagates to content view regardless of focus)
-	case key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+b"))):
+	case key.Matches(msg, keys.ToggleSidebar):
 		if m.leanMode || m.hideSidebar {
 			return m, nil
 		}
@@ -2031,7 +2001,7 @@ func (m *appModel) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.handleCycleThinkingLevel()
 
 	// Focus switching: Tab key toggles between content and editor
-	case key.Matches(msg, key.NewBinding(key.WithKeys("tab"))):
+	case key.Matches(msg, keys.SwitchFocus):
 		return m.switchFocus()
 
 	// Esc: cancel stream (works regardless of focus)

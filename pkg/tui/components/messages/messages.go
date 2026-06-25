@@ -471,11 +471,14 @@ func (m *model) handleKeyPress(msg tea.KeyPressMsg) (layout.Model, tea.Cmd) {
 			return m, cmd
 		}
 
-		switch msg.Key().Code {
-		case tea.KeyEnter:
-			// Plain Enter commits the edit
+		// The configured send key commits the edit (Enter by default), mirroring
+		// the composer so a remapped editor_send works here too.
+		if key.Matches(msg, core.GetKeys().EditorSend) {
 			cmd := m.commitInlineEdit()
 			return m, cmd
+		}
+
+		switch msg.Key().Code {
 		case tea.KeyEscape:
 			// Esc cancels the edit
 			cmd := m.CancelInlineEdit()
@@ -2034,9 +2037,14 @@ func (m *model) StartInlineEdit(msgIndex, sessionPosition int, content string) t
 	}
 	ta.SetStyles(inlineEditStyle)
 
-	// Configure newline keybinding - use ctrl+j as the safe default
-	// (shift+enter only works on terminals with keyboard enhancements)
-	ta.KeyMap.InsertNewline.SetKeys("shift+enter", "ctrl+j")
+	// Mirror the composer's configurable newline keys (ctrl+j by default),
+	// always offering shift+enter for terminals with keyboard enhancements.
+	// Clone so the keymap never aliases the cached KeyMap slice.
+	newlineKeys := slices.Clone(core.GetKeys().EditorNewline.Keys())
+	if !slices.Contains(newlineKeys, "shift+enter") {
+		newlineKeys = append([]string{"shift+enter"}, newlineKeys...)
+	}
+	ta.KeyMap.InsertNewline.SetKeys(newlineKeys...)
 	ta.KeyMap.InsertNewline.SetEnabled(true)
 
 	m.inlineEditTextarea = ta

@@ -647,19 +647,19 @@ func (e *editor) resetAndSend(content string) tea.Cmd {
 	return core.CmdHandler(messages.SendMsg{Content: content, Attachments: finalAttachments})
 }
 
-// configureNewlineKeybinding sets up the appropriate newline keybinding
-// based on terminal keyboard enhancement support.
+// configureNewlineKeybinding sets up the newline keybinding from the
+// user-configurable EditorNewline binding (ctrl+j by default), layering
+// shift+enter on top whenever the terminal can report it. This keeps the
+// historical defaults intact while letting users replace the ctrl+j fallback
+// that conflicts with common editor/terminal shortcuts (see issue #1626).
 func (e *editor) configureNewlineKeybinding() {
-	// Configure textarea's InsertNewline binding based on terminal capabilities
-	if e.keyboardEnhancementsSupported {
-		// Modern terminals:
-		e.textarea.KeyMap.InsertNewline.SetKeys("shift+enter", "ctrl+j")
-		e.textarea.KeyMap.InsertNewline.SetEnabled(true)
-	} else {
-		// Legacy terminals:
-		e.textarea.KeyMap.InsertNewline.SetKeys("ctrl+j")
-		e.textarea.KeyMap.InsertNewline.SetEnabled(true)
+	// Clone so the textarea's keymap never aliases the cached KeyMap slice.
+	newlineKeys := slices.Clone(core.GetKeys().EditorNewline.Keys())
+	if e.keyboardEnhancementsSupported && !slices.Contains(newlineKeys, "shift+enter") {
+		newlineKeys = append([]string{"shift+enter"}, newlineKeys...)
 	}
+	e.textarea.KeyMap.InsertNewline.SetKeys(newlineKeys...)
+	e.textarea.KeyMap.InsertNewline.SetEnabled(true)
 }
 
 // Update handles messages and updates the component state
@@ -814,11 +814,12 @@ func (e *editor) Update(msg tea.Msg) (layout.Model, tea.Cmd) {
 			return e.handleGraphemeBackspace()
 		}
 
-		// Handle send/newline keys:
-		// - Enter: submit current input (if textarea inserted a newline, submit previous buffer).
-		// - Shift+Enter: insert newline when keyboard enhancements are supported.
-		// - Ctrl+J: fallback to insert '\n' when keyboard enhancements are not supported.
-		if msg.String() == "enter" || key.Matches(msg, e.textarea.KeyMap.InsertNewline) {
+		// Handle send/newline keys (both user-configurable, see issue #1626):
+		// - EditorSend (enter by default): submit the current input.
+		// - EditorNewline (ctrl+j by default) / shift+enter: insert a newline,
+		//   handled by the textarea's InsertNewline binding.
+		isSend := key.Matches(msg, core.GetKeys().EditorSend)
+		if isSend || key.Matches(msg, e.textarea.KeyMap.InsertNewline) {
 			if !e.textarea.Focused() {
 				return e, nil
 			}
@@ -829,13 +830,13 @@ func (e *editor) Update(msg tea.Msg) (layout.Model, tea.Cmd) {
 			value := e.textarea.Value()
 
 			// If textarea inserted a newline, just refresh and return
-			if value != prev && msg.String() != "enter" {
+			if value != prev && !isSend {
 				e.refreshSuggestion()
 				return e, nil
 			}
 
-			// If plain enter and textarea inserted a newline, submit the previous value
-			if value != prev && msg.String() == "enter" {
+			// If the send key also inserted a newline, submit the previous value
+			if value != prev && isSend {
 				if prev != "" {
 					e.textarea.SetValue(prev)
 					e.textarea.MoveToEnd()
@@ -845,7 +846,7 @@ func (e *editor) Update(msg tea.Msg) (layout.Model, tea.Cmd) {
 				return e, nil
 			}
 
-			// Normal enter submit: send current value
+			// Normal send: send current value
 			if value != "" {
 				cmd := e.resetAndSend(value)
 				return e, cmd

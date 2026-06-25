@@ -75,6 +75,21 @@ type Settings struct {
 	// and agents. These act as user-wide defaults; session-level and agent-level
 	// permissions override them.
 	Permissions *latest.PermissionsConfig `yaml:"permissions,omitempty"`
+	// Keybindings lets users remap TUI keyboard shortcuts. Each entry maps an
+	// action name to one or more key combinations (Bubbles key format, e.g.
+	// "ctrl+q", "f2"). Unknown actions, malformed keys, and conflicts are
+	// ignored with a logged warning so a bad entry never breaks the TUI.
+	Keybindings []Keybinding `yaml:"keybindings,omitempty"`
+}
+
+// Keybinding maps a single TUI action to the key combinations that trigger it.
+type Keybinding struct {
+	// Action is the identifier of the action to remap (e.g. "quit",
+	// "editor_newline"). See pkg/tui/core for the list of valid actions.
+	Action string `yaml:"action"`
+	// Keys is the list of key combinations bound to the action, in Bubbles
+	// key format (e.g. "ctrl+q", "shift+enter", "f2").
+	Keys []string `yaml:"keys"`
 }
 
 // DefaultTabTitleMaxLength is the default maximum tab title length when not configured.

@@ -265,6 +265,50 @@ Customize session titles to make them more meaningful and easier to find. By def
 
 Press <kbd>Ctrl</kbd>+<kbd>H</kbd> to view the complete list of all available keyboard shortcuts.
 
+### Custom Keybindings
+
+You can remap the shortcuts above by adding a `keybindings` list to the `settings` block of your `~/.config/cagent/config.yaml`. Each entry maps an action to one or more key combinations in [Bubbles key format](https://github.com/charmbracelet/bubbles) (for example `ctrl+q`, `alt+enter`, `f2`). Unlisted actions keep their defaults.
+
+This is the recommended way to replace the `Ctrl+J` newline fallback, which conflicts with common editor/terminal shortcuts (for example inside VS Code).
+
+```yaml
+settings:
+  keybindings:
+    # Insert a newline with Alt+Enter instead of Ctrl+J. Shift+Enter still
+    # works automatically on terminals that report it.
+    - action: "editor_newline"
+      keys: ["alt+enter"]
+    # Allow several keys for one action.
+    - action: "commands"
+      keys: ["f2", "ctrl+k"]
+    - action: "quit"
+      keys: ["ctrl+q"]
+```
+
+**Valid actions:**
+
+| Action                     | Default      | Description                            |
+| -------------------------- | ------------ | -------------------------------------- |
+| `editor_send`              | `enter`      | Send the current message               |
+| `editor_newline`           | `ctrl+j`     | Insert a newline in the input          |
+| `quit`                     | `ctrl+c`     | Quit (opens the exit confirmation)     |
+| `switch_focus`             | `tab`        | Switch focus between panels            |
+| `commands`                 | `ctrl+k`     | Open the command palette               |
+| `help`                     | `ctrl+h`     | Show the help dialog                   |
+| `toggle_yolo`              | `ctrl+y`     | Toggle YOLO mode                       |
+| `toggle_hide_tool_results` | `ctrl+o`     | Toggle hiding tool results             |
+| `cycle_agent`              | `ctrl+s`     | Cycle to the next agent                |
+| `model_picker`             | `ctrl+m`     | Open the model picker                  |
+| `clear_queue`              | `ctrl+x`     | Clear queued messages                  |
+| `suspend`                  | `ctrl+z`     | Suspend the TUI                        |
+| `toggle_sidebar`           | `ctrl+b`     | Toggle the sidebar                     |
+| `edit_external`            | `ctrl+g`     | Edit input in an external editor       |
+| `history_search`           | `ctrl+r`     | Incremental history search             |
+
+`Shift+Enter` for newline is detected from your terminal's capabilities and is always available where supported, independent of `editor_newline`.
+
+Invalid entries are ignored with a warning (visible with `--debug`) so a bad config never breaks the TUI: unknown actions, empty or malformed keys, and keys that would collide with another action are dropped while every other binding keeps working.
+
 ## History Search
 
 Press <kbd>Ctrl</kbd>+<kbd>R</kbd> to enter incremental history search mode. Start typing to filter through your previous inputs. Press <kbd>Enter</kbd> to select a match, or <kbd>Escape</kbd> to cancel.
