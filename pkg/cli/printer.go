@@ -67,6 +67,13 @@ func (p *Printer) PrintError(err error) {
 	p.Printf("❌ %s", err)
 }
 
+// PrintWarning prints a warning message on its own line. Used for non-fatal
+// notices such as a turn that produced only reasoning or an empty response,
+// which would otherwise be invisible in non-TUI runs.
+func (p *Printer) PrintWarning(message string) {
+	p.Printf("\n⚠️  %s\n", message)
+}
+
 // PrintAgentName prints the agent name header
 func (p *Printer) PrintAgentName(agentName string) {
 	if !p.isTTYOut {

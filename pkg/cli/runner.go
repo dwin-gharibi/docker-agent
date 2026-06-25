@@ -201,6 +201,11 @@ func Run(ctx context.Context, out *Printer, cfg Config, rt runtime.Runtime, sess
 				if e.ToolCallID == lastConfirmedToolCallID {
 					lastConfirmedToolCallID = ""
 				}
+			case *runtime.WarningEvent:
+				// Surface warnings (e.g. a refusal, or a turn that produced only
+				// reasoning / an empty response) in non-TUI runs, where they would
+				// otherwise be dropped. The TUI renders these as notifications.
+				out.PrintWarning(e.Message)
 			case *runtime.ErrorEvent:
 				lowerErr := strings.ToLower(e.Error)
 				if strings.Contains(lowerErr, "context cancel") && ctx.Err() != nil { // treat Ctrl+C cancellations as non-errors

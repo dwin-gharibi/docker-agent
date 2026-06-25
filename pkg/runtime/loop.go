@@ -687,6 +687,36 @@ func (r *LocalRuntime) runTurn(
 	if res.FinishReason == chat.FinishReasonRefusal {
 		slog.WarnContext(ctx, "Model refused to respond", "agent", a.Name(), "model", modelID.String(), "session_id", sess.ID)
 		events.Emit(Warning(fmt.Sprintf("Model %s refused to respond (stop reason: refusal).", modelID.String()), a.Name()))
+	} else if strings.TrimSpace(res.Content) == "" && len(res.Calls) == 0 {
+		// Surface otherwise-silent empty turns. recordAssistantMessage skips a
+		// turn with no content and no tool calls, which previously left the user
+		// staring at silence with no explanation. Two known causes:
+		//   - thinking-mode models (e.g. Qwen3 via openai_chatcompletions) that
+		//     stream only reasoning tokens and then stop or hit the output token
+		//     limit, so the visible content stays empty (see #3145); and
+		//   - an empty stream from a rate-limited or token-capped provider.
+		// Refusals are reported above and are excluded here by the else branch.
+		reason := res.FinishReason
+		if reason == "" {
+			reason = chat.FinishReasonNull
+		}
+		var warning string
+		if strings.TrimSpace(res.ReasoningContent) != "" {
+			warning = fmt.Sprintf(
+				"Model %s produced only reasoning and no reply (stop reason: %s). "+
+					"Thinking-mode models can emit reasoning tokens without a final answer; "+
+					"the reasoning is not used as the response.",
+				modelID.String(), reason)
+		} else {
+			warning = fmt.Sprintf(
+				"Model %s returned an empty response (stop reason: %s). "+
+					"This usually means the provider rate-limited the request or the output token limit was reached.",
+				modelID.String(), reason)
+		}
+		slog.WarnContext(ctx, "Empty assistant turn",
+			"agent", a.Name(), "model", modelID.String(),
+			"finish_reason", string(reason), "reasoning_length", len(res.ReasoningContent), "session_id", sess.ID)
+		events.Emit(Warning(warning, a.Name()))
 	}
 
 	msgUsage := r.recordAssistantMessage(sess, a, res, agentTools, modelID.String(), m, events)
