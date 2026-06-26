@@ -453,15 +453,22 @@ func (r *LocalRuntime) executeBeforeLLMCallHooks(
 // model call, before the response is recorded into the session and
 // tool calls are dispatched. The assistant text content is passed via
 // stop_response (matching the stop event), so handlers can reuse the
-// same parsing logic. Failed model calls fire on_error instead and
-// skip this event.
-func (r *LocalRuntime) executeAfterLLMCallHooks(ctx context.Context, sess *session.Session, a *agent.Agent, modelID, responseContent string) {
+// same parsing logic. The per-turn token usage and computed USD cost
+// are forwarded via [hooks.Input.Usage] and [hooks.Input.Cost] so
+// sidecar cost ledgers can record per-call spend from the payload
+// alone. cost is a *float64 so an unpriced model (nil) is distinct on
+// the wire from a priced free call (a pointer to 0); the caller owns
+// that distinction. Failed model calls fire on_error instead and skip
+// this event.
+func (r *LocalRuntime) executeAfterLLMCallHooks(ctx context.Context, sess *session.Session, a *agent.Agent, modelID, responseContent string, usage *chat.Usage, cost *float64) {
 	r.dispatchHook(ctx, a, hooks.EventAfterLLMCall, &hooks.Input{
 		SessionID:       sess.ID,
 		AgentName:       a.Name(),
 		ModelID:         modelID,
 		StopResponse:    responseContent,
 		LastUserMessage: sess.GetLastUserMessageContent(),
+		Usage:           usage,
+		Cost:            cost,
 	}, nil)
 }
 

@@ -189,7 +189,20 @@ func (r *LocalRuntime) runHarnessAgent(ctx context.Context, sess *session.Sessio
 		content = strings.TrimSpace(finalResult)
 	}
 
-	r.executeAfterLLMCallHooks(ctx, sess, a, modelID, content)
+	// A harness reports its own TotalCostUSD, which the harness
+	// library defaults to 0 whenever the harness output omits a cost
+	// (e.g. the codex harness never reports one). That 0 is
+	// indistinguishable from a genuinely free call, so — to avoid
+	// telling a cost ledger that a billed turn was free — surface cost
+	// only when the harness reported a non-zero value and leave it nil
+	// (unpriced) otherwise. This keeps the wire contract honest: a
+	// present cost is always a real reported figure.
+	var hookCost *float64
+	if cost != 0 {
+		c := cost
+		hookCost = &c
+	}
+	r.executeAfterLLMCallHooks(ctx, sess, a, modelID, content, usage, hookCost)
 	r.recordHarnessAssistantMessage(sess, a, content, modelID, usage, cost, events)
 	r.executeStopHooks(ctx, sess, a, content, events)
 

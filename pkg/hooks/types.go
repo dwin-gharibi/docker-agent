@@ -90,6 +90,12 @@ const (
 	EventBeforeLLMCall EventType = "before_llm_call"
 	// EventAfterLLMCall fires immediately after a successful model call,
 	// before the response is recorded. Failed calls fire EventOnError.
+	// The Input carries the response text in [Input.StopResponse]
+	// (matching the stop event), the model that produced it in
+	// [Input.ModelID], and per-turn billing data in [Input.Usage] and
+	// [Input.Cost] so sidecar cost ledgers can record per-call spend
+	// from the payload alone, without subscribing to the runtime event
+	// channel.
 	EventAfterLLMCall EventType = "after_llm_call"
 	// EventSessionEnd fires when a session terminates.
 	EventSessionEnd EventType = "session_end"
@@ -318,6 +324,36 @@ type Input struct {
 	// "user_approved_tool", "user_rejected", "context_canceled").
 	ApprovalDecision string `json:"approval_decision,omitempty"`
 	ApprovalSource   string `json:"approval_source,omitempty"`
+
+	// AfterLLMCall specific: per-turn token usage and the computed USD
+	// cost of the model response the runtime just received. Both are
+	// populated only for [EventAfterLLMCall] and are nil for every
+	// other event. They are the hook-side counterpart of the runtime's
+	// internal TokenUsageEvent and let sidecar cost ledgers record
+	// per-call spend from the payload alone.
+	//
+	// Usage is a pointer so a handler can distinguish "the provider
+	// reported no usage" (nil) from "usage was zero".
+	//
+	// Cost is a *float64 with three meaningful states, mirroring the
+	// runtime's own pricing gate (usage present AND a model definition
+	// with a pricing table):
+	//   - nil   → unpriced: the model has no pricing data on file
+	//             (unknown model ID, custom endpoint without cost
+	//             config) or the provider reported no usage. With
+	//             omitempty the "cost" key is absent on the wire.
+	//   - 0     → a priced model whose computed cost is genuinely zero
+	//             (a free call). Emitted as "cost": 0, NOT elided —
+	//             omitempty on a pointer drops only nil, never a
+	//             non-nil pointer to the zero value.
+	//   - non-0 → the priced USD cost of this single response.
+	// A handler therefore reads a present "cost" as authoritative and
+	// an absent one as "unpriced", with no need to cross-check usage.
+	// (This is deliberately a *float64, unlike [chat.Message.Cost],
+	// which is a plain float64 with omitempty and so cannot distinguish
+	// a free priced call from an unpriced one on the wire.)
+	Usage *chat.Usage `json:"usage,omitempty"`
+	Cost  *float64    `json:"cost,omitempty"`
 
 	// Compaction fields (BeforeCompaction, AfterCompaction).
 	InputTokens  int64 `json:"input_tokens,omitempty"`

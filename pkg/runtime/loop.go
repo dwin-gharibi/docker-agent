@@ -460,8 +460,8 @@ func (r *LocalRuntime) runStreamLoop(ctx context.Context, sess *session.Session,
 		// the actual inference context), then falls back to the models.dev
 		// catalogue. The lookup above is reused inside resolveContextLimit
 		// only when context_size isn't supplied; we keep the explicit call
-		// here because m is also threaded into [recordAssistantMessage] for
-		// per-message cost computation.
+		// here because m is also passed to [computeMessageCost] for
+		// per-turn cost computation.
 		contextLimit := r.resolveContextLimit(ctx, model, modelID)
 		if contextLimit > 0 && r.sessionCompaction && compaction.ShouldCompact(sess.InputTokens, sess.OutputTokens, 0, contextLimit) {
 			r.compactWithReason(ctx, sess, "", compactionReasonThreshold, sink)
@@ -666,11 +666,20 @@ func (r *LocalRuntime) runTurn(
 	// A successful model call resets the overflow compaction counter.
 	ls.overflowCompactions = 0
 
+	// Compute the per-turn cost once, here, so the exact same value
+	// reaches both the after_llm_call hook payload and the recorded
+	// assistant message — the hook's cost is therefore guaranteed to
+	// equal the cost the session bills for this turn. It is nil when
+	// the turn cannot be priced (no usage, or a model with no pricing
+	// table); see computeMessageCost.
+	msgCost := computeMessageCost(res.Usage, m)
+
 	// after_llm_call hooks fire on success only; failed calls
 	// fire on_error above. The assistant text content is passed
 	// via stop_response, matching the stop event's payload, so
-	// handlers can reuse the same parsing.
-	r.executeAfterLLMCallHooks(ctx, sess, a, modelID.String(), res.Content)
+	// handlers can reuse the same parsing. Usage and Cost carry the
+	// per-turn billing data for sidecar cost ledgers.
+	r.executeAfterLLMCallHooks(ctx, sess, a, modelID.String(), res.Content, res.Usage, msgCost)
 
 	if usedModel != nil && usedModel.ID() != model.ID() {
 		slog.InfoContext(ctx, "Used fallback model", "agent", a.Name(), "primary", model.ID().String(), "used", usedModel.ID().String())
@@ -692,7 +701,7 @@ func (r *LocalRuntime) runTurn(
 		events.Emit(Warning(fmt.Sprintf("Model %s refused to respond (stop reason: refusal).", modelID.String()), a.Name()))
 	}
 
-	msgUsage := r.recordAssistantMessage(sess, a, res, agentTools, modelID.String(), m, events)
+	msgUsage := r.recordAssistantMessage(sess, a, res, agentTools, modelID.String(), msgCost, events)
 
 	usage := SessionUsage(sess, contextLimit)
 	usage.LastMessage = msgUsage
@@ -857,16 +866,39 @@ func (r *LocalRuntime) Run(ctx context.Context, sess *session.Session) ([]sessio
 	return sess.GetAllMessages(), nil
 }
 
+// computeMessageCost returns the USD cost of a single model response,
+// or nil when the response cannot be priced. It is nil when there is
+// no usage to price (usage == nil) or the model has no pricing table
+// (m == nil — e.g. an unknown model ID or a custom endpoint without
+// cost config — or m.Cost == nil). A non-nil result of 0 therefore
+// means "priced, but this call was free", distinct from "unpriced"
+// (nil). This single arithmetic source feeds both the persisted
+// assistant message (dereferenced to 0 when nil) and the
+// after_llm_call hook payload (which keeps the nil/0 distinction), so
+// the two can never disagree.
+func computeMessageCost(usage *chat.Usage, m *modelsdev.Model) *float64 {
+	if usage == nil || m == nil || m.Cost == nil {
+		return nil
+	}
+	cost := (float64(usage.InputTokens)*m.Cost.Input +
+		float64(usage.OutputTokens)*m.Cost.Output +
+		float64(usage.CachedInputTokens)*m.Cost.CacheRead +
+		float64(usage.CacheWriteTokens)*m.Cost.CacheWrite) / 1e6
+	return &cost
+}
+
 // recordAssistantMessage adds the model's response to the session and returns
 // per-message usage information for the token-usage event. Empty responses
 // (no text and no tool calls) are silently skipped since providers reject them.
+// cost is the precomputed per-turn cost (see computeMessageCost); nil records
+// as 0, matching the previous "no pricing data" behaviour.
 func (r *LocalRuntime) recordAssistantMessage(
 	sess *session.Session,
 	a *agent.Agent,
 	res streamResult,
 	agentTools []tools.Tool,
 	modelID string,
-	m *modelsdev.Model,
+	cost *float64,
 	events EventSink,
 ) *MessageUsage {
 	if strings.TrimSpace(res.Content) == "" && len(res.Calls) == 0 {
@@ -888,13 +920,17 @@ func (r *LocalRuntime) recordAssistantMessage(
 		}
 	}
 
-	// Calculate per-message cost when pricing information is available.
-	// When the model is absent from the catalogue (or carries no price
-	// table) the cost is silently 0 even though tokens were spent; warn so
-	// the otherwise-invisible "uncatalogued model bills $0" leak is at least
-	// observable in logs and any spend guardrail built on top of it.
-	messageCost, priced := computeMessageCost(res.Usage, m)
-	if !priced && usageHasTokens(res.Usage) {
+	// The per-turn cost was computed once in runTurn and threaded in;
+	// nil means the response could not be priced and records as 0,
+	// preserving the previous "no pricing data" behaviour. When the model
+	// is absent from the catalogue (or carries no price table) the cost is
+	// silently 0 even though tokens were spent; warn so the otherwise-
+	// invisible "uncatalogued model bills $0" leak is at least observable
+	// in logs and any spend guardrail built on top of it.
+	var messageCost float64
+	if cost != nil {
+		messageCost = *cost
+	} else if usageHasTokens(res.Usage) {
 		slog.Warn("Model is missing from the pricing catalogue; recording $0 cost despite token usage",
 			"agent", a.Name(),
 			"model", modelID,
@@ -935,23 +971,6 @@ func (r *LocalRuntime) recordAssistantMessage(
 		FinishReason: res.FinishReason,
 	}
 	return msgUsage
-}
-
-// computeMessageCost returns the dollar cost of a single assistant message
-// and whether pricing information was actually available. priced is false
-// when usage is nil, the model is unknown to the catalogue, or it carries no
-// price table; callers use that signal to distinguish a genuine $0 turn from
-// an uncatalogued-model turn whose real cost is unknown. The arithmetic is
-// unchanged from the original inline computation.
-func computeMessageCost(usage *chat.Usage, m *modelsdev.Model) (cost float64, priced bool) {
-	if usage == nil || m == nil || m.Cost == nil {
-		return 0, false
-	}
-	cost = (float64(usage.InputTokens)*m.Cost.Input +
-		float64(usage.OutputTokens)*m.Cost.Output +
-		float64(usage.CachedInputTokens)*m.Cost.CacheRead +
-		float64(usage.CacheWriteTokens)*m.Cost.CacheWrite) / 1e6
-	return cost, true
 }
 
 // usageHasTokens reports whether any billable tokens were recorded for a turn.

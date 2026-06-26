@@ -74,6 +74,7 @@
 #   /tmp/agent-steering.log        (user_steering_messages_submit)
 #   /tmp/agent-followups.log       (user_followup_submit)
 #   /tmp/agent-llm-calls.log       (before_llm_call, after_llm_call)
+#   /tmp/agent-cost-ledger.csv     (after_llm_call: per-call token usage + cost)
 #   /tmp/agent-turns.log           (turn_end)
 #   /tmp/agent-tool-results.log    (post_tool_use)
 #   /tmp/agent-permissions.log     (permission_request)
@@ -331,6 +332,14 @@ agents:
       # assistant text content arrives via stop_response (matching the
       # stop event's payload). Failed calls fire on_error instead and
       # skip this event.
+      #
+      # The payload also carries this call's token usage in .usage and its
+      # computed USD cost in .cost. .cost is ABSENT for an unpriced model
+      # (test with `has("cost")`) and an explicit 0 for a priced free call,
+      # so a present cost is authoritative without checking usage. That is
+      # everything a sidecar cost ledger needs — no event-channel wiring.
+      # after_llm_call also fires for sub-session turns (each with its own
+      # session_id), so summing .cost is the full spend for the run.
       # ====================================================================
       after_llm_call:
         - type: command
@@ -340,6 +349,12 @@ agents:
             SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // "unknown"')
             LEN=$(echo "$INPUT" | jq -r '.stop_response // ""' | wc -c | tr -d ' ')
             echo "[$(date)] [←] $SESSION_ID llm call complete, content=$LEN chars" >> /tmp/agent-llm-calls.log
+            # Per-call cost ledger: timestamp, session, model, tokens, cost.
+            echo "$INPUT" | jq -r '[
+              (now | todateiso8601), .session_id, .model_id,
+              (.usage.input_tokens // 0), (.usage.output_tokens // 0),
+              (if has("cost") then (.cost | tostring) else "unpriced" end)
+            ] | @csv' >> /tmp/agent-cost-ledger.csv
 
       # ====================================================================
       # SESSION-END - cleanup when the session terminates.
