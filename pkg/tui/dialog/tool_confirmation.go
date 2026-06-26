@@ -79,8 +79,12 @@ func (d *toolConfirmationDialog) SetSize(width, height int) tea.Cmd {
 	options := d.renderOptions(contentWidth)
 	optionsHeight := lipgloss.Height(options)
 
-	// The metadata section, when present, adds its own height plus a
-	// leading blank line (matching how View() spaces it).
+	// The safety-warning + metadata sections each contribute their own
+	// height plus a leading blank line (matching how View() spaces them).
+	var safetyHeight int
+	if warning := d.renderSafetyWarning(contentWidth); warning != "" {
+		safetyHeight = lipgloss.Height(warning) + 1
+	}
 	var metadataHeight int
 	if metadata := d.renderMetadata(contentWidth); metadata != "" {
 		metadataHeight = lipgloss.Height(metadata) + 1
@@ -88,7 +92,7 @@ func (d *toolConfirmationDialog) SetSize(width, height int) tea.Cmd {
 
 	// Calculate available height for scroll view
 	frameHeight := styles.DialogStyle.GetVerticalFrameSize()
-	fixedContentHeight := titleHeight + separatorHeight + toolConfirmEmptyLinesBefore + questionHeight + toolConfirmEmptyLinesAfter + optionsHeight + metadataHeight
+	fixedContentHeight := titleHeight + separatorHeight + toolConfirmEmptyLinesBefore + questionHeight + toolConfirmEmptyLinesAfter + optionsHeight + safetyHeight + metadataHeight
 	availableHeight := max(maxDialogHeight-frameHeight-fixedContentHeight, toolConfirmMinScrollHeight)
 	d.scrollView.SetSize(contentWidth, availableHeight)
 
@@ -105,23 +109,106 @@ func (d *toolConfirmationDialog) renderOptions(contentWidth int) string {
 	return RenderHelpKeys(contentWidth, toolconfirm.OptionsHelp(d.permissionPattern)...)
 }
 
+// safetyConventionKeys are the metadata keys the safer_shell builtin
+// uses to surface its verdict to the UI when paired with a
+// `blast_radius` key. The renderer composes a user-facing warning
+// from these instead of showing raw key/value pairs (avoid leaking
+// implementation details into the prompt).
+//
+// The convention only applies when `blast_radius` is also present —
+// `category` and `reason` are deliberately generic key names that a
+// permission_request hook might use for unrelated purposes, so we
+// keep them rendering as plain text when no blast radius indicates
+// a safety verdict is in play.
+var safetyConventionKeys = map[string]struct{}{
+	"blast_radius": {},
+	"category":     {},
+	"reason":       {},
+}
+
+// blastRadiusBadge maps the safer_shell builtin's blast_radius
+// vocabulary onto theme colors. Unknown values render unstyled so the
+// renderer never silently drops data it doesn't recognise.
+func blastRadiusBadge(value string) string {
+	style := styles.BaseStyle.Bold(true)
+	switch value {
+	case "low":
+		style = style.Foreground(styles.Success)
+	case "medium":
+		style = style.Foreground(styles.Warning)
+	case "high":
+		style = style.Foreground(styles.Error)
+	case "unknown":
+		style = style.Foreground(styles.TextMuted)
+	default:
+		return value
+	}
+	return style.Render(value)
+}
+
+// renderSafetyWarning composes the destructive-command warning block
+// when the confirmation event carries the safer_shell builtin's
+// `blast_radius` metadata. The block names the severity prominently
+// (with a colored badge) and surfaces the matched reason as
+// supporting context. Returns "" when no blast radius is present.
+func (d *toolConfirmationDialog) renderSafetyWarning(contentWidth int) string {
+	radius, ok := d.msg.Metadata["blast_radius"]
+	if !ok {
+		return ""
+	}
+
+	heading := styles.BaseStyle.Bold(true).Foreground(styles.Warning).
+		Render(fmt.Sprintf("⚠  Destructive command — %s blast radius", blastRadiusBadge(radius)))
+
+	lines := []string{heading}
+	if reason := d.msg.Metadata["reason"]; reason != "" {
+		lines = append(lines, "  "+styles.DialogContentStyle.Render(reason))
+	}
+
+	return styles.DialogContentStyle.Width(contentWidth).Render(
+		lipgloss.JoinVertical(lipgloss.Left, lines...),
+	)
+}
+
 // renderMetadata renders the key/value annotations attached to the
 // confirmation prompt (static toolset metadata merged with any
-// permission_request hook contributions). Returns "" when there is none.
-// Keys are sorted so the display order is stable across renders.
+// permission_request / safety_check hook contributions). Returns ""
+// when there is none.
+//
+// Metadata keys the safer_shell builtin uses to express its verdict
+// (see [safetyConventionKeys]) are excluded — they're rendered by
+// [renderSafetyWarning] as a polished warning block instead of as
+// raw key/value rows. Anything else renders as plain text so a
+// permission_request hook's freeform annotations still surface.
 func (d *toolConfirmationDialog) renderMetadata(contentWidth int) string {
 	if len(d.msg.Metadata) == 0 {
 		return ""
 	}
 
-	header := styles.SecondaryStyle.Render("Metadata")
-	lines := []string{header}
+	// Only suppress convention keys when blast_radius is present —
+	// then renderSafetyWarning is composing the message from them.
+	// Otherwise (no safety verdict in play), keys like `reason` and
+	// `category` are just regular permission_request metadata and
+	// should render as plain pairs.
+	_, hasBlastRadius := d.msg.Metadata["blast_radius"]
+
+	var lines []string
 	for _, k := range slices.Sorted(maps.Keys(d.msg.Metadata)) {
+		if hasBlastRadius {
+			if _, ok := safetyConventionKeys[k]; ok {
+				continue
+			}
+		}
 		key := styles.MutedStyle.Render(k + ": ")
 		val := styles.DialogContentStyle.Render(d.msg.Metadata[k])
 		lines = append(lines, fmt.Sprintf("  %s%s", key, val))
 	}
+	if len(lines) == 0 {
+		return ""
+	}
 
+	header := styles.SecondaryStyle.Render("Metadata")
+	lines = append([]string{header}, lines...)
 	return styles.DialogContentStyle.Width(contentWidth).Render(
 		lipgloss.JoinVertical(lipgloss.Left, lines...),
 	)
@@ -281,6 +368,10 @@ func (d *toolConfirmationDialog) View() string {
 
 	if argumentsSection != "" {
 		parts = append(parts, "", argumentsSection)
+	}
+
+	if warning := d.renderSafetyWarning(contentWidth); warning != "" {
+		parts = append(parts, "", warning)
 	}
 
 	if metadata := d.renderMetadata(contentWidth); metadata != "" {
