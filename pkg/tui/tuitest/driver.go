@@ -11,8 +11,7 @@
 //
 // The result is a fluent, Selenium-like DSL without Selenium's flakiness:
 //
-//	tuitest.New(t, model).
-//	    Resize(120, 40).
+//	tuitest.New(t, model, 120, 40).
 //	    Type("What's 2+2?").
 //	    Enter().
 //	    WaitFor(tuitest.Contains("4")).
@@ -57,6 +56,7 @@ type Driver struct {
 	tb      testing.TB
 	program programStarter
 	frames  *frameStore
+	sink    frameSink
 
 	waitTimeout time.Duration
 	runDone     chan struct{}
@@ -116,8 +116,9 @@ type programReady interface {
 func New(tb testing.TB, model tea.Model, width, height int, opts ...Option) *Driver {
 	tb.Helper()
 
+	sink := newDebugSink(tb)
 	store := &frameStore{}
-	capture := &captureModel{inner: model, frames: store}
+	capture := &captureModel{inner: model, frames: store, sink: sink}
 
 	// WithoutRenderer: we never want the framework to touch a terminal. Frames
 	// are captured in captureModel.Update instead, which is deterministic.
@@ -139,6 +140,7 @@ func New(tb testing.TB, model tea.Model, width, height int, opts ...Option) *Dri
 		tb:          tb,
 		program:     p,
 		frames:      store,
+		sink:        sink,
 		waitTimeout: defaultWaitTimeout,
 		runDone:     make(chan struct{}),
 	}
@@ -169,6 +171,11 @@ func (d *Driver) stop() {
 	case <-d.runDone:
 	case <-time.After(5 * time.Second):
 		d.tb.Error("tuitest: program did not shut down within 5s")
+	}
+	if d.sink != nil {
+		if err := d.sink.err(); err != nil {
+			d.tb.Errorf("tuitest: debug frame output failed: %v", err)
+		}
 	}
 }
 
@@ -288,18 +295,27 @@ func (d *Driver) Assert(m Matcher) *Driver {
 type captureModel struct {
 	inner  tea.Model
 	frames *frameStore
+	sink   frameSink
+}
+
+func (c *captureModel) recordFrame() {
+	frame := stripFrame(c.inner.View())
+	c.frames.push(frame)
+	if c.sink != nil {
+		c.sink.frame(frame)
+	}
 }
 
 func (c *captureModel) Init() tea.Cmd {
 	cmd := c.inner.Init()
-	c.frames.push(stripFrame(c.inner.View()))
+	c.recordFrame()
 	return cmd
 }
 
 func (c *captureModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	inner, cmd := c.inner.Update(msg)
 	c.inner = inner
-	c.frames.push(stripFrame(c.inner.View()))
+	c.recordFrame()
 	return c, cmd
 }
 

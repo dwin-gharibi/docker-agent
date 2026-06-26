@@ -1,8 +1,11 @@
 package tuitest
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -105,6 +108,99 @@ func TestStripFrame(t *testing.T) {
 	want := "hi\nworld"
 	if got != want {
 		t.Errorf("stripFrame = %q, want %q", got, want)
+	}
+}
+
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.String()
+}
+
+func TestDebugFramesDump(t *testing.T) {
+	origLive := *liveFrames
+	origDump := *dumpFrames
+	t.Cleanup(func() {
+		*liveFrames = origLive
+		*dumpFrames = origDump
+	})
+	*liveFrames = false
+	*dumpFrames = true
+
+	dir := filepath.Join(goldenDir, "frames", safeTestName(t.Name()))
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+
+	d := New(t, &echoModel{}, 80, 24)
+	d.Type("x").WaitFor(Contains("later"))
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("reading frame dump dir: %v", err)
+	}
+	if len(entries) == 0 {
+		t.Fatal("frame dump dir is empty")
+	}
+
+	last, err := os.ReadFile(filepath.Join(dir, entries[len(entries)-1].Name()))
+	if err != nil {
+		t.Fatalf("reading last frame: %v", err)
+	}
+	if !bytes.Contains(last, []byte("later")) {
+		t.Fatalf("last dumped frame = %q, want to contain delayed text", last)
+	}
+}
+
+func TestDebugLiveFrames(t *testing.T) {
+	origLive := *liveFrames
+	origDump := *dumpFrames
+	liveMu.Lock()
+	origWriter := liveWriter
+	var out lockedBuffer
+	liveWriter = &out
+	liveMu.Unlock()
+	t.Cleanup(func() {
+		*liveFrames = origLive
+		*dumpFrames = origDump
+		liveMu.Lock()
+		liveWriter = origWriter
+		liveMu.Unlock()
+	})
+	*liveFrames = true
+	*dumpFrames = false
+
+	d := New(t, &echoModel{}, 80, 24)
+	d.Type("hi")
+
+	got := out.String()
+	if !strings.Contains(got, "--- tuitest frame") {
+		t.Fatalf("live output = %q, want frame header", got)
+	}
+	if !strings.Contains(got, "echo: hi") {
+		t.Fatalf("live output = %q, want latest frame content", got)
+	}
+}
+
+func TestSafeTestName(t *testing.T) {
+	t.Parallel()
+
+	got := safeTestName(`TestFoo/bar baz:*`)
+	want := "TestFoo_bar_baz__"
+	if got != want {
+		t.Errorf("safeTestName = %q, want %q", got, want)
+	}
+	if got := safeTestName(".."); got != "__" {
+		t.Errorf("safeTestName for dots = %q, want __", got)
 	}
 }
 
