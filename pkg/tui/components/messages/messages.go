@@ -38,6 +38,15 @@ import (
 // ToggleHideToolResultsMsg triggers hiding/showing tool results
 type ToggleHideToolResultsMsg struct{}
 
+// scrollToBottomMsg requests the message list scroll to the bottom. It is
+// returned by commands (e.g. after appending a message) instead of mutating
+// scroll state directly from the command goroutine: bubbletea runs command
+// closures on their own goroutines, so writing scrollOffset / userHasScrolled
+// / bottomSlack there races with View() / updateScrollState() on the event
+// loop. Handling it as a message keeps all scroll-state mutation on the
+// single Update/View goroutine.
+type scrollToBottomMsg struct{}
+
 type toggleableView interface {
 	IsToggleLine(lineIdx int) bool
 	Toggle()
@@ -232,6 +241,12 @@ func (m *model) Update(msg tea.Msg) (layout.Model, tea.Cmd) {
 	case DebouncedCopyMsg:
 		cmd := m.handleDebouncedCopy(msg)
 		return m, cmd
+
+	case scrollToBottomMsg:
+		if !m.userHasScrolled {
+			m.scrollToBottom()
+		}
+		return m, nil
 
 	case editfile.ToggleDiffViewMsg:
 		m.invalidateAllItems()
@@ -1287,8 +1302,7 @@ func (m *model) addMessage(msg *types.Message) tea.Cmd {
 	}
 	if shouldAutoScroll {
 		cmds = append(cmds, func() tea.Msg {
-			m.scrollToBottom()
-			return nil
+			return scrollToBottomMsg{}
 		})
 	}
 
@@ -1649,8 +1663,7 @@ func (m *model) addReasoningBlock(agentName, content string) tea.Cmd {
 	}
 	if shouldAutoScroll {
 		cmds = append(cmds, func() tea.Msg {
-			m.scrollToBottom()
-			return nil
+			return scrollToBottomMsg{}
 		})
 	}
 
@@ -1678,10 +1691,7 @@ func (m *model) getActiveReasoningBlock(agentName string) (*reasoningblock.Model
 
 func (m *model) ScrollToBottom() tea.Cmd {
 	return func() tea.Msg {
-		if !m.userHasScrolled {
-			m.scrollToBottom()
-		}
-		return nil
+		return scrollToBottomMsg{}
 	}
 }
 

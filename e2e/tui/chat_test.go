@@ -65,12 +65,12 @@ func TestCommandPalette_Opens(t *testing.T) {
 		WaitFor(tuitest.Absent(placeholder))
 }
 
-// TestChat_BasicMath_Golden snapshots the full finished frame after the agent
+// TestGolden_Chat_BasicMath snapshots the full finished frame after the agent
 // answers, so unintended visual drift in the chat surface shows up as a diff.
 // Refresh the snapshot after an intentional UI change with:
 //
-//	go test ./e2e/tui/ -run TestChat_BasicMath_Golden -tuitest.update
-func TestChat_BasicMath_Golden(t *testing.T) {
+//	go test ./e2e/tui/ -run TestGolden_Chat_BasicMath -tuitest.update
+func TestGolden_Chat_BasicMath(t *testing.T) {
 	// Hide the sidebar so the snapshot doesn't capture the machine-specific
 	// working directory and git branch, and pin the version so a release
 	// build's ldflags-injected version can't change the status bar. Both keep

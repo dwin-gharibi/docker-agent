@@ -891,7 +891,33 @@ func (s *SQLiteSessionStore) UpdateSession(ctx context.Context, session *Session
 		return ErrEmptyID
 	}
 
-	fields, err := sessionPersistedFieldsOf(session)
+	// Snapshot the persisted fields under session.mu so the reads below
+	// don't race with concurrent writers on the runtime stream goroutine
+	// (SetUsage / ApplyCompaction update InputTokens/OutputTokens while a
+	// stream is running). Mirrors InMemorySessionStore.UpdateSession.
+	// MAINTENANCE: when adding new persisted fields to Session, add them here too.
+	session.mu.RLock()
+	snapshot := &Session{
+		ID:                  session.ID,
+		Title:               session.Title,
+		CreatedAt:           session.CreatedAt,
+		ToolsApproved:       session.ToolsApproved,
+		HideToolResults:     session.HideToolResults,
+		WorkingDir:          session.WorkingDir,
+		SendUserMessage:     session.SendUserMessage,
+		MaxIterations:       session.MaxIterations,
+		Starred:             session.Starred,
+		InputTokens:         session.InputTokens,
+		OutputTokens:        session.OutputTokens,
+		Cost:                session.Cost,
+		Permissions:         clonePermissionsConfig(session.Permissions),
+		AgentModelOverrides: cloneStringMap(session.AgentModelOverrides),
+		CustomModelsUsed:    cloneStringSlice(session.CustomModelsUsed),
+		ParentID:            session.ParentID,
+	}
+	session.mu.RUnlock()
+
+	fields, err := sessionPersistedFieldsOf(snapshot)
 	if err != nil {
 		return err
 	}
@@ -926,9 +952,9 @@ func (s *SQLiteSessionStore) UpdateSession(ctx context.Context, session *Session
 		   custom_models_used = excluded.custom_models_used,
 		   thinking = excluded.thinking,
 		   parent_id = excluded.parent_id`,
-		session.ID, session.ToolsApproved, session.InputTokens, session.OutputTokens,
-		session.Title, session.Cost, session.SendUserMessage, session.MaxIterations, session.WorkingDir,
-		session.CreatedAt.Format(time.RFC3339), session.Starred, fields.PermissionsJSON, fields.AgentModelOverridesJSON,
+		snapshot.ID, snapshot.ToolsApproved, snapshot.InputTokens, snapshot.OutputTokens,
+		snapshot.Title, snapshot.Cost, snapshot.SendUserMessage, snapshot.MaxIterations, snapshot.WorkingDir,
+		snapshot.CreatedAt.Format(time.RFC3339), snapshot.Starred, fields.PermissionsJSON, fields.AgentModelOverridesJSON,
 		fields.CustomModelsUsedJSON, false, fields.ParentID)
 	if err != nil {
 		return err
