@@ -3,6 +3,28 @@
 All notable changes to this project will be documented in this file.
 
 
+## [v1.88.1] - 2026-06-26
+
+This release adds session forking by user-message ordinal and includes documentation updates for recently merged features.
+
+## What's New
+- Adds the ability to fork a session by user-message ordinal, allowing clients to target "the Nth user message" directly without translating to a flat message-stream index
+
+## Technical Changes
+- Bumps `github.com/dgageot/rubocop-go` to pull in a new whole-program, inter-procedural dataflow analysis engine and the `Lint/ContextConnectivity` cop
+- Updates documentation for the `plan` builtin toolset, the `readonly` attribute for toolsets and agents, and top-level shared toolsets with `use_toolsets`
+- Fixes tool ordering and `list_plans` description in plan docs; adds `updatedAt` to `read_plan` description
+### Pull Requests
+
+- [#3226](https://github.com/docker/docker-agent/pull/3226) - feat: add readonly attribute for toolsets and agents
+- [#3227](https://github.com/docker/docker-agent/pull/3227) - feat: add plan builtin toolset for shared multi-agent collaboration
+- [#3232](https://github.com/docker/docker-agent/pull/3232) - feat: add top-level shared toolsets with use_toolsets agent field
+- [#3244](https://github.com/docker/docker-agent/pull/3244) - docs: update docs for features merged 2026-06-25 (plan toolset, readonly, shared toolsets)
+- [#3245](https://github.com/docker/docker-agent/pull/3245) - docs: update CHANGELOG.md for v1.88.0
+- [#3247](https://github.com/docker/docker-agent/pull/3247) - chore: bump rubocop-go for whole-program context cop
+- [#3250](https://github.com/docker/docker-agent/pull/3250) - feat(server): fork session by user-message ordinal
+
+
 ## [v1.88.0] - 2026-06-26
 
 This release overhauls the TUI with a redesigned Agents panel, Agent Inspector, configurable keybindings, and image rendering in the lean TUI, plus fixes for provider thinking-budget leaks and OTLP trace export compatibility.
@@ -3840,3 +3862,5 @@ This release improves the terminal user interface with better error handling and
 [v1.87.0]: https://github.com/docker/docker-agent/releases/tag/v1.87.0
 
 [v1.88.0]: https://github.com/docker/docker-agent/releases/tag/v1.88.0
+
+[v1.88.1]: https://github.com/docker/docker-agent/releases/tag/v1.88.1
