@@ -631,6 +631,217 @@ func TestEncryptedStore_KeyringFailureIsCachedOnce(t *testing.T) {
 	}
 }
 
+// TestSecureBackendsExcludeGenericFile guards the fix for the sandbox failure:
+// the generic "file" and "pass" backends must never be in the secure list, or
+// openKeyring would silently return a half-broken backend instead of an error
+// the caller can fall back from.
+func TestSecureBackendsExcludeGenericFile(t *testing.T) {
+	for _, b := range secureBackends {
+		if b == keyring.FileBackend || b == keyring.PassBackend {
+			t.Fatalf("secureBackends must not contain the generic %q backend", b)
+		}
+	}
+}
+
+// TestOpenFileKeyring_Persists verifies the file-backed fallback used inside a
+// sandbox actually persists an item to disk and survives a reopen, so tokens
+// don't vanish between runs.
+func TestOpenFileKeyring_Persists(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), fallbackKeyringDir)
+
+	ring, err := openFileKeyring(dir)
+	if err != nil {
+		t.Fatalf("openFileKeyring: %v", err)
+	}
+	if err := ring.Set(keyring.Item{Key: encryptionKeyItem, Data: []byte("secret")}); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	reopened, err := openFileKeyring(dir)
+	if err != nil {
+		t.Fatalf("reopen openFileKeyring: %v", err)
+	}
+	item, err := reopened.Get(encryptionKeyItem)
+	if err != nil {
+		t.Fatalf("Get after reopen: %v", err)
+	}
+	if string(item.Data) != "secret" {
+		t.Errorf("Data = %q, want %q", item.Data, "secret")
+	}
+}
+
+// TestFileKeyringBackedStore_PersistsAcrossReload exercises the full fallback
+// path a sandbox would take: a KeyringTokenStore backed by the file keyring
+// must round-trip tokens across a simulated process restart.
+func TestFileKeyringBackedStore_PersistsAcrossReload(t *testing.T) {
+	root := t.TempDir()
+	keyringDir := filepath.Join(root, fallbackKeyringDir)
+	tokenPath := filepath.Join(root, tokenFileName)
+
+	ring, err := openFileKeyring(keyringDir)
+	if err != nil {
+		t.Fatalf("openFileKeyring: %v", err)
+	}
+
+	const url = "https://mcp.notion.com/sse"
+	if err := newKeyringTokenStore(ring, tokenPath).StoreToken(url, &mcp.OAuthToken{AccessToken: "notion-token"}); err != nil {
+		t.Fatalf("StoreToken: %v", err)
+	}
+
+	reopened, err := openFileKeyring(keyringDir)
+	if err != nil {
+		t.Fatalf("reopen openFileKeyring: %v", err)
+	}
+	got, err := newKeyringTokenStore(reopened, tokenPath).GetToken(url)
+	if err != nil {
+		t.Fatalf("GetToken after reload: %v", err)
+	}
+	if got.AccessToken != "notion-token" {
+		t.Errorf("AccessToken = %q, want %q", got.AccessToken, "notion-token")
+	}
+}
+
+// TestFileKeyringPassphrase_RandomAndPersistent verifies the file-keyring
+// passphrase is generated randomly on first use, persisted with owner-only
+// permissions, and reused on subsequent calls — so it is unique per install
+// rather than a hardcoded constant baked into the binary.
+func TestFileKeyringPassphrase_RandomAndPersistent(t *testing.T) {
+	dirA := filepath.Join(t.TempDir(), fallbackKeyringDir)
+	if err := ensurePrivateDir(dirA); err != nil {
+		t.Fatalf("ensurePrivateDir: %v", err)
+	}
+
+	first, err := fileKeyringPassphrase(dirA)
+	if err != nil {
+		t.Fatalf("fileKeyringPassphrase: %v", err)
+	}
+	if first == "" {
+		t.Fatal("passphrase must not be empty")
+	}
+
+	// A second call in the same dir must reuse the persisted passphrase.
+	second, err := fileKeyringPassphrase(dirA)
+	if err != nil {
+		t.Fatalf("fileKeyringPassphrase (reuse): %v", err)
+	}
+	if second != first {
+		t.Errorf("passphrase changed across calls: %q != %q", second, first)
+	}
+
+	// The passphrase file must be owner-only.
+	info, err := os.Stat(filepath.Join(dirA, fallbackPassphraseFile))
+	if err != nil {
+		t.Fatalf("Stat passphrase file: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Errorf("passphrase file permissions = %o, want 0600", perm)
+	}
+
+	// A different install dir must get a different passphrase.
+	dirB := filepath.Join(t.TempDir(), fallbackKeyringDir)
+	if err := ensurePrivateDir(dirB); err != nil {
+		t.Fatalf("ensurePrivateDir: %v", err)
+	}
+	other, err := fileKeyringPassphrase(dirB)
+	if err != nil {
+		t.Fatalf("fileKeyringPassphrase (dirB): %v", err)
+	}
+	if other == first {
+		t.Error("two independent installs must not share a passphrase")
+	}
+}
+
+// TestBuildDefaultStore_PrefersNativeKeyring verifies the native keyring is
+// used when it opens successfully, without ever consulting the fallback.
+func TestBuildDefaultStore_PrefersNativeKeyring(t *testing.T) {
+	native := keyring.NewArrayKeyring(nil)
+	fallbackCalled := false
+
+	store := buildDefaultStore(t.TempDir(),
+		func() (keyring.Keyring, error) { return native, nil },
+		func(string) (keyring.Keyring, error) {
+			fallbackCalled = true
+			return nil, errors.New("should not be called")
+		},
+	)
+
+	if _, ok := store.(*KeyringTokenStore); !ok {
+		t.Fatalf("expected *KeyringTokenStore, got %T", store)
+	}
+	if fallbackCalled {
+		t.Error("fallback keyring must not be opened when the native keyring succeeds")
+	}
+}
+
+// TestBuildDefaultStore_FallsBackToFileKeyring verifies that when the native
+// keyring is unavailable (as inside a sandbox), the file-backed keyring is
+// used — the regression path for issue #3037.
+func TestBuildDefaultStore_FallsBackToFileKeyring(t *testing.T) {
+	fallback := keyring.NewArrayKeyring(nil)
+	var gotDir string
+
+	store := buildDefaultStore(t.TempDir(),
+		func() (keyring.Keyring, error) { return nil, errors.New("no OS keyring") },
+		func(dir string) (keyring.Keyring, error) {
+			gotDir = dir
+			return fallback, nil
+		},
+	)
+
+	ks, ok := store.(*KeyringTokenStore)
+	if !ok {
+		t.Fatalf("expected *KeyringTokenStore, got %T", store)
+	}
+	if ks.ring != fallback {
+		t.Error("expected the store to be backed by the fallback keyring")
+	}
+	if filepath.Base(gotDir) != fallbackKeyringDir {
+		t.Errorf("fallback dir = %q, want basename %q", gotDir, fallbackKeyringDir)
+	}
+}
+
+// TestBuildDefaultStore_FallsBackToMemory verifies the last-resort in-memory
+// store is used when neither keyring backend can be opened.
+func TestBuildDefaultStore_FallsBackToMemory(t *testing.T) {
+	store := buildDefaultStore(t.TempDir(),
+		func() (keyring.Keyring, error) { return nil, errors.New("no OS keyring") },
+		func(string) (keyring.Keyring, error) { return nil, errors.New("no file keyring") },
+	)
+
+	if _, ok := store.(*KeyringTokenStore); ok {
+		t.Fatal("expected in-memory store, got *KeyringTokenStore")
+	}
+}
+
+// TestBuildDefaultStore_NilRingFallsThrough guards against a (nil, nil) return
+// from an opener: a nil keyring must be treated like an error and fall through
+// to the next tier rather than constructing a store that panics on first use.
+func TestBuildDefaultStore_NilRingFallsThrough(t *testing.T) {
+	fallback := keyring.NewArrayKeyring(nil)
+
+	// Native opener returns (nil, nil): must not be used, must fall through.
+	store := buildDefaultStore(t.TempDir(),
+		func() (keyring.Keyring, error) { return nil, nil },
+		func(string) (keyring.Keyring, error) { return fallback, nil },
+	)
+	ks, ok := store.(*KeyringTokenStore)
+	if !ok {
+		t.Fatalf("expected *KeyringTokenStore, got %T", store)
+	}
+	if ks.ring != fallback {
+		t.Error("a nil native ring must fall through to the fallback keyring")
+	}
+
+	// Both openers return (nil, nil): must land on the in-memory store.
+	memStore := buildDefaultStore(t.TempDir(),
+		func() (keyring.Keyring, error) { return nil, nil },
+		func(string) (keyring.Keyring, error) { return nil, nil },
+	)
+	if _, ok := memStore.(*KeyringTokenStore); ok {
+		t.Fatal("a nil fallback ring must fall through to the in-memory store")
+	}
+}
+
 // TestKeyringTokenStore_ConcurrentAccess verifies that concurrent reads and
 // writes to the token store are safe and don't cause data races.
 func TestKeyringTokenStore_ConcurrentAccess(t *testing.T) {
