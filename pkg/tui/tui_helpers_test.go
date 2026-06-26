@@ -57,6 +57,12 @@ func TestParseCtrlNumberKey(t *testing.T) {
 		{name: "ctrl+3 via BaseCode", msg: tea.KeyPressMsg{Code: '"', BaseCode: '3', Mod: tea.ModCtrl}, want: 2},
 		// ctrl+alt+1 must not match (extra modifier).
 		{name: "ctrl+alt+1", msg: tea.KeyPressMsg{Code: '1', Mod: tea.ModCtrl | tea.ModAlt}, want: -1},
+		// Lock states (Caps/Num Lock) ride along under the Kitty protocol but
+		// must be ignored so the shortcut still fires.
+		{name: "ctrl+1 with caps lock", msg: tea.KeyPressMsg{Code: '1', Mod: tea.ModCtrl | tea.ModCapsLock}, want: 0},
+		{name: "ctrl+4 with num lock", msg: tea.KeyPressMsg{Code: '4', Mod: tea.ModCtrl | tea.ModNumLock}, want: 3},
+		// Lock state alone (no Ctrl) must not match.
+		{name: "caps lock only", msg: tea.KeyPressMsg{Code: '1', Mod: tea.ModCapsLock}, want: -1},
 	}
 
 	for _, tt := range tests {

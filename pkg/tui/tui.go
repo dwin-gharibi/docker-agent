@@ -2027,6 +2027,12 @@ func (m *appModel) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// lockModifiers are the keyboard lock states (Caps/Num/Scroll Lock). They ride
+// along in a key event's modifier set under the Kitty protocol but must be
+// ignored when matching shortcuts, since whether Caps Lock is on has no bearing
+// on whether the user pressed ctrl+1.
+const lockModifiers = tea.ModCapsLock | tea.ModNumLock | tea.ModScrollLock
+
 // parseCtrlNumberKey checks if msg is ctrl+1 through ctrl+9 and returns the index (0-8), or -1 if not matched.
 //
 // It inspects the key's modifiers and code directly rather than msg.String():
@@ -2034,7 +2040,9 @@ func (m *appModel) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // key's Text field, which makes String() return the bare digit ("1") instead of
 // "ctrl+1", silently breaking string-based matching.
 func parseCtrlNumberKey(msg tea.KeyPressMsg) int {
-	if msg.Mod != tea.ModCtrl {
+	// Require Ctrl and no other active modifier. Lock states (Caps/Num/Scroll)
+	// are masked out first so the shortcut still fires when, e.g., Caps Lock is on.
+	if msg.Mod&^lockModifiers != tea.ModCtrl {
 		return -1
 	}
 	// Prefer BaseCode (the PC-101 layout key) when present so the shortcut
