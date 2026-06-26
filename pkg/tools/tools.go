@@ -186,8 +186,11 @@ type Tool struct {
 	// Metadata carries arbitrary key/value annotations a toolset attaches
 	// to a tool. The runtime forwards it onto the tool-call confirmation
 	// message so clients (TUI, HTTP) can render extra context for the
-	// approval prompt. Empty for tools that don't set any.
-	Metadata map[string]string `json:"metadata,omitempty"`
+	// approval prompt. Empty for tools that don't set any. Not serialised
+	// directly: clients read the merged value from the confirmation event's
+	// top-level metadata field, so exposing it here would duplicate it (with
+	// a stale, pre-merge value) across every Tool-embedding event.
+	Metadata map[string]string `json:"-"`
 }
 
 type ToolAnnotations mcp.ToolAnnotations
