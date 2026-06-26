@@ -299,7 +299,7 @@ func LoadWithConfig(ctx context.Context, agentSource config.Source, runConfig *c
 				skillSet := skillstool.New(loadedSkills, runConfig.WorkingDir)
 				// Resolve the additional toolsets each fork skill exposes in
 				// its sub-session from the top-level toolsets section.
-				forkToolSets, forkWarnings := forkSkillToolSets(ctx, cfg, loadedSkills, parentDir, runConfig, loadOpts.toolsetRegistry, configName, expander)
+				forkToolSets, forkWarnings := forkSkillToolSets(ctx, cfg, &agentConfig, loadedSkills, parentDir, runConfig, loadOpts.toolsetRegistry, configName, expander)
 				if len(forkToolSets) > 0 {
 					skillSet.SetForkToolSets(forkToolSets)
 				}
@@ -678,10 +678,13 @@ func inlineSkills(defs []latest.InlineSkill) []skills.Skill {
 // list of toolsets to expose while the skill runs in its sub-session. Toolset
 // names are resolved against the top-level `toolsets` section and instantiated
 // through the same registry path agents use, so they get the standard
-// name/filter/instruction wrappers. Non-fork skills and skills without
-// declared toolsets are skipped. Creation failures are collected as warnings
-// (parity with getToolsForAgent) rather than aborting the load.
-func forkSkillToolSets(ctx context.Context, cfg *latest.Config, loadedSkills []skills.Skill, parentDir string, runConfig *config.RuntimeConfig, registry ToolsetRegistry, configName string, expander *js.Expander) (map[string][]tools.ToolSet, []string) {
+// name/filter/instruction wrappers. Each toolset is wrapped in a
+// StartableToolSet so the runtime gets the same lazy, single-flight start and
+// failure-dedup semantics as the agent's own toolsets. Non-fork skills and
+// skills without declared toolsets are skipped. Creation failures are
+// collected as warnings (parity with getToolsForAgent) rather than aborting
+// the load.
+func forkSkillToolSets(ctx context.Context, cfg *latest.Config, a *latest.AgentConfig, loadedSkills []skills.Skill, parentDir string, runConfig *config.RuntimeConfig, registry ToolsetRegistry, configName string, expander *js.Expander) (map[string][]tools.ToolSet, []string) {
 	var (
 		result   map[string][]tools.ToolSet
 		warnings []string
@@ -706,11 +709,16 @@ func forkSkillToolSets(ctx context.Context, cfg *latest.Config, loadedSkills []s
 				continue
 			}
 			wrapped := WithToolsFilter(tool, toolset.Tools...)
-			wrapped = WithReadOnlyFilter(wrapped, toolset.ReadOnly)
+			// Honor the agent-level readonly flag, exactly like getToolsForAgent:
+			// a readonly agent must not gain mutating tools through a fork skill.
+			wrapped = WithReadOnlyFilter(wrapped, toolset.ReadOnly || a.ReadOnly)
 			wrapped = WithInstructions(wrapped, expander.Expand(ctx, toolset.Instruction, nil))
 			wrapped = WithToon(wrapped, toolset.Toon)
 			wrapped = WithModelOverride(wrapped, toolset.Model)
-			built = append(built, wrapped)
+			// Wrap for lazy, single-flight start + failure-dedup, matching
+			// agent.WithToolSets. skillSubSessionTools calls Start() on every
+			// run-loop iteration, so the toolset must tolerate repeated starts.
+			built = append(built, tools.NewStartable(wrapped))
 		}
 		if len(built) > 0 {
 			if result == nil {

@@ -54,9 +54,9 @@ agents:
 	assert.Len(t, prepared.ToolSets, 1, "fork skill must carry its resolved assistive toolset")
 }
 
-// TestForkSkillToolsets_NonForkSkipped verifies that toolsets declared on a
-// non-fork skill are not resolved (they are rejected by config validation, so
-// this guards the loader's IsFork gate independently).
+// TestForkSkillToolsets_AllowedToolsThreaded verifies that a fork skill's
+// allowed_tools list is threaded through to the prepared fork (it is enforced
+// against the inherited tools at runtime, see pkg/runtime).
 func TestForkSkillToolsets_AllowedToolsThreaded(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "dummy")
 
@@ -98,4 +98,63 @@ func TestForkSkillToolsets_AllowedToolsThreaded(t *testing.T) {
 // skillSetFrom unwraps a toolset to a *skillstool.ToolSet if possible.
 func skillSetFrom(ts tools.ToolSet) (*skillstool.ToolSet, bool) {
 	return tools.As[*skillstool.ToolSet](ts)
+}
+
+// TestForkSkillToolsets_ReadonlyAgentFiltersMutatingTools verifies that a
+// readonly agent does not gain mutating tools through a fork skill's
+// assistive toolset: the agent-level readonly flag is applied to the skill's
+// toolset, so only read-only tools survive. Without this, a `readonly: true`
+// agent could call a mutating tool (e.g. shell) inside a fork sub-session.
+func TestForkSkillToolsets_ReadonlyAgentFiltersMutatingTools(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "dummy")
+
+	data := []byte(`toolsets:
+  shell_ts:
+    type: shell
+agents:
+  root:
+    model: openai/gpt-4o
+    instruction: test
+    readonly: true
+    skills:
+      - name: builder
+        description: Build things in an isolated context.
+        context: fork
+        toolsets:
+          - shell_ts
+        instructions: Do the build.
+`)
+
+	team, err := Load(t.Context(), config.NewBytesSource("fork_readonly.yaml", data), &config.RuntimeConfig{}, withTestProviderRegistry()...)
+	require.NoError(t, err)
+
+	root, err := team.Agent("root")
+	require.NoError(t, err)
+
+	var skillSet *skillstool.ToolSet
+	for _, ts := range root.ToolSets() {
+		if s, ok := skillSetFrom(ts); ok {
+			skillSet = s
+			break
+		}
+	}
+	require.NotNil(t, skillSet)
+
+	prepared, errResult := skillSet.PrepareForkSubSession(t.Context(), skillstool.RunSkillArgs{Name: "builder", Task: "go"})
+	require.Nil(t, errResult)
+	require.Len(t, prepared.ToolSets, 1)
+
+	// Start and list the skill's toolset; the mutating shell tool must be
+	// filtered out by the agent-level readonly flag, leaving only the
+	// read-only-hinted tools.
+	ts := prepared.ToolSets[0]
+	if startable, ok := tools.As[tools.Startable](ts); ok {
+		require.NoError(t, startable.Start(t.Context()))
+	}
+	listed, err := ts.Tools(t.Context())
+	require.NoError(t, err)
+	for _, tool := range listed {
+		assert.NotEqual(t, "shell", tool.Name, "readonly agent must not expose the mutating shell tool via a fork skill")
+		assert.NotEqual(t, "run_shell_background", tool.Name, "readonly agent must not expose mutating background-shell tools via a fork skill")
+	}
 }
