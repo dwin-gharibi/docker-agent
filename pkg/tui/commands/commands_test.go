@@ -13,6 +13,7 @@ func newTestParser() *Parser {
 	return NewParser(
 		Category{Name: "Session", Commands: builtInSessionCommands()},
 		Category{Name: "Settings", Commands: builtInSettingsCommands()},
+		Category{Name: "Feedback", Commands: builtInFeedbackCommands()},
 	)
 }
 
@@ -123,6 +124,26 @@ func TestParseSlashCommand_OtherCommands(t *testing.T) {
 		msg := cmd()
 		_, ok := msg.(messages.ShowSkillsDialogMsg)
 		assert.True(t, ok)
+	})
+
+	t.Run("feedback command opens URL", func(t *testing.T) {
+		t.Parallel()
+		cmd := parser.Parse("/feedback")
+		require.NotNil(t, cmd)
+		msg := cmd()
+		openMsg, ok := msg.(messages.OpenURLMsg)
+		require.True(t, ok)
+		assert.NotEmpty(t, openMsg.URL)
+	})
+
+	t.Run("bug command opens URL", func(t *testing.T) {
+		t.Parallel()
+		cmd := parser.Parse("/bug")
+		require.NotNil(t, cmd)
+		msg := cmd()
+		openMsg, ok := msg.(messages.OpenURLMsg)
+		require.True(t, ok)
+		assert.NotEmpty(t, openMsg.URL)
 	})
 
 	t.Run("unknown command returns nil", func(t *testing.T) {
