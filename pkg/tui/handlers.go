@@ -323,10 +323,8 @@ func (m *appModel) handleSwitchAgent(agentName string) (tea.Model, tea.Cmd) {
 		return m, notification.ErrorCmd(fmt.Sprintf("Failed to switch to agent '%s': %v", agentName, err))
 	}
 	m.sessionState.SetCurrentAgentName(agentName)
-	return m, tea.Batch(
-		m.updateChatCmd(messages.SessionToggleChangedMsg{}),
-		notification.SuccessCmd(fmt.Sprintf("Switched to agent '%s'", agentName)),
-	)
+	cmd := m.updateChatCmd(messages.SessionToggleChangedMsg{})
+	return m, cmd
 }
 
 // handleShowAgentDetails opens the read-only agent-details dialog for the named
@@ -546,14 +544,13 @@ func (m *appModel) handleCycleThinkingLevel() (tea.Model, tea.Cmd) {
 	if !m.application.SupportsModelSwitching() {
 		return m, notification.InfoCmd("Thinking levels can't be changed with remote runtimes")
 	}
-	level, err := m.application.CycleAgentThinkingLevel(context.Background())
-	if err != nil {
+	if _, err := m.application.CycleAgentThinkingLevel(context.Background()); err != nil {
 		if errors.Is(err, runtime.ErrUnsupported) {
 			return m, notification.InfoCmd("Current model does not support thinking levels")
 		}
 		return m, notification.ErrorCmd(fmt.Sprintf("Failed to change thinking level: %v", err))
 	}
-	return m, notification.InfoCmd(styles.ThinkingGlyph + " Thinking: " + level.String())
+	return m, nil
 }
 
 func (m *appModel) handleChangeModel(modelRef string) (tea.Model, tea.Cmd) {
