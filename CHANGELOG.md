@@ -3,6 +3,40 @@
 All notable changes to this project will be documented in this file.
 
 
+## [v1.88.0] - 2026-06-26
+
+This release overhauls the TUI with a redesigned Agents panel, Agent Inspector, configurable keybindings, and image rendering in the lean TUI, plus fixes for provider thinking-budget leaks and OTLP trace export compatibility.
+
+## What's New
+
+- Adds clearer thinking-state vocabulary in the TUI: effort gauge (6-cell), updated labels (`adaptive→auto`), and token budget display
+- Redesigns the TUI sidebar Agents panel with a focus card and compact roster layout
+- Adds a right-click Agent Inspector showing live and configured agent details
+- Labels the delegation spinner with `parent → child` for at-a-glance readability
+- Adds configurable keybindings via `~/.config/cagent/config.yaml`, including remappable send/newline keys (resolves `Ctrl+J` conflict in VS Code and tmux)
+- Allows embedders to register custom tool renderers keyed by tool name or category, with built-in renderers as fallback
+- Adds a pluggable `Storage` interface to the `plan` toolset (parity with the `todo` toolset), with a default filesystem backend and per-instance construction
+- Appends OTLP signal path so trace export works with generic base-path backends such as Langfuse and LangSmith
+- Renders images in the lean TUI using the Kitty protocol and reuses existing tool call renderers
+
+## Bug Fixes
+
+- Fixes `CloneWithOptions(..., WithNoThinking())` leaking the provider-level `thinking_budget`, which caused short-budget callers (e.g., session-title generation, summaries) to fail
+### Pull Requests
+
+- [#3101](https://github.com/docker/docker-agent/pull/3101) - Merge pull request #3115 from docker/feat/tui-delegation-spinner-readability
+- [#3108](https://github.com/docker/docker-agent/pull/3108) - feat(tui): readable thinking state, redesigned Agents panel, and Agent Inspector
+- [#3115](https://github.com/docker/docker-agent/pull/3115) - feat(tui): live status + labeled spinner for delegation (#3101)
+- [#3202](https://github.com/docker/docker-agent/pull/3202) - Let embedders register custom tool renderers
+- [#3204](https://github.com/docker/docker-agent/pull/3204) - feat(tui): configurable keybindings (Shift+Enter / Ctrl+J newline alternative)
+- [#3236](https://github.com/docker/docker-agent/pull/3236) - docs: update CHANGELOG.md for v1.87.0
+- [#3238](https://github.com/docker/docker-agent/pull/3238) - fix(provider): WithNoThinking clone no longer leaks provider-level thinking_budget
+- [#3239](https://github.com/docker/docker-agent/pull/3239) - feat(plan): add pluggable Storage interface (parity with todo toolset)
+- [#3240](https://github.com/docker/docker-agent/pull/3240) - feat(otel): append OTLP signal path so Langfuse and LangSmith work
+- [#3242](https://github.com/docker/docker-agent/pull/3242) - test(teamloader): wire test provider registry in agent config retention test
+- [#3243](https://github.com/docker/docker-agent/pull/3243) - Lean TUI tool renderers
+
+
 ## [v1.87.0] - 2026-06-25
 
 This release adds shared toolsets, a new `plan` builtin toolset for multi-agent collaboration, and a `readonly` attribute for toolsets and agents, alongside several MCP OAuth reliability fixes and improvements to attachment forwarding and deterministic prompt ordering.
@@ -3804,3 +3838,5 @@ This release improves the terminal user interface with better error handling and
 [v1.86.0]: https://github.com/docker/docker-agent/releases/tag/v1.86.0
 
 [v1.87.0]: https://github.com/docker/docker-agent/releases/tag/v1.87.0
+
+[v1.88.0]: https://github.com/docker/docker-agent/releases/tag/v1.88.0
