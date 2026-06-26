@@ -241,23 +241,20 @@ func (s *Server) createSession(c echo.Context) error {
 	return c.JSON(http.StatusOK, sess)
 }
 
-// forkSession creates a new session whose history is a deep copy of an
-// existing session up to (but excluding) the message at MessageIndex. The
-// fork point must be a user message; the new session uses a
-// fork-numbered title derived from the parent and starts with no runtime
-// attached. Clients are expected to prefill the excluded user message into
-// their chat input for the user to edit and resubmit.
+// forkSession creates a new session whose history is a deep copy of
+// an existing session up to (but excluding) the Nth user message. The
+// new session uses a fork-numbered title and starts with no runtime
+// attached.
 func (s *Server) forkSession(c echo.Context) error {
 	var req api.ForkSessionRequest
 	if err := c.Bind(&req); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("invalid request body: %v", err))
 	}
 
-	forked, err := s.sm.ForkSession(c.Request().Context(), c.Param("id"), req.MessageIndex)
+	forked, err := s.sm.ForkSession(c.Request().Context(), c.Param("id"), req.UserMessageIndex)
 	if err != nil {
 		switch {
-		case errors.Is(err, ErrForkInvalidMessage),
-			errors.Is(err, ErrForkOutOfRange),
+		case errors.Is(err, ErrForkOutOfRange),
 			errors.Is(err, ErrForkInSubSession):
 			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 		}

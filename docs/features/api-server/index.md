@@ -308,27 +308,26 @@ as soon as any session is ready.
 **Request body:**
 
 ```json
-{ "message_index": 2 }
+{ "user_message_index": 1 }
 ```
 
-`message_index` is a **0-based index** into the flat, user-visible message list (the same shape `GET /api/sessions/:id` returns in `messages`). The fork includes messages `[0, message_index)` — the message at `message_index` is **excluded**, so clients can prefill it into their chat input for the user to edit and resubmit.
+`user_message_index` is a **0-based ordinal** that counts only user-role messages in the parent's flat, user-visible message list. The targeted user message is **excluded** from the fork so clients can prefill it into their chat input for the user to edit and resubmit.
 
 **Example:**
 
 ```bash
-# Fork a session before message index 4 (the user message the user wants to rewrite)
+# Fork a session before the second user message (ordinal 1)
 $ curl -X POST http://localhost:8080/api/sessions/$SID/fork \
   -H 'Content-Type: application/json' \
-  -d '{"message_index": 4}'
+  -d '{"user_message_index": 1}'
 # Returns: api.SessionResponse for the new forked session
 # New session title: "<parent title> (fork 1)", "(fork 2)", etc.
 ```
 
 **Validation:**
 
-- `message_index` must point to a **user-role message**; pointing at an assistant turn returns `400 Bad Request`.
-- Out-of-range indices return `400 Bad Request`.
-- An index that falls inside a sub-session returns `400 Bad Request`. A sub-session is a nested session created when a multi-agent config delegates work to a child agent; its messages are embedded within the parent session's message list and cannot be used as a fork boundary.
+- Out-of-range ordinals (negative, or at/past the user-message count) return `400 Bad Request`.
+- An ordinal that resolves to a user message inside a sub-session returns `400 Bad Request`. A sub-session is a nested session created when a multi-agent config delegates work to a child agent; its messages are embedded within the parent session's message list and cannot be used as a fork boundary.
 
 ## Idempotent follow-ups
 

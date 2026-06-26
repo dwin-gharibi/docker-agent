@@ -201,9 +201,9 @@ func TestServer_UpdateSessionTitle(t *testing.T) {
 }
 
 // TestServer_ForkSession exercises the POST /api/sessions/:id/fork
-// endpoint end-to-end: a fork at a user message must return a new
-// session with the history before that message, a fork-numbered title,
-// and a fresh ID. Forking at a non-user message must be rejected with
+// endpoint end-to-end: a fork at the Nth user message must return a
+// new session with the history before that message, a fork-numbered
+// title, and a fresh ID. An out-of-range ordinal must be rejected with
 // 400 Bad Request.
 func TestServer_ForkSession(t *testing.T) {
 	t.Parallel()
@@ -225,10 +225,10 @@ func TestServer_ForkSession(t *testing.T) {
 
 	lnPath := startServerWithStore(t, ctx, prepareAgentsDir(t), store)
 
-	// Happy path: fork before the second user message (flat index 2).
+	// Happy path: fork before the second user message (ordinal 1).
 	resp := httpDo(t, ctx, http.MethodPost, lnPath,
 		"/api/sessions/"+parent.ID+"/fork",
-		api.ForkSessionRequest{MessageIndex: 2})
+		api.ForkSessionRequest{UserMessageIndex: 1})
 	var forked api.SessionResponse
 	unmarshal(t, resp, &forked)
 
@@ -245,19 +245,12 @@ func TestServer_ForkSession(t *testing.T) {
 	assert.Equal(t, forked.ID, fetched.ID)
 	assert.Equal(t, "Original (fork 1)", fetched.Title)
 
-	// Forking at the assistant message must be rejected with 400.
-	rejected := httpRaw(t, ctx, http.MethodPost, lnPath,
-		"/api/sessions/"+parent.ID+"/fork",
-		api.ForkSessionRequest{MessageIndex: 1})
-	assert.Equal(t, http.StatusBadRequest, rejected.StatusCode, rejected.body)
-
-	// Forking past the end of the visible list (no real "after the last
-	// message" full-clone shortcut) must also return 400, not 500. This
-	// pins the sentinel-driven classification so future error-message
-	// reshuffles can't silently flip the status code.
+	// Forking past the last user message (no "full clone" shortcut) must
+	// return 400, not 500. This pins the sentinel-driven classification so
+	// future error-message reshuffles can't silently flip the status code.
 	outOfRange := httpRaw(t, ctx, http.MethodPost, lnPath,
 		"/api/sessions/"+parent.ID+"/fork",
-		api.ForkSessionRequest{MessageIndex: 99})
+		api.ForkSessionRequest{UserMessageIndex: 99})
 	assert.Equal(t, http.StatusBadRequest, outOfRange.StatusCode, outOfRange.body)
 }
 

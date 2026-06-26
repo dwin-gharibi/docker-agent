@@ -187,13 +187,13 @@ type UpdateSessionTitleRequest struct {
 	Title string `json:"title"`
 }
 
-// ForkSessionRequest represents a request to fork a session at a given
-// message index. MessageIndex points at the user message to fork BEFORE
-// (exclusive cut): the new session contains messages [0, MessageIndex)
-// from the parent. The clicked message is excluded so clients can prefill
-// it into the chat input of the new session for the user to edit.
+// ForkSessionRequest represents a request to fork a session at the Nth
+// user message. UserMessageIndex is a 0-based ordinal counting only
+// user-role messages in the parent's flat, user-visible message list;
+// the targeted message is excluded from the fork so clients can
+// prefill it into the chat input.
 type ForkSessionRequest struct {
-	MessageIndex int `json:"message_index"`
+	UserMessageIndex int `json:"user_message_index"`
 }
 
 // UpdateSessionTitleResponse represents the response from updating a session's title
