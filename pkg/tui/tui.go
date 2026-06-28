@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	goruntime "runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"charm.land/bubbles/v2/help"
@@ -65,6 +66,9 @@ const (
 
 // Model is the top-level TUI model that wraps the chat page.
 type appModel struct {
+	shutdownDone <-chan struct{}
+	cleanupOnce  sync.Once
+
 	supervisor *supervisor.Supervisor
 	tabBar     *tabbar.TabBar
 	tuiStore   *tuistate.Store
@@ -344,6 +348,7 @@ func New(ctx context.Context, spawner SessionSpawner, initialApp *app.App, initi
 	sessID := initialApp.Session().ID
 
 	m := &appModel{
+		shutdownDone: ctx.Done(),
 		buildCommandCategories: func(ctx context.Context, _ tea.Model) []commands.Category {
 			return commands.BuildCommandCategories(ctx, initialApp)
 		},
@@ -400,18 +405,6 @@ func New(ctx context.Context, spawner SessionSpawner, initialApp *app.App, initi
 	tabs, activeIdx := sv.GetTabs()
 	tb.SetTabs(tabs, activeIdx)
 	m.statusBar.SetShowNewTab(tb.Height() == 0)
-
-	// Make sure to stop on context cancellation.
-	// Note: chatPages/editors cleanup is handled by cleanupAll() on the
-	// normal exit path (ExitConfirmedMsg). We don't iterate those maps
-	// here to avoid racing with the Bubble Tea event loop.
-	go func() {
-		<-ctx.Done()
-		if ts != nil {
-			_ = ts.Close()
-		}
-		sv.Shutdown()
-	}()
 
 	return m
 }
@@ -533,8 +526,19 @@ func (m *appModel) initAndFocusComponents() tea.Cmd {
 	)
 }
 
+func (m *appModel) contextShutdownCmd() tea.Cmd {
+	return func() tea.Msg {
+		go func() {
+			<-m.shutdownDone
+			m.cleanupManagedResources()
+		}()
+		return nil
+	}
+}
+
 // Init initializes the model.
 func (m *appModel) Init() tea.Cmd {
+	shutdownCmd := m.contextShutdownCmd()
 	// If a different tab should be active on startup, switch to it directly.
 	// The initial tab's pending restore stays lazy — it will be loaded via
 	// handleSwitchTab when the user eventually opens it, just like every
@@ -543,7 +547,7 @@ func (m *appModel) Init() tea.Cmd {
 		tabID := m.pendingActiveTab
 		m.pendingActiveTab = ""
 		_, switchCmd := m.handleSwitchTab(tabID)
-		return tea.Batch(m.dialogMgr.Init(), switchCmd)
+		return tea.Batch(m.dialogMgr.Init(), switchCmd, shutdownCmd)
 	}
 
 	// If the initial tab has a pending session restore, go through
@@ -564,12 +568,13 @@ func (m *appModel) Init() tea.Cmd {
 				cmd = tea.Batch(cmd, m.applySidebarCollapsed(activeID))
 				m.persistActiveTab(sess.ID)
 
-				return tea.Batch(m.dialogMgr.Init(), cmd)
+				return tea.Batch(m.dialogMgr.Init(), cmd, shutdownCmd)
 			}
 		}
 	}
 
 	return tea.Batch(
+		shutdownCmd,
 		m.dialogMgr.Init(),
 		m.chatPage.Init(),
 		m.editor.Init(),
@@ -2540,6 +2545,20 @@ var exitFunc = os.Exit
 
 var shutdownTimeout = 5 * time.Second
 
+// cleanupManagedResources shuts down resources owned by the top-level TUI
+// lifecycle. It is safe to call from both the Bubble Tea event loop (normal
+// exit) and the context watcher (external cancellation).
+func (m *appModel) cleanupManagedResources() {
+	m.cleanupOnce.Do(func() {
+		if m.tuiStore != nil {
+			_ = m.tuiStore.Close()
+		}
+		if m.supervisor != nil {
+			m.supervisor.Shutdown()
+		}
+	})
+}
+
 // cleanupAll cleans up all sessions, editors, and resources.
 func (m *appModel) cleanupAll() {
 	m.transcriber.Stop()
@@ -2547,6 +2566,7 @@ func (m *appModel) cleanupAll() {
 	for _, ed := range m.editors {
 		ed.Cleanup()
 	}
+	m.cleanupManagedResources()
 
 	// Safety net: bubbletea's renderer can deadlock on shutdown if stdout
 	// is wedged — the final flush re-acquires the mutex that the still

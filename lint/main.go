@@ -29,6 +29,9 @@ var cops = []cop.Cop{
 	HookConfigSync,
 	HookBuiltinsRegistered,
 	SlogContextual,
+	ConstructorPurity,
+	ConstructorCommandExec,
+	ConstructorNetworkIO,
 }
 
 func main() {

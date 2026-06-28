@@ -1,6 +1,7 @@
 package gemini
 
 import (
+	"io"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -8,6 +9,19 @@ import (
 
 	"github.com/docker/docker-agent/pkg/chat"
 )
+
+func TestStreamAdapter_CloseBeforeRecv(t *testing.T) {
+	called := false
+	adapter := NewStreamAdapter(func(func(*genai.GenerateContentResponse, error) bool) {
+		called = true
+	}, "test-model", true)
+
+	adapter.Close()
+	_, err := adapter.Recv()
+
+	require.ErrorIs(t, err, io.EOF)
+	require.False(t, called, "Recv after Close must not start the upstream iterator")
+}
 
 func TestStreamAdapter_GeminiUsageMetadata(t *testing.T) {
 	// Gemini 3 (and any future model that emits usage metadata on its own chunk
