@@ -914,7 +914,13 @@ func (f *runExecFlags) runLeanTUI(ctx context.Context, rt runtime.Runtime, sess 
 		cleanup = func() {}
 	}
 
-	wd, _ := os.Getwd()
+	// Prefer the session's working directory so the lean status bar shows
+	// where the tools operate — e.g. the worktree from --worktree, not the
+	// process CWD it was launched from.
+	wd := sess.WorkingDir
+	if wd == "" {
+		wd, _ = os.Getwd()
+	}
 	return leantui.Run(ctx, leantui.Config{
 		App:                    a,
 		WorkingDir:             wd,
