@@ -293,6 +293,6 @@ func GetKeys() KeyMap {
 // them. Used by tests and available for a future hot-reload.
 func ResetKeys() {
 	ckMutex.Lock()
+	defer ckMutex.Unlock()
 	cachedKeys = nil
-	ckMutex.Unlock()
 }

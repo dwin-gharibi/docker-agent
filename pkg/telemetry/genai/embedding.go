@@ -90,8 +90,8 @@ func (s *EmbeddingSpan) SetInputTokens(n int64) {
 		return
 	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.inputTokens = n
-	s.mu.Unlock()
 }
 
 // SetDimensions records the dimensionality of the resulting embedding
@@ -101,8 +101,8 @@ func (s *EmbeddingSpan) SetDimensions(d int) {
 		return
 	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.dimensions = d
-	s.mu.Unlock()
 }
 
 // RecordError marks the span as failed and stores `error.type` for the

@@ -452,8 +452,8 @@ func (a *Agent) AddToolWarning(msg string) {
 		return
 	}
 	a.warningsMu.Lock()
+	defer a.warningsMu.Unlock()
 	a.pendingWarnings = append(a.pendingWarnings, msg)
-	a.warningsMu.Unlock()
 }
 
 // DrainWarnings returns pending warnings and clears them.

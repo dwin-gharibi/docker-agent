@@ -158,8 +158,8 @@ func (a *Agent) newRuntime(ctx context.Context, workingDir string) (runtime.Runt
 // registerSession stores a session in the active sessions map.
 func (a *Agent) registerSession(acpSess *Session) {
 	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.sessions[acpSess.id] = acpSess
-	a.mu.Unlock()
 }
 
 // registerSessionIfAbsent stores acpSess only if no session with the same id
@@ -420,8 +420,8 @@ func (a *Agent) Prompt(ctx context.Context, params acp.PromptRequest) (acp.Promp
 	}
 
 	a.mu.Lock()
+	defer a.mu.Unlock()
 	acpSess.cancel = nil
-	a.mu.Unlock()
 
 	return acp.PromptResponse{StopReason: acp.StopReasonEndTurn}, nil
 }

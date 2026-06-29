@@ -240,8 +240,8 @@ func (c *Capturer) Stop() error {
 	c.capturing = false
 
 	globalCapturerMu.Lock()
+	defer globalCapturerMu.Unlock()
 	globalCapturer = nil
-	globalCapturerMu.Unlock()
 
 	return nil
 }

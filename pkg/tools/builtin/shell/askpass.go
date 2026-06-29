@@ -418,8 +418,8 @@ func wrapSudoCommand(command, shell string) string {
 
 func (h *shellHandler) setElicitationHandler(handler tools.ElicitationHandler) {
 	h.elicitationMu.Lock()
+	defer h.elicitationMu.Unlock()
 	h.elicitationHandler = handler
-	h.elicitationMu.Unlock()
 }
 
 func (h *shellHandler) currentElicitationHandler() tools.ElicitationHandler {

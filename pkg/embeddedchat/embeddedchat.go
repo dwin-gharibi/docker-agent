@@ -269,10 +269,10 @@ func (s *Session) forwardEvents(ctx context.Context, events <-chan dagentruntime
 	defer cancel()
 	defer func() {
 		s.mu.Lock()
+		defer s.mu.Unlock()
 		if s.activeRun == runID {
 			s.activeCancel = nil
 		}
-		s.mu.Unlock()
 	}()
 
 	emit := func(e Event) bool {

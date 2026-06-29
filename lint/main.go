@@ -35,6 +35,7 @@ var cops = []cop.Cop{
 	ConstructorCommandExec,
 	ConstructorNetworkIO,
 	WrapErrors,
+	DeferMutexUnlock,
 }
 
 // programCops lists whole-program, inter-procedural cops. These run once over

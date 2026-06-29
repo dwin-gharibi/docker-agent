@@ -24,8 +24,8 @@ func withCleanToolRegistry(t *testing.T) {
 	customMu.Unlock()
 	t.Cleanup(func() {
 		customMu.Lock()
+		defer customMu.Unlock()
 		custom = saved
-		customMu.Unlock()
 	})
 }
 

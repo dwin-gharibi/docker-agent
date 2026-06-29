@@ -598,8 +598,8 @@ func LoadTheme(ref string) (*Theme, error) {
 
 	// Store in cache (use full ref as key)
 	themeCacheMu.Lock()
+	defer themeCacheMu.Unlock()
 	themeCache[ref] = entry
-	themeCacheMu.Unlock()
 
 	return theme, nil
 }

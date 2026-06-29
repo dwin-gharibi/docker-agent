@@ -199,8 +199,8 @@ func TestDebugLiveFrames(t *testing.T) {
 		*liveFrames = origLive
 		*dumpFrames = origDump
 		liveMu.Lock()
+		defer liveMu.Unlock()
 		liveWriter = origWriter
-		liveMu.Unlock()
 	})
 	*liveFrames = true
 	*dumpFrames = false

@@ -72,8 +72,8 @@ type frameStore struct {
 
 func (s *frameStore) push(frame string) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.frames = append(s.frames, frame)
-	s.mu.Unlock()
 }
 
 // latest returns the most recently captured frame, or "" if none yet.

@@ -54,6 +54,7 @@ func (f *fakeSession) waitParked(t *testing.T) {
 
 func (f *fakeSession) Close(context.Context) error {
 	f.mu.Lock()
+	defer f.mu.Unlock()
 	if !f.closed {
 		f.closed = true
 		// Closed sessions return nil from Wait by convention.
@@ -62,7 +63,6 @@ func (f *fakeSession) Close(context.Context) error {
 		default:
 		}
 	}
-	f.mu.Unlock()
 	return nil
 }
 

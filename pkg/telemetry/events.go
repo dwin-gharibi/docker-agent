@@ -79,16 +79,14 @@ func (tc *Client) RecordSessionStart(ctx context.Context, agentName, sessionID s
 // RecordError records a general session error
 func (tc *Client) RecordError(_ context.Context, errorMsg string) {
 	tc.mu.Lock()
+	defer tc.mu.Unlock()
 
 	if tc.session.SessionEnded || tc.session.AgentName == "" || tc.session.ID == "" {
-		tc.mu.Unlock()
 		return
 	}
 
 	tc.session.ErrorCount++
 	tc.session.Error = append(tc.session.Error, errorMsg)
-
-	tc.mu.Unlock()
 }
 
 // RecordSessionEnd finalizes session tracking

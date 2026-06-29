@@ -78,8 +78,8 @@ func newReconnectableMock() *reconnectableMockClient {
 
 func (m *reconnectableMockClient) Initialize(context.Context, *mcp.InitializeRequest) (*mcp.InitializeResult, error) {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.waitCh = make(chan struct{}) // fresh channel for each session
-	m.mu.Unlock()
 	return &mcp.InitializeResult{}, nil
 }
 
@@ -93,13 +93,13 @@ func (m *reconnectableMockClient) Wait() error {
 
 func (m *reconnectableMockClient) Close(context.Context) error {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	// Close the wait channel to unblock Wait().
 	select {
 	case <-m.waitCh:
 	default:
 		close(m.waitCh)
 	}
-	m.mu.Unlock()
 	return nil
 }
 

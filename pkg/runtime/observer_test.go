@@ -29,14 +29,14 @@ type recordingObserver struct {
 func (o *recordingObserver) OnRunStart(_ context.Context, sess *session.Session) {
 	o.startCalls.Add(1)
 	o.mu.Lock()
+	defer o.mu.Unlock()
 	o.startSessID = sess.ID
-	o.mu.Unlock()
 }
 
 func (o *recordingObserver) OnEvent(_ context.Context, _ *session.Session, e Event) {
 	o.mu.Lock()
+	defer o.mu.Unlock()
 	o.events = append(o.events, e)
-	o.mu.Unlock()
 }
 
 func (o *recordingObserver) snapshot() []Event {
@@ -129,8 +129,8 @@ func TestObserver_MultipleObserversFireInRegistrationOrder(t *testing.T) {
 		return &fnObserver{
 			onEvent: func(_ context.Context, _ *session.Session, _ Event) {
 				mu.Lock()
+				defer mu.Unlock()
 				order = append(order, name)
-				mu.Unlock()
 			},
 		}
 	}

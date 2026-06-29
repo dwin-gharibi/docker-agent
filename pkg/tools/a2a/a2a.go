@@ -206,9 +206,9 @@ func (t *Toolset) Start(ctx context.Context) error {
 // Stop disconnects from the A2A agent.
 func (t *Toolset) Stop(_ context.Context) error {
 	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.client = nil
 	t.card = nil
-	t.mu.Unlock()
 	return nil
 }
 

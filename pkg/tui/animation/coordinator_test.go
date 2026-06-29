@@ -13,9 +13,9 @@ import (
 func resetGlobalCoordinator(t *testing.T) {
 	t.Helper()
 	globalCoordinator.mu.Lock()
+	defer globalCoordinator.mu.Unlock()
 	globalCoordinator.active = 0
 	globalCoordinator.frame = 0
-	globalCoordinator.mu.Unlock()
 }
 
 func getActiveCount() int32 {

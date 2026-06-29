@@ -37,26 +37,25 @@ var globalCoordinator = &Coordinator{}
 // Call this when an animation starts.
 func Register() {
 	globalCoordinator.mu.Lock()
+	defer globalCoordinator.mu.Unlock()
 	globalCoordinator.active++
-	globalCoordinator.mu.Unlock()
 }
 
 // Unregister decrements the active animation count.
 // Call this when an animation stops.
 func Unregister() {
 	globalCoordinator.mu.Lock()
+	defer globalCoordinator.mu.Unlock()
 	if globalCoordinator.active > 0 {
 		globalCoordinator.active--
 	}
-	globalCoordinator.mu.Unlock()
 }
 
 // HasActive returns true if any animations are currently active.
 func HasActive() bool {
 	globalCoordinator.mu.Lock()
-	active := globalCoordinator.active > 0
-	globalCoordinator.mu.Unlock()
-	return active
+	defer globalCoordinator.mu.Unlock()
+	return globalCoordinator.active > 0
 }
 
 // StartTick starts the global animation tick if any animations are active.
@@ -89,9 +88,9 @@ func StartTickIfFirst() tea.Cmd {
 func (c *Coordinator) tickLocked() tea.Cmd {
 	return tea.Tick(time.Second/14, func(time.Time) tea.Msg {
 		c.mu.Lock()
+		defer c.mu.Unlock()
 		c.frame++
 		frame := c.frame
-		c.mu.Unlock()
 		return TickMsg{Frame: frame}
 	})
 }

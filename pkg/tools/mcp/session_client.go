@@ -40,8 +40,8 @@ type sessionClient struct {
 // setSession stores the session under the write lock.
 func (c *sessionClient) setSession(s *gomcp.ClientSession) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.session = s
-	c.mu.Unlock()
 }
 
 // ServerAddress returns the connection identifier captured at construction
@@ -88,14 +88,14 @@ func (c *sessionClient) notificationHandlers() (
 
 func (c *sessionClient) SetToolListChangedHandler(handler func()) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.toolListChangedHandler = handler
-	c.mu.Unlock()
 }
 
 func (c *sessionClient) SetPromptListChangedHandler(handler func()) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.promptListChangedHandler = handler
-	c.mu.Unlock()
 }
 
 func (c *sessionClient) Wait() error {
@@ -278,8 +278,8 @@ func (c *sessionClient) handleElicitationRequest(ctx context.Context, req *gomcp
 // from the MCP server.
 func (c *sessionClient) SetElicitationHandler(handler tools.ElicitationHandler) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.elicitationHandler = handler
-	c.mu.Unlock()
 }
 
 // handleSamplingRequest forwards incoming sampling/createMessage requests
@@ -308,8 +308,8 @@ func (c *sessionClient) handleSamplingRequest(ctx context.Context, req *gomcp.Cr
 // from the MCP server.
 func (c *sessionClient) SetSamplingHandler(handler tools.SamplingHandler) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.samplingHandler = handler
-	c.mu.Unlock()
 }
 
 // requestElicitation invokes the registered elicitation handler directly.
@@ -341,8 +341,8 @@ func (c *sessionClient) requestElicitation(ctx context.Context, req *gomcp.Elici
 // SetOAuthSuccessHandler sets the handler called when an OAuth flow completes.
 func (c *sessionClient) SetOAuthSuccessHandler(handler func()) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.oauthSuccessHandler = handler
-	c.mu.Unlock()
 }
 
 // oauthSuccess invokes the registered OAuth success handler, if any.

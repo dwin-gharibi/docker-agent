@@ -161,8 +161,8 @@ func (l *eventLog) stream(ctx context.Context, since *uint64, send func(seq uint
 
 	defer func() {
 		l.mu.Lock()
+		defer l.mu.Unlock()
 		delete(l.listeners, ln)
-		l.mu.Unlock()
 	}()
 
 	if !l.replay(ctx, since, backlog, send) {

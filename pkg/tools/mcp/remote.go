@@ -169,8 +169,8 @@ func enrichConnectError(err error, t *oauthTransport) error {
 // In managed mode, the client handles the OAuth flow instead of the server.
 func (c *remoteMCPClient) SetManagedOAuth(managed bool) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.managed = managed
-	c.mu.Unlock()
 }
 
 // SetUnmanagedOAuthRedirectURI sets the redirect URI docker-agent advertises
@@ -178,8 +178,8 @@ func (c *remoteMCPClient) SetManagedOAuth(managed bool) {
 // semantics.
 func (c *remoteMCPClient) SetUnmanagedOAuthRedirectURI(uri string) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.unmanagedOAuthRedirectURI = uri
-	c.mu.Unlock()
 }
 
 // createHTTPClient creates an HTTP client with custom headers and OAuth support.

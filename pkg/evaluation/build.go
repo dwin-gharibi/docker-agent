@@ -58,8 +58,8 @@ func (r *Runner) getOrBuildImage(ctx context.Context, evals *session.EvalCriteri
 		}
 
 		r.imageCacheMu.Lock()
+		defer r.imageCacheMu.Unlock()
 		r.imageCache[key] = imageID
-		r.imageCacheMu.Unlock()
 
 		return imageID, nil
 	})

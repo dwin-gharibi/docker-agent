@@ -491,8 +491,8 @@ func cloneSchemaValue(v any) any {
 // AddMessage adds a message to the session
 func (s *Session) AddMessage(msg *Message) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.Messages = append(s.Messages, NewMessageItem(msg))
-	s.mu.Unlock()
 }
 
 // SetUsage records cumulative input/output token counts under s.mu.
@@ -500,9 +500,9 @@ func (s *Session) AddMessage(msg *Message) {
 // these fields without it.
 func (s *Session) SetUsage(input, output int64) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.InputTokens = input
 	s.OutputTokens = output
-	s.mu.Unlock()
 }
 
 // Usage returns a consistent snapshot of the cumulative input/output
@@ -519,25 +519,25 @@ func (s *Session) Usage() (input, output int64) {
 // observe the new tokens without the matching summary item.
 func (s *Session) ApplyCompaction(inputTokens, outputTokens int64, item Item) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.InputTokens = inputTokens
 	s.OutputTokens = outputTokens
 	s.Messages = append(s.Messages, item)
-	s.mu.Unlock()
 }
 
 // AddSubSession adds a sub-session to the session
 func (s *Session) AddSubSession(subSession *Session) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.Messages = append(s.Messages, NewSubSessionItem(subSession))
-	s.mu.Unlock()
 }
 
 // AddError appends a recorded error to the session so it survives reload and
 // JSON export.
 func (s *Session) AddError(e *Error) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.Messages = append(s.Messages, NewErrorItem(e))
-	s.mu.Unlock()
 }
 
 // Duration calculates the duration of the session from message timestamps.

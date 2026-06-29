@@ -160,8 +160,8 @@ func (h *lspHandler) publishSession(cmd *exec.Cmd, stdin io.WriteCloser, stdout 
 	h.capabilities = nil
 	h.serverInfo = nil
 	h.openFilesMu.Lock()
+	defer h.openFilesMu.Unlock()
 	h.openFiles = make(map[string]int)
-	h.openFilesMu.Unlock()
 }
 
 // clearSession is the inverse of publishSession: it nils all session
@@ -191,8 +191,8 @@ func (h *lspHandler) clearSessionLocked() {
 	h.capabilities = nil
 	h.serverInfo = nil
 	h.openFilesMu.Lock()
+	defer h.openFilesMu.Unlock()
 	h.openFiles = make(map[string]int)
-	h.openFilesMu.Unlock()
 }
 
 // fireToolsChanged invokes the registered tools-changed handler if any,

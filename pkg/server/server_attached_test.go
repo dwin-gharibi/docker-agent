@@ -590,8 +590,8 @@ func TestAttachedServer_FollowUpIdempotencyKeyDedupes(t *testing.T) {
 	var delivered []string
 	sm.RegisterFollowUpInjector(sess.ID, func(_ context.Context, content string) {
 		mu.Lock()
+		defer mu.Unlock()
 		delivered = append(delivered, content)
-		mu.Unlock()
 	})
 
 	srv := NewWithManager(sm, "")

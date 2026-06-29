@@ -605,8 +605,8 @@ func (r *RemoteRuntime) AvailableModels(ctx context.Context) []ModelChoice {
 // turn replaces the queued ref; an empty string clears it.
 func (r *RemoteRuntime) SetAgentModel(_ context.Context, _, modelRef string) error {
 	r.pendingMu.Lock()
+	defer r.pendingMu.Unlock()
 	r.pendingModelOverride = modelRef
-	r.pendingMu.Unlock()
 	return nil
 }
 

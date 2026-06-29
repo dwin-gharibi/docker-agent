@@ -167,8 +167,8 @@ func (fm *FileManager) GetOrUpload(ctx context.Context, filePath string) (result
 			}
 			// Cache the path mapping
 			fm.mu.Lock()
+			defer fm.mu.Unlock()
 			fm.paths[absPath] = key
-			fm.mu.Unlock()
 			return flight.result, nil
 		case <-ctx.Done():
 			return nil, ctx.Err()
@@ -188,6 +188,7 @@ func (fm *FileManager) GetOrUpload(ctx context.Context, filePath string) (result
 	func() {
 		defer func() {
 			fm.mu.Lock()
+			defer fm.mu.Unlock()
 			flight.result = upload
 			flight.err = err
 			close(flight.done)
@@ -199,7 +200,6 @@ func (fm *FileManager) GetOrUpload(ctx context.Context, filePath string) (result
 				fm.uploads[key] = upload
 				fm.paths[absPath] = key
 			}
-			fm.mu.Unlock()
 		}()
 
 		upload, err = fm.upload(ctx, absPath, hash, mimeType, stat.Size())

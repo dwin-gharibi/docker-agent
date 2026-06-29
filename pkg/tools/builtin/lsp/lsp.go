@@ -399,8 +399,8 @@ func New(command string, args, env []string, workingDir string, policy ...lifecy
 		// Reset diagnostics on disconnect: the next server may not
 		// re-emit them and stale data is worse than nothing.
 		h.diagnosticsMu.Lock()
+		defer h.diagnosticsMu.Unlock()
 		h.diagnostics = make(map[string][]lspDiagnostic)
-		h.diagnosticsMu.Unlock()
 	}
 	h.supervisor = lifecycle.New("lsp/"+command, &lspConnector{h: h}, base)
 	return &ToolSet{handler: h}
@@ -554,8 +554,8 @@ func (h *lspHandler) snapshotCapabilities() *lspServerCapabilities {
 // capability-filtered list.
 func (t *ToolSet) SetToolsChangedHandler(handler func()) {
 	t.handler.mu.Lock()
+	defer t.handler.mu.Unlock()
 	t.handler.toolsChangedHandler = handler
-	t.handler.mu.Unlock()
 }
 
 // allLSPTools returns the full catalogue of LSP tools backed by h. It is

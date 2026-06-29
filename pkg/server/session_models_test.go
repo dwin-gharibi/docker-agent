@@ -621,8 +621,8 @@ func TestApplyStoredOverrides(t *testing.T) {
 		applyStoredOverrides(t.Context(), "sess", fake, nil)
 
 		fake.mu.Lock()
+		defer fake.mu.Unlock()
 		assert.Empty(t, fake.overrides)
-		fake.mu.Unlock()
 	})
 
 	t.Run("no-op when runtime does not support switching", func(t *testing.T) {
@@ -643,9 +643,9 @@ func TestApplyStoredOverrides(t *testing.T) {
 		})
 
 		fake.mu.Lock()
+		defer fake.mu.Unlock()
 		assert.Equal(t, "openai/gpt-4o", fake.overrides["root"])
 		assert.Equal(t, "anthropic/claude-sonnet-4-0", fake.overrides["researcher"])
-		fake.mu.Unlock()
 	})
 
 	t.Run("runtime errors are swallowed (logged) so the session still loads", func(t *testing.T) {

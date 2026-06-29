@@ -26,8 +26,8 @@ func TestInstructions_Concurrent(t *testing.T) {
 			// Simulate a concurrent writer (the supervisor's Connect updates
 			// instructions under ts.mu after a successful Initialize).
 			ts.mu.Lock()
+			defer ts.mu.Unlock()
 			ts.instructions = "updated"
-			ts.mu.Unlock()
 		}()
 		go func() {
 			defer wg.Done()

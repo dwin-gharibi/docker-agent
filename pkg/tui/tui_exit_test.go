@@ -233,19 +233,19 @@ func (w *blockingWriter) Write(p []byte) (int, error) {
 // reblock installs a new gate so that subsequent writes block again.
 func (w *blockingWriter) reblock() {
 	w.mu.Lock()
+	defer w.mu.Unlock()
 	w.gate = make(chan struct{})
-	w.mu.Unlock()
 }
 
 // unblock releases all pending and future writes.
 func (w *blockingWriter) unblock() {
 	w.mu.Lock()
+	defer w.mu.Unlock()
 	select {
 	case <-w.gate:
 	default:
 		close(w.gate)
 	}
-	w.mu.Unlock()
 }
 
 // quitModel is a minimal bubbletea model that requests alt-screen and quits
