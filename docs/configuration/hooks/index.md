@@ -36,7 +36,6 @@ docker-agent dispatches the following hook events:
 
 | Event                       | When it fires                                                                     | Can block? |
 | --------------------------- | --------------------------------------------------------------------------------- | ---------- |
-| `safety_check`              | Before the deterministic approval pipeline — verdicts preempt `--yolo` / permission rules | Yes |
 | `pre_tool_use`              | Before a tool call executes                                                       | Yes        |
 | `tool_response_transform`   | Between a tool's execution and the runtime's emission/record of the response      | No         |
 | `post_tool_use`             | After a tool completes — fires for both success and failure                       | Yes        |
@@ -160,7 +159,7 @@ Built-ins are typically zero-config and faster than equivalent shell hooks becau
 | `max_iterations`        | `before_llm_call`                                                                         | `["<N>"]` (required)  | Hard-stops the agent after `N` model calls. Stateless: the runtime supplies the iteration counter on every dispatch.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `snapshot`              | `session_start`, `turn_start`, `turn_end`, `pre_tool_use`, `post_tool_use`, `session_end` | _none_                | Records filesystem snapshots in a shadow git repo under the docker-agent data directory. No-op outside git repos; respects the source repo's ignore rules and skips newly-added files larger than 2 MiB.                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `redact_secrets`        | `pre_tool_use`, `before_llm_call`, `tool_response_transform`                              | _none_                | Scrubs detected secrets (API keys, tokens, private keys, …) out of tool call arguments, outgoing chat content, and tool output. The same builtin handles all three events and dispatches on the event name. Auto-registered on all three events by `redact_secrets: true` on the agent — see [`examples/redact_secrets_hooks.yaml`](https://github.com/docker/docker-agent/blob/main/examples/redact_secrets_hooks.yaml) for the manual wiring.                                                                                                                                                                                     |
-| `safer_shell`           | `safety_check`                                                                            | _none_                | Classifies shell commands against an embedded taxonomy. Destructive matches (rm -rf, docker volume rm, mkfs, …) get an Ask verdict with `blast_radius` / `category` metadata; known-safe reads (ls, git status, docker ps, …) flow through silently; everything else asks with `blast_radius=unknown`. Filters by tool name internally (no-op for non-shell calls). Auto-registered by `safer: true` on a shell toolset — see [`examples/shell_safer.yaml`](https://github.com/docker/docker-agent/blob/main/examples/shell_safer.yaml). |
+| `safer_shell`           | `pre_tool_use` (with `preempt_yolo: true`)                                                | _none_                | Classifies shell commands against an embedded taxonomy. Destructive matches (rm -rf, docker volume rm, mkfs, …) get an Ask verdict with `blast_radius` / `category` metadata; known-safe reads (ls, git status, docker ps, …) flow through silently; everything else asks with `blast_radius=unknown`. Filters by tool name internally (no-op for non-shell calls). Registered with `preempt_yolo: true` so the entry fires before `Decide()` / `--yolo`. Auto-registered by `safer: true` on a shell toolset — see [`examples/shell_safer.yaml`](https://github.com/docker/docker-agent/blob/main/examples/shell_safer.yaml). |
 | `unload`                | `on_agent_switch`                                                                         | _none_                | POSTs `{"model": "<id>"}` to each of the previous agent's DMR model endpoints (`/_unload` by default, overridable per-model via `unload_api`) to free the GPU/RAM the just-departing model was holding. Pure HTTP — reads the model snapshot the runtime ships on `on_agent_switch` and depends on no provider-specific runtime state. Non-DMR providers (OpenAI, Anthropic, …) are silently skipped, so cross-provider chains are safe. Errors are logged and swallowed; agent switching never blocks on a slow or unreachable engine (each call has a 10 s timeout). See [`examples/unload_on_switch.yaml`](https://github.com/docker/docker-agent/blob/main/examples/unload_on_switch.yaml). |
 
 <div class="callout callout-info" markdown="1">
@@ -254,7 +253,6 @@ In addition to the common fields, each event ships its own payload:
 
 | Event                       | Extra fields                                                                                                          |
 | --------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `safety_check`              | `agent_name`, `tool_name`, `tool_use_id`, `tool_input`                                                                |
 | `pre_tool_use`              | `agent_name`, `tool_name`, `tool_use_id`, `tool_input`                                                                |
 | `tool_response_transform`   | `tool_name`, `tool_use_id`, `tool_input`, `tool_response`                                                             |
 | `post_tool_use`             | `agent_name`, `tool_name`, `tool_use_id`, `tool_input`, `tool_response`, `tool_error`                                 |
@@ -340,22 +338,52 @@ The `hook_specific_output` for `pre_tool_use` (and `permission_request`) support
 | `permission_decision`        | string | `allow`, `deny`, or `ask`               |
 | `permission_decision_reason` | string | Explanation for the decision            |
 | `updated_input`              | object | Modified tool input (replaces original) |
-| `metadata`                   | object | (`permission_request` only) string key/value annotations merged onto the tool-call confirmation prompt — see below |
+| `metadata`                   | object | (`permission_request` and `pre_tool_use` entries with `preempt_yolo: true` only) string key/value annotations merged onto the tool-call confirmation prompt — see below |
 
-### Safety-Check Specific Output
+### Preempting `--yolo` from `pre_tool_use`
 
-`safety_check` reuses the `permission_decision` shape from `pre_tool_use`
-with one critical difference: it fires BEFORE the deterministic
-approval pipeline, so a `deny`/`ask` here cannot be bypassed by
-`--yolo` or `allow` permission rules.
+`pre_tool_use` entries default to firing AFTER the deterministic approval
+pipeline (`--yolo` / permission allow-rules / read-only hint), so a yolo'd
+call skips them entirely. For security-critical checks that MUST run on
+every call regardless of `--yolo`, set `preempt_yolo: true` on the matcher
+entry:
 
-| Field                        | Type   | Description                                                                                                                                                                                                                                                                                                       |
-| ---------------------------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `permission_decision`        | string | `allow`, `deny`, or `ask`. `allow` is advisory at this stage — the pipeline still runs `Decide()` and `pre_tool_use`. `deny` rejects the call outright; `ask` forces user confirmation regardless of `--yolo`.                                                                                                    |
-| `permission_decision_reason` | string | Human-readable explanation surfaced in the confirmation prompt and the deny error response.                                                                                                                                                                                                                       |
-| `metadata`                   | object | Free-form key/value annotations (`map[string]string`) merged into the tool-call confirmation event. Conventions: `blast_radius` (`low`/`medium`/`high`/`unknown`) and `category` get special rendering in the TUI confirmation prompt; other keys render as plain text. Last writer wins on key clashes across hooks. |
+```yaml
+hooks:
+  pre_tool_use:
+    - matcher: "*"
+      preempt_yolo: true
+      hooks:
+        - type: builtin
+          command: safer_shell
+```
 
-Hook crashes fail closed (deny) for this event, matching `pre_tool_use`.
+The entry then fires in a dedicated stage 0 BEFORE `Decide()`:
+
+- `deny` rejects the call outright; the user is not prompted.
+- `ask` forces user confirmation. The default `pre_tool_use` lane and
+  `permission_request` are skipped on this path so a policy-level
+  allow there can't override the security verdict.
+- `allow` is advisory — the pipeline still runs `Decide()` and the
+  rest of `pre_tool_use`. Same shape as a regular `allow` on the
+  default lane, just observed earlier.
+- No verdict (empty `permission_decision`) falls through.
+
+Hook crashes on a `preempt_yolo: true` entry fail closed (deny), matching
+the default `pre_tool_use` posture.
+
+Preempting entries can attach structured context via
+`hook_specific_output.metadata` (`map[string]string`). The runtime merges
+that into the tool-call confirmation event. Two key conventions get
+special rendering in the TUI confirmation prompt:
+
+- `blast_radius` — one of `low`, `medium`, `high`, `unknown`. Rendered
+  as a colored severity badge (green / yellow / red / muted).
+- `category` — taxonomy tag (e.g. `fs-delete`, `dk-volume-del`).
+
+Plus a free-form `reason` key that the dialog shows as supporting
+context. Other keys render as plain text. Last writer wins on key
+clashes across hooks. The `safer_shell` builtin uses this convention.
 
 ### Tool-Response-Transform Specific Output
 

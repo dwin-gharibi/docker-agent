@@ -30,13 +30,15 @@
 //   - limit_large_tool_results
 //     (tool_response_transform) — store oversized tool output in a temp file
 //     and replace it with a bounded tail plus notice
-//   - safer_shell           (safety_check)    — classify destructive
+//   - safer_shell           (pre_tool_use)    — classify destructive
 //     shell commands against an embedded taxonomy
 //     and force user confirmation regardless of
-//     --yolo / permission allow-rules. Filters by
-//     tool name internally; no-op for non-shell
-//     calls. Auto-injected by `safer: true` on a
-//     shell toolset (see ApplyAgentDefaults).
+//     --yolo / permission allow-rules. Registered
+//     with preempt_yolo:true so the entry fires
+//     before Decide(). Filters by tool name
+//     internally; no-op for non-shell calls.
+//     Auto-injected by `safer: true` on a shell
+//     toolset (see ApplyAgentDefaults).
 //   - http_post              (any event)       — POST args[1] to args[0]
 //
 // Reference any of them from a hook YAML entry as
@@ -105,10 +107,11 @@ type AgentDefaults struct {
 	// entry that already names the same builtin.
 	RedactSecrets bool
 	// SaferShell auto-injects the safer_shell builtin under
-	// safety_check. Equivalent to writing the hook entry by hand. Set
-	// from the shell toolset's `safer: true` flag during agent loading;
-	// the builtin filters by tool name internally so it's a no-op for
-	// agents whose shell toolset doesn't opt in.
+	// pre_tool_use with preempt_yolo:true so the entry fires before
+	// Decide()/--yolo. Equivalent to writing the hook entry by hand.
+	// Set from the shell toolset's `safer: true` flag during agent
+	// loading; the builtin filters by tool name internally so it's a
+	// no-op for agents whose shell toolset doesn't opt in.
 	SaferShell bool
 }
 
@@ -171,12 +174,17 @@ func ApplyAgentDefaults(cfg *hooks.Config, d AgentDefaults) *hooks.Config {
 	}
 	if d.SaferShell {
 		// Wildcard matcher: the builtin filters by tool name
-		// internally (no-op for non-shell calls). Idempotent against
-		// an explicit YAML `safety_check` entry naming the same
-		// builtin via the dedup in hooks.Executor.hooksFor.
-		cfg.SafetyCheck = append(cfg.SafetyCheck, hooks.MatcherConfig{
-			Matcher: "*",
-			Hooks:   []hooks.Hook{builtinHook(SaferShell)},
+		// internally (no-op for non-shell calls). preempt_yolo:true
+		// makes the entry fire BEFORE Decide() so destructive-command
+		// verdicts cannot be bypassed by --yolo or permission
+		// allow-rules. Idempotent against an explicit YAML
+		// pre_tool_use entry naming the same builtin via the dedup in
+		// hooks.Executor.hooksFor.
+		preemptYolo := true
+		cfg.PreToolUse = append(cfg.PreToolUse, hooks.MatcherConfig{
+			Matcher:     "*",
+			PreemptYolo: &preemptYolo,
+			Hooks:       []hooks.Hook{builtinHook(SaferShell)},
 		})
 	}
 	if cfg.IsEmpty() {

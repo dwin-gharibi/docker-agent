@@ -49,8 +49,9 @@ toolsets:
     safer: true
 ```
 
-This auto-registers the [`safer_shell`](../../configuration/hooks/#built-in-hooks) builtin under the
-`safety_check` hook event. Three behaviors:
+This auto-registers the [`safer_shell`](../../configuration/hooks/#built-in-hooks) builtin
+under `pre_tool_use` with `preempt_yolo: true` so the entry fires
+before `Decide()` / `--yolo`. Three behaviors:
 
 - **Destructive matches** (`rm -rf <path>`, `docker volume rm`, `mkfs`, `dd if=… of=/dev/<disk>`, …) get a forced user confirmation carrying a `blast_radius` classification (`low` / `medium` / `high` / `unknown`) and a `category` tag. The TUI confirmation dialog renders the blast radius with a color badge.
 - **Known-safe reads** (`ls`, `cat`, `git status`, `git diff`, `docker ps`, `docker logs`, `kubectl get`, …) flow through silently — they're treated as no-opinion and follow the regular approval pipeline (`--yolo`, permission rules, read-only hint).
@@ -58,7 +59,7 @@ This auto-registers the [`safer_shell`](../../configuration/hooks/#built-in-hook
 
 The verdict cannot be bypassed by `--yolo` or by a `permission_request` hook that returns `allow` — `safety_check` runs before both. Compound shell (`a && b`, `a; b`, `a | b`) is never matched against the safe allowlist; any destructive segment falls through to ask. The full taxonomy lives in [`pkg/hooks/builtins/safety_patterns.json`](https://github.com/docker/docker-agent/blob/main/pkg/hooks/builtins/safety_patterns.json).
 
-See [`examples/shell_safer.yaml`](https://github.com/docker/docker-agent/blob/main/examples/shell_safer.yaml) for a full example. Under the hood, `safer: true` is a sugar that appends one entry under `hooks.safety_check`; writing the entry by hand achieves the same thing.
+See [`examples/shell_safer.yaml`](https://github.com/docker/docker-agent/blob/main/examples/shell_safer.yaml) for a full example. Under the hood, `safer: true` is a sugar that appends one entry under `hooks.pre_tool_use` with `preempt_yolo: true`; writing the entry by hand achieves the same thing.
 
 ### Sudo support
 

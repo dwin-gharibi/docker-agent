@@ -1,8 +1,9 @@
 package builtins
 
 // safer_shell is the destructive-command guard for the shell toolset.
-// It fires on EventSafetyCheck (pre-Decide(), before --yolo) and
-// classifies each shell call against an embedded taxonomy:
+// It fires on EventPreToolUse (registered with preempt_yolo:true so
+// the runtime dispatches it before Decide()/--yolo) and classifies
+// each shell call against an embedded taxonomy:
 //
 //   1. Destructive match → Ask + Metadata{blast_radius, category, reason}
 //   2. Safe match        → nil (no opinion; falls through to the
@@ -148,7 +149,7 @@ func compileSafe(value any) ([]safePattern, error) {
 // closed is the security-meaningful choice and matches [failClosed]'s
 // treatment of EventSafetyCheck.
 func saferShell(_ context.Context, in *hooks.Input, _ []string) (*hooks.Output, error) {
-	if in == nil || in.HookEventName != hooks.EventSafetyCheck {
+	if in == nil || in.HookEventName != hooks.EventPreToolUse {
 		return nil, nil
 	}
 	if in.ToolName != shellToolName {
@@ -246,7 +247,7 @@ func askWithMetadata(blastRadius, category, reason string) *hooks.Output {
 	}
 	return &hooks.Output{
 		HookSpecificOutput: &hooks.HookSpecificOutput{
-			HookEventName:            hooks.EventSafetyCheck,
+			HookEventName:            hooks.EventPreToolUse,
 			PermissionDecision:       hooks.DecisionAsk,
 			PermissionDecisionReason: reason,
 			Metadata:                 meta,

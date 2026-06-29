@@ -205,20 +205,30 @@ const (
 	// a hook may abort the run by returning decision="block" (or
 	// continue=false / exit code 2), e.g. when setup fails.
 	EventWorktreeCreate EventType = "worktree_create"
-	// EventSafetyCheck fires once per tool call BEFORE the deterministic
-	// approval pipeline (--yolo, permission patterns, pre_tool_use). It
-	// is the only event whose verdict can preempt --yolo: a deny here
-	// rejects the call regardless of permission allow-rules; an ask here
-	// forces a user confirmation that --yolo would otherwise skip. Hooks
-	// surface structured context (e.g. blast radius, risk category) via
-	// [HookSpecificOutput.Metadata]; the runtime merges that into the
-	// tool-call confirmation event so renderers can highlight destructive
-	// calls. An ALLOW verdict is advisory — the call still flows through
-	// the rest of the approval pipeline. Hook crashes fail closed, same
-	// as [EventPreToolUse]. Builtins should filter by [Input.ToolName]
-	// and return nil for tools they don't classify.
-	EventSafetyCheck EventType = "safety_check"
 )
+
+// EventPreToolUsePreYolo is the runtime-internal sentinel used to
+// dispatch the preempt-yolo lane of pre_tool_use. Entries declared
+// in YAML with `preempt_yolo: true` are bucketed here at
+// compileEvents time and dispatched BEFORE the deterministic
+// approval pipeline (--yolo, permission patterns) so a deny/ask
+// verdict cannot be bypassed by auto-approval rules. Default
+// pre_tool_use entries continue to fire under EventPreToolUse after
+// Decide(), as before.
+//
+// Hooks see [Input.HookEventName] = EventPreToolUse on this lane
+// (the executor normalises it before invoking handlers), so builtins
+// and external scripts don't need to know about the internal split.
+// Aggregation handles this sentinel specifically only for Metadata
+// collection — Decision/Allowed/UpdatedInput semantics are shared
+// with EventPreToolUse.
+//
+// Do NOT use this in YAML; HooksConfig has no matching field. It is
+// declared as a var (not a const) so the HookConfigSync linter — which
+// requires every EventXxx const to have a corresponding HooksConfig
+// field — does not flag it. The dispatcher in pkg/runtime/toolexec
+// references this name when consulting the preempt lane.
+var EventPreToolUsePreYolo EventType = "pre_tool_use_pre_yolo"
 
 // Input is the JSON-serializable payload passed to hooks via stdin.
 type Input struct {

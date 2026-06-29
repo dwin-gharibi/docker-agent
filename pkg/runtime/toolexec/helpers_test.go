@@ -32,9 +32,14 @@ func newDenyChecker(toolName string) *permissions.Checker {
 type stubHookDispatcher struct {
 	on                map[hooks.EventType]*hooks.Result
 	lastPostToolInput *hooks.Input
+	// dispatched records every event the dispatcher asked us to fire,
+	// in order. Tests assert against this to pin negative cases —
+	// "this event must NOT have been dispatched in pipeline X."
+	dispatched []hooks.EventType
 }
 
 func (s *stubHookDispatcher) Dispatch(_ context.Context, _ *agent.Agent, event hooks.EventType, in *hooks.Input) *hooks.Result {
+	s.dispatched = append(s.dispatched, event)
 	if event == hooks.EventPostToolUse {
 		s.lastPostToolInput = in
 	}

@@ -79,8 +79,10 @@ func compileEvents(c *Config) map[EventType][]matcher {
 		}
 		return []matcher{{hooks: hooks}}
 	}
+	preToolUseDefault, preToolUsePreYolo := splitPreToolUseByPreemptYolo(c.PreToolUse)
 	return map[EventType][]matcher{
-		EventPreToolUse:                 compileMatchers(c.PreToolUse),
+		EventPreToolUse:                 preToolUseDefault,
+		EventPreToolUsePreYolo:          preToolUsePreYolo,
 		EventPostToolUse:                compileMatchers(c.PostToolUse),
 		EventPermissionRequest:          compileMatchers(c.PermissionRequest),
 		EventSessionStart:               flat(c.SessionStart),
@@ -106,8 +108,28 @@ func compileEvents(c *Config) map[EventType][]matcher {
 		EventAfterCompaction:            flat(c.AfterCompaction),
 		EventToolResponseTransform:      compileMatchers(c.ToolResponseTransform),
 		EventWorktreeCreate:             flat(c.WorktreeCreate),
-		EventSafetyCheck:                compileMatchers(c.SafetyCheck),
 	}
+}
+
+// splitPreToolUseByPreemptYolo buckets pre_tool_use matcher entries
+// into the default lane (post-Decide()) and the preempt-yolo lane
+// (pre-Decide()). The lane is selected per entry via
+// [MatcherConfig.PreemptYolo]; nil/false → default, true → preempt.
+//
+// The split is done once at compileEvents time so the dispatcher's
+// hot path is a single map lookup per lane. Entries inside one
+// matcher entry share a lane — if an author wants two hooks at
+// different lanes, they declare two YAML entries.
+func splitPreToolUseByPreemptYolo(configs []MatcherConfig) (defaults, preempt []matcher) {
+	var defaultCfgs, preemptCfgs []MatcherConfig
+	for _, mc := range configs {
+		if mc.PreemptYolo != nil && *mc.PreemptYolo {
+			preemptCfgs = append(preemptCfgs, mc)
+		} else {
+			defaultCfgs = append(defaultCfgs, mc)
+		}
+	}
+	return compileMatchers(defaultCfgs), compileMatchers(preemptCfgs)
 }
 
 func compileMatchers(configs []MatcherConfig) []matcher {
@@ -139,10 +161,23 @@ func (e *Executor) Has(event EventType) bool {
 // verdicts into a single [Result]. Sets input.HookEventName so handlers
 // don't have to remember. Defaults [Input.Cwd] to the executor's
 // working directory when the caller didn't supply one.
+//
+// EventPreToolUsePreYolo is an internal sentinel for the preempt-yolo
+// lane of pre_tool_use. Hooks on this lane see input.HookEventName =
+// EventPreToolUse (the executor normalises it before invoking
+// handlers) and aggregation reuses the EventPreToolUse branches.
+// Tracing keeps the lane visible via the span name.
 func (e *Executor) Dispatch(ctx context.Context, event EventType, input *Input) (*Result, error) {
 	hooks := e.hooksFor(event, input.ToolName)
 	if len(hooks) == 0 {
 		return &Result{Allowed: true}, nil
+	}
+
+	// Hooks on the preempt-yolo lane see the public pre_tool_use event
+	// name so a single handler implementation works on either lane.
+	publicEvent := event
+	if event == EventPreToolUsePreYolo {
+		publicEvent = EventPreToolUse
 	}
 
 	// Single span per Dispatch call covers every hook the event matched.
@@ -166,7 +201,7 @@ func (e *Executor) Dispatch(ctx context.Context, event EventType, input *Input) 
 	}
 	defer span.End()
 
-	input.HookEventName = event
+	input.HookEventName = publicEvent
 	if input.Cwd == "" {
 		input.Cwd = e.workingDir
 	}
@@ -358,12 +393,12 @@ func parseStdoutJSON(stdout string) *Output {
 }
 
 // failClosed reports whether a hook failure on event must deny the
-// event. PreToolUse and SafetyCheck are hard security boundaries: a
+// event. PreToolUse (both lanes) is a hard security boundary: a
 // crashed safety hook must not silently allow the call through.
 // Every other event surfaces failures as warnings unless the hook
 // opts into ErrorPolicyBlock.
 func failClosed(event EventType) bool {
-	return event == EventPreToolUse || event == EventSafetyCheck
+	return event == EventPreToolUse || event == EventPreToolUsePreYolo
 }
 
 // stdoutAsContext reports whether plain stdout (non-JSON, exit 0)
@@ -450,13 +485,13 @@ func aggregate(results []hookResult, event EventType) *Result {
 			sysMsgs = append(sysMsgs, out.SystemMessage)
 		}
 		if hso := out.HookSpecificOutput; hso != nil {
-			if (event == EventPreToolUse || event == EventSafetyCheck) && hso.PermissionDecision != "" {
+			if (event == EventPreToolUse || event == EventPreToolUsePreYolo) && hso.PermissionDecision != "" {
 				final.Decision, final.DecisionReason = strongerDecision(
 					final.Decision, final.DecisionReason,
 					hso.PermissionDecision, hso.PermissionDecisionReason,
 				)
 			}
-			if event == EventPreToolUse || event == EventPermissionRequest {
+			if event == EventPreToolUse || event == EventPreToolUsePreYolo || event == EventPermissionRequest {
 				switch hso.PermissionDecision {
 				case DecisionDeny:
 					final.Allowed = false
@@ -469,19 +504,6 @@ func aggregate(results []hookResult, event EventType) *Result {
 					}
 					if hso.PermissionDecisionReason != "" {
 						contexts = append(contexts, hso.PermissionDecisionReason)
-					}
-				}
-			}
-			if event == EventSafetyCheck {
-				// SafetyCheck Deny short-circuits the call entirely. Ask is
-				// enforced upstream via Decision (the dispatcher routes Ask
-				// to user confirmation without flipping Allowed). Allow is
-				// advisory — the pipeline still runs Decide(), pre_tool_use,
-				// and the read-only hint.
-				if hso.PermissionDecision == DecisionDeny {
-					final.Allowed = false
-					if hso.PermissionDecisionReason != "" {
-						messages = append(messages, hso.PermissionDecisionReason)
 					}
 				}
 			}
@@ -522,7 +544,7 @@ func aggregate(results []hookResult, event EventType) *Result {
 				// blank a leaky tool's output entirely can do so.
 				final.UpdatedToolResponse = hso.UpdatedToolResponse
 			}
-			if (event == EventPermissionRequest || event == EventSafetyCheck) && len(hso.Metadata) > 0 {
+			if (event == EventPermissionRequest || event == EventPreToolUsePreYolo) && len(hso.Metadata) > 0 {
 				// Metadata from every matching hook is merged so multiple
 				// hooks can each contribute keys. On a key clash the last
 				// hook in config order wins (results is iterated in

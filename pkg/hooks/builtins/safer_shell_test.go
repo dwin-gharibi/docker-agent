@@ -31,14 +31,14 @@ func TestSaferShell_MatchesDestructivePatterns(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			out, err := saferShell(t.Context(), &hooks.Input{
-				HookEventName: hooks.EventSafetyCheck,
+				HookEventName: hooks.EventPreToolUse,
 				ToolName:      shellToolName,
 				ToolInput:     map[string]any{"cmd": tc.cmd},
 			}, nil)
 			require.NoError(t, err)
 			require.NotNil(t, out, "destructive command %q should produce a verdict", tc.cmd)
 			require.NotNil(t, out.HookSpecificOutput)
-			assert.Equal(t, hooks.EventSafetyCheck, out.HookSpecificOutput.HookEventName)
+			assert.Equal(t, hooks.EventPreToolUse, out.HookSpecificOutput.HookEventName)
 			assert.Equal(t, hooks.DecisionAsk, out.HookSpecificOutput.PermissionDecision)
 			assert.Equal(t, tc.wantLevel, out.HookSpecificOutput.Metadata[metaBlastRadius],
 				"unexpected blast radius for %q", tc.cmd)
@@ -114,7 +114,7 @@ func TestSaferShell_SafeCommandsBypassPrompt(t *testing.T) {
 	for _, cmd := range safeCases {
 		t.Run(cmd, func(t *testing.T) {
 			out, err := saferShell(t.Context(), &hooks.Input{
-				HookEventName: hooks.EventSafetyCheck,
+				HookEventName: hooks.EventPreToolUse,
 				ToolName:      shellToolName,
 				ToolInput:     map[string]any{"cmd": cmd},
 			}, nil)
@@ -144,7 +144,7 @@ func TestSaferShell_CompoundShellFallsThroughToAsk(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			out, err := saferShell(t.Context(), &hooks.Input{
-				HookEventName: hooks.EventSafetyCheck,
+				HookEventName: hooks.EventPreToolUse,
 				ToolName:      shellToolName,
 				ToolInput:     map[string]any{"cmd": tc.cmd},
 			}, nil)
@@ -161,7 +161,7 @@ func TestSaferShell_CompoundShellFallsThroughToAsk(t *testing.T) {
 // this the alias path would silently bypass the matcher.
 func TestSaferShell_AcceptsCommandAliasKey(t *testing.T) {
 	out, err := saferShell(t.Context(), &hooks.Input{
-		HookEventName: hooks.EventSafetyCheck,
+		HookEventName: hooks.EventPreToolUse,
 		ToolName:      shellToolName,
 		ToolInput:     map[string]any{"command": "rm -rf /tmp/x"},
 	}, nil)
@@ -176,7 +176,7 @@ func TestSaferShell_AcceptsCommandAliasKey(t *testing.T) {
 // classify.
 func TestSaferShell_NoOpForNonShellTool(t *testing.T) {
 	out, err := saferShell(t.Context(), &hooks.Input{
-		HookEventName: hooks.EventSafetyCheck,
+		HookEventName: hooks.EventPreToolUse,
 		ToolName:      "filesystem",
 		ToolInput:     map[string]any{"cmd": "rm -rf /tmp/x"},
 	}, nil)
@@ -184,13 +184,12 @@ func TestSaferShell_NoOpForNonShellTool(t *testing.T) {
 	assert.Nil(t, out)
 }
 
-// TestSaferShell_NoOpUnderWrongEvent: the builtin is registered
-// under matcher "*", and an operator could mistakenly wire it under
-// pre_tool_use. Log-and-no-op rather than failing closed — returning
-// nil keeps the rest of the pre_tool_use chain working.
+// TestSaferShell_NoOpUnderWrongEvent: the builtin only acts on
+// EventPreToolUse. An operator who wires it under a different event
+// (e.g. post_tool_use) gets a no-op rather than a misleading verdict.
 func TestSaferShell_NoOpUnderWrongEvent(t *testing.T) {
 	out, err := saferShell(t.Context(), &hooks.Input{
-		HookEventName: hooks.EventPreToolUse,
+		HookEventName: hooks.EventPostToolUse,
 		ToolName:      shellToolName,
 		ToolInput:     map[string]any{"cmd": "rm -rf /tmp/x"},
 	}, nil)
@@ -204,7 +203,7 @@ func TestSaferShell_NoOpUnderWrongEvent(t *testing.T) {
 // blast_radius=unknown.
 func TestSaferShell_UnknownCommandAsksWithUnknownRadius(t *testing.T) {
 	out, err := saferShell(t.Context(), &hooks.Input{
-		HookEventName: hooks.EventSafetyCheck,
+		HookEventName: hooks.EventPreToolUse,
 		ToolName:      shellToolName,
 		ToolInput:     map[string]any{"cmd": "myproject-cli deploy --prod"},
 	}, nil)
@@ -229,7 +228,7 @@ func TestSaferShell_EmptyOrMissingCommandAsksWithUnknown(t *testing.T) {
 	}
 	for i, in := range cases {
 		out, err := saferShell(t.Context(), &hooks.Input{
-			HookEventName: hooks.EventSafetyCheck,
+			HookEventName: hooks.EventPreToolUse,
 			ToolName:      shellToolName,
 			ToolInput:     in,
 		}, nil)
@@ -251,14 +250,18 @@ func TestSaferShell_NilInputIsNoOp(t *testing.T) {
 
 // TestSaferShell_ApplyAgentDefaultsAutoInjectsBuiltin pins the YAML
 // sugar contract: setting AgentDefaults.SaferShell=true must produce
-// a safety_check hook entry that names the safer_shell builtin.
+// a pre_tool_use entry that names the safer_shell builtin and flags
+// PreemptYolo so the entry fires before Decide()/--yolo.
 func TestSaferShell_ApplyAgentDefaultsAutoInjectsBuiltin(t *testing.T) {
 	cfg := ApplyAgentDefaults(nil, AgentDefaults{SaferShell: true})
 	require.NotNil(t, cfg, "SaferShell=true must produce a non-empty config")
-	require.Len(t, cfg.SafetyCheck, 1, "expected exactly one safety_check matcher entry")
-	mc := cfg.SafetyCheck[0]
+	require.Len(t, cfg.PreToolUse, 1, "expected exactly one pre_tool_use matcher entry")
+	mc := cfg.PreToolUse[0]
 	assert.Equal(t, "*", mc.Matcher,
-		"wildcard matcher keeps the hook generic so other safety_check hooks can coexist")
+		"wildcard matcher keeps the hook generic so other pre_tool_use hooks can coexist")
+	require.NotNil(t, mc.PreemptYolo, "preempt_yolo must be set on the auto-injected entry")
+	assert.True(t, *mc.PreemptYolo,
+		"preempt_yolo must be true so the entry fires before Decide()/--yolo")
 	require.Len(t, mc.Hooks, 1)
 	assert.Equal(t, hooks.HookTypeBuiltin, mc.Hooks[0].Type)
 	assert.Equal(t, SaferShell, mc.Hooks[0].Command)

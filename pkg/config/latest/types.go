@@ -2229,18 +2229,6 @@ type HooksConfig struct {
 	// (decision="block" / continue=false / exit code 2); stdout is added
 	// as context.
 	WorktreeCreate []HookDefinition `json:"worktree_create,omitempty" yaml:"worktree_create,omitempty"`
-
-	// SafetyCheck hooks fire once per tool call BEFORE --yolo,
-	// permission patterns, and pre_tool_use. They are the only hooks
-	// whose verdict can preempt --yolo: a deny/ask here rejects or
-	// forces confirmation regardless of permission allow-rules.
-	// Verdicts go in hook_specific_output.permission_decision; hooks
-	// surface structured context (e.g. blast radius, risk category)
-	// via hook_specific_output.metadata, which the runtime merges into
-	// the tool-call confirmation event. Tool-matched, like
-	// pre_tool_use. The safer_shell builtin (auto-registered by
-	// safer: true on a shell toolset) is the v1 user.
-	SafetyCheck []HookMatcherConfig `json:"safety_check,omitempty" yaml:"safety_check,omitempty"`
 }
 
 // IsEmpty returns true if no hooks are configured
@@ -2273,8 +2261,7 @@ func (h *HooksConfig) IsEmpty() bool {
 		len(h.BeforeCompaction) == 0 &&
 		len(h.AfterCompaction) == 0 &&
 		len(h.ToolResponseTransform) == 0 &&
-		len(h.WorktreeCreate) == 0 &&
-		len(h.SafetyCheck) == 0
+		len(h.WorktreeCreate) == 0
 }
 
 // HookMatcherConfig represents a hook matcher with its hooks.
@@ -2286,6 +2273,20 @@ type HookMatcherConfig struct {
 
 	// Hooks are the hooks to execute when the matcher matches
 	Hooks []HookDefinition `json:"hooks" yaml:"hooks"`
+
+	// PreemptYolo opts a pre_tool_use entry into firing BEFORE the
+	// deterministic approval pipeline (--yolo, permission patterns).
+	// A deny/ask verdict from a preempting hook cannot be bypassed by
+	// auto-approval rules; an allow verdict is advisory (the pipeline
+	// still runs Decide() and the rest of pre_tool_use). Default
+	// pre_tool_use entries fire AFTER Decide(), as before. Only valid
+	// on pre_tool_use; ignored on other events.
+	//
+	// Used by the safer_shell builtin (auto-registered with this flag
+	// when a shell toolset has `safer: true`). Custom hooks set it to
+	// true when they implement a security-critical check that must
+	// not be bypassed by --yolo.
+	PreemptYolo *bool `json:"preempt_yolo,omitempty" yaml:"preempt_yolo,omitempty"`
 }
 
 // HookDefinition represents a single hook configuration

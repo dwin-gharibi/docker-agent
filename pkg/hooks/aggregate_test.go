@@ -134,82 +134,39 @@ func TestAggregateMergesPermissionRequestMetadata(t *testing.T) {
 	}, final.Metadata)
 }
 
-// TestAggregateIgnoresMetadataForNonPermissionRequest documents that
-// Metadata is only collected for permission_request and safety_check
-// events.
-func TestAggregateIgnoresMetadataForNonPermissionRequest(t *testing.T) {
+// TestAggregateIgnoresMetadataForUnrelatedEvent documents that
+// Metadata collection is scoped: only permission_request and the
+// preempt-yolo lane of pre_tool_use collect it. Other events that
+// happen to set the field on their HookSpecificOutput get nil.
+func TestAggregateIgnoresMetadataForUnrelatedEvent(t *testing.T) {
 	t.Parallel()
 
 	results := []hookResult{{HandlerResult: HandlerResult{Output: &Output{
 		HookSpecificOutput: &HookSpecificOutput{
-			HookEventName: EventPreToolUse,
+			HookEventName: EventTurnStart,
 			Metadata:      map[string]string{"a": "1"},
 		},
 	}}}}
 
-	final := aggregate(results, EventPreToolUse)
+	final := aggregate(results, EventTurnStart)
 	assert.Nil(t, final.Metadata)
 }
 
-// TestAggregateSafetyCheck_DenyDeniesAndFlipsAllowed: a Deny verdict
-// from any safety_check hook flips Allowed=false so the dispatcher
-// short-circuits to errorResponse rather than askUser. Mirrors the
-// pre_tool_use deny semantics but applies at the pre-Decide() stage.
-func TestAggregateSafetyCheck_DenyDeniesAndFlipsAllowed(t *testing.T) {
-	t.Parallel()
-
-	mk := func(d Decision, reason string) hookResult {
-		return hookResult{HandlerResult: HandlerResult{Output: &Output{
-			HookSpecificOutput: &HookSpecificOutput{
-				HookEventName:            EventSafetyCheck,
-				PermissionDecision:       d,
-				PermissionDecisionReason: reason,
-			},
-		}}}
-	}
-
-	final := aggregate([]hookResult{
-		mk(DecisionAllow, "first hook says ok"),
-		mk(DecisionDeny, "second hook says no"),
-		mk(DecisionAsk, "third hook would ask"),
-	}, EventSafetyCheck)
-
-	assert.Equal(t, DecisionDeny, final.Decision)
-	assert.Equal(t, "second hook says no", final.DecisionReason)
-	assert.False(t, final.Allowed, "any Deny must flip Allowed=false")
-	assert.Contains(t, final.Message, "second hook says no")
-}
-
-// TestAggregateSafetyCheck_AllowDoesNotFlipAllowed pins the advisory
-// semantics. An Allow verdict from safety_check is informational —
-// the pipeline still proceeds to Decide() / pre_tool_use, so Allowed
-// must stay true (Deny is the only verdict that short-circuits at
-// this stage).
-func TestAggregateSafetyCheck_AllowDoesNotFlipAllowed(t *testing.T) {
-	t.Parallel()
-
-	results := []hookResult{{HandlerResult: HandlerResult{Output: &Output{
-		HookSpecificOutput: &HookSpecificOutput{
-			HookEventName:      EventSafetyCheck,
-			PermissionDecision: DecisionAllow,
-		},
-	}}}}
-
-	final := aggregate(results, EventSafetyCheck)
-	assert.Equal(t, DecisionAllow, final.Decision)
-	assert.True(t, final.Allowed, "Allow under safety_check is advisory; Allowed stays true")
-}
-
-// TestAggregateSafetyCheck_MergesMetadata pins the merge contract for
-// safety_check metadata: keys from every hook are merged, with later
-// hooks winning on key clashes (same shape as permission_request).
-func TestAggregateSafetyCheck_MergesMetadata(t *testing.T) {
+// TestAggregatePreToolUsePreYolo_MergesMetadata pins the
+// preempt-yolo lane's metadata collection. The default pre_tool_use
+// lane (EventPreToolUse) does NOT collect Metadata; the preempt lane
+// (EventPreToolUsePreYolo) does, with last-writer-wins on key clashes
+// — same shape as permission_request. This is the only meaningful
+// aggregator difference between the two lanes; Decision/Allowed/
+// UpdatedInput semantics are shared and covered by the existing
+// pre_tool_use tests.
+func TestAggregatePreToolUsePreYolo_MergesMetadata(t *testing.T) {
 	t.Parallel()
 
 	mk := func(meta map[string]string) hookResult {
 		return hookResult{HandlerResult: HandlerResult{Output: &Output{
 			HookSpecificOutput: &HookSpecificOutput{
-				HookEventName:      EventSafetyCheck,
+				HookEventName:      EventPreToolUse,
 				PermissionDecision: DecisionAsk,
 				Metadata:           meta,
 			},
@@ -221,10 +178,32 @@ func TestAggregateSafetyCheck_MergesMetadata(t *testing.T) {
 		mk(map[string]string{"blast_radius": "high", "reason": "irreversible"}),
 	}
 
-	final := aggregate(results, EventSafetyCheck)
+	final := aggregate(results, EventPreToolUsePreYolo)
 	assert.Equal(t, map[string]string{
 		"blast_radius": "high",
 		"category":     "fs-modify",
 		"reason":       "irreversible",
 	}, final.Metadata)
+}
+
+// TestAggregatePreToolUseDefault_IgnoresMetadata documents the
+// lane distinction from the other direction: aggregating EventPreToolUse
+// (the default lane) does NOT collect Metadata even when hooks set it.
+// Default-lane consumers (the regular pre_tool_use chain in the
+// dispatcher) have no use for Metadata; collecting it would be a
+// silent no-op behavior change that could surprise hook authors.
+func TestAggregatePreToolUseDefault_IgnoresMetadata(t *testing.T) {
+	t.Parallel()
+
+	results := []hookResult{{HandlerResult: HandlerResult{Output: &Output{
+		HookSpecificOutput: &HookSpecificOutput{
+			HookEventName:      EventPreToolUse,
+			PermissionDecision: DecisionAsk,
+			Metadata:           map[string]string{"blast_radius": "high"},
+		},
+	}}}}
+
+	final := aggregate(results, EventPreToolUse)
+	assert.Nil(t, final.Metadata,
+		"default pre_tool_use lane must not collect Metadata; only the preempt_yolo lane does")
 }

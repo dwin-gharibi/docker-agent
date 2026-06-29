@@ -8,8 +8,9 @@ agents:
     toolsets:
       - type: shell
     hooks:
-      safety_check:
+      pre_tool_use:
         - matcher: "*"
+          preempt_yolo: true
           hooks:
             - type: builtin
               command: safer_shell

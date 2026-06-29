@@ -1236,13 +1236,6 @@
           "items": {
             "$ref": "#/definitions/HookDefinition"
           }
-        },
-        "safety_check": {
-          "type": "array",
-          "description": "Hooks that fire once per tool call BEFORE the deterministic approval pipeline (--yolo, permission allow/deny patterns, pre_tool_use). They are the only hooks whose verdict can preempt --yolo: a deny/ask here rejects or forces confirmation regardless of permission allow-rules. The safer_shell builtin (auto-registered by safer:true on a shell toolset) is the v1 user; custom hooks can also register here to classify destructive calls in other toolsets. Tool-matched, like pre_tool_use. Verdicts go in hook_specific_output.permission_decision; allow is advisory (the pipeline still runs Decide() and pre_tool_use), deny rejects the call outright, ask forces user confirmation. Use hook_specific_output.metadata to surface structured context (e.g. blast_radius, category) that renderers can highlight.",
-          "items": {
-            "$ref": "#/definitions/HookMatcherConfig"
-          }
         }
       },
       "additionalProperties": false
@@ -1267,6 +1260,10 @@
           "items": {
             "$ref": "#/definitions/HookDefinition"
           }
+        },
+        "preempt_yolo": {
+          "type": "boolean",
+          "description": "Opt a pre_tool_use entry into firing BEFORE the deterministic approval pipeline (--yolo, permission allow/deny patterns). A deny/ask verdict from a preempting hook cannot be bypassed by --yolo or permission allow-rules; an allow verdict is advisory (the pipeline still runs Decide() and the rest of pre_tool_use). Default pre_tool_use entries fire AFTER Decide(). Only meaningful on pre_tool_use; ignored on other events. Used by the safer_shell builtin (auto-registered with this flag when a shell toolset has `safer: true`)."
         }
       },
       "required": [
