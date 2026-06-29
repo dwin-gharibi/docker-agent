@@ -3,6 +3,24 @@
 All notable changes to this project will be documented in this file.
 
 
+## [v1.90.0] - 2026-06-29
+
+This release adds support for OpenCode Go and OpenCode Zen providers and improves error handling for stream truncation during model inference.
+
+## What's New
+- Adds OpenCode Go (`opencode-go`) and OpenCode Zen (`opencode-zen`) as built-in provider aliases, including automatic API key detection via `OPENCODE_API_KEY`
+
+## Bug Fixes
+- Fixes handling of stream truncation errors: retries when a stream is unexpectedly cut mid-response and clarifies the error message shown to users
+- Fixes error handling for mid-stream connection drops in truncation error reporting
+### Pull Requests
+
+- [#3211](https://github.com/docker/docker-agent/pull/3211) - feat: add OpenCode Go and OpenCode Zen provider support
+- [#3298](https://github.com/docker/docker-agent/pull/3298) - Merge pull request #3302 from docker/fix/3298-retry-stream-truncation
+- [#3302](https://github.com/docker/docker-agent/pull/3302) - fix(modelerrors): retry stream truncation and clarify the error (#3298)
+- [#3303](https://github.com/docker/docker-agent/pull/3303) - docs: update CHANGELOG.md for v1.89.0
+
+
 ## [v1.89.0] - 2026-06-29
 
 This release brings significant new capabilities including a safety-check hook system, TUI improvements with retry support and new slash commands, expanded hook and config features, and a large number of internal quality improvements around context threading, linting, and test performance.
@@ -3991,3 +4009,5 @@ This release improves the terminal user interface with better error handling and
 [v1.88.1]: https://github.com/docker/docker-agent/releases/tag/v1.88.1
 
 [v1.89.0]: https://github.com/docker/docker-agent/releases/tag/v1.89.0
+
+[v1.90.0]: https://github.com/docker/docker-agent/releases/tag/v1.90.0
