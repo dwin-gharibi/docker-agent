@@ -68,7 +68,7 @@ func TestThinkingBadgeVocabulary(t *testing.T) {
 	}
 }
 
-// TestCardThinkingLineShowsGaugeAndValue verifies the shared thinking summary
+// TestThinkingGaugeValueShowsGaugeAndWord verifies the shared thinking summary
 // used by the agent-details dialog is "<gauge> <word>" (no ✻): both the gauge
 // and the descriptive word.
 func TestThinkingGaugeValueShowsGaugeAndWord(t *testing.T) {
@@ -87,8 +87,8 @@ func TestThinkingGaugeValueShowsGaugeAndWord(t *testing.T) {
 }
 
 // TestRowGaugeColumnAlignment verifies a roster of effort-level agents renders
-// fixed-width six-cell gauges that all end before the shortcut column at the
-// same right-aligned position.
+// fixed-width six-cell gauges on their name line, and that the gauges all end
+// at the same right-aligned column (just before the shared shortcut column).
 func TestRowGaugeColumnAlignment(t *testing.T) {
 	t.Parallel()
 
@@ -104,9 +104,21 @@ func TestRowGaugeColumnAlignment(t *testing.T) {
 		"beta":  gaugePattern(3),
 		"gamma": gaugePattern(6),
 	}
+	gaugeEnd := -1
 	for name, gauge := range wantGauge {
 		line1, _ := agentLines(m, name)
 		require.NotEmptyf(t, line1, "row for %q should render", name)
 		assert.Containsf(t, line1, gauge, "row %q should contain gauge %q", name, gauge)
+
+		// The gauge column ends where the gauge substring ends; all rows must
+		// share that column so the badges line up.
+		idx := strings.Index(line1, gauge)
+		require.GreaterOrEqualf(t, idx, 0, "gauge %q must appear in row %q", gauge, line1)
+		end := len([]rune(line1[:idx])) + len([]rune(gauge))
+		if gaugeEnd == -1 {
+			gaugeEnd = end
+		} else {
+			assert.Equalf(t, gaugeEnd, end, "gauge for %q must end in the shared badge column", name)
+		}
 	}
 }
