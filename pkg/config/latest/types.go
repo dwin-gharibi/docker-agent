@@ -426,26 +426,39 @@ type HarnessConfig struct {
 
 // InstructionFiles holds one or more instruction file paths. It accepts both
 // a single string (`instruction_file: prompt.md`) and a list of strings
-// (`instruction_file: [intro.md, rules.md]`) in YAML and JSON. A single path
-// is marshalled back as a scalar so configs round-trip unchanged.
+// (`instruction_file: [intro.md, rules.md]`) in YAML and JSON. Empty strings
+// are dropped on decode, so `instruction_file: ""` and `instruction_file: [""]`
+// both decode to nil (treated as absent). A single path is marshalled back as
+// a scalar, and an empty value is omitted entirely, so configs round-trip
+// unchanged.
 type InstructionFiles []string
 
 func (f *InstructionFiles) unmarshal(scalar, list func(any) error) error {
 	var one string
 	if err := scalar(&one); err == nil {
-		if one == "" {
-			*f = nil
-		} else {
-			*f = InstructionFiles{one}
-		}
+		*f = nonEmptyInstructionFiles(one)
 		return nil
 	}
 	var many []string
 	if err := list(&many); err != nil {
 		return errors.New("instruction_file must be a string or a list of strings")
 	}
-	*f = InstructionFiles(many)
+	*f = nonEmptyInstructionFiles(many...)
 	return nil
+}
+
+// nonEmptyInstructionFiles returns the given paths with empty strings dropped,
+// or nil when nothing remains. This keeps the list form consistent with the
+// scalar form, where `instruction_file: ""` is treated as absent rather than a
+// path to resolve.
+func nonEmptyInstructionFiles(paths ...string) InstructionFiles {
+	var out InstructionFiles
+	for _, p := range paths {
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func (f *InstructionFiles) UnmarshalYAML(unmarshal func(any) error) error {
@@ -453,6 +466,9 @@ func (f *InstructionFiles) UnmarshalYAML(unmarshal func(any) error) error {
 }
 
 func (f InstructionFiles) MarshalYAML() (any, error) {
+	if len(f) == 0 {
+		return nil, nil
+	}
 	if len(f) == 1 {
 		return f[0], nil
 	}
@@ -467,6 +483,9 @@ func (f *InstructionFiles) UnmarshalJSON(data []byte) error {
 }
 
 func (f InstructionFiles) MarshalJSON() ([]byte, error) {
+	if len(f) == 0 {
+		return json.Marshal(nil)
+	}
 	if len(f) == 1 {
 		return json.Marshal(f[0])
 	}

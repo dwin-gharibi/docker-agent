@@ -269,3 +269,63 @@ func TestInstructionFileSingleElementMarshalsAsScalar(t *testing.T) {
 	require.NoError(t, err)
 	assert.JSONEq(t, `"prompt.md"`, string(data))
 }
+
+// TestInstructionFileEmptyMarshalsAsNull verifies that a zero-length value
+// marshals to null so the omitempty struct tag can drop the field entirely
+// rather than emitting `instruction_file: []`.
+func TestInstructionFileEmptyMarshalsAsNull(t *testing.T) {
+	t.Parallel()
+
+	var empty latest.InstructionFiles
+
+	out, err := empty.MarshalYAML()
+	require.NoError(t, err)
+	assert.Nil(t, out)
+
+	data, err := empty.MarshalJSON()
+	require.NoError(t, err)
+	assert.JSONEq(t, `null`, string(data))
+}
+
+// TestInstructionFileListDropsEmptyEntries verifies that empty strings inside
+// the list are dropped on decode, matching the scalar `""` no-op behaviour
+// instead of tripping the path-safety check.
+func TestInstructionFileListDropsEmptyEntries(t *testing.T) {
+	t.Parallel()
+
+	cfgYAML := `agents:
+  root:
+    model: openai/gpt-4o
+    description: test agent
+    instruction_file:
+      - ""
+      - instructions/intro.md
+`
+	dir := writeConfigDir(t, cfgYAML, map[string]string{
+		"instructions/intro.md": "hello",
+	})
+
+	cfg, err := Load(t.Context(), NewFileSource(filepath.Join(dir, "agent.yaml")))
+	require.NoError(t, err)
+	assert.Equal(t, "hello", cfg.Agents.First().Instruction)
+}
+
+// TestInstructionFileListAllEmptyIgnored verifies that a list made up solely
+// of empty strings is treated as absent (no instruction loaded, no error).
+func TestInstructionFileListAllEmptyIgnored(t *testing.T) {
+	t.Parallel()
+
+	cfgYAML := `agents:
+  root:
+    model: openai/gpt-4o
+    description: test agent
+    instruction: inline prompt
+    instruction_file:
+      - ""
+`
+	dir := writeConfigDir(t, cfgYAML, nil)
+
+	cfg, err := Load(t.Context(), NewFileSource(filepath.Join(dir, "agent.yaml")))
+	require.NoError(t, err)
+	assert.Equal(t, "inline prompt", cfg.Agents.First().Instruction)
+}
