@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"io"
+	"sync"
 	"testing"
 	"time"
 
@@ -158,10 +159,11 @@ func TestHandleStream_ToolCallThenSeparateStop(t *testing.T) {
 // either unblocked or the stream is closed. It is used to simulate a
 // half-open TCP connection where the remote side stops sending data.
 type stalledStream struct {
-	// unblock is closed (or sent on) to release a blocked Recv call.
+	// unblock is closed to release a blocked Recv call.
 	unblock chan struct{}
-	// closed is set when Close is called.
-	closed bool
+	// closeOnce guards unblock so Close is safe to call concurrently from
+	// both the test goroutine and handleStream's deferred Close.
+	closeOnce sync.Once
 }
 
 func newStalledStream() *stalledStream {
@@ -175,10 +177,7 @@ func (s *stalledStream) Recv() (chat.MessageStreamResponse, error) {
 }
 
 func (s *stalledStream) Close() {
-	if !s.closed {
-		s.closed = true
-		close(s.unblock)
-	}
+	s.closeOnce.Do(func() { close(s.unblock) })
 }
 
 // withShortStreamIdleTimeout temporarily overrides defaultStreamIdleTimeout
