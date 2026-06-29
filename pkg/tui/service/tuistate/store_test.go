@@ -14,12 +14,12 @@ import (
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "tui_state.db")
-	db, err := sqliteutil.OpenDB(dbPath)
+	db, err := sqliteutil.OpenDB(t.Context(), dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { db.Close() })
 
 	store := &Store{db: db}
-	require.NoError(t, store.migrate())
+	require.NoError(t, store.migrate(t.Context()))
 	return store
 }
 

@@ -35,6 +35,8 @@ import (
 )
 
 type App struct {
+	ctx func() context.Context
+
 	runtime                runtime.Runtime
 	session                *session.Session
 	firstMessage           *string
@@ -118,8 +120,9 @@ func WithSnapshotController(c builtins.SnapshotController) Opt {
 	}
 }
 
-func New(rt runtime.Runtime, sess *session.Session, opts ...Opt) *App {
+func New(ctx context.Context, rt runtime.Runtime, sess *session.Session, opts ...Opt) *App {
 	app := &App{
+		ctx:              func() context.Context { return context.WithoutCancel(ctx) },
 		runtime:          rt,
 		session:          sess,
 		events:           make(chan tea.Msg, 128),
@@ -175,7 +178,7 @@ func (a *App) SendFirstMessage() tea.Cmd {
 	cmds := []tea.Cmd{
 		func() tea.Msg {
 			// Use the shared PrepareUserMessage function for consistent attachment handling
-			userMsg, attachedPath, err := cli.PrepareUserMessage(context.Background(), a.runtime, *a.firstMessage, a.firstMessageAttach)
+			userMsg, attachedPath, err := cli.PrepareUserMessage(a.ctx(), a.runtime, *a.firstMessage, a.firstMessageAttach)
 			if err != nil {
 				slog.Error("Failed to prepare first message", "error", err)
 				return nil
@@ -224,19 +227,19 @@ func (a *App) CurrentAgentTools(ctx context.Context) ([]tools.Tool, error) {
 // Only the local runtime (which holds the team) implements it; remote runtimes
 // don't, so the agent-details config sections are simply omitted for them.
 type agentConfigProvider interface {
-	AgentConfigInfo(agentName string) runtime.AgentConfigInfo
+	AgentConfigInfo(ctx context.Context, agentName string) runtime.AgentConfigInfo
 }
 
 // AgentConfigInfo returns the named agent's static configuration for the
 // read-only agent-details dialog, or the zero value when it can't be resolved
 // (remote runtime or unknown agent). It reads resolved config only and starts
 // no toolsets.
-func (a *App) AgentConfigInfo(agentName string) runtime.AgentConfigInfo {
+func (a *App) AgentConfigInfo(ctx context.Context, agentName string) runtime.AgentConfigInfo {
 	cp, ok := a.runtime.(agentConfigProvider)
 	if !ok {
 		return runtime.AgentConfigInfo{}
 	}
-	return cp.AgentConfigInfo(agentName)
+	return cp.AgentConfigInfo(ctx, agentName)
 }
 
 // CurrentAgentToolsetStatuses returns lifecycle status for each toolset of
@@ -347,7 +350,7 @@ func (a *App) RunSkillFork(ctx context.Context, cancel context.CancelFunc, skill
 	// Mirrors App.Run's drain loop: forward events to the App bus and
 	// always let StreamStoppedEvent through, even after ctx cancellation,
 	// so the supervisor marks the session idle.
-	go func() { //nolint:gosec // background processing intentionally continues after request ctx ends; uses context.Background() only to forward StreamStoppedEvent
+	go func() {
 		events := make(chan runtime.Event, defaultRuntimeEventBuffer)
 		go func() {
 			defer close(events)
@@ -370,7 +373,9 @@ func (a *App) RunSkillFork(ctx context.Context, cancel context.CancelFunc, skill
 		for event := range events {
 			if ctx.Err() != nil {
 				if _, ok := event.(*runtime.StreamStoppedEvent); ok {
-					a.sendEvent(context.Background(), event)
+					// ctx is cancelled; detach cancellation but keep its trace
+					// context so the stop event still reaches subscribers.
+					a.sendEvent(context.WithoutCancel(ctx), event)
 				}
 				continue
 			}
@@ -398,13 +403,13 @@ func (a *App) ResolveInput(ctx context.Context, input string) string {
 // CurrentAgentModel returns the model ID for the current agent.
 // Returns the tracked model from AgentInfoEvent, or falls back to session overrides.
 // Returns empty string if no model information is available (fail-open scenario).
-func (a *App) CurrentAgentModel() string {
+func (a *App) CurrentAgentModel(ctx context.Context) string {
 	if a.currentAgentModel != "" {
 		return a.currentAgentModel
 	}
 	// Fallback to session overrides
 	if a.session != nil && a.session.AgentModelOverrides != nil {
-		agentName := a.runtime.CurrentAgentName()
+		agentName := a.runtime.CurrentAgentName(ctx)
 		if modelRef, ok := a.session.AgentModelOverrides[agentName]; ok {
 			return modelRef
 		}
@@ -457,7 +462,7 @@ func (a *App) Run(ctx context.Context, cancel context.CancelFunc, message string
 		go a.generateTitle(ctx, []string{message})
 	}
 
-	go func() { //nolint:gosec // background processing intentionally continues after request ctx ends; uses context.Background() only to forward StreamStoppedEvent
+	go func() {
 		if len(attachments) > 0 {
 			// Build a single text string with the user's message and inlined text files.
 			// Keeping everything in one text block ensures the model sees file content
@@ -502,7 +507,9 @@ func (a *App) Run(ctx context.Context, cancel context.CancelFunc, message string
 			// supervisor can mark the session as no longer running.
 			if ctx.Err() != nil {
 				if _, ok := event.(*runtime.StreamStoppedEvent); ok {
-					a.sendEvent(context.Background(), event)
+					// ctx is cancelled; detach cancellation but keep its trace
+					// context so the stop event still reaches subscribers.
+					a.sendEvent(context.WithoutCancel(ctx), event)
 				}
 				continue
 			}
@@ -639,7 +646,7 @@ func (a *App) processInlineAttachment(att messages.Attachment, textBuilder *stri
 func (a *App) Retry(ctx context.Context, cancel context.CancelFunc) {
 	a.cancel = cancel
 
-	go func() { //nolint:gosec // background processing intentionally continues after request ctx ends; uses context.Background() only to forward StreamStoppedEvent
+	go func() {
 		streamStarted := false
 		for event := range a.runtime.RunStream(ctx, a.session) {
 			// If context is cancelled, continue draining but don't forward events
@@ -647,7 +654,7 @@ func (a *App) Retry(ctx context.Context, cancel context.CancelFunc) {
 			// supervisor can mark the session as no longer running.
 			if ctx.Err() != nil {
 				if _, ok := event.(*runtime.StreamStoppedEvent); ok {
-					a.sendEvent(context.Background(), event)
+					a.sendEvent(context.WithoutCancel(ctx), event)
 				}
 				continue
 			}
@@ -691,7 +698,7 @@ func (a *App) RunWithMessage(ctx context.Context, cancel context.CancelFunc, msg
 		go a.generateTitle(ctx, []string{userMessage})
 	}
 
-	go func() { //nolint:gosec // background processing intentionally continues after request ctx ends; uses context.Background() only to forward StreamStoppedEvent
+	go func() {
 		a.session.AddMessage(msg)
 		for event := range a.runtime.RunStream(ctx, a.session) {
 			// If context is cancelled, continue draining but don't forward events
@@ -699,7 +706,9 @@ func (a *App) RunWithMessage(ctx context.Context, cancel context.CancelFunc, msg
 			// supervisor can mark the session as no longer running.
 			if ctx.Err() != nil {
 				if _, ok := event.(*runtime.StreamStoppedEvent); ok {
-					a.sendEvent(context.Background(), event)
+					// ctx is cancelled; detach cancellation but keep its trace
+					// context so the stop event still reaches subscribers.
+					a.sendEvent(context.WithoutCancel(ctx), event)
 				}
 				continue
 			}
@@ -786,7 +795,7 @@ func (a *App) removeSubscriber(ch chan tea.Msg) {
 // non-blocking; if a subscriber's buffer is full the event is dropped for
 // that subscriber so one slow consumer cannot stall the others.
 func (a *App) startFanOut() {
-	throttled := a.throttleEvents(context.Background(), a.events)
+	throttled := a.throttleEvents(a.ctx(), a.events)
 	go func() {
 		for msg := range throttled {
 			a.subsMu.Lock()
@@ -805,7 +814,7 @@ func (a *App) startFanOut() {
 
 // Resume resumes the runtime with the given confirmation request
 func (a *App) Resume(req runtime.ResumeRequest) {
-	a.runtime.Resume(context.Background(), req)
+	a.runtime.Resume(a.ctx(), req)
 }
 
 // TogglePause toggles whether the runtime loop is paused at iteration
@@ -813,7 +822,7 @@ func (a *App) Resume(req runtime.ResumeRequest) {
 // doesn't support pausing (e.g. remote runtimes), in which case the first
 // return value is meaningless.
 func (a *App) TogglePause() (paused, supported bool) {
-	p, err := a.runtime.TogglePause(context.Background())
+	p, err := a.runtime.TogglePause(a.ctx())
 	if errors.Is(err, runtime.ErrUnsupported) {
 		return false, false
 	}
@@ -850,7 +859,7 @@ func (a *App) NewSession() {
 	a.firstMessageAttach = ""
 
 	// Re-emit startup info so the sidebar shows agent/tools info in the new session
-	a.reEmitStartupInfo(context.Background())
+	a.reEmitStartupInfo(a.ctx())
 }
 
 // reEmitStartupInfo resets and re-emits startup info (agent, team, tools)
@@ -933,7 +942,9 @@ func (a *App) HasPermissions() bool {
 
 // SwitchAgent switches the currently active agent for subsequent user messages
 func (a *App) SwitchAgent(agentName string) error {
-	return a.runtime.SetCurrentAgent(agentName)
+	// Called from the Bubble Tea event loop, which has no context; this is
+	// a TUI-root boundary.
+	return a.runtime.SetCurrentAgent(a.ctx(), agentName)
 }
 
 // SetCurrentAgentModel sets the model for the current agent and persists
@@ -941,7 +952,7 @@ func (a *App) SwitchAgent(agentName string) error {
 // supported by the runtime (e.g., remote runtimes).
 // Pass an empty modelRef to clear the override and use the agent's default model.
 func (a *App) SetCurrentAgentModel(ctx context.Context, modelRef string) error {
-	agentName := a.runtime.CurrentAgentName()
+	agentName := a.runtime.CurrentAgentName(ctx)
 
 	// Set the model override on the runtime (empty modelRef clears the override)
 	if err := a.runtime.SetAgentModel(ctx, agentName, modelRef); err != nil {
@@ -990,7 +1001,7 @@ func (a *App) SetCurrentAgentModel(ctx context.Context, modelRef string) error {
 // as a model override). Returns an error wrapping [runtime.ErrUnsupported]
 // when the runtime or model cannot cycle thinking levels.
 func (a *App) CycleAgentThinkingLevel(ctx context.Context) (effort.Level, error) {
-	agentName := a.runtime.CurrentAgentName()
+	agentName := a.runtime.CurrentAgentName(ctx)
 	level, err := a.runtime.CycleAgentThinkingLevel(ctx, agentName)
 	if err != nil {
 		return "", err
@@ -1019,7 +1030,7 @@ func (a *App) AvailableModels(ctx context.Context) []runtime.ModelChoice {
 		return nil
 	}
 
-	agentName := a.runtime.CurrentAgentName()
+	agentName := a.runtime.CurrentAgentName(ctx)
 	currentRef := ""
 	var customRefs []string
 	if a.session != nil {
@@ -1088,7 +1099,7 @@ func (a *App) CompactSession(ctx context.Context, cancel context.CancelFunc, add
 	go func() {
 		defer cancel()
 
-		agentName := a.runtime.CurrentAgentName()
+		agentName := a.runtime.CurrentAgentName(ctx)
 		completed := false
 		events := make(chan runtime.Event, 100)
 		go func() {

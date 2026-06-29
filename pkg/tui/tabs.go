@@ -26,7 +26,7 @@ func (m *appModel) persistActiveTab(persistedID string) {
 	if m.tuiStore == nil {
 		return
 	}
-	if err := m.tuiStore.SetActiveTab(context.Background(), persistedID); err != nil {
+	if err := m.tuiStore.SetActiveTab(m.ctx(), persistedID); err != nil {
 		slog.Warn("Failed to set active tab", "error", err)
 	}
 }

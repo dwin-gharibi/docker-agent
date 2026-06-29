@@ -21,9 +21,8 @@ func setupTestDB(t *testing.T) database.Database {
 	require.NotNil(t, db)
 
 	t.Cleanup(func() {
-		// Close connection
 		memDB := db.(*MemoryDatabase)
-		memDB.db.Close()
+		require.NoError(t, memDB.Close())
 	})
 
 	return db
@@ -34,7 +33,9 @@ func TestNewMemoryDatabase(t *testing.T) {
 
 	assert.NotNil(t, db, "Database should be created successfully")
 
-	_, err := NewMemoryDatabase("/:invalid:path")
+	db, err := NewMemoryDatabase("/:invalid:path")
+	require.NoError(t, err, "constructor should not touch the filesystem")
+	err = db.AddMemory(t.Context(), database.UserMemory{ID: "1", CreatedAt: time.Now().Format(time.RFC3339), Memory: "x"})
 	require.Error(t, err, "Should fail with invalid database path")
 }
 
@@ -286,13 +287,13 @@ func TestMigrationAddsCategory(t *testing.T) {
 		Memory:    "Old memory without category",
 	})
 	require.NoError(t, err)
-	memDB1.db.Close()
+	require.NoError(t, memDB1.Close())
 
 	// Reopen - migration should be idempotent
 	db2, err := NewMemoryDatabase(tmpFile)
 	require.NoError(t, err)
 	memDB2 := db2.(*MemoryDatabase)
-	defer memDB2.db.Close()
+	defer func() { require.NoError(t, memDB2.Close()) }()
 
 	memories, err := db2.GetMemories(t.Context())
 	require.NoError(t, err)
@@ -335,7 +336,7 @@ func TestDatabaseWithMultipleInstances(t *testing.T) {
 	require.NoError(t, err)
 	defer func() {
 		memDB := db1.(*MemoryDatabase)
-		memDB.db.Close()
+		require.NoError(t, memDB.Close())
 	}()
 
 	memory := database.UserMemory{
@@ -351,7 +352,7 @@ func TestDatabaseWithMultipleInstances(t *testing.T) {
 	require.NoError(t, err)
 	defer func() {
 		memDB := db2.(*MemoryDatabase)
-		memDB.db.Close()
+		require.NoError(t, memDB.Close())
 	}()
 
 	memories, err := db2.GetMemories(t.Context())

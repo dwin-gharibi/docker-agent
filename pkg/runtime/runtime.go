@@ -46,9 +46,9 @@ type Runtime interface {
 	// CurrentAgentInfo returns information about the currently active agent
 	CurrentAgentInfo(ctx context.Context) CurrentAgentInfo
 	// CurrentAgentName returns the name of the currently active agent
-	CurrentAgentName() string
+	CurrentAgentName(ctx context.Context) string
 	// SetCurrentAgent sets the currently active agent for subsequent user messages
-	SetCurrentAgent(agentName string) error
+	SetCurrentAgent(ctx context.Context, agentName string) error
 	// CurrentAgentTools returns the tools for the active agent
 	CurrentAgentTools(ctx context.Context) ([]tools.Tool, error)
 	// CurrentAgentToolsetStatuses returns lifecycle status for each toolset of
@@ -116,15 +116,15 @@ type Runtime interface {
 
 	// TitleGenerator returns a generator for automatic session titles, or nil
 	// if the runtime does not support local title generation (e.g. remote runtimes).
-	TitleGenerator() *sessiontitle.Generator
+	TitleGenerator(ctx context.Context) *sessiontitle.Generator
 
 	// Steer enqueues a user message for urgent mid-turn injection into the
 	// running agent loop. Returns an error if the queue is full or steering
 	// is not available.
-	Steer(msg QueuedMessage) error
+	Steer(ctx context.Context, msg QueuedMessage) error
 	// FollowUp enqueues a message for end-of-turn processing. Each follow-up
 	// gets a full undivided agent turn. Returns an error if the queue is full.
-	FollowUp(msg QueuedMessage) error
+	FollowUp(ctx context.Context, msg QueuedMessage) error
 
 	// SetAgentModel sets a model override for the named agent.
 	// modelRef can be:
@@ -197,6 +197,7 @@ type ModelStore interface {
 
 // LocalRuntime manages the execution of agents
 type LocalRuntime struct {
+	ctx                       func() context.Context
 	toolMap                   map[string]ToolHandlerFunc
 	team                      *team.Team
 	agents                    *agentRouter
@@ -531,19 +532,20 @@ func WithHooksRegistry(reg *hooks.Registry) Opt {
 // the configured (or default in-memory) session store; pass
 // [WithSessionStore] to override and [WithEventObserver] to layer
 // additional observers (telemetry, audit, ...).
-func New(agents *team.Team, opts ...Opt) (Runtime, error) {
-	return NewLocalRuntime(agents, opts...)
+func New(ctx context.Context, agents *team.Team, opts ...Opt) (Runtime, error) {
+	return NewLocalRuntime(ctx, agents, opts...)
 }
 
 // NewLocalRuntime creates a new LocalRuntime without the persistence wrapper.
 // This is useful for testing or when persistence is handled externally.
-func NewLocalRuntime(agents *team.Team, opts ...Opt) (*LocalRuntime, error) {
+func NewLocalRuntime(ctx context.Context, agents *team.Team, opts ...Opt) (*LocalRuntime, error) {
 	defaultAgent, err := agents.DefaultAgent()
 	if err != nil {
 		return nil, err
 	}
 
 	r := &LocalRuntime{
+		ctx:                    func() context.Context { return context.WithoutCancel(ctx) },
 		toolMap:                make(map[string]ToolHandlerFunc),
 		team:                   agents,
 		agents:                 newAgentRouter(agents, defaultAgent.Name()),
@@ -644,7 +646,7 @@ func NewLocalRuntime(agents *team.Team, opts ...Opt) (*LocalRuntime, error) {
 		return nil, err
 	}
 
-	if defaultAgent.Model(context.TODO()) == nil && !defaultAgent.HasHarness() {
+	if defaultAgent.Model(ctx) == nil && !defaultAgent.HasHarness() {
 		return nil, fmt.Errorf("agent %s has no valid model", defaultAgent.Name())
 	}
 
@@ -665,12 +667,21 @@ func NewLocalRuntime(agents *team.Team, opts ...Opt) (*LocalRuntime, error) {
 		r.observers = append([]EventObserver{obs}, r.observers...)
 	}
 
-	slog.Debug("Creating new runtime", "agent", r.agents.Name(), "available_agents", agents.Size())
+	slog.DebugContext(ctx, "Creating new runtime", "agent", r.agents.Name(), "available_agents", agents.Size())
 
 	return r, nil
 }
 
-func (r *LocalRuntime) CurrentAgentName() string {
+func (r *LocalRuntime) CurrentAgentName(context.Context) string {
+	return r.currentAgentName()
+}
+
+// currentAgentName is the context-free internal accessor. LocalRuntime
+// resolves the active agent purely from in-memory state, so its internal
+// callers (event callbacks, logging) use this directly; the exported
+// context-taking method exists to satisfy the Runtime interface, whose
+// remote implementation needs a context for its one-time lookup.
+func (r *LocalRuntime) currentAgentName() string {
 	return r.agents.Name()
 }
 
@@ -688,7 +699,7 @@ func (r *LocalRuntime) CurrentAgentInfo(context.Context) CurrentAgentInfo {
 	}
 }
 
-func (r *LocalRuntime) SetCurrentAgent(agentName string) error {
+func (r *LocalRuntime) SetCurrentAgent(_ context.Context, agentName string) error {
 	return r.agents.SetValidated(agentName)
 }
 
@@ -755,7 +766,7 @@ type AgentConfigInfo struct {
 // already-started toolsets (never starting one), so it is safe to call for any
 // agent whether or not it has run. Unknown agents yield the zero value, so the
 // modal omits the corresponding sections.
-func (r *LocalRuntime) AgentConfigInfo(agentName string) AgentConfigInfo {
+func (r *LocalRuntime) AgentConfigInfo(ctx context.Context, agentName string) AgentConfigInfo {
 	a, err := r.team.Agent(agentName)
 	if err != nil || a == nil {
 		return AgentConfigInfo{}
@@ -792,7 +803,7 @@ func (r *LocalRuntime) AgentConfigInfo(agentName string) AgentConfigInfo {
 		NumHistoryItems:         a.NumHistoryItems(),
 		MaxConsecutiveToolCalls: a.MaxConsecutiveToolCalls(),
 		Options:                 agentOptionFlags(a, cfg, hasCfg),
-		Toolsets:                toolsetDetails(a, cfg, hasCfg),
+		Toolsets:                toolsetDetails(ctx, a, cfg, hasCfg),
 		IsCurrent:               r.agents != nil && r.agents.Name() == agentName,
 	}
 	if hasCfg {
@@ -841,7 +852,7 @@ func configSkillNames(cfg latest.AgentConfig) []string {
 // combining the side-effect-free lifecycle status with tool names: live names
 // for started toolsets, otherwise the declared `tools:` allow-list keyed by the
 // same name the registry assigns (cmp.Or(name, type)).
-func toolsetDetails(a *agent.Agent, cfg latest.AgentConfig, hasCfg bool) []ToolsetDetail {
+func toolsetDetails(ctx context.Context, a *agent.Agent, cfg latest.AgentConfig, hasCfg bool) []ToolsetDetail {
 	toolSets := a.ToolSets()
 	if len(toolSets) == 0 {
 		return nil
@@ -858,7 +869,7 @@ func toolsetDetails(a *agent.Agent, cfg latest.AgentConfig, hasCfg bool) []Tools
 			Kind:  status.Kind,
 			State: toolsetStateBucket(status.State),
 		}
-		if live, ok := startedToolNames(ts); ok {
+		if live, ok := startedToolNames(ctx, ts); ok {
 			info.Tools = live
 		} else if names, ok := declared[status.Name]; ok {
 			info.Tools = names
@@ -888,12 +899,12 @@ func toolsetStateBucket(s lifecycle.State) ToolsetState {
 // caller can fall back to the declared allow-list. context.TODO is safe here:
 // the toolset is already started, so listing returns its cached tools without
 // a cancellable round-trip.
-func startedToolNames(ts tools.ToolSet) ([]string, bool) {
+func startedToolNames(ctx context.Context, ts tools.ToolSet) ([]string, bool) {
 	s, ok := tools.As[*tools.StartableToolSet](ts)
 	if !ok || !s.IsStarted() {
 		return nil, false
 	}
-	tl, err := s.Tools(context.TODO())
+	tl, err := s.Tools(ctx)
 	if err != nil {
 		return nil, false
 	}
@@ -1193,15 +1204,12 @@ func (r *LocalRuntime) ExecuteMCPPrompt(ctx context.Context, promptName string, 
 }
 
 // TitleGenerator returns a title generator for automatic session title generation.
-func (r *LocalRuntime) TitleGenerator() *sessiontitle.Generator {
+func (r *LocalRuntime) TitleGenerator(ctx context.Context) *sessiontitle.Generator {
 	a := r.CurrentAgent()
 	if a == nil {
 		return nil
 	}
-	// Title-gen setup happens before any session ctx exists; the resulting
-	// generator carries its own ctx when actually invoked. context.TODO is
-	// the right marker here.
-	models := a.TitleModels(context.TODO())
+	models := a.TitleModels(ctx)
 	if len(models) == 0 {
 		return nil
 	}
@@ -1210,11 +1218,11 @@ func (r *LocalRuntime) TitleGenerator() *sessiontitle.Generator {
 
 // getAgentModelID returns the model ID for an agent. The zero ID is
 // returned when no model is configured.
-func getAgentModelID(a *agent.Agent) modelsdev.ID {
+func getAgentModelID(ctx context.Context, a *agent.Agent) modelsdev.ID {
 	if a == nil {
 		return modelsdev.ID{}
 	}
-	if model := a.Model(context.TODO()); model != nil {
+	if model := a.Model(ctx); model != nil {
 		return model.ID()
 	}
 	return modelsdev.ID{}
@@ -1223,7 +1231,7 @@ func getAgentModelID(a *agent.Agent) modelsdev.ID {
 // getEffectiveModelID returns the currently active model ID for an agent, accounting
 // for any active fallback cooldown. During a cooldown period, this returns the fallback
 // model ID instead of the configured primary model, so the UI reflects the actual model in use.
-func (r *LocalRuntime) getEffectiveModelID(a *agent.Agent) modelsdev.ID {
+func (r *LocalRuntime) getEffectiveModelID(ctx context.Context, a *agent.Agent) modelsdev.ID {
 	cooldownState := r.fallback.cooldowns.Get(a.Name())
 	if cooldownState != nil {
 		fallbacks := a.FallbackModels()
@@ -1231,14 +1239,14 @@ func (r *LocalRuntime) getEffectiveModelID(a *agent.Agent) modelsdev.ID {
 			return fallbacks[cooldownState.fallbackIndex].ID()
 		}
 	}
-	return getAgentModelID(a)
+	return getAgentModelID(ctx, a)
 }
 
 // agentDetailsFromTeam converts team agent info to AgentDetails for events.
 // It accounts for active fallback cooldowns, returning the effective model
 // instead of the configured model when a fallback is in effect.
 func (r *LocalRuntime) agentDetailsFromTeam(ctx context.Context) []AgentDetails {
-	agentsInfo := r.team.AgentsInfo()
+	agentsInfo := r.team.AgentsInfo(ctx)
 	details := make([]AgentDetails, len(agentsInfo))
 	for i, info := range agentsInfo {
 		providerName := info.Provider
@@ -1373,14 +1381,14 @@ func (r *LocalRuntime) emitToolsChanged() {
 	if r.onToolsChanged == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), toolsChangedTimeout)
+	ctx, cancel := context.WithTimeout(r.ctx(), toolsChangedTimeout)
 	defer cancel()
 	a := r.CurrentAgent()
 	agentTools, err := a.StartedTools(ctx)
 	if err != nil {
 		return
 	}
-	r.onToolsChanged(ToolsetInfo(len(agentTools), false, r.CurrentAgentName()))
+	r.onToolsChanged(ToolsetInfo(len(agentTools), false, r.currentAgentName()))
 }
 
 // emitAgentAndTeamInfo sends the AgentInfo and TeamInfo events that drive the
@@ -1388,14 +1396,14 @@ func (r *LocalRuntime) emitToolsChanged() {
 // aborted (e.g. the context was cancelled). Shared by EmitStartupInfo and
 // EmitAgentInfo so both render identical model labels.
 func (r *LocalRuntime) emitAgentAndTeamInfo(ctx context.Context, a *agent.Agent, send func(Event) bool) bool {
-	modelLabel := r.getEffectiveModelID(a).String()
+	modelLabel := r.getEffectiveModelID(ctx, a).String()
 	if a.HasHarness() {
-		modelLabel = agentModelLabel(a)
+		modelLabel = agentModelLabel(ctx, a)
 	}
 	if !send(AgentInfo(a.Name(), modelLabel, a.Description(), a.WelcomeMessage())) {
 		return false
 	}
-	return send(TeamInfo(r.agentDetailsFromTeam(ctx), r.CurrentAgentName()))
+	return send(TeamInfo(r.agentDetailsFromTeam(ctx), r.currentAgentName()))
 }
 
 // EmitAgentInfo implements [Runtime.EmitAgentInfo]: it refreshes the agent and
@@ -1437,7 +1445,7 @@ func (r *LocalRuntime) EmitStartupInfo(ctx context.Context, sess *session.Sessio
 
 	// Emit agent and team information immediately for fast sidebar display.
 	// Use getEffectiveModelID to account for active fallback cooldowns.
-	modelID := r.getEffectiveModelID(a)
+	modelID := r.getEffectiveModelID(ctx, a)
 	if !r.emitAgentAndTeamInfo(ctx, a, send) {
 		return
 	}
@@ -1480,7 +1488,7 @@ func (r *LocalRuntime) EmitStartupInfo(ctx context.Context, sess *session.Sessio
 			break
 		}
 
-		send(NewTokenUsageEvent(sess.ID, r.CurrentAgentName(), usage))
+		send(NewTokenUsageEvent(sess.ID, r.currentAgentName(), usage))
 	}
 
 	// Tool loading can be slow (MCP servers need to start). Mark the
@@ -1511,12 +1519,12 @@ func (r *LocalRuntime) emitToolsProgressively(ctx context.Context, a *agent.Agen
 
 	// If no toolsets, emit final state immediately
 	if totalToolsets == 0 {
-		send(ToolsetInfo(0, false, r.CurrentAgentName()))
+		send(ToolsetInfo(0, false, r.currentAgentName()))
 		return
 	}
 
 	// Emit initial loading state
-	if !send(ToolsetInfo(0, true, r.CurrentAgentName())) {
+	if !send(ToolsetInfo(0, true, r.currentAgentName())) {
 		return
 	}
 
@@ -1598,13 +1606,13 @@ func (r *LocalRuntime) emitToolsProgressively(ctx context.Context, a *agent.Agen
 		totalTools += len(ts)
 
 		// Emit progress update - still loading unless this is the last toolset
-		if !send(ToolsetInfo(totalTools, !isLast, r.CurrentAgentName())) {
+		if !send(ToolsetInfo(totalTools, !isLast, r.currentAgentName())) {
 			return
 		}
 	}
 
 	// Emit final state (not loading)
-	send(ToolsetInfo(totalTools, false, r.CurrentAgentName()))
+	send(ToolsetInfo(totalTools, false, r.currentAgentName()))
 }
 
 // listToolsWithTimeout enumerates a toolset's tools under a bounded deadline.
@@ -1643,7 +1651,7 @@ func listToolsWithTimeout(ctx context.Context, toolset tools.ToolSet, timeout ti
 }
 
 func (r *LocalRuntime) Resume(_ context.Context, req ResumeRequest) {
-	slog.Debug("Resuming runtime", "agent", r.CurrentAgentName(), "type", req.Type, "reason", req.Reason)
+	slog.Debug("Resuming runtime", "agent", r.currentAgentName(), "type", req.Type, "reason", req.Reason)
 
 	// Defensive validation:
 	//
@@ -1654,7 +1662,7 @@ func (r *LocalRuntime) Resume(_ context.Context, req ResumeRequest) {
 	if !IsValidResumeType(req.Type) {
 		slog.Warn(
 			"Invalid resume type received; ignoring resume request",
-			"agent", r.CurrentAgentName(),
+			"agent", r.currentAgentName(),
 			"confirmation_type", req.Type,
 			"valid_types", ValidResumeTypes(),
 		)
@@ -1668,11 +1676,11 @@ func (r *LocalRuntime) Resume(_ context.Context, req ResumeRequest) {
 	// canceled, or shutting down).
 	select {
 	case r.resumeChan <- req:
-		slog.Debug("Resume signal sent", "agent", r.CurrentAgentName())
+		slog.Debug("Resume signal sent", "agent", r.currentAgentName())
 	default:
 		slog.Debug(
 			"Resume channel not ready; resume signal dropped",
-			"agent", r.CurrentAgentName(),
+			"agent", r.currentAgentName(),
 			"confirmation_type", req.Type,
 		)
 	}
@@ -1681,8 +1689,8 @@ func (r *LocalRuntime) Resume(_ context.Context, req ResumeRequest) {
 // Steer enqueues a user message for urgent mid-turn injection into the
 // running agent loop. The message will be picked up after the current batch
 // of tool calls finishes but before the loop checks whether to stop.
-func (r *LocalRuntime) Steer(msg QueuedMessage) error {
-	if !r.steerQueue.Enqueue(context.Background(), msg) {
+func (r *LocalRuntime) Steer(ctx context.Context, msg QueuedMessage) error {
+	if !r.steerQueue.Enqueue(ctx, msg) {
 		return errors.New("steer queue full")
 	}
 	return nil
@@ -1691,8 +1699,8 @@ func (r *LocalRuntime) Steer(msg QueuedMessage) error {
 // FollowUp enqueues a message to be processed after the current agent turn
 // finishes. Unlike Steer, follow-ups are popped one at a time and each gets
 // a full undivided agent turn.
-func (r *LocalRuntime) FollowUp(msg QueuedMessage) error {
-	if !r.followUpQueue.Enqueue(context.Background(), msg) {
+func (r *LocalRuntime) FollowUp(ctx context.Context, msg QueuedMessage) error {
+	if !r.followUpQueue.Enqueue(ctx, msg) {
 		return errors.New("follow-up queue full")
 	}
 	return nil
@@ -1774,7 +1782,7 @@ func (r *LocalRuntime) compactWithReason(ctx context.Context, sess *session.Sess
 	// Emit a TokenUsageEvent so the sidebar immediately reflects the
 	// compaction: tokens drop to the summary size, context % drops, and
 	// cost increases by the summary generation cost.
-	modelID := r.getEffectiveModelID(a)
+	modelID := r.getEffectiveModelID(ctx, a)
 	contextLimit := r.resolveContextLimit(ctx, a.Model(ctx), modelID)
 	events.Emit(NewTokenUsageEvent(sess.ID, a.Name(), SessionUsage(sess, contextLimit)))
 }

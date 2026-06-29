@@ -24,20 +24,20 @@ func runRuntimeContract(t *testing.T, newRT func(t *testing.T) Runtime) {
 	t.Run("CurrentAgentName not empty", func(t *testing.T) {
 		rt := newRT(t)
 		t.Cleanup(func() { _ = rt.Close() })
-		assert.NotEmpty(t, rt.CurrentAgentName())
+		assert.NotEmpty(t, rt.CurrentAgentName(t.Context()))
 	})
 
 	t.Run("CurrentAgentInfo carries the current name", func(t *testing.T) {
 		rt := newRT(t)
 		t.Cleanup(func() { _ = rt.Close() })
 		info := rt.CurrentAgentInfo(t.Context())
-		assert.Equal(t, rt.CurrentAgentName(), info.Name)
+		assert.Equal(t, rt.CurrentAgentName(t.Context()), info.Name)
 	})
 
 	t.Run("SetCurrentAgent rejects unknown agents", func(t *testing.T) {
 		rt := newRT(t)
 		t.Cleanup(func() { _ = rt.Close() })
-		err := rt.SetCurrentAgent("nonexistent-agent")
+		err := rt.SetCurrentAgent(t.Context(), "nonexistent-agent")
 		assert.Error(t, err)
 	})
 
@@ -80,7 +80,7 @@ func runRuntimeContract(t *testing.T, newRT func(t *testing.T) Runtime) {
 	t.Run("Steer accepts a message", func(t *testing.T) {
 		rt := newRT(t)
 		t.Cleanup(func() { _ = rt.Close() })
-		err := rt.Steer(QueuedMessage{Content: "hello"})
+		err := rt.Steer(t.Context(), QueuedMessage{Content: "hello"})
 		if err != nil {
 			assert.ErrorIs(t, err, ErrUnsupported, "unexpected error type: %v", err)
 		}
@@ -89,7 +89,7 @@ func runRuntimeContract(t *testing.T, newRT func(t *testing.T) Runtime) {
 	t.Run("FollowUp accepts a message", func(t *testing.T) {
 		rt := newRT(t)
 		t.Cleanup(func() { _ = rt.Close() })
-		err := rt.FollowUp(QueuedMessage{Content: "hello"})
+		err := rt.FollowUp(t.Context(), QueuedMessage{Content: "hello"})
 		if err != nil {
 			assert.ErrorIs(t, err, ErrUnsupported, "unexpected error type: %v", err)
 		}
@@ -135,7 +135,7 @@ func TestLocalRuntime_Contract(t *testing.T) {
 		root := agent.New("root", "You are a test agent", agent.WithModel(prov))
 		tm := team.New(team.WithAgents(root))
 
-		rt, err := New(tm, WithSessionCompaction(false), WithModelStore(mockModelStore{}))
+		rt, err := New(t.Context(), tm, WithSessionCompaction(false), WithModelStore(mockModelStore{}))
 		require.NoError(t, err)
 		return rt
 	})

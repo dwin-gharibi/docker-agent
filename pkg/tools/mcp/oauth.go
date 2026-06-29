@@ -986,12 +986,14 @@ func (t *oauthTransport) handleManagedOAuthFlow(ctx context.Context, authServer,
 	if t.oauthConfig != nil {
 		callbackPort = t.oauthConfig.CallbackPort
 	}
-	callbackServer, err := NewCallbackServerOnPort(callbackPort)
+	callbackServer, err := NewCallbackServerOnPort(ctx, callbackPort)
 	if err != nil {
 		return fmt.Errorf("failed to create callback server: %w", err)
 	}
 	defer func() {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		// Detach from ctx's cancellation (the request may be done) but
+		// keep its trace context for the shutdown.
+		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
 		if err := callbackServer.Shutdown(shutdownCtx); err != nil {
 			slog.ErrorContext(ctx, "Failed to shutdown callback server", "error", err)

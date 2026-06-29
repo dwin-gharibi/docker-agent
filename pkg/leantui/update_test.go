@@ -26,8 +26,8 @@ type cycleThinkingRuntime struct {
 func (r *cycleThinkingRuntime) CurrentAgentInfo(context.Context) runtime.CurrentAgentInfo {
 	return runtime.CurrentAgentInfo{}
 }
-func (r *cycleThinkingRuntime) CurrentAgentName() string     { return "coder" }
-func (r *cycleThinkingRuntime) SetCurrentAgent(string) error { return nil }
+func (r *cycleThinkingRuntime) CurrentAgentName(context.Context) string       { return "coder" }
+func (r *cycleThinkingRuntime) SetCurrentAgent(context.Context, string) error { return nil }
 func (r *cycleThinkingRuntime) CurrentAgentTools(context.Context) ([]tools.Tool, error) {
 	return nil, nil
 }
@@ -77,12 +77,12 @@ func (r *cycleThinkingRuntime) UpdateSessionTitle(_ context.Context, sess *sessi
 	sess.Title = title
 	return nil
 }
-func (r *cycleThinkingRuntime) TitleGenerator() *sessiontitle.Generator { return nil }
-func (r *cycleThinkingRuntime) Close() error                            { return nil }
-func (r *cycleThinkingRuntime) Stop()                                   {}
-func (r *cycleThinkingRuntime) Steer(runtime.QueuedMessage) error       { return nil }
-func (r *cycleThinkingRuntime) FollowUp(runtime.QueuedMessage) error    { return nil }
-func (r *cycleThinkingRuntime) QueueStatus() runtime.QueueStatus        { return runtime.QueueStatus{} }
+func (r *cycleThinkingRuntime) TitleGenerator(context.Context) *sessiontitle.Generator { return nil }
+func (r *cycleThinkingRuntime) Close() error                                           { return nil }
+func (r *cycleThinkingRuntime) Stop()                                                  {}
+func (r *cycleThinkingRuntime) Steer(context.Context, runtime.QueuedMessage) error     { return nil }
+func (r *cycleThinkingRuntime) FollowUp(context.Context, runtime.QueuedMessage) error  { return nil }
+func (r *cycleThinkingRuntime) QueueStatus() runtime.QueueStatus                       { return runtime.QueueStatus{} }
 
 func (r *cycleThinkingRuntime) TogglePause(context.Context) (bool, error) {
 	return false, nil
@@ -104,7 +104,7 @@ var _ runtime.Runtime = (*cycleThinkingRuntime)(nil)
 func TestShiftTabCyclesThinkingLevel(t *testing.T) {
 	rt := &cycleThinkingRuntime{supports: true, level: effort.High}
 	m := bareModel(24)
-	m.app = app.New(rt, session.New())
+	m.app = app.New(t.Context(), rt, session.New())
 
 	m.handleKey(t.Context(), key{typ: keyShiftTab})
 
@@ -116,7 +116,7 @@ func TestShiftTabCyclesThinkingLevel(t *testing.T) {
 func TestShiftTabReportsUnsupportedThinkingLevel(t *testing.T) {
 	rt := &cycleThinkingRuntime{supports: true, err: runtime.ErrUnsupported}
 	m := bareModel(24)
-	m.app = app.New(rt, session.New())
+	m.app = app.New(t.Context(), rt, session.New())
 
 	m.handleKey(t.Context(), key{typ: keyShiftTab})
 

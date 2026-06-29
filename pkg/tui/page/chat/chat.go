@@ -161,6 +161,8 @@ type chatPage struct {
 	// Key map
 	keyMap KeyMap
 
+	ctx func() context.Context
+
 	app *app.App
 
 	// Command parser for handling slash commands in the editor
@@ -264,9 +266,10 @@ func defaultKeyMap() KeyMap {
 }
 
 // New creates a new chat page
-func New(a *app.App, sessionState *service.SessionState, opts ...PageOption) Page {
+func New(ctx context.Context, a *app.App, sessionState *service.SessionState, opts ...PageOption) Page {
 	p := &chatPage{
-		sidebar:       sidebar.New(sessionState),
+		ctx:           func() context.Context { return context.WithoutCancel(ctx) },
+		sidebar:       sidebar.New(ctx, sessionState),
 		messages:      messages.New(sessionState),
 		app:           a,
 		keyMap:        defaultKeyMap(),
@@ -898,7 +901,7 @@ func (p *chatPage) processMessage(msg msgtypes.SendMsg) tea.Cmd {
 	}
 
 	if isBangCommand(msg.Content) {
-		p.app.RunBangCommand(context.Background(), msg.Content[1:])
+		p.app.RunBangCommand(p.ctx(), msg.Content[1:])
 		return p.messages.ScrollToBottom()
 	}
 
@@ -911,7 +914,7 @@ func (p *chatPage) processMessage(msg msgtypes.SendMsg) tea.Cmd {
 	p.sidebar.ResetStreamTracking()
 
 	var ctx context.Context
-	ctx, p.msgCancel = context.WithCancel(context.Background())
+	ctx, p.msgCancel = context.WithCancel(p.ctx())
 
 	// Start working state immediately to show the user something is happening.
 	// This provides visual feedback while the runtime loads tools and prepares the stream.
@@ -961,7 +964,7 @@ func (p *chatPage) handleRetry() (layout.Model, tea.Cmd) {
 	p.sidebar.ResetStreamTracking()
 
 	var ctx context.Context
-	ctx, p.msgCancel = context.WithCancel(context.Background())
+	ctx, p.msgCancel = context.WithCancel(p.ctx())
 
 	spinnerCmd := p.setWorking(true)
 	p.app.Retry(ctx, p.msgCancel)
@@ -975,7 +978,7 @@ func (p *chatPage) CompactSession(additionalPrompt string) tea.Cmd {
 	cancelCmd := p.cancelStream(false)
 
 	var ctx context.Context
-	ctx, p.msgCancel = context.WithCancel(context.Background())
+	ctx, p.msgCancel = context.WithCancel(p.ctx())
 	p.app.CompactSession(ctx, p.msgCancel, additionalPrompt)
 
 	return tea.Batch(

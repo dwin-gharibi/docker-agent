@@ -88,7 +88,7 @@ func TestUserSteeringMessagesSubmitFiresOnDrain(t *testing.T) {
 	)
 	tm := team.New(team.WithAgents(root))
 
-	rt, err := NewLocalRuntime(tm,
+	rt, err := NewLocalRuntime(t.Context(), tm,
 		WithSessionCompaction(false),
 		WithModelStore(mockModelStore{}),
 	)
@@ -105,8 +105,8 @@ func TestUserSteeringMessagesSubmitFiresOnDrain(t *testing.T) {
 
 	// Enqueue before RunStream so the messages are drained at the
 	// idle/first-turn drain site at the top of the run loop.
-	require.NoError(t, rt.Steer(QueuedMessage{Content: "steer one"}))
-	require.NoError(t, rt.Steer(QueuedMessage{Content: "steer two"}))
+	require.NoError(t, rt.Steer(t.Context(), QueuedMessage{Content: "steer one"}))
+	require.NoError(t, rt.Steer(t.Context(), QueuedMessage{Content: "steer two"}))
 
 	sess := session.New()
 	sess.Title = "Unit Test"
@@ -148,7 +148,7 @@ func setupUserPromptSubmitCounter(t *testing.T, opts ...session.Opt) (*atomic.In
 	)
 	tm := team.New(team.WithAgents(root))
 
-	rt, err := NewLocalRuntime(tm,
+	rt, err := NewLocalRuntime(t.Context(), tm,
 		WithSessionCompaction(false),
 		WithModelStore(mockModelStore{}),
 	)
@@ -204,7 +204,7 @@ func TestUserFollowupSubmitFiresOnDequeue(t *testing.T) {
 	)
 	tm := team.New(team.WithAgents(root))
 
-	rt, err := NewLocalRuntime(tm,
+	rt, err := NewLocalRuntime(t.Context(), tm,
 		WithSessionCompaction(false),
 		WithModelStore(mockModelStore{}),
 	)
@@ -221,7 +221,7 @@ func TestUserFollowupSubmitFiresOnDequeue(t *testing.T) {
 
 	// Enqueue before RunStream so the follow-up is dequeued when the
 	// first turn stops.
-	require.NoError(t, rt.FollowUp(QueuedMessage{Content: "please also do this"}))
+	require.NoError(t, rt.FollowUp(t.Context(), QueuedMessage{Content: "please also do this"}))
 
 	sess := session.New(session.WithUserMessage("hi"))
 	sess.Title = "Unit Test"

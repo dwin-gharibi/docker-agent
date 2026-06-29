@@ -163,7 +163,7 @@ func run(ctx context.Context) error {
 	t := team.New(team.WithAgents(assistant))
 	defer func() { _ = t.StopToolSets(ctx) }()
 
-	rt, err := runtime.New(t)
+	rt, err := runtime.New(ctx, t)
 	if err != nil {
 		return err
 	}
@@ -176,7 +176,7 @@ func run(ctx context.Context) error {
 		session.WithTitle("Repository search demo"),
 		session.WithToolsApproved(true),
 	)
-	a := app.New(rt, sess, app.WithFirstMessage(firstMessage))
+	a := app.New(ctx, rt, sess, app.WithFirstMessage(firstMessage))
 
 	// The one line that matters: a custom renderer for the MCP tool.
 	wd, _ := os.Getwd()

@@ -150,8 +150,8 @@ func NewVectorStore(cfg VectorStoreConfig) *VectorStore {
 
 	// Set usage handler to calculate cost from models.dev and emit events with CUMULATIVE totals
 	// This matches how chat completions calculate cost in runtime.go
-	cfg.Embedder.SetUsageHandler(func(tokens int64, _ float64) {
-		cost := s.calculateCost(tokens)
+	cfg.Embedder.SetUsageHandler(func(ctx context.Context, tokens int64, _ float64) {
+		cost := s.calculateCost(ctx, tokens)
 		s.recordUsage(tokens, cost)
 	})
 
@@ -170,14 +170,14 @@ func (s *VectorStore) SetEmbeddingInputBuilder(builder EmbeddingInputBuilder) {
 }
 
 // calculateCost calculates embedding cost using models.dev pricing
-func (s *VectorStore) calculateCost(tokens int64) float64 {
+func (s *VectorStore) calculateCost(ctx context.Context, tokens int64) float64 {
 	if s.modelsStore == nil || s.modelID.Provider == "dmr" {
 		return 0
 	}
 
-	model, err := s.modelsStore.GetModel(context.Background(), s.modelID)
+	model, err := s.modelsStore.GetModel(ctx, s.modelID)
 	if err != nil {
-		slog.Debug("Failed to get model pricing from models.dev, cost will be 0",
+		slog.DebugContext(ctx, "Failed to get model pricing from models.dev, cost will be 0",
 			"model_id", s.modelID.String(),
 			"error", err)
 		return 0
@@ -570,7 +570,7 @@ func (s *VectorStore) indexFile(ctx context.Context, filePath string) error {
 		return fmt.Errorf("failed to delete old documents: %w", err)
 	}
 
-	chunks, err := chunk.ProcessFile(s.docProcessor, filePath)
+	chunks, err := chunk.ProcessFile(ctx, s.docProcessor, filePath)
 	if err != nil {
 		return fmt.Errorf("failed to process file: %w", err)
 	}

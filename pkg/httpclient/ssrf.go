@@ -206,6 +206,11 @@ func proxyHostPorts(spec string) map[string]struct{} {
 		out[net.JoinHostPort(ip.String(), port)] = struct{}{}
 		return out
 	}
+	// The allowlist is resolved once, at transport-construction time, so its
+	// (potentially blocking) DNS lookups are not repeated on every dial.
+	// There is no caller context at construction; a bounded independent root
+	// is the right base for the resolver timeout.
+	//rubocop:disable Lint/ContextConnectivity
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	ips, _ := net.DefaultResolver.LookupIPAddr(ctx, host)

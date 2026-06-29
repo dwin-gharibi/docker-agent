@@ -33,8 +33,8 @@ type mockRuntime struct {
 func (m *mockRuntime) CurrentAgentInfo(ctx context.Context) runtime.CurrentAgentInfo {
 	return runtime.CurrentAgentInfo{}
 }
-func (m *mockRuntime) CurrentAgentName() string          { return "mock" }
-func (m *mockRuntime) SetCurrentAgent(name string) error { return nil }
+func (m *mockRuntime) CurrentAgentName(context.Context) string              { return "mock" }
+func (m *mockRuntime) SetCurrentAgent(_ context.Context, name string) error { return nil }
 func (m *mockRuntime) CurrentAgentTools(ctx context.Context) ([]tools.Tool, error) {
 	return nil, nil
 }
@@ -83,13 +83,13 @@ func (m *mockRuntime) UpdateSessionTitle(_ context.Context, sess *session.Sessio
 	sess.Title = title
 	return nil
 }
-func (m *mockRuntime) TitleGenerator() *sessiontitle.Generator   { return nil }
-func (m *mockRuntime) Close() error                              { return nil }
-func (m *mockRuntime) Stop()                                     {}
-func (m *mockRuntime) Steer(_ runtime.QueuedMessage) error       { return nil }
-func (m *mockRuntime) FollowUp(_ runtime.QueuedMessage) error    { return nil }
-func (m *mockRuntime) QueueStatus() runtime.QueueStatus          { return runtime.QueueStatus{} }
-func (m *mockRuntime) TogglePause(context.Context) (bool, error) { return false, nil }
+func (m *mockRuntime) TitleGenerator(context.Context) *sessiontitle.Generator    { return nil }
+func (m *mockRuntime) Close() error                                              { return nil }
+func (m *mockRuntime) Stop()                                                     {}
+func (m *mockRuntime) Steer(_ context.Context, _ runtime.QueuedMessage) error    { return nil }
+func (m *mockRuntime) FollowUp(_ context.Context, _ runtime.QueuedMessage) error { return nil }
+func (m *mockRuntime) QueueStatus() runtime.QueueStatus                          { return runtime.QueueStatus{} }
+func (m *mockRuntime) TogglePause(context.Context) (bool, error)                 { return false, nil }
 func (m *mockRuntime) SetAgentModel(context.Context, string, string) error {
 	return nil
 }
@@ -201,7 +201,7 @@ func TestApp_NewSession_PreservesToolsApproved(t *testing.T) {
 	initialSess := session.New(session.WithToolsApproved(true))
 	require.True(t, initialSess.ToolsApproved, "Initial session should have tools approved")
 
-	app := New(rt, initialSess)
+	app := New(t.Context(), rt, initialSess)
 
 	// Call NewSession - should preserve ToolsApproved
 	app.NewSession()
@@ -218,7 +218,7 @@ func TestApp_NewSession_PreservesHideToolResults(t *testing.T) {
 	initialSess := session.New(session.WithHideToolResults(true))
 	require.True(t, initialSess.HideToolResults, "Initial session should have HideToolResults")
 
-	app := New(rt, initialSess)
+	app := New(t.Context(), rt, initialSess)
 
 	// Call NewSession - should preserve HideToolResults
 	app.NewSession()
@@ -233,6 +233,7 @@ func TestApp_NewSession_WithNilSession(t *testing.T) {
 
 	// Create app with nil session (edge case)
 	app := &App{
+		ctx:     t.Context,
 		runtime: rt,
 		session: nil,
 	}
@@ -320,7 +321,7 @@ func TestApp_ResolveSkillCommand_NoLocalRuntime(t *testing.T) {
 	ctx := t.Context()
 	rt := &mockRuntime{}
 	sess := session.New()
-	app := New(rt, sess)
+	app := New(t.Context(), rt, sess)
 
 	// mockRuntime is not a LocalRuntime, so no skills should be returned
 	resolved, err := app.ResolveSkillCommand(ctx, "/some-skill")
@@ -334,7 +335,7 @@ func TestApp_ResolveSkillCommand_NotSlashCommand(t *testing.T) {
 	ctx := t.Context()
 	rt := &mockRuntime{}
 	sess := session.New()
-	app := New(rt, sess)
+	app := New(t.Context(), rt, sess)
 
 	resolved, err := app.ResolveSkillCommand(ctx, "not a slash command")
 	require.NoError(t, err)
@@ -345,7 +346,7 @@ func TestApp_UndoLastSnapshot(t *testing.T) {
 	t.Parallel()
 
 	ctx := t.Context()
-	app := New(&mockRuntime{}, session.New(),
+	app := New(t.Context(), &mockRuntime{}, session.New(),
 		WithSnapshotController(&stubSnapshotController{enabled: true, files: 2, ok: true}),
 	)
 	result, err := app.UndoLastSnapshot(ctx)
@@ -357,7 +358,7 @@ func TestApp_UndoLastSnapshot_NoSnapshot(t *testing.T) {
 	t.Parallel()
 
 	ctx := t.Context()
-	app := New(&mockRuntime{}, session.New(),
+	app := New(t.Context(), &mockRuntime{}, session.New(),
 		WithSnapshotController(&stubSnapshotController{enabled: true}),
 	)
 	_, err := app.UndoLastSnapshot(ctx)
@@ -371,7 +372,7 @@ func TestApp_UndoLastSnapshot_NoController(t *testing.T) {
 	// so the same UI affordance can light up regardless of which
 	// runtime the embedder paired the App with.
 	ctx := t.Context()
-	app := New(&mockRuntime{}, session.New())
+	app := New(t.Context(), &mockRuntime{}, session.New())
 	_, err := app.UndoLastSnapshot(ctx)
 	require.ErrorIs(t, err, ErrNothingToUndo)
 	assert.False(t, app.SnapshotsEnabled())
@@ -383,6 +384,7 @@ func TestApp_SnapshotsEnabled_DoesNotRequireSession(t *testing.T) {
 	// SnapshotsEnabled answers a controller-capability question; it
 	// must not silently return false just because no session is attached.
 	app := &App{
+		ctx:                t.Context,
 		runtime:            &mockRuntime{},
 		session:            nil,
 		snapshotController: &stubSnapshotController{enabled: true},
@@ -397,7 +399,7 @@ func TestApp_SubscribeWith_FanOutToMultipleSubscribers(t *testing.T) {
 	defer cancel()
 
 	rt := &mockRuntime{}
-	app := New(rt, session.New())
+	app := New(t.Context(), rt, session.New())
 
 	recv := func() (chan tea.Msg, context.CancelFunc) {
 		subCtx, subCancel := context.WithCancel(ctx)
@@ -498,6 +500,7 @@ func TestApp_InjectUserMessage(t *testing.T) {
 
 	events := make(chan tea.Msg, 4)
 	app := &App{
+		ctx:     t.Context,
 		runtime: &mockRuntime{},
 		session: session.New(),
 		events:  events,

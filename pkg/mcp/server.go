@@ -86,7 +86,9 @@ func StartHTTPServer(ctx context.Context, agentFilename, agentName string, runCo
 
 	select {
 	case <-ctx.Done():
-		return httpServer.Shutdown(context.Background())
+		// ctx is done; detach from its cancellation but keep its trace
+		// context so the graceful shutdown can still run.
+		return httpServer.Shutdown(context.WithoutCancel(ctx))
 	case err := <-errCh:
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
@@ -206,7 +208,7 @@ func CreateToolHandler(t *team.Team, agentName string) func(context.Context, *mc
 			session.WithNonInteractive(true),
 		)
 
-		rt, err := runtime.New(t,
+		rt, err := runtime.New(ctx, t,
 			runtime.WithCurrentAgent(agentName),
 			runtime.WithNonInteractive(true),
 			// See pkg/a2a/adapter.go for rationale — without this

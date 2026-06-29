@@ -56,7 +56,7 @@ func (p *chatPage) handleRuntimeEvent(msg tea.Msg) (bool, tea.Cmd) {
 	// ===== Error and Warning Events =====
 	case *runtime.ErrorEvent:
 		if userconfig.Get().GetSound() {
-			sound.Play(sound.Failure)
+			sound.Play(p.ctx(), sound.Failure)
 		}
 		return true, p.messages.AddErrorMessage(msg.Error)
 
@@ -270,7 +270,7 @@ func (p *chatPage) handleStreamStopped(msg *runtime.StreamStoppedEvent) tea.Cmd 
 		duration := time.Since(p.streamStartTime)
 		threshold := time.Duration(userconfig.Get().GetSoundThreshold()) * time.Second
 		if duration >= threshold {
-			sound.Play(sound.Success)
+			sound.Play(p.ctx(), sound.Success)
 		}
 	}
 	p.msgCancel = nil
@@ -365,7 +365,7 @@ func (p *chatPage) handleElicitationRequest(msg *runtime.ElicitationRequestEvent
 				serverURL = url
 			}
 			dialogCmd := core.CmdHandler(dialog.OpenDialogMsg{
-				Model:            dialog.NewOAuthAuthorizationDialog(serverURL, p.app),
+				Model:            dialog.NewOAuthAuthorizationDialog(p.ctx(), serverURL, p.app),
 				OriginatingEvent: msg,
 			})
 			return tea.Batch(spinnerCmd, dialogCmd)
@@ -377,7 +377,7 @@ func (p *chatPage) handleElicitationRequest(msg *runtime.ElicitationRequestEvent
 	case "url":
 		// URL-based elicitation - show URL dialog
 		dialogCmd := core.CmdHandler(dialog.OpenDialogMsg{
-			Model:            dialog.NewURLElicitationDialog(msg.Message, msg.URL),
+			Model:            dialog.NewURLElicitationDialog(p.ctx(), msg.Message, msg.URL),
 			OriginatingEvent: msg,
 		})
 		return tea.Batch(spinnerCmd, dialogCmd)
