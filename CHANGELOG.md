@@ -3,6 +3,44 @@
 All notable changes to this project will be documented in this file.
 
 
+## [v1.91.0] - 2026-06-30
+
+This release adds per-session markdown plan toolset support, extends `instruction_file` to accept multiple files, and includes several bug fixes and documentation updates.
+
+## What's New
+
+- Adds a `session_plan` toolset alongside the existing `plan` toolset, providing per-session markdown plan storage
+- Extends `instruction_file` to accept either a single string or a list of file paths, with contents concatenated when multiple paths are provided
+- Adds support for a `title` field in `POST /api/sessions` to skip LLM title generation when a title is supplied
+
+## Bug Fixes
+
+- Fixes a data race in `stalledStream.Close` by replacing an unguarded `closed bool` field with `sync.Once`
+- Fixes `instruction_file` to omit empty values and drop empty-string list entries
+
+## Technical Changes
+
+- Redesigns the TUI sidebar agents panel to use uniform two-line entries for all agents via a single `renderAgentLine` function
+- Computes badge column width once in `agentInfo` in the sidebar
+- Extracts a `readInstructionFiles` helper with deferred `root.Close`
+- Adds `t.Parallel()` to isolated unit tests across multiple packages
+- Corrects a stale doc comment and restores alignment assertion in `effort_gauge_test`
+- Updates documentation for `limit_large_tool_results` always-on builtin, the `title` field in `POST /api/sessions`, and model hook `working_dir` and `env` behaviour
+### Pull Requests
+
+- [#3290](https://github.com/docker/docker-agent/pull/3290) - feat(hooks): cap oversized tool result payloads
+- [#3301](https://github.com/docker/docker-agent/pull/3301) - fix(hooks): cap oversized mcp and a2a tool results
+- [#3305](https://github.com/docker/docker-agent/pull/3305) - feat(session_plan): per-session markdown plan toolset alongside plan
+- [#3306](https://github.com/docker/docker-agent/pull/3306) - feat: allow instruction_file to accept a list of files
+- [#3307](https://github.com/docker/docker-agent/pull/3307) - refactor(sidebar): redesign agents panel to uniform two-line entries
+- [#3308](https://github.com/docker/docker-agent/pull/3308) - docs: update CHANGELOG.md for v1.90.0
+- [#3309](https://github.com/docker/docker-agent/pull/3309) - chore: bump direct Go dependencies
+- [#3310](https://github.com/docker/docker-agent/pull/3310) - feat(server): accept title in POST /api/sessions to skip LLM title generation
+- [#3311](https://github.com/docker/docker-agent/pull/3311) - test: enable t.Parallel() on isolated unit tests
+- [#3312](https://github.com/docker/docker-agent/pull/3312) - fix: data race in stalledStream.Close using sync.Once
+- [#3313](https://github.com/docker/docker-agent/pull/3313) - docs: sync /docs with recent merged PRs
+
+
 ## [Unreleased]
 
 ## What's New
@@ -4018,3 +4056,5 @@ This release improves the terminal user interface with better error handling and
 [v1.89.0]: https://github.com/docker/docker-agent/releases/tag/v1.89.0
 
 [v1.90.0]: https://github.com/docker/docker-agent/releases/tag/v1.90.0
+
+[v1.91.0]: https://github.com/docker/docker-agent/releases/tag/v1.91.0
