@@ -233,7 +233,7 @@ References follow the `op://<vault>/<item>/<field>` format. Make sure the `op` C
 
 <div class="callout callout-warning" markdown="1">
 <div class="callout-title">Behaviour when resolution fails</div>
-<p>If the value starts with <code>op://</code> but the <code>op</code> CLI is not installed, or the reference cannot be read (not signed in, wrong path, locked vault), docker-agent logs a warning and treats the variable as <strong>unset</strong> — it never forwards the raw <code>op://</code> reference to a model provider or tool.</p>
+<p>If the value starts with <code>op://</code> but the <code>op</code> CLI is not installed, or the reference cannot be read (not signed in, wrong path, locked vault), docker-agent logs a warning and uses an <strong>empty value</strong> — it never forwards the raw <code>op://</code> reference to a model provider or tool. Resolved references (and deterministic failures) are cached for the lifetime of the run; transient failures such as a cancelled lookup are not cached, so a later attempt can retry.</p>
 </div>
 
 ## Choosing a Method

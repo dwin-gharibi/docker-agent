@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+
+	"golang.org/x/sync/singleflight"
 )
 
 // onePasswordPrefix marks an environment value as a 1Password secret reference
@@ -21,9 +23,15 @@ type OnePasswordProvider struct {
 	// so tests can inject a fake resolver without relying on the `op` binary.
 	resolve func(ctx context.Context, reference string) (string, bool)
 
-	// cache memoizes resolved references so the same secret is not looked up
-	// (and the `op` CLI not spawned) repeatedly. Failed resolutions are cached
-	// as an empty string too, since they are equally deterministic per run.
+	// group coalesces concurrent resolutions of the same reference so the `op`
+	// CLI is spawned at most once per reference, while still allowing distinct
+	// references to resolve in parallel.
+	group singleflight.Group
+
+	// cache memoizes resolved references. Successful results and deterministic
+	// failures (op missing, bad reference) are cached so we don't keep spawning
+	// the CLI; transient failures (e.g. context cancellation) are not cached so
+	// a later call can retry.
 	mu    sync.Mutex
 	cache map[string]string
 }
@@ -69,22 +77,45 @@ func (p *OnePasswordProvider) Get(ctx context.Context, name string) (string, boo
 }
 
 func (p *OnePasswordProvider) resolveCached(ctx context.Context, reference string) string {
+	if cached, ok := p.cachedValue(reference); ok {
+		return cached
+	}
+
+	resolved, _, _ := p.group.Do(reference, func() (any, error) {
+		if cached, ok := p.cachedValue(reference); ok {
+			return cached, nil
+		}
+
+		value, ok := p.resolve(ctx, reference)
+		if !ok {
+			slog.WarnContext(ctx, "Failed to resolve 1Password secret reference; using empty value")
+			value = ""
+			// Don't cache failures caused by a cancelled/expired context: those
+			// are transient and a later call should be allowed to retry.
+			if ctx.Err() != nil {
+				return value, nil
+			}
+		}
+
+		p.storeValue(reference, value)
+		return value, nil
+	})
+
+	return resolved.(string)
+}
+
+func (p *OnePasswordProvider) cachedValue(reference string) (string, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	value, ok := p.cache[reference]
+	return value, ok
+}
 
+func (p *OnePasswordProvider) storeValue(reference, value string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	if p.cache == nil {
 		p.cache = make(map[string]string)
 	}
-	if resolved, ok := p.cache[reference]; ok {
-		return resolved
-	}
-
-	resolved, ok := p.resolve(ctx, reference)
-	if !ok {
-		slog.WarnContext(ctx, "Failed to resolve 1Password secret reference; using empty value", "reference", reference)
-		resolved = ""
-	}
-
-	p.cache[reference] = resolved
-	return resolved
+	p.cache[reference] = value
 }
