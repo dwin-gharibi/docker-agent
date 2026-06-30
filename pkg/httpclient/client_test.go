@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -16,12 +15,11 @@ import (
 	"github.com/docker/docker-agent/pkg/userid"
 )
 
-// TestMain redirects the config directory used by [userid.Get] to a
-// throw-away temp dir so the package's tests, which exercise
-// gateway-bound HTTP requests, never read or write the real user-uuid
-// file in the developer's config dir. Individual tests can still
-// override the directory and call [userid.ResetForTests] for finer
-// control.
+// TestMain points the config dir used by the default [userid.Get] at a
+// throw-away temp dir so tests exercising gateway-bound requests never
+// read or write the real user-uuid file. The override is set once and
+// never mutated, so it stays safe for parallel tests. Tests needing a
+// deterministic UUID inject their own resolver via [withCagentIDSource].
 func TestMain(m *testing.M) {
 	//nolint:forbidigo // TestMain has no *testing.T, so t.TempDir is unavailable.
 	dir, err := os.MkdirTemp("", "httpclient-test-config-*")
@@ -30,7 +28,6 @@ func TestMain(m *testing.M) {
 	}
 
 	paths.SetConfigDir(dir)
-	userid.ResetForTests()
 
 	code := m.Run()
 
@@ -181,12 +178,16 @@ func TestContextWithSessionID_RoundTrip(t *testing.T) {
 }
 
 func TestCagentIDHeader_GatewayBoundOnly(t *testing.T) {
-	// Pin the persistent UUID file to a temp dir so the test does
-	// not touch the real config dir and the value is deterministic.
-	// We do not call t.Parallel because we mutate the package-level
-	// paths override and the userid cache.
+	t.Parallel()
+
+	// Seed a fixed UUID into an isolated resolver so the value is
+	// deterministic and the test touches neither the real config dir
+	// nor any global state — letting it run in parallel.
 	const stored = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
-	withStoredUserUUID(t, stored)
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "user-uuid"), []byte(stored), 0o600))
+	idSource := userid.New(dir).Get
+	require.Equal(t, stored, idSource(), "seeded resolver must return the stored UUID")
 
 	tests := []struct {
 		name           string
@@ -207,7 +208,10 @@ func TestCagentIDHeader_GatewayBoundOnly(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			headers := doRequest(t, tt.opts...)
+			t.Parallel()
+
+			opts := append([]Opt{withCagentIDSource(idSource)}, tt.opts...)
+			headers := doRequest(t, opts...)
 
 			if tt.wantHeaderSent {
 				assert.Equal(t, stored, headers.Get("X-Cagent-Id"))
@@ -216,28 +220,4 @@ func TestCagentIDHeader_GatewayBoundOnly(t *testing.T) {
 			}
 		})
 	}
-}
-
-// withStoredUserUUID seeds a fixed UUID into a temporary config dir for
-// the duration of the test, so the persistent identifier surfaced by
-// userid.Get is deterministic and isolated from other tests. The
-// previous override is restored on cleanup so we keep the package-wide
-// isolation set up by [TestMain].
-func withStoredUserUUID(t *testing.T, id string) {
-	t.Helper()
-
-	_, err := uuid.Parse(id)
-	require.NoError(t, err, "seeded value must be a valid UUID")
-
-	previous := paths.GetConfigDir()
-
-	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "user-uuid"), []byte(id), 0o600))
-
-	paths.SetConfigDir(dir)
-	userid.ResetForTests()
-	t.Cleanup(func() {
-		paths.SetConfigDir(previous)
-		userid.ResetForTests()
-	})
 }
