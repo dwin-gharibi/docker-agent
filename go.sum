@@ -175,8 +175,8 @@ github.com/docker/go-units v0.5.0 h1:69rxXcBk27SvSaaxTtLh/8llcHD8vYHT7WSdRZ/jvr4
 github.com/docker/go-units v0.5.0/go.mod h1:fgPhTUdO+D/Jk86RDLlptpiXQzgHJF7gydDDbaIK4Dk=
 github.com/docker/portcullis v0.0.0-20260629131418-af46a89c4e49 h1:2CVzrWyNxCxOgV7UluBfMBnXsIS5vb30/FbdiXz0MjQ=
 github.com/docker/portcullis v0.0.0-20260629131418-af46a89c4e49/go.mod h1:FBCDtWLlYquonR/uesgN9HhLvbaDIX3PEC6lgHCnL24=
-github.com/dop251/goja v0.0.0-20260627200808-0b76000cabdb h1:qxbH9q0zvt7Fwy9UJrHdd9grPTlO07G/vUUE3eqfZ4w=
-github.com/dop251/goja v0.0.0-20260627200808-0b76000cabdb/go.mod h1:Sc+QOu1WruvaaeT/cxFez/pXHpI9ZDjg/E8QNfSVveI=
+github.com/dop251/goja v0.0.0-20260629171413-2a84ae0cf10d h1:IrTLEhqeFRChlRwzmMvNeXbP9ELyB1c6Xbc/ObpzZ3c=
+github.com/dop251/goja v0.0.0-20260629171413-2a84ae0cf10d/go.mod h1:Sc+QOu1WruvaaeT/cxFez/pXHpI9ZDjg/E8QNfSVveI=
 github.com/dustin/go-humanize v1.0.1 h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkpeCY=
 github.com/dustin/go-humanize v1.0.1/go.mod h1:Mu1zIs6XwVuF/gI1OepvI0qD18qycQx+mFykh5fBlto=
 github.com/dvsekhvalnov/jose2go v1.7.0 h1:bnQc8+GMnidJZA8zc6lLEAb4xNrIqHwO+9TzqvtQZPo=
