@@ -4054,3 +4054,62 @@ func TestRunAgentPersistsSubSessionOnError(t *testing.T) {
 	assert.Equal(t, 1, subSessionItems,
 		"parent session must record the sub-session even when the background agent errored")
 }
+
+// TestReasoningOnlyTurnEmitsWarning is a regression test for
+// https://github.com/docker/docker-agent/issues/3145. A thinking-mode model
+// (e.g. Qwen3 via an openai_chatcompletions provider) can stream only reasoning
+// tokens and then stop with no content and no tool calls. recordAssistantMessage
+// skips that empty turn, which previously left the user staring at silence. The
+// runtime must instead surface a Warning explaining that the model produced only
+// reasoning, and must still not persist an assistant message.
+func TestReasoningOnlyTurnEmitsWarning(t *testing.T) {
+	stream := newStreamBuilder().
+		AddReasoning("The user wants the file list. ").
+		AddReasoning("I should call list_directory.").
+		AddStopWithUsage(10, 25).
+		Build()
+
+	sess := session.New(session.WithUserMessage("List the files"))
+	events := runSession(t, sess, stream)
+
+	var warn *WarningEvent
+	assistantPersisted := false
+	for _, ev := range events {
+		switch e := ev.(type) {
+		case *WarningEvent:
+			warn = e
+		case *MessageAddedEvent:
+			if e.Message != nil && e.Message.Message.Role == chat.MessageRoleAssistant {
+				assistantPersisted = true
+			}
+		}
+	}
+
+	require.NotNil(t, warn, "expected a Warning event for a reasoning-only turn")
+	assert.Contains(t, warn.Message, "only reasoning")
+	assert.False(t, assistantPersisted,
+		"a reasoning-only turn must not persist an assistant message")
+}
+
+// TestEmptyTurnEmitsWarning verifies that a wholly empty turn (no content, no
+// reasoning, no tool calls) - e.g. a rate-limited or token-capped provider that
+// returns a bare [DONE] stream, the dominant cause of empty replies on OVHcloud's
+// free tier in #3145 - is surfaced as a Warning instead of terminating silently.
+func TestEmptyTurnEmitsWarning(t *testing.T) {
+	stream := newStreamBuilder().
+		AddStopWithUsage(5, 0).
+		Build()
+
+	sess := session.New(session.WithUserMessage("hello"))
+	events := runSession(t, sess, stream)
+
+	var warn *WarningEvent
+	for _, ev := range events {
+		if w, ok := ev.(*WarningEvent); ok {
+			warn = w
+		}
+	}
+
+	require.NotNil(t, warn, "expected a Warning event for an empty turn")
+	assert.Contains(t, warn.Message, "empty response")
+}

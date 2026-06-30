@@ -163,6 +163,33 @@ func TestHandleStream_ToolCallThenSeparateStop(t *testing.T) {
 	assert.False(t, res.Stopped)
 }
 
+// TestHandleStream_WhitespaceOnlyContentStops is a regression test for an
+// infinite-loop risk surfaced while reviewing #3145. A turn that streams only
+// whitespace content and ends with a bare EOF (no finish reason) must report
+// Stopped=true. runTurn emits an empty-turn warning whenever the trimmed
+// content is empty and there are no tool calls; were such a turn not stopped,
+// runTurn would fall through to turnContinue and re-enter the model with
+// identical messages, spinning forever.
+func TestHandleStream_WhitespaceOnlyContentStops(t *testing.T) {
+	stream := newStreamBuilder().
+		AddContent("\n\n   "). // whitespace only
+		Build()                // no terminal chunk: bare EOF, no finish reason
+
+	a := agent.New("root", "test", agent.WithModel(&mockProvider{id: "test/mock-model", stream: stream}))
+	sess := session.New(session.WithUserMessage("go"))
+
+	evCh := make(chan Event, 64)
+	res, err := handleStream(
+		t.Context(), nil, stream, a, nil, sess, nil,
+		defaultTelemetry{}, NewChannelSink(evCh),
+	)
+	require.NoError(t, err)
+
+	assert.Empty(t, res.Calls)
+	assert.True(t, res.Stopped,
+		"a whitespace-only, bare-EOF turn must stop so the empty-turn warning is followed by a turn exit, not an identical re-entry (#3145)")
+}
+
 // stalledStream is a chat.MessageStream that blocks in Recv() until
 // either unblocked or the stream is closed. It is used to simulate a
 // half-open TCP connection where the remote side stops sending data.
