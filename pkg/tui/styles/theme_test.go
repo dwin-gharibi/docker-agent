@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sync"
 	"testing"
 	"testing/fstest"
 
@@ -22,48 +23,48 @@ import (
 //go:embed testdata/themes/*.yaml
 var embedderThemes embed.FS
 
-// resetThemes clears embedder-registered theme sources and the theme caches
-// before and after a test, so tests that register themes stay isolated.
-func resetThemes(t *testing.T) {
-	t.Helper()
-	reset := func() {
-		extraThemeFSesMu.Lock()
-		extraThemeFSes = nil
-		extraThemeFSesMu.Unlock()
+type blockingThemeFS struct {
+	fstest.MapFS
 
-		builtinRefsCacheMu.Lock()
-		builtinRefsCacheOK = false
-		builtinRefsCache = nil
-		builtinRefsCacheMu.Unlock()
+	opened  chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
 
-		InvalidateThemeCache("")
+func (fsys *blockingThemeFS) ReadFile(name string) ([]byte, error) {
+	if name == "themes/nord.yaml" {
+		fsys.once.Do(func() {
+			close(fsys.opened)
+			<-fsys.release
+		})
 	}
-	reset()
-	t.Cleanup(reset)
+	return fs.ReadFile(fsys.MapFS, name)
 }
 
 // TestRegisterBuiltinThemes_Integration exercises the full embedder loop:
 // register a theme from a real embed.FS, then discover, load, and apply it the
 // way a downstream CLI/TUI would. The narrower tests below isolate individual
 // behaviors (merge, precedence, errors) with synthetic sources.
-func TestRegisterBuiltinThemes_Integration(t *testing.T) {
-	resetThemes(t)
+func TestRegisterBuiltinThemes_Integration(t *testing.T) { //nolint:paralleltest // ApplyTheme mutates package-wide style variables.
+	registry := newThemeRegistry()
 	original := CurrentTheme()
 	t.Cleanup(func() { ApplyTheme(original) })
 
 	themesFS, err := fs.Sub(embedderThemes, "testdata")
 	require.NoError(t, err)
-	require.NoError(t, RegisterBuiltinThemes(themesFS))
+	require.NoError(t, registry.RegisterBuiltinThemes(themesFS))
 
 	// The registered theme is discoverable and classified like a built-in.
-	refs, err := ListThemeRefs()
+	refs, err := registry.ListThemeRefs()
 	require.NoError(t, err)
 	assert.Contains(t, refs, "embedder")
-	assert.True(t, IsBuiltinTheme("embedder"))
+	assert.True(t, registry.IsBuiltinTheme("embedder"))
 
 	// It applies via the embedder entry point, merged onto the default theme so
 	// unspecified fields are inherited.
-	applied := ApplyThemeRef("embedder")
+	applied, err := registry.LoadTheme("embedder")
+	require.NoError(t, err)
+	ApplyTheme(applied)
 	require.NotNil(t, applied)
 	assert.Equal(t, "embedder", applied.Ref)
 	assert.Equal(t, "Embedder", applied.Name)
@@ -72,11 +73,35 @@ func TestRegisterBuiltinThemes_Integration(t *testing.T) {
 	assert.Equal(t, "embedder", CurrentTheme().Ref)
 }
 
+// TestRegisterBuiltinThemes_PackageAPI verifies the exported wrapper functions
+// use the package-wide default registry correctly.
+func TestRegisterBuiltinThemes_PackageAPI(t *testing.T) { //nolint:paralleltest // Temporarily swaps package-wide defaultRegistry.
+	previous := defaultRegistry
+	defaultRegistry = newThemeRegistry()
+	t.Cleanup(func() { defaultRegistry = previous })
+
+	src := fstest.MapFS{
+		"themes/package-api.yaml": &fstest.MapFile{Data: []byte("name: Package API\n")},
+	}
+	require.NoError(t, RegisterBuiltinThemes(src))
+
+	refs, err := ListThemeRefs()
+	require.NoError(t, err)
+	assert.Contains(t, refs, "package-api")
+	assert.True(t, IsBuiltinTheme("package-api"))
+
+	theme, err := LoadTheme("package-api")
+	require.NoError(t, err)
+	assert.Equal(t, "Package API", theme.Name)
+	assert.Equal(t, "package-api", theme.Ref)
+}
+
 // TestRegisterBuiltinThemes covers core registration: a registered theme is
 // listed, classified as built-in, and loads merged onto the default theme.
 func TestRegisterBuiltinThemes(t *testing.T) {
-	resetThemes(t)
+	t.Parallel()
 
+	registry := newThemeRegistry()
 	def := DefaultTheme()
 
 	src := fstest.MapFS{
@@ -84,14 +109,14 @@ func TestRegisterBuiltinThemes(t *testing.T) {
 			Data: []byte("name: Branded\ncolors:\n  accent: \"#FF0000\"\n"),
 		},
 	}
-	require.NoError(t, RegisterBuiltinThemes(src))
+	require.NoError(t, registry.RegisterBuiltinThemes(src))
 
-	refs, err := ListThemeRefs()
+	refs, err := registry.ListThemeRefs()
 	require.NoError(t, err)
 	assert.Contains(t, refs, "branded")
-	assert.True(t, IsBuiltinTheme("branded"))
+	assert.True(t, registry.IsBuiltinTheme("branded"))
 
-	theme, err := LoadTheme("branded")
+	theme, err := registry.LoadTheme("branded")
 	require.NoError(t, err)
 	assert.Equal(t, "Branded", theme.Name)
 	assert.Equal(t, "branded", theme.Ref)
@@ -104,7 +129,9 @@ func TestRegisterBuiltinThemes(t *testing.T) {
 // across more than one registered source, and that the later-registered source
 // wins a name collision between two registered sources (last-wins).
 func TestRegisterBuiltinThemes_MultipleSources(t *testing.T) {
-	resetThemes(t)
+	t.Parallel()
+
+	registry := newThemeRegistry()
 
 	first := fstest.MapFS{
 		"themes/alpha.yaml":  &fstest.MapFile{Data: []byte("name: Alpha\n")},
@@ -114,16 +141,16 @@ func TestRegisterBuiltinThemes_MultipleSources(t *testing.T) {
 		"themes/beta.yaml":   &fstest.MapFile{Data: []byte("name: Beta\n")},
 		"themes/shared.yaml": &fstest.MapFile{Data: []byte("name: Second\n")},
 	}
-	require.NoError(t, RegisterBuiltinThemes(first))
-	require.NoError(t, RegisterBuiltinThemes(second))
+	require.NoError(t, registry.RegisterBuiltinThemes(first))
+	require.NoError(t, registry.RegisterBuiltinThemes(second))
 
-	refs, err := ListThemeRefs()
+	refs, err := registry.ListThemeRefs()
 	require.NoError(t, err)
 	assert.Contains(t, refs, "alpha")
 	assert.Contains(t, refs, "beta")
 
 	// Later registration wins a collision between two registered sources (last-wins).
-	shared, err := LoadTheme("shared")
+	shared, err := registry.LoadTheme("shared")
 	require.NoError(t, err)
 	assert.Equal(t, "Second", shared.Name)
 }
@@ -131,16 +158,18 @@ func TestRegisterBuiltinThemes_MultipleSources(t *testing.T) {
 // TestRegisterBuiltinThemes_OverridesBuiltin verifies a registered source takes
 // precedence over a bundled theme of the same name.
 func TestRegisterBuiltinThemes_OverridesBuiltin(t *testing.T) {
-	resetThemes(t)
+	t.Parallel()
+
+	registry := newThemeRegistry()
 
 	src := fstest.MapFS{
 		"themes/nord.yaml": &fstest.MapFile{
 			Data: []byte("name: NotNord\ncolors:\n  accent: \"#123456\"\n"),
 		},
 	}
-	require.NoError(t, RegisterBuiltinThemes(src))
+	require.NoError(t, registry.RegisterBuiltinThemes(src))
 
-	got, err := LoadTheme("nord")
+	got, err := registry.LoadTheme("nord")
 	require.NoError(t, err)
 	assert.Equal(t, "#123456", got.Colors.Accent)
 	assert.Equal(t, "NotNord", got.Name)
@@ -149,8 +178,9 @@ func TestRegisterBuiltinThemes_OverridesBuiltin(t *testing.T) {
 // TestRegisterBuiltinThemes_MasksDefault verifies an embedder can replace the
 // "default" theme; the override merges onto cagent's pristine default base.
 func TestRegisterBuiltinThemes_MasksDefault(t *testing.T) {
-	resetThemes(t)
+	t.Parallel()
 
+	registry := newThemeRegistry()
 	cagentDefault := DefaultTheme()
 
 	src := fstest.MapFS{
@@ -158,9 +188,9 @@ func TestRegisterBuiltinThemes_MasksDefault(t *testing.T) {
 			Data: []byte("name: Branded Default\ncolors:\n  accent: \"#ABCDEF\"\n"),
 		},
 	}
-	require.NoError(t, RegisterBuiltinThemes(src))
+	require.NoError(t, registry.RegisterBuiltinThemes(src))
 
-	got, err := LoadTheme(DefaultThemeRef)
+	got, err := registry.LoadTheme(DefaultThemeRef)
 	require.NoError(t, err)
 	assert.Equal(t, "#ABCDEF", got.Colors.Accent)
 	assert.Equal(t, "Branded Default", got.Name)
@@ -176,14 +206,16 @@ func TestRegisterBuiltinThemes_MasksDefault(t *testing.T) {
 // as permanently valid, so registration must drop them; otherwise the override is
 // a silent no-op.
 func TestRegisterBuiltinThemes_OverrideAfterLoad(t *testing.T) {
-	resetThemes(t)
+	t.Parallel()
+
+	registry := newThemeRegistry()
 
 	// Warm the theme cache with the bundled built-in and the bundled default.
-	bundledNord, err := LoadTheme("nord")
+	bundledNord, err := registry.LoadTheme("nord")
 	require.NoError(t, err)
 	require.NotEqual(t, "#123456", bundledNord.Colors.Accent)
 
-	bundledDefault, err := LoadTheme(DefaultThemeRef)
+	bundledDefault, err := registry.LoadTheme(DefaultThemeRef)
 	require.NoError(t, err)
 	require.NotEqual(t, "#ABCDEF", bundledDefault.Colors.Accent)
 
@@ -195,26 +227,73 @@ func TestRegisterBuiltinThemes_OverrideAfterLoad(t *testing.T) {
 			Data: []byte("name: Branded Default\ncolors:\n  accent: \"#ABCDEF\"\n"),
 		},
 	}
-	require.NoError(t, RegisterBuiltinThemes(src))
+	require.NoError(t, registry.RegisterBuiltinThemes(src))
 
-	gotNord, err := LoadTheme("nord")
+	gotNord, err := registry.LoadTheme("nord")
 	require.NoError(t, err)
 	assert.Equal(t, "#123456", gotNord.Colors.Accent)
 	assert.Equal(t, "NotNord", gotNord.Name)
 
-	gotDefault, err := LoadTheme(DefaultThemeRef)
+	gotDefault, err := registry.LoadTheme(DefaultThemeRef)
 	require.NoError(t, err)
 	assert.Equal(t, "#ABCDEF", gotDefault.Colors.Accent)
 	assert.Equal(t, "Branded Default", gotDefault.Name)
 }
 
+// TestRegisterBuiltinThemes_ConcurrentLoadDoesNotRepopulateStaleCache verifies
+// that a load already in progress when registration invalidates the cache cannot
+// store stale built-in data after the invalidation.
+func TestRegisterBuiltinThemes_ConcurrentLoadDoesNotRepopulateStaleCache(t *testing.T) {
+	t.Parallel()
+
+	registry := newThemeRegistry()
+	oldSource := &blockingThemeFS{
+		MapFS: fstest.MapFS{
+			"themes/nord.yaml": &fstest.MapFile{Data: []byte("name: Stale Nord\ncolors:\n  accent: \"#111111\"\n")},
+		},
+		opened:  make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	newSource := fstest.MapFS{
+		"themes/nord.yaml": &fstest.MapFile{Data: []byte("name: Fresh Nord\ncolors:\n  accent: \"#222222\"\n")},
+	}
+	require.NoError(t, registry.RegisterBuiltinThemes(oldSource))
+
+	type loadResult struct {
+		theme *Theme
+		err   error
+	}
+	loaded := make(chan loadResult, 1)
+	go func() {
+		theme, err := registry.LoadTheme("nord")
+		loaded <- loadResult{theme: theme, err: err}
+	}()
+	<-oldSource.opened
+
+	require.NoError(t, registry.RegisterBuiltinThemes(newSource))
+	close(oldSource.release)
+
+	result := <-loaded
+	require.NoError(t, result.err)
+	require.NotNil(t, result.theme)
+	assert.Equal(t, "Fresh Nord", result.theme.Name)
+	assert.Equal(t, "#222222", result.theme.Colors.Accent)
+
+	cached, err := registry.LoadTheme("nord")
+	require.NoError(t, err)
+	assert.Equal(t, "Fresh Nord", cached.Name)
+	assert.Equal(t, "#222222", cached.Colors.Accent)
+}
+
 // TestRegisterBuiltinThemes_Errors covers eager validation of the source.
 func TestRegisterBuiltinThemes_Errors(t *testing.T) {
-	resetThemes(t)
+	t.Parallel()
 
-	require.Error(t, RegisterBuiltinThemes(nil))
+	registry := newThemeRegistry()
+
+	require.Error(t, registry.RegisterBuiltinThemes(nil))
 	// A source without a "themes" directory is rejected eagerly.
-	require.Error(t, RegisterBuiltinThemes(fstest.MapFS{
+	require.Error(t, registry.RegisterBuiltinThemes(fstest.MapFS{
 		"other/x.yaml": &fstest.MapFile{Data: []byte("{}")},
 	}))
 }
@@ -399,7 +478,7 @@ name: YML Theme
 	assert.Equal(t, "YML Theme", theme.Name)
 }
 
-func TestApplyTheme(t *testing.T) {
+func TestApplyTheme(t *testing.T) { //nolint:paralleltest // ApplyTheme mutates package-wide style variables.
 	// Note: Cannot use t.Parallel() because ApplyTheme modifies global state
 
 	// Create a custom theme

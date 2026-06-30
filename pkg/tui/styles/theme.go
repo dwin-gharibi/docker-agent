@@ -32,20 +32,37 @@ type themeCacheEntry struct {
 	path    string    // For user themes: file path; for built-in: empty
 }
 
-var (
-	themeCache   = make(map[string]*themeCacheEntry)
-	themeCacheMu sync.RWMutex
+// themeRegistry holds the mutable theme state: embedder-registered theme
+// sources and the lazy caches derived from them. The package-level theme API
+// is backed by a single process-wide defaultRegistry, but tests can construct
+// isolated instances with newThemeRegistry to exercise registration and
+// loading in parallel without racing on shared globals.
+type themeRegistry struct {
+	cacheMu sync.RWMutex
+	cache   map[string]*themeCacheEntry
+	// generation changes whenever cached entries are invalidated, so in-flight
+	// loads can avoid repopulating stale data after registration.
+	generation uint64
 
-	// builtinRefsCache caches the list of built-in theme refs (they never change at runtime)
-	builtinRefsCache   []string
-	builtinRefsCacheOK bool
-	builtinRefsCacheMu sync.Mutex
+	// builtinRefs caches the list of built-in theme refs (they never change at
+	// runtime); builtinRefsOK guards its lazy population.
+	refsMu        sync.Mutex
+	builtinRefs   []string
+	builtinRefsOK bool
 
-	// extraThemeFSes holds additional theme sources contributed by embedders via
+	// extraFSes holds additional theme sources contributed by embedders via
 	// RegisterBuiltinThemes. They are consulted alongside the bundled themes.
-	extraThemeFSes   []fs.FS
-	extraThemeFSesMu sync.RWMutex
-)
+	extraMu   sync.RWMutex
+	extraFSes []fs.FS
+}
+
+// newThemeRegistry returns an empty registry with an initialized theme cache.
+func newThemeRegistry() *themeRegistry {
+	return &themeRegistry{cache: make(map[string]*themeCacheEntry)}
+}
+
+// defaultRegistry backs the package-level theme API.
+var defaultRegistry = newThemeRegistry()
 
 // RegisterBuiltinThemes adds an additional source of built-in themes from fsys.
 // It must contain theme files at "themes/<ref>.yaml" (or .yml) — the same layout
@@ -66,6 +83,10 @@ var (
 // Call this at startup, before applying any persisted theme, so that a persisted
 // selection naming a registered theme resolves.
 func RegisterBuiltinThemes(fsys fs.FS) error {
+	return defaultRegistry.RegisterBuiltinThemes(fsys)
+}
+
+func (r *themeRegistry) RegisterBuiltinThemes(fsys fs.FS) error {
 	if fsys == nil {
 		return errors.New("register built-in themes: nil fs")
 	}
@@ -74,31 +95,31 @@ func RegisterBuiltinThemes(fsys fs.FS) error {
 		return fmt.Errorf("register built-in themes: %w", err)
 	}
 
-	extraThemeFSesMu.Lock()
-	extraThemeFSes = append(extraThemeFSes, fsys)
-	extraThemeFSesMu.Unlock()
+	r.extraMu.Lock()
+	r.extraFSes = append(r.extraFSes, fsys)
+	r.extraMu.Unlock()
 
 	// Newly registered themes must appear in subsequent listings.
-	builtinRefsCacheMu.Lock()
-	builtinRefsCacheOK = false
-	builtinRefsCacheMu.Unlock()
+	r.refsMu.Lock()
+	r.builtinRefsOK = false
+	r.refsMu.Unlock()
 
 	// Drop any theme already resolved under a ref this source overrides (a bundled
 	// built-in, or "default"), so the registered override/mask wins even when it
 	// was loaded before registration — built-in cache entries are otherwise treated
 	// as permanently valid. DefaultTheme()'s own cache is separate and untouched, so
 	// it stays the pristine merge base.
-	InvalidateThemeCache("")
+	r.InvalidateThemeCache("")
 
 	return nil
 }
 
 // registeredThemeFSes returns a snapshot of the embedder-contributed theme
 // sources.
-func registeredThemeFSes() []fs.FS {
-	extraThemeFSesMu.RLock()
-	defer extraThemeFSesMu.RUnlock()
-	return extraThemeFSes
+func (r *themeRegistry) registeredThemeFSes() []fs.FS {
+	r.extraMu.RLock()
+	defer r.extraMu.RUnlock()
+	return slices.Clone(r.extraFSes)
 }
 
 // readThemeRefsFromFS lists the theme refs (file basenames without extension)
@@ -139,9 +160,9 @@ func readThemeData(fsys fs.FS, ref string) ([]byte, bool) {
 // cagent's bundled themes, so an embedder can override a built-in — including
 // masking "default" with their own — and a later RegisterBuiltinThemes call wins
 // a name collision with an earlier one (last-wins).
-func readRegisteredThemeData(ref string) ([]byte, bool) {
+func (r *themeRegistry) readRegisteredThemeData(ref string) ([]byte, bool) {
 	// Iterate newest-first so a later RegisterBuiltinThemes call wins (last-wins).
-	for _, fsys := range slices.Backward(registeredThemeFSes()) {
+	for _, fsys := range slices.Backward(r.registeredThemeFSes()) {
 		if data, ok := readThemeData(fsys, ref); ok {
 			return data, true
 		}
@@ -152,12 +173,17 @@ func readRegisteredThemeData(ref string) ([]byte, bool) {
 // InvalidateThemeCache clears the theme cache for a specific ref, or all if ref is empty.
 // This is primarily for testing; the cache is mtime-aware so it auto-invalidates on file changes.
 func InvalidateThemeCache(ref string) {
-	themeCacheMu.Lock()
-	defer themeCacheMu.Unlock()
+	defaultRegistry.InvalidateThemeCache(ref)
+}
+
+func (r *themeRegistry) InvalidateThemeCache(ref string) {
+	r.cacheMu.Lock()
+	defer r.cacheMu.Unlock()
+	r.generation++
 	if ref == "" {
-		themeCache = make(map[string]*themeCacheEntry)
+		r.cache = make(map[string]*themeCacheEntry)
 	} else {
-		delete(themeCache, ref)
+		delete(r.cache, ref)
 	}
 }
 
@@ -329,6 +355,10 @@ const UserThemePrefix = "user:"
 // User themes with names matching built-in themes are prefixed with "user:" to distinguish them.
 // The "default" theme is always listed first for UX purposes.
 func ListThemeRefs() ([]string, error) {
+	return defaultRegistry.ListThemeRefs()
+}
+
+func (r *themeRegistry) ListThemeRefs() ([]string, error) {
 	// Track built-in refs to detect conflicts with user themes
 	builtinSet := make(map[string]bool)
 
@@ -337,7 +367,7 @@ func ListThemeRefs() ([]string, error) {
 	builtinSet[DefaultThemeRef] = true
 
 	// Add built-in themes from embedded files (default.yaml will be skipped since already added)
-	builtinRefs, err := listBuiltinThemeRefs()
+	builtinRefs, err := r.listBuiltinThemeRefs()
 	if err != nil {
 		return nil, fmt.Errorf("listing built-in themes: %w", err)
 	}
@@ -369,11 +399,15 @@ func ListThemeRefs() ([]string, error) {
 // listBuiltinThemeRefs returns the list of built-in theme references from embedded files.
 // Results are cached since built-in themes never change at runtime.
 func listBuiltinThemeRefs() ([]string, error) {
-	builtinRefsCacheMu.Lock()
-	defer builtinRefsCacheMu.Unlock()
+	return defaultRegistry.listBuiltinThemeRefs()
+}
 
-	if builtinRefsCacheOK {
-		return builtinRefsCache, nil
+func (r *themeRegistry) listBuiltinThemeRefs() ([]string, error) {
+	r.refsMu.Lock()
+	defer r.refsMu.Unlock()
+
+	if r.builtinRefsOK {
+		return slices.Clone(r.builtinRefs), nil
 	}
 
 	refs, err := readThemeRefsFromFS(builtinThemes)
@@ -384,26 +418,26 @@ func listBuiltinThemeRefs() ([]string, error) {
 	// Append themes contributed by embedders, skipping the reserved "default"
 	// ref and any name that collides with an existing built-in.
 	seen := make(map[string]bool, len(refs))
-	for _, r := range refs {
-		seen[r] = true
+	for _, ref := range refs {
+		seen[ref] = true
 	}
-	for _, fsys := range registeredThemeFSes() {
+	for _, fsys := range r.registeredThemeFSes() {
 		extraRefs, err := readThemeRefsFromFS(fsys)
 		if err != nil {
 			return nil, fmt.Errorf("reading registered themes: %w", err)
 		}
-		for _, r := range extraRefs {
-			if r == DefaultThemeRef || seen[r] {
+		for _, ref := range extraRefs {
+			if ref == DefaultThemeRef || seen[ref] {
 				continue
 			}
-			seen[r] = true
-			refs = append(refs, r)
+			seen[ref] = true
+			refs = append(refs, ref)
 		}
 	}
 
-	builtinRefsCache = refs
-	builtinRefsCacheOK = true
-	return refs, nil
+	r.builtinRefs = refs
+	r.builtinRefsOK = true
+	return slices.Clone(refs), nil
 }
 
 // listUserThemeRefs returns the list of user theme references from ~/.cagent/themes/.
@@ -519,6 +553,10 @@ func listThemeRefsFrom(dir string) ([]string, error) {
 // The cache is mtime-aware: user themes are re-parsed only when the file's modTime changes.
 // If a user theme file exists but fails to parse, an error is returned (no silent fallback).
 func LoadTheme(ref string) (*Theme, error) {
+	return defaultRegistry.LoadTheme(ref)
+}
+
+func (r *themeRegistry) LoadTheme(ref string) (*Theme, error) {
 	// Empty ref means "use default theme" - caller should resolve this to DefaultThemeRef
 	if ref == "" {
 		return nil, fmt.Errorf("cannot load theme with empty ref; use %q instead", DefaultThemeRef)
@@ -536,72 +574,81 @@ func LoadTheme(ref string) (*Theme, error) {
 		return nil, err
 	}
 
-	// Determine if this should load from built-in or user themes
-	isBuiltin := !forceUserTheme && IsBuiltinTheme(baseRef)
+	for {
+		// Determine if this should load from built-in or user themes
+		isBuiltin := !forceUserTheme && r.IsBuiltinTheme(baseRef)
 
-	// For user themes, check if file exists and get modTime
-	var userThemePath string
-	var userModTime time.Time
-	if !isBuiltin {
-		userThemePath, userModTime = getUserThemeFileInfo(baseRef)
+		// For user themes, check if file exists and get modTime
+		var userThemePath string
+		var userModTime time.Time
+		if !isBuiltin {
+			userThemePath, userModTime = getUserThemeFileInfo(baseRef)
+		}
+
+		// Check the cache (use the full ref as cache key to distinguish user:nord from nord)
+		r.cacheMu.RLock()
+		generation := r.generation
+		cached, hasCached := r.cache[ref]
+		r.cacheMu.RUnlock()
+
+		if hasCached {
+			if isBuiltin {
+				// Built-in themes don't change at runtime, cache is always valid
+				return cached.theme, nil
+			}
+			// User theme: check if modTime matches
+			if cached.path == userThemePath && cached.modTime.Equal(userModTime) {
+				return cached.theme, nil
+			}
+			// modTime changed or path changed, need to reload
+		}
+
+		// Load and cache the theme
+		var theme *Theme
+		var err error
+		var entry *themeCacheEntry
+
+		switch {
+		case isBuiltin:
+			// Load built-in theme from embedded files
+			theme, err = r.loadBuiltinTheme(baseRef)
+			if err != nil {
+				return nil, err
+			}
+			entry = &themeCacheEntry{
+				theme:   theme,
+				modTime: time.Time{}, // Zero time for built-in themes
+				path:    "",          // Empty path for built-in themes
+			}
+		case userThemePath != "":
+			// User theme file exists - load it
+			theme, err = loadThemeFrom(baseRef, ThemesDir())
+			if err != nil {
+				return nil, err
+			}
+			entry = &themeCacheEntry{
+				theme:   theme,
+				modTime: userModTime,
+				path:    userThemePath,
+			}
+		default:
+			// Not a built-in and no user theme file exists
+			return nil, fmt.Errorf("theme %q not found", ref)
+		}
+
+		// Store in cache (use full ref as key). If registration or explicit
+		// invalidation happened while we loaded, retry so an old source cannot
+		// repopulate the cache after invalidation.
+		r.cacheMu.Lock()
+		if r.generation != generation {
+			r.cacheMu.Unlock()
+			continue
+		}
+		r.cache[ref] = entry
+		r.cacheMu.Unlock()
+
+		return theme, nil
 	}
-
-	// Check the cache (use the full ref as cache key to distinguish user:nord from nord)
-	themeCacheMu.RLock()
-	cached, hasCached := themeCache[ref]
-	themeCacheMu.RUnlock()
-
-	if hasCached {
-		if isBuiltin {
-			// Built-in themes don't change at runtime, cache is always valid
-			return cached.theme, nil
-		}
-		// User theme: check if modTime matches
-		if cached.path == userThemePath && cached.modTime.Equal(userModTime) {
-			return cached.theme, nil
-		}
-		// modTime changed or path changed, need to reload
-	}
-
-	// Load and cache the theme
-	var theme *Theme
-	var err error
-	var entry *themeCacheEntry
-
-	switch {
-	case isBuiltin:
-		// Load built-in theme from embedded files
-		theme, err = loadBuiltinTheme(baseRef)
-		if err != nil {
-			return nil, err
-		}
-		entry = &themeCacheEntry{
-			theme:   theme,
-			modTime: time.Time{}, // Zero time for built-in themes
-			path:    "",          // Empty path for built-in themes
-		}
-	case userThemePath != "":
-		// User theme file exists - load it
-		theme, err = loadThemeFrom(baseRef, ThemesDir())
-		if err != nil {
-			return nil, err
-		}
-		entry = &themeCacheEntry{
-			theme:   theme,
-			modTime: userModTime,
-			path:    userThemePath,
-		}
-	default:
-		// Not a built-in and no user theme file exists
-		return nil, fmt.Errorf("theme %q not found", ref)
-	}
-
-	// Store in cache (use full ref as key)
-	themeCacheMu.Lock()
-	defer themeCacheMu.Unlock()
-	themeCache[ref] = entry
-
-	return theme, nil
 }
 
 // getUserThemeFileInfo returns the path and modTime of a user theme file if it exists.
@@ -636,13 +683,17 @@ func validateThemeRef(ref string) error {
 
 // loadBuiltinTheme loads a built-in theme from embedded files.
 func loadBuiltinTheme(ref string) (*Theme, error) {
+	return defaultRegistry.loadBuiltinTheme(ref)
+}
+
+func (r *themeRegistry) loadBuiltinTheme(ref string) (*Theme, error) {
 	base := DefaultTheme()
 
 	// Prefer embedder-registered sources over cagent's bundled themes, so an
 	// embedder can override a built-in — including masking "default" with their
 	// own. The override is still merged onto the bundled DefaultTheme() base, so
 	// a registered theme only needs to specify the fields it changes.
-	data, ok := readRegisteredThemeData(ref)
+	data, ok := r.readRegisteredThemeData(ref)
 	if !ok {
 		data, ok = readThemeData(builtinThemes, ref)
 	}
@@ -668,6 +719,10 @@ func loadBuiltinTheme(ref string) (*Theme, error) {
 // IsBuiltinTheme returns true if the given theme reference is a built-in theme.
 // Refs prefixed with "user:" are always considered user themes, not built-in.
 func IsBuiltinTheme(ref string) bool {
+	return defaultRegistry.IsBuiltinTheme(ref)
+}
+
+func (r *themeRegistry) IsBuiltinTheme(ref string) bool {
 	// User-prefixed refs are explicitly user themes
 	if strings.HasPrefix(ref, UserThemePrefix) {
 		return false
@@ -677,7 +732,7 @@ func IsBuiltinTheme(ref string) bool {
 		return true
 	}
 
-	builtinRefs, err := listBuiltinThemeRefs()
+	builtinRefs, err := r.listBuiltinThemeRefs()
 	if err != nil {
 		return false
 	}
