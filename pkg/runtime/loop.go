@@ -27,6 +27,7 @@ import (
 	bgagent "github.com/docker/docker-agent/pkg/tools/builtin/agent"
 	"github.com/docker/docker-agent/pkg/tools/builtin/handoff"
 	"github.com/docker/docker-agent/pkg/tools/builtin/modelpicker"
+	"github.com/docker/docker-agent/pkg/tools/builtin/sessioncontext"
 	"github.com/docker/docker-agent/pkg/tools/builtin/sessionplan"
 	"github.com/docker/docker-agent/pkg/tools/builtin/shell"
 	"github.com/docker/docker-agent/pkg/tools/builtin/skills"
@@ -45,6 +46,8 @@ func (r *LocalRuntime) registerDefaultTools() {
 	r.toolMap[sessionplan.ToolNameWriteSessionPlan] = r.handleWriteSessionPlan
 	r.toolMap[sessionplan.ToolNameReadSessionPlan] = r.handleReadSessionPlan
 	r.toolMap[sessionplan.ToolNameExitPlanMode] = r.handleExitPlanMode
+	r.toolMap[sessioncontext.ToolNameListSessions] = r.handleListSessions
+	r.toolMap[sessioncontext.ToolNameReadSession] = r.handleReadSession
 
 	r.bgAgents.RegisterHandlers(func(name string, fn func(context.Context, *session.Session, tools.ToolCall) (*tools.ToolCallResult, error)) {
 		r.toolMap[name] = func(ctx context.Context, sess *session.Session, tc tools.ToolCall, _ EventSink) (*tools.ToolCallResult, error) {
