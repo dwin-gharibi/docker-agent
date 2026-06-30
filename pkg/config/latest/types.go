@@ -1021,6 +1021,37 @@ func (m *ModelConfig) UnloadAPI() string {
 	return v
 }
 
+// ExpandEnv rewrites the model config's value-bearing string fields in place by
+// passing each through expand, which substitutes ${env.X} / ${X} references
+// against the runtime environment. Only fields that carry a literal value the
+// provider sends or dials are expanded: model (the model identifier) and
+// base_url (the endpoint). token_key is intentionally excluded because it names
+// an environment variable rather than holding a value, and reference-only
+// fields (provider, routing/fallback specs) are resolved before a provider is
+// built.
+//
+// expand is injected so this package keeps no dependency on pkg/environment,
+// which already depends on the config packages. A nil expand or an empty field
+// is a no-op; the first expansion error is returned and stops processing.
+// Addresses issue #2261, where ${env.X} in a model's model field reached the
+// provider verbatim instead of being substituted.
+func (m *ModelConfig) ExpandEnv(expand func(string) (string, error)) error {
+	if m == nil || expand == nil {
+		return nil
+	}
+	for _, field := range []*string{&m.Model, &m.BaseURL} {
+		if *field == "" {
+			continue
+		}
+		expanded, err := expand(*field)
+		if err != nil {
+			return err
+		}
+		*field = expanded
+	}
+	return nil
+}
+
 // FlexibleModelConfig wraps ModelConfig to support both shorthand and full syntax.
 // It can be unmarshaled from either:
 //   - A shorthand string: "provider/model" (e.g., "anthropic/claude-sonnet-4-5")

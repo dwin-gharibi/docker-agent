@@ -410,6 +410,18 @@ models:
     token_key: INTERNAL_API_KEY
 ```
 
+The `model` and `base_url` fields accept `${env.VAR}` (or `${VAR}`) references, which are substituted from the environment when the model is loaded. This keeps the model id or endpoint out of the config when it is supplied by the environment, e.g. a Docker Compose / DMR setup:
+
+```yaml
+models:
+  nemotron3:
+    provider: dmr
+    model: "${env.NEMOTRON3_MODEL}"
+    base_url: "${env.DMR_BASE_URL}"
+```
+
+See [Variable Expansion in Config Fields]({{ '/configuration/overview/#variable-expansion-in-config-fields' | relative_url }}) for the full set of fields and supported syntaxes.
+
 See [Local Models]({{ '/providers/local/' | relative_url }}) for more examples of custom endpoints.
 
 ## Inheriting from Provider Definitions

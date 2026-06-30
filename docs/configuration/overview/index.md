@@ -276,6 +276,18 @@ agents:
 
 The `working_dir`, `path`, and `env` value fields additionally accept the `${env.VAR}` form as an alias for `${VAR}`, so the JS-style syntax works there too. Richer JS expressions (e.g. `${env.VAR || 'default'}`) are still **not** evaluated in these fields.
 
+Model definitions follow the same rule. The `models.<name>.model` and `models.<name>.base_url` fields are expanded when the provider is built, accepting both `${env.VAR}` and `${VAR}`. This is useful when the model id or endpoint is injected by the environment (for example a Docker Compose / DMR setup that exports the model reference as a variable):
+
+```yaml
+models:
+  nemotron3:
+    provider: dmr
+    model: "${env.NEMOTRON3_MODEL}" # resolved from the environment at load time
+    base_url: "${DMR_BASE_URL}"     # ${VAR} is accepted as well
+```
+
+`token_key` is **not** expanded: it already names the environment variable that holds the API token, so its value is used as a key rather than substituted. An unset variable in `model` or `base_url` is reported as an error instead of dialing with an empty value.
+
 ### Quick reference
 
 | Field                                         | `${env.X}` | `$X` / `${X}` | `~` |
@@ -284,6 +296,7 @@ The `working_dir`, `path`, and `env` value fields additionally accept the `${env
 | `instruction` (agent and toolset)             |     ✓      |       ✗       |  ✗  |
 | `commands.*`                                  |     ✓      |       ✗       |  ✗  |
 | `headers`, `remote.headers`, `api_config.headers` |     ✓      |       ✗       |  ✗  |
+| `models.*.model`, `models.*.base_url`         |     ✓      |       ✓       |  ✗  |
 | `working_dir`, `path`                         |     ✓      |       ✓       |  ✓  |
 | `env` values                                  |     ✓      |       ✓       |  ✗  |
 

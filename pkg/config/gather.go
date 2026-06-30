@@ -93,6 +93,16 @@ func gatherEnvVarsForModel(ctx context.Context, cfg *latest.Config, modelName st
 // addEnvVarsForModelConfig adds required environment variables for a model config.
 // It checks custom providers first, then built-in aliases, then hardcoded fallbacks.
 func addEnvVarsForModelConfig(ctx context.Context, model *latest.ModelConfig, customProviders map[string]latest.ProviderConfig, requiredEnv map[string]bool, env environment.Provider) {
+	// The model and base_url fields support ${env.X}/${X} substitution, so any
+	// variable they reference must be set for the provider to be built (issue
+	// #2261). Collect these regardless of the credential logic below, which can
+	// return early (e.g. when base_url is set).
+	for _, field := range []string{model.Model, model.BaseURL} {
+		for _, name := range environment.Refs(field) {
+			requiredEnv[name] = true
+		}
+	}
+
 	// A model with non-API-key auth (e.g. Workload Identity Federation) does
 	// not require a TokenKey or the hardcoded API-key env var. Instead, the
 	// env vars referenced by its identity-token source are required.
