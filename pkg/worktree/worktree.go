@@ -72,11 +72,23 @@ func (s Status) IsDirty() bool {
 	return s.Modified || s.Untracked || s.NewCommits
 }
 
-// CreateOption customizes how [Create] builds a worktree.
+// CreateOption customizes how [Create] and [CreatePR] build a worktree.
 type CreateOption func(*createConfig)
 
 type createConfig struct {
 	base string
+	root string
+}
+
+// resolveCreateConfig applies opts on top of the defaults. The worktrees root
+// defaults to the data directory; [WithRoot] overrides it (mainly for tests
+// and embedders that need an isolated location).
+func resolveCreateConfig(opts []CreateOption) createConfig {
+	cfg := createConfig{root: paths.GetDataDir()}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	return cfg
 }
 
 // WithBase branches the worktree from ref instead of the repository's current
@@ -88,6 +100,19 @@ func WithBase(ref string) CreateOption {
 	return func(c *createConfig) { c.base = strings.TrimSpace(ref) }
 }
 
+// WithRoot places the worktree under dir instead of the default data
+// directory. The worktree is created at <dir>/worktrees/<name>. An empty dir
+// is ignored, keeping the default. This decouples the package from the
+// process-global data directory, letting tests and embedders pick an isolated
+// location.
+func WithRoot(dir string) CreateOption {
+	return func(c *createConfig) {
+		if dir != "" {
+			c.root = dir
+		}
+	}
+}
+
 // Create creates a new git worktree for the repository containing dir and
 // returns it. The worktree lives under the data directory and checks out a
 // freshly created branch so the agent's changes stay isolated from the user's
@@ -95,7 +120,8 @@ func WithBase(ref string) CreateOption {
 //
 // When name is empty, a friendly random name (e.g. "focused_turing") is
 // generated. The branch is named "worktree-<name>" and the worktree is stored
-// under <dataDir>/worktrees/<name>.
+// under <root>/worktrees/<name>, where root defaults to the data directory and
+// can be overridden with [WithRoot].
 //
 // By default the branch starts at the repository's current HEAD. Pass
 // [WithBase] to branch from another ref instead; when the base is a
@@ -105,10 +131,7 @@ func WithBase(ref string) CreateOption {
 // Returns [ErrNotGitRepository] when dir is not inside a git worktree, and
 // [ErrInvalidName] when an explicit name is not a safe path/branch component.
 func Create(ctx context.Context, dir, name string, opts ...CreateOption) (*Worktree, error) {
-	var cfg createConfig
-	for _, opt := range opts {
-		opt(&cfg)
-	}
+	cfg := resolveCreateConfig(opts)
 
 	root, err := repoRoot(ctx, dir)
 	if err != nil {
@@ -122,7 +145,7 @@ func Create(ctx context.Context, dir, name string, opts ...CreateOption) (*Workt
 	}
 
 	branch := "worktree-" + name
-	dest := filepath.Join(paths.GetDataDir(), "worktrees", name)
+	dest := filepath.Join(cfg.root, "worktrees", name)
 
 	if _, err := os.Stat(dest); err == nil {
 		return nil, fmt.Errorf("%w: worktree %q already exists at %s", ErrInvalidName, name, dest)
@@ -167,7 +190,9 @@ func Create(ctx context.Context, dir, name string, opts ...CreateOption) (*Workt
 // lookup, fork remotes, and upstream tracking. Returns [ErrGHNotFound] when gh
 // is not installed, [ErrInvalidPRRef] when ref is malformed, and
 // [ErrNotGitRepository] when dir is not inside a git repository.
-func CreatePR(ctx context.Context, dir, ref string) (*Worktree, error) {
+func CreatePR(ctx context.Context, dir, ref string, opts ...CreateOption) (*Worktree, error) {
+	cfg := resolveCreateConfig(opts)
+
 	number, err := parsePRRef(ref)
 	if err != nil {
 		return nil, err
@@ -183,7 +208,7 @@ func CreatePR(ctx context.Context, dir, ref string) (*Worktree, error) {
 	}
 
 	name := fmt.Sprintf("pr-%d", number)
-	dest := filepath.Join(paths.GetDataDir(), "worktrees", name)
+	dest := filepath.Join(cfg.root, "worktrees", name)
 	if _, err := os.Stat(dest); err == nil {
 		return nil, fmt.Errorf("%w: worktree %q already exists at %s", ErrInvalidName, name, dest)
 	}

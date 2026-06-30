@@ -8,17 +8,14 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/docker/docker-agent/pkg/paths"
 )
 
 func TestCreateWorktree(t *testing.T) {
+	t.Parallel()
 	dir := bootstrapRepo(t)
-	dataDir := t.TempDir()
-	paths.SetDataDir(dataDir)
-	t.Cleanup(func() { paths.SetDataDir("") })
+	root := t.TempDir()
 
-	wt, err := Create(t.Context(), dir, "")
+	wt, err := Create(t.Context(), dir, "", WithRoot(root))
 	require.NoError(t, err)
 	require.NotNil(t, wt)
 
@@ -26,7 +23,7 @@ func TestCreateWorktree(t *testing.T) {
 	// A random name looks like "focused_turing" (adjective_surname).
 	assert.Regexp(t, `^[a-z]+_[a-z]+$`, wt.Name)
 	assert.Equal(t, "worktree-"+wt.Name, wt.Branch)
-	assert.Equal(t, filepath.Join(dataDir, "worktrees", wt.Name), wt.Dir)
+	assert.Equal(t, filepath.Join(root, "worktrees", wt.Name), wt.Dir)
 
 	// The worktree shares the repository's history: the initial commit's
 	// files must be present in the new working directory.
@@ -38,24 +35,22 @@ func TestCreateWorktree(t *testing.T) {
 }
 
 func TestCreateWithName(t *testing.T) {
+	t.Parallel()
 	dir := bootstrapRepo(t)
-	dataDir := t.TempDir()
-	paths.SetDataDir(dataDir)
-	t.Cleanup(func() { paths.SetDataDir("") })
+	root := t.TempDir()
 
-	wt, err := Create(t.Context(), dir, "my-feature")
+	wt, err := Create(t.Context(), dir, "my-feature", WithRoot(root))
 	require.NoError(t, err)
 
 	assert.Equal(t, "my-feature", wt.Name)
 	assert.Equal(t, "worktree-my-feature", wt.Branch)
-	assert.Equal(t, filepath.Join(dataDir, "worktrees", "my-feature"), wt.Dir)
+	assert.Equal(t, filepath.Join(root, "worktrees", "my-feature"), wt.Dir)
 	assert.FileExists(t, filepath.Join(wt.Dir, "a.txt"))
 }
 
 func TestCreateWithBaseBranchesFromRef(t *testing.T) {
+	t.Parallel()
 	dir := bootstrapRepo(t)
-	paths.SetDataDir(t.TempDir())
-	t.Cleanup(func() { paths.SetDataDir("") })
 
 	// Add a second commit on a side branch; the default HEAD (main) stays at
 	// the first commit.
@@ -67,7 +62,7 @@ func TestCreateWithBaseBranchesFromRef(t *testing.T) {
 	featureHead := gitOut(t, dir, "rev-parse", "feature")
 	runGit(t, dir, "checkout", "-")
 
-	wt, err := Create(t.Context(), dir, "from-feature", WithBase("feature"))
+	wt, err := Create(t.Context(), dir, "from-feature", WithRoot(t.TempDir()), WithBase("feature"))
 	require.NoError(t, err)
 
 	// The worktree branched from feature, so it carries feature's commit and
@@ -78,28 +73,27 @@ func TestCreateWithBaseBranchesFromRef(t *testing.T) {
 }
 
 func TestCreateWithEmptyBaseUsesHead(t *testing.T) {
+	t.Parallel()
 	dir := bootstrapRepo(t)
-	paths.SetDataDir(t.TempDir())
-	t.Cleanup(func() { paths.SetDataDir("") })
 
 	head := gitOut(t, dir, "rev-parse", "HEAD")
 
 	// An empty base is ignored: the worktree branches from the current HEAD.
-	wt, err := Create(t.Context(), dir, "default-base", WithBase(""))
+	wt, err := Create(t.Context(), dir, "default-base", WithRoot(t.TempDir()), WithBase(""))
 	require.NoError(t, err)
 	assert.Equal(t, head, gitOut(t, wt.Dir, "rev-parse", "HEAD"))
 }
 
 func TestCreateWithInvalidBase(t *testing.T) {
+	t.Parallel()
 	dir := bootstrapRepo(t)
-	paths.SetDataDir(t.TempDir())
-	t.Cleanup(func() { paths.SetDataDir("") })
 
-	_, err := Create(t.Context(), dir, "bad-base", WithBase("does-not-exist"))
+	_, err := Create(t.Context(), dir, "bad-base", WithRoot(t.TempDir()), WithBase("does-not-exist"))
 	assert.ErrorIs(t, err, ErrInvalidBase)
 }
 
 func TestCreateWithRemoteBaseFetches(t *testing.T) {
+	t.Parallel()
 	// A bare "remote" repo with one extra commit beyond what the clone has.
 	remote := bootstrapRepo(t)
 	require.NoError(t, os.WriteFile(filepath.Join(remote, "remote-only.txt"), []byte("R"), 0o644))
@@ -122,10 +116,7 @@ func TestCreateWithRemoteBaseFetches(t *testing.T) {
 	runGit(t, remote, "commit", "-m", "newer work")
 	newerHead := gitOut(t, remote, "rev-parse", "HEAD")
 
-	paths.SetDataDir(t.TempDir())
-	t.Cleanup(func() { paths.SetDataDir("") })
-
-	wt, err := Create(t.Context(), clone, "from-remote", WithBase("origin/"+remoteBranch))
+	wt, err := Create(t.Context(), clone, "from-remote", WithRoot(t.TempDir()), WithBase("origin/"+remoteBranch))
 	require.NoError(t, err)
 
 	// The fetch pulled the latest remote commit, so the worktree starts there.
@@ -134,6 +125,7 @@ func TestCreateWithRemoteBaseFetches(t *testing.T) {
 }
 
 func TestCreateWithRemoteBaseUpdatesTrackingRefWithoutFetchConfig(t *testing.T) {
+	t.Parallel()
 	// A remote with one extra commit beyond what the clone has.
 	remote := bootstrapRepo(t)
 	remoteBranch := gitOut(t, remote, "rev-parse", "--abbrev-ref", "HEAD")
@@ -154,10 +146,7 @@ func TestCreateWithRemoteBaseUpdatesTrackingRefWithoutFetchConfig(t *testing.T) 
 	runGit(t, remote, "commit", "-m", "newer work")
 	newerHead := gitOut(t, remote, "rev-parse", "HEAD")
 
-	paths.SetDataDir(t.TempDir())
-	t.Cleanup(func() { paths.SetDataDir("") })
-
-	wt, err := Create(t.Context(), clone, "from-remote-noconfig", WithBase("origin/"+remoteBranch))
+	wt, err := Create(t.Context(), clone, "from-remote-noconfig", WithRoot(t.TempDir()), WithBase("origin/"+remoteBranch))
 	require.NoError(t, err)
 
 	// The explicit refspec updated the remote-tracking ref despite the missing
@@ -167,27 +156,27 @@ func TestCreateWithRemoteBaseUpdatesTrackingRefWithoutFetchConfig(t *testing.T) 
 }
 
 func TestCreateFromSubfolder(t *testing.T) {
-	root := bootstrapRepo(t)
-	sub := filepath.Join(root, "nested")
+	t.Parallel()
+	repoRoot := bootstrapRepo(t)
+	sub := filepath.Join(repoRoot, "nested")
 	require.NoError(t, os.MkdirAll(sub, 0o755))
-	paths.SetDataDir(t.TempDir())
-	t.Cleanup(func() { paths.SetDataDir("") })
 
-	wt, err := Create(t.Context(), sub, "")
+	wt, err := Create(t.Context(), sub, "", WithRoot(t.TempDir()))
 	require.NoError(t, err)
 	assert.DirExists(t, wt.Dir)
 	assert.FileExists(t, filepath.Join(wt.Dir, "a.txt"))
 }
 
 func TestCreateOutsideGitRepo(t *testing.T) {
-	_, err := Create(t.Context(), t.TempDir(), "")
+	t.Parallel()
+	_, err := Create(t.Context(), t.TempDir(), "", WithRoot(t.TempDir()))
 	assert.ErrorIs(t, err, ErrNotGitRepository)
 }
 
 func TestCreateRejectsUnsafeNames(t *testing.T) {
+	t.Parallel()
 	dir := bootstrapRepo(t)
-	paths.SetDataDir(t.TempDir())
-	t.Cleanup(func() { paths.SetDataDir("") })
+	root := t.TempDir()
 
 	for _, name := range []string{
 		"../escape",
@@ -200,30 +189,30 @@ func TestCreateRejectsUnsafeNames(t *testing.T) {
 		"trailing ",
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, err := Create(t.Context(), dir, name)
+			t.Parallel()
+			_, err := Create(t.Context(), dir, name, WithRoot(root))
 			assert.ErrorIs(t, err, ErrInvalidName)
 		})
 	}
 }
 
 func TestCreateRejectsDuplicateName(t *testing.T) {
+	t.Parallel()
 	dir := bootstrapRepo(t)
-	paths.SetDataDir(t.TempDir())
-	t.Cleanup(func() { paths.SetDataDir("") })
+	root := t.TempDir()
 
-	_, err := Create(t.Context(), dir, "dup")
+	_, err := Create(t.Context(), dir, "dup", WithRoot(root))
 	require.NoError(t, err)
 
-	_, err = Create(t.Context(), dir, "dup")
+	_, err = Create(t.Context(), dir, "dup", WithRoot(root))
 	assert.ErrorIs(t, err, ErrInvalidName)
 }
 
 func TestStatusClean(t *testing.T) {
+	t.Parallel()
 	dir := bootstrapRepo(t)
-	paths.SetDataDir(t.TempDir())
-	t.Cleanup(func() { paths.SetDataDir("") })
 
-	wt, err := Create(t.Context(), dir, "clean")
+	wt, err := Create(t.Context(), dir, "clean", WithRoot(t.TempDir()))
 	require.NoError(t, err)
 
 	st, err := wt.Status(t.Context())
@@ -235,11 +224,10 @@ func TestStatusClean(t *testing.T) {
 }
 
 func TestStatusDetectsUntracked(t *testing.T) {
+	t.Parallel()
 	dir := bootstrapRepo(t)
-	paths.SetDataDir(t.TempDir())
-	t.Cleanup(func() { paths.SetDataDir("") })
 
-	wt, err := Create(t.Context(), dir, "untracked")
+	wt, err := Create(t.Context(), dir, "untracked", WithRoot(t.TempDir()))
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(wt.Dir, "new.txt"), []byte("x"), 0o644))
 
@@ -252,11 +240,10 @@ func TestStatusDetectsUntracked(t *testing.T) {
 }
 
 func TestStatusDetectsModified(t *testing.T) {
+	t.Parallel()
 	dir := bootstrapRepo(t)
-	paths.SetDataDir(t.TempDir())
-	t.Cleanup(func() { paths.SetDataDir("") })
 
-	wt, err := Create(t.Context(), dir, "modified")
+	wt, err := Create(t.Context(), dir, "modified", WithRoot(t.TempDir()))
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(wt.Dir, "a.txt"), []byte("changed"), 0o644))
 
@@ -269,11 +256,10 @@ func TestStatusDetectsModified(t *testing.T) {
 }
 
 func TestStatusDetectsNewCommits(t *testing.T) {
+	t.Parallel()
 	dir := bootstrapRepo(t)
-	paths.SetDataDir(t.TempDir())
-	t.Cleanup(func() { paths.SetDataDir("") })
 
-	wt, err := Create(t.Context(), dir, "committed")
+	wt, err := Create(t.Context(), dir, "committed", WithRoot(t.TempDir()))
 	require.NoError(t, err)
 
 	require.NoError(t, os.WriteFile(filepath.Join(wt.Dir, "a.txt"), []byte("changed"), 0o644))
@@ -289,11 +275,10 @@ func TestStatusDetectsNewCommits(t *testing.T) {
 }
 
 func TestRemove(t *testing.T) {
+	t.Parallel()
 	dir := bootstrapRepo(t)
-	paths.SetDataDir(t.TempDir())
-	t.Cleanup(func() { paths.SetDataDir("") })
 
-	wt, err := Create(t.Context(), dir, "gone")
+	wt, err := Create(t.Context(), dir, "gone", WithRoot(t.TempDir()))
 	require.NoError(t, err)
 	require.DirExists(t, wt.Dir)
 
@@ -306,11 +291,10 @@ func TestRemove(t *testing.T) {
 }
 
 func TestRemoveDiscardsDirtyWork(t *testing.T) {
+	t.Parallel()
 	dir := bootstrapRepo(t)
-	paths.SetDataDir(t.TempDir())
-	t.Cleanup(func() { paths.SetDataDir("") })
 
-	wt, err := Create(t.Context(), dir, "dirty")
+	wt, err := Create(t.Context(), dir, "dirty", WithRoot(t.TempDir()))
 	require.NoError(t, err)
 	// Uncommitted change + untracked file + a new commit: removal must
 	// still succeed and wipe everything.
@@ -401,6 +385,7 @@ func TestParsePRRef(t *testing.T) {
 // TestCreatePRValidatesRefBeforeGit checks a malformed ref fails fast with
 // ErrInvalidPRRef, before touching git or gh, even outside a repository.
 func TestCreatePRValidatesRefBeforeGit(t *testing.T) {
+	t.Parallel()
 	_, err := CreatePR(t.Context(), t.TempDir(), "not-a-pr")
 	assert.ErrorIs(t, err, ErrInvalidPRRef)
 }
