@@ -17,14 +17,8 @@ import (
 	"github.com/docker/docker-agent/pkg/tools"
 )
 
-// nowFn returns the current time. Indirected through a package-level variable
-// so that tests can install a deterministic clock via setNowForTest.
-var nowFn = time.Now
-
-// newIDFn returns a fresh session ID. Indirected through a package-level
-// variable so that tests can install a deterministic ID generator via
-// setIDForTest.
-var newIDFn = func() string { return uuid.New().String() }
+// defaultNewID returns a fresh random session ID.
+func defaultNewID() string { return uuid.New().String() }
 
 const (
 	// toolContentPlaceholder is the text used to replace truncated tool content
@@ -93,6 +87,16 @@ type Error struct {
 type Session struct {
 	// mu protects Messages from concurrent read/write access.
 	mu sync.RWMutex `json:"-"`
+
+	// now and newID are per-session sources of time and identity. They are
+	// indirected (rather than calling time.Now/uuid.New directly) so that
+	// tests can inject a deterministic clock and ID generator via WithClock
+	// and WithIDGen without mutating any process-global state — which keeps
+	// such tests safe to run with t.Parallel(). Sessions created outside New
+	// (e.g. via JSON deserialization or struct literals) leave these nil; use
+	// the now() and newID() accessors which fall back to real implementations.
+	clock func() time.Time `json:"-"`
+	idgen func() string    `json:"-"`
 
 	// ID is the unique identifier for the session
 	ID string `json:"id"`
@@ -248,18 +252,30 @@ type Message struct {
 }
 
 func ImplicitUserMessage(content string) *Message {
-	msg := UserMessage(content)
+	return ImplicitUserMessageAt(time.Now(), content)
+}
+
+// ImplicitUserMessageAt is like ImplicitUserMessage but stamps the message with
+// an explicit creation time, letting callers (and tests) avoid the wall clock.
+func ImplicitUserMessageAt(createdAt time.Time, content string) *Message {
+	msg := UserMessageAt(createdAt, content)
 	msg.Implicit = true
 	return msg
 }
 
 func UserMessage(content string, multiContent ...chat.MessagePart) *Message {
+	return UserMessageAt(time.Now(), content, multiContent...)
+}
+
+// UserMessageAt is like UserMessage but stamps the message with an explicit
+// creation time, letting callers (and tests) avoid the wall clock.
+func UserMessageAt(createdAt time.Time, content string, multiContent ...chat.MessagePart) *Message {
 	return &Message{
 		Message: chat.Message{
 			Role:         chat.MessageRoleUser,
 			Content:      content,
 			MultiContent: multiContent,
-			CreatedAt:    nowFn().Format(time.RFC3339),
+			CreatedAt:    createdAt.Format(time.RFC3339),
 		},
 	}
 }
@@ -272,11 +288,17 @@ func NewAgentMessage(agentName string, message *chat.Message) *Message {
 }
 
 func SystemMessage(content string) *Message {
+	return SystemMessageAt(time.Now(), content)
+}
+
+// SystemMessageAt is like SystemMessage but stamps the message with an explicit
+// creation time, letting callers (and tests) avoid the wall clock.
+func SystemMessageAt(createdAt time.Time, content string) *Message {
 	return &Message{
 		Message: chat.Message{
 			Role:      chat.MessageRoleSystem,
 			Content:   content,
-			CreatedAt: nowFn().Format(time.RFC3339),
+			CreatedAt: createdAt.Format(time.RFC3339),
 		},
 	}
 }
@@ -809,6 +831,25 @@ func WithID(id string) Opt {
 	}
 }
 
+// WithClock injects the time source used for the session's CreatedAt and for
+// timestamping messages it generates (summaries, compaction input). Primarily
+// for tests that need a deterministic clock; production code leaves it unset
+// and falls back to time.Now.
+func WithClock(now func() time.Time) Opt {
+	return func(s *Session) {
+		s.clock = now
+	}
+}
+
+// WithIDGen injects the generator used to mint the session ID when no explicit
+// ID is provided. Primarily for tests that need deterministic IDs; production
+// code leaves it unset and falls back to a random UUID.
+func WithIDGen(gen func() string) Opt {
+	return func(s *Session) {
+		s.idgen = gen
+	}
+}
+
 // WithExcludedTools sets tool names that should be filtered out of the agent's
 // tool list for this session. This prevents recursive tool calls in skill
 // sub-sessions.
@@ -904,17 +945,41 @@ func (s *Session) OwnCost() float64 {
 	return cost
 }
 
+// now returns the session's current time, falling back to time.Now for
+// sessions created without a clock (e.g. JSON deserialization).
+func (s *Session) now() time.Time {
+	if s.clock != nil {
+		return s.clock()
+	}
+	return time.Now()
+}
+
+// newID returns a fresh session ID using the session's generator, falling back
+// to a random UUID for sessions created without one.
+func (s *Session) newID() string {
+	if s.idgen != nil {
+		return s.idgen()
+	}
+	return defaultNewID()
+}
+
 // New creates a new agent session
 func New(opts ...Opt) *Session {
 	s := &Session{
-		ID:              newIDFn(),
-		CreatedAt:       nowFn(),
 		SendUserMessage: true,
 	}
 
 	for _, opt := range opts {
 		opt(s)
 	}
+
+	// Generate the ID and creation time after options run so that
+	// WithClock/WithIDGen (and WithID) can influence them. WithID short-
+	// circuits the generator when an explicit ID was provided.
+	if s.ID == "" {
+		s.ID = s.newID()
+	}
+	s.CreatedAt = s.now()
 
 	slog.Debug("Creating new session", "session_id", s.ID)
 	return s
@@ -1013,7 +1078,7 @@ func buildInvariantSystemMessages(a *agent.Agent) []chat.Message {
 // first kept message so that recent context is preserved after compaction.
 // Otherwise it is lastSummaryIndex+1 (i.e. right after the summary item), or
 // 0 when there is no summary.
-func buildSessionSummaryMessages(items []Item) ([]chat.Message, int) {
+func (s *Session) buildSessionSummaryMessages(items []Item) ([]chat.Message, int) {
 	var messages []chat.Message
 	// Find the last summary index to determine where conversation messages start
 	// and to include the summary in session summary messages
@@ -1029,7 +1094,7 @@ func buildSessionSummaryMessages(items []Item) ([]chat.Message, int) {
 		messages = append(messages, chat.Message{
 			Role:      chat.MessageRoleUser,
 			Content:   "Session Summary: " + items[lastSummaryIndex].Summary,
-			CreatedAt: nowFn().Format(time.RFC3339),
+			CreatedAt: s.now().Format(time.RFC3339),
 		})
 	}
 
@@ -1094,7 +1159,7 @@ func (s *Session) CompactionInput() ([]chat.Message, []int) {
 		messages = append(messages, chat.Message{
 			Role:      chat.MessageRoleUser,
 			Content:   "Session Summary: " + items[lastSummaryIndex].Summary,
-			CreatedAt: nowFn().Format(time.RFC3339),
+			CreatedAt: s.now().Format(time.RFC3339),
 		})
 		// The synthetic message stands in for the prior summary item;
 		// when this index lands inside the kept tail we want the
@@ -1137,7 +1202,7 @@ func (s *Session) GetMessages(a *agent.Agent, extraSystemMessages ...chat.Messag
 	items := s.snapshotItems()
 
 	// Build session summary messages (vary per session)
-	summaryMessages, startIndex := buildSessionSummaryMessages(items)
+	summaryMessages, startIndex := s.buildSessionSummaryMessages(items)
 
 	var messages []chat.Message
 	messages = append(messages, invariantMessages...)
