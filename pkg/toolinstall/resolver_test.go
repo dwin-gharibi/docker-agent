@@ -13,6 +13,8 @@ import (
 // --- EnsureCommand tests ---
 
 func TestEnsureCommand_FoundInPath(t *testing.T) {
+	t.Parallel()
+
 	command := "ls"
 	if _, err := exec.LookPath(command); err != nil {
 		t.Skipf("skipping: %q not in PATH", command)

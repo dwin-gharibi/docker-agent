@@ -351,6 +351,8 @@ func TestCheckRequiredEnvVarsWithModelGateway(t *testing.T) {
 }
 
 func TestApplyModelOverrides(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name        string
 		agents      []latest.AgentConfig

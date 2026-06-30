@@ -709,6 +709,8 @@ func TestDispatcher_ConfirmationMetadataNilWhenNoneSupplied(t *testing.T) {
 // (--yolo / Allow All) would otherwise auto-run the call. Also
 // verifies the hook's Metadata reaches the confirmation event.
 func TestDispatcher_PreToolUsePreYoloAskPreemptsYolo(t *testing.T) {
+	t.Parallel()
+
 	a := newAgent()
 	sess := session.New()
 	sess.ToolsApproved = true
@@ -766,6 +768,8 @@ func TestDispatcher_PreToolUsePreYoloAskPreemptsYolo(t *testing.T) {
 // without emitting a confirmation event or consulting
 // permission_request.
 func TestDispatcher_PreToolUsePreYoloDenyShortCircuits(t *testing.T) {
+	t.Parallel()
+
 	a := newAgent()
 	sess := session.New()
 	sess.ToolsApproved = true
@@ -810,6 +814,8 @@ func TestDispatcher_PreToolUsePreYoloDenyShortCircuits(t *testing.T) {
 // the pipeline still proceeds. With ToolsApproved=true the call must
 // auto-run.
 func TestDispatcher_PreToolUsePreYoloAllowIsAdvisory(t *testing.T) {
+	t.Parallel()
+
 	a := newAgent()
 	sess := session.New()
 	sess.ToolsApproved = true
@@ -855,6 +861,8 @@ func TestDispatcher_PreToolUsePreYoloAllowIsAdvisory(t *testing.T) {
 // call — only entries that explicitly opt into preempt_yolo:true run
 // before Decide().
 func TestDispatcher_PreToolUseDefaultLaneSkippedUnderYolo(t *testing.T) {
+	t.Parallel()
+
 	a := newAgent()
 	sess := session.New()
 	sess.ToolsApproved = true

@@ -10,6 +10,8 @@ import (
 )
 
 func TestHandleSwitchAgentNoOpForCurrentAgent(t *testing.T) {
+	t.Parallel()
+
 	m, _ := newTestModel(t)
 	m.sessionState = service.NewSessionState(session.New())
 	m.sessionState.SetCurrentAgentName("agent1")

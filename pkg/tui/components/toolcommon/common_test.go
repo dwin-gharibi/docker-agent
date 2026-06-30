@@ -225,6 +225,8 @@ func BenchmarkWrapLines(b *testing.B) {
 }
 
 func TestWrapLines(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name     string
 		text     string
@@ -384,6 +386,8 @@ func TestWrapLines(t *testing.T) {
 }
 
 func TestWrapLinesWords(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name     string
 		text     string
@@ -480,6 +484,8 @@ func TestWrapLinesWords(t *testing.T) {
 }
 
 func TestTruncateText(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name     string
 		text     string
@@ -629,6 +635,8 @@ func BenchmarkTruncateText(b *testing.B) {
 }
 
 func TestRuneWidth(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name     string
 		r        rune

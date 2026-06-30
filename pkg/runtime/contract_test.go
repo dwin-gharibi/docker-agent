@@ -129,6 +129,8 @@ func runRuntimeContract(t *testing.T, newRT func(t *testing.T) Runtime) {
 }
 
 func TestLocalRuntime_Contract(t *testing.T) {
+	t.Parallel()
+
 	runRuntimeContract(t, func(t *testing.T) Runtime {
 		t.Helper()
 		prov := &mockProvider{id: "test/mock-model", stream: &mockStream{}}

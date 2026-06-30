@@ -154,6 +154,8 @@ func (s *stubRemoteClient) SetSessionStarred(context.Context, string, bool) erro
 // no-op on RemoteRuntime that the contract considers a failure surfaces
 // here as a red test rather than a runtime user complaint.
 func TestRemoteRuntime_Contract(t *testing.T) {
+	t.Parallel()
+
 	runRuntimeContract(t, func(t *testing.T) Runtime {
 		t.Helper()
 		client := &stubRemoteClient{

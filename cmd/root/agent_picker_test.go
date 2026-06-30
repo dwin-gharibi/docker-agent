@@ -12,6 +12,8 @@ import (
 )
 
 func TestParseAgentPickerRefs(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name string
 		raw  string
@@ -34,12 +36,16 @@ func TestParseAgentPickerRefs(t *testing.T) {
 }
 
 func TestPrependAgentRef(t *testing.T) {
+	t.Parallel()
+
 	assert.Equal(t, []string{"coder"}, prependAgentRef("coder", nil))
 	assert.Equal(t, []string{"coder", "hello"}, prependAgentRef("coder", []string{"hello"}))
 	assert.Equal(t, []string{"coder", "a", "b"}, prependAgentRef("coder", []string{"a", "b"}))
 }
 
 func TestTruncateDetail(t *testing.T) {
+	t.Parallel()
+
 	// Collapses newlines and runs of whitespace into single spaces.
 	assert.Equal(t, "a b c", truncateDetail("a\nb\t  c", 80))
 	// Truncates to width with an ellipsis.
@@ -49,6 +55,8 @@ func TestTruncateDetail(t *testing.T) {
 }
 
 func TestAgentPickerRenderNoPanic(t *testing.T) {
+	t.Parallel()
+
 	choices := []agentChoice{
 		{ref: "default", description: "A helpful AI assistant", yaml: "agents:\n  root:\n    model: auto\n"},
 		{ref: "agentcatalog/some-really-long-agent-reference-name", description: strings.Repeat("very long description ", 20)},
@@ -69,6 +77,8 @@ func TestAgentPickerRenderNoPanic(t *testing.T) {
 }
 
 func TestAgentPickerDetailsToggle(t *testing.T) {
+	t.Parallel()
+
 	m := newAgentPickerModel([]agentChoice{
 		{ref: "default", yaml: "agents:\n  root:\n    model: auto\n"},
 	})
@@ -82,6 +92,8 @@ func TestAgentPickerDetailsToggle(t *testing.T) {
 }
 
 func TestDetailsContent(t *testing.T) {
+	t.Parallel()
+
 	m := newAgentPickerModel(nil)
 	// YAML is syntax-highlighted, so compare with ANSI stripped.
 	assert.Equal(t, "a: b", ansi.Strip(m.detailsContent(agentChoice{yaml: "a: b\n\n"})))
@@ -90,6 +102,8 @@ func TestDetailsContent(t *testing.T) {
 }
 
 func TestHighlightYAML(t *testing.T) {
+	t.Parallel()
+
 	src := "agents:\n  root:\n    model: auto"
 	out := highlightYAML(src)
 	// Colorized output differs from the input but preserves the text
@@ -107,6 +121,8 @@ func trimTrailingPerLine(s string) string {
 }
 
 func TestPercentLabel(t *testing.T) {
+	t.Parallel()
+
 	assert.Equal(t, "0%", percentLabel(0))
 	assert.Equal(t, "50%", percentLabel(0.5))
 	assert.Equal(t, "100%", percentLabel(1))
@@ -115,6 +131,8 @@ func TestPercentLabel(t *testing.T) {
 }
 
 func TestAgentPickerDetailsFixedSize(t *testing.T) {
+	t.Parallel()
+
 	// A long YAML so the viewport is scrollable.
 	var sb strings.Builder
 	for i := range 200 {
@@ -145,6 +163,8 @@ func TestAgentPickerDetailsFixedSize(t *testing.T) {
 }
 
 func TestStripControl(t *testing.T) {
+	t.Parallel()
+
 	// The ESC byte is removed, neutralizing the escape sequence (the
 	// remaining "[31m" is harmless literal text). Other control chars go too;
 	// newlines are preserved.
@@ -156,6 +176,8 @@ func TestStripControl(t *testing.T) {
 }
 
 func TestSanitizeYAML(t *testing.T) {
+	t.Parallel()
+
 	// CRLF/CR normalized to LF, tabs expanded, ESC/control chars stripped.
 	assert.Equal(t, "a\nb", sanitizeYAML("a\r\nb"))
 	assert.Equal(t, "a\nb", sanitizeYAML("a\rb"))
@@ -164,6 +186,8 @@ func TestSanitizeYAML(t *testing.T) {
 }
 
 func TestHighlightYAMLStripsInjectedEscapes(t *testing.T) {
+	t.Parallel()
+
 	// A malicious config can't smuggle its own escape sequences through.
 	out := highlightYAML("key: \x1b[31mvalue\x1b[0m\x07")
 	plain := ansi.Strip(out)
@@ -173,6 +197,8 @@ func TestHighlightYAMLStripsInjectedEscapes(t *testing.T) {
 }
 
 func TestAgentPickerModelNavigation(t *testing.T) {
+	t.Parallel()
+
 	m := newAgentPickerModel([]agentChoice{
 		{ref: "default"},
 		{ref: "coder"},

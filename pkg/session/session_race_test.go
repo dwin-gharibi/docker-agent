@@ -8,6 +8,8 @@ import (
 )
 
 func TestAddMessageUsageRecordConcurrent(t *testing.T) {
+	t.Parallel()
+
 	s := New()
 	var wg sync.WaitGroup
 	for range 100 {
@@ -28,6 +30,8 @@ func TestAddMessageUsageRecordConcurrent(t *testing.T) {
 // header read aliases the live backing array and the race detector
 // flags the AddMessage append.
 func TestCompactionInputConcurrent(t *testing.T) {
+	t.Parallel()
+
 	s := New()
 	var wg sync.WaitGroup
 	for range 100 {

@@ -84,6 +84,8 @@ func TestIsGitRepo(t *testing.T) {
 // the GIT_CONFIG_* env injection carried by the hook's env override;
 // without it the key is absent and the command errors.
 func TestGitOutputUsesHookEnv(t *testing.T) {
+	t.Parallel()
+
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed; skipping git-backed builtin test")
 	}

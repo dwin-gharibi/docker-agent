@@ -269,6 +269,8 @@ func TestLimitLargeToolResultsStoresFullOutputAndReturnsTailNotice(t *testing.T)
 }
 
 func TestLimitLargeToolResultsPreservesUTF8Tail(t *testing.T) {
+	t.Parallel()
+
 	payload := strings.Repeat("世", maxToolCallResultBytesForTest/len("世")+largeToolCallResultTailBytesForTest/len("世")+10)
 
 	fn := lookup(t, builtins.LimitLargeToolResults)

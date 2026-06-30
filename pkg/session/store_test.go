@@ -16,6 +16,8 @@ import (
 )
 
 func TestStoreAgentName(t *testing.T) {
+	t.Parallel()
+
 	tempDB := filepath.Join(t.TempDir(), "test_store.db")
 
 	store, err := NewSQLiteSessionStore(t.Context(), tempDB)
@@ -68,6 +70,8 @@ func TestStoreAgentName(t *testing.T) {
 }
 
 func TestStoreMultipleAgents(t *testing.T) {
+	t.Parallel()
+
 	tempDB := filepath.Join(t.TempDir(), "test_store_multi.db")
 
 	store, err := NewSQLiteSessionStore(t.Context(), tempDB)
@@ -117,6 +121,8 @@ func TestStoreMultipleAgents(t *testing.T) {
 }
 
 func TestGetSessions(t *testing.T) {
+	t.Parallel()
+
 	tempDB := filepath.Join(t.TempDir(), "test_get_sessions.db")
 
 	store, err := NewSQLiteSessionStore(t.Context(), tempDB)
@@ -165,6 +171,8 @@ func TestGetSessions(t *testing.T) {
 }
 
 func TestGetSessionSummaries(t *testing.T) {
+	t.Parallel()
+
 	tempDB := filepath.Join(t.TempDir(), "test_get_session_summaries.db")
 
 	store, err := NewSQLiteSessionStore(t.Context(), tempDB)
@@ -224,6 +232,8 @@ func TestGetSessionSummaries(t *testing.T) {
 }
 
 func TestBranchSessionCopiesPrefix(t *testing.T) {
+	t.Parallel()
+
 	tempDB := filepath.Join(t.TempDir(), "test_branch_prefix.db")
 
 	store, err := NewSQLiteSessionStore(t.Context(), tempDB)
@@ -263,6 +273,8 @@ func TestBranchSessionCopiesPrefix(t *testing.T) {
 }
 
 func TestBranchSessionClonesSubSession(t *testing.T) {
+	t.Parallel()
+
 	tempDB := filepath.Join(t.TempDir(), "test_branch_subsession.db")
 
 	store, err := NewSQLiteSessionStore(t.Context(), tempDB)
@@ -309,6 +321,8 @@ func TestBranchSessionClonesSubSession(t *testing.T) {
 }
 
 func TestStoreAgentNameJSON(t *testing.T) {
+	t.Parallel()
+
 	tempDB := filepath.Join(t.TempDir(), "test_store_json.db")
 
 	store, err := NewSQLiteSessionStore(t.Context(), tempDB)
@@ -349,6 +363,8 @@ func TestStoreAgentNameJSON(t *testing.T) {
 }
 
 func TestNewSQLiteSessionStore_DirectoryNotWritable(t *testing.T) {
+	t.Parallel()
+
 	readOnlyDir := filepath.Join(t.TempDir(), "readonly")
 	err := os.Mkdir(readOnlyDir, 0o555)
 	require.NoError(t, err)
@@ -367,6 +383,8 @@ func TestNewSQLiteSessionStore_DirectoryNotWritable(t *testing.T) {
 }
 
 func TestUpdateSession_LazyCreation(t *testing.T) {
+	t.Parallel()
+
 	tempDB := filepath.Join(t.TempDir(), "test_lazy.db")
 
 	store, err := NewSQLiteSessionStore(t.Context(), tempDB)
@@ -414,6 +432,8 @@ func TestUpdateSession_LazyCreation(t *testing.T) {
 }
 
 func TestUpdateSession_LazyCreation_InMemory(t *testing.T) {
+	t.Parallel()
+
 	store := NewInMemorySessionStore()
 
 	testAgent := agent.New("test-agent", "test prompt")
@@ -454,6 +474,8 @@ func TestUpdateSession_LazyCreation_InMemory(t *testing.T) {
 }
 
 func TestStorePermissions(t *testing.T) {
+	t.Parallel()
+
 	tempDB := filepath.Join(t.TempDir(), "test_permissions.db")
 
 	store, err := NewSQLiteSessionStore(t.Context(), tempDB)
@@ -484,6 +506,8 @@ func TestStorePermissions(t *testing.T) {
 }
 
 func TestStorePermissions_NilPermissions(t *testing.T) {
+	t.Parallel()
+
 	tempDB := filepath.Join(t.TempDir(), "test_nil_permissions.db")
 
 	store, err := NewSQLiteSessionStore(t.Context(), tempDB)
@@ -509,6 +533,8 @@ func TestStorePermissions_NilPermissions(t *testing.T) {
 }
 
 func TestUpdateSession_Permissions(t *testing.T) {
+	t.Parallel()
+
 	tempDB := filepath.Join(t.TempDir(), "test_update_permissions.db")
 
 	store, err := NewSQLiteSessionStore(t.Context(), tempDB)
@@ -543,6 +569,8 @@ func TestUpdateSession_Permissions(t *testing.T) {
 }
 
 func TestAgentModelOverrides_SQLite(t *testing.T) {
+	t.Parallel()
+
 	tempDB := filepath.Join(t.TempDir(), "test_model_overrides.db")
 
 	store, err := NewSQLiteSessionStore(t.Context(), tempDB)
@@ -576,6 +604,8 @@ func TestAgentModelOverrides_SQLite(t *testing.T) {
 }
 
 func TestAgentModelOverrides_Update(t *testing.T) {
+	t.Parallel()
+
 	tempDB := filepath.Join(t.TempDir(), "test_model_overrides_update.db")
 
 	store, err := NewSQLiteSessionStore(t.Context(), tempDB)
@@ -610,6 +640,8 @@ func TestAgentModelOverrides_Update(t *testing.T) {
 }
 
 func TestAgentModelOverrides_EmptyMap(t *testing.T) {
+	t.Parallel()
+
 	tempDB := filepath.Join(t.TempDir(), "test_model_overrides_empty.db")
 
 	store, err := NewSQLiteSessionStore(t.Context(), tempDB)
@@ -636,6 +668,8 @@ func TestAgentModelOverrides_EmptyMap(t *testing.T) {
 }
 
 func TestNewSQLiteSessionStore_RejectsNewerDatabase(t *testing.T) {
+	t.Parallel()
+
 	tempDir := t.TempDir()
 	dbPath := filepath.Join(tempDir, "test_newer_db.db")
 
@@ -662,6 +696,8 @@ func TestNewSQLiteSessionStore_RejectsNewerDatabase(t *testing.T) {
 }
 
 func TestNewSQLiteSessionStore_MigrationFailureRecovery(t *testing.T) {
+	t.Parallel()
+
 	tempDir := t.TempDir()
 	dbPath := filepath.Join(tempDir, "test_migration_recovery.db")
 	backupPath := dbPath + ".bak"
@@ -693,6 +729,8 @@ func TestNewSQLiteSessionStore_MigrationFailureRecovery(t *testing.T) {
 }
 
 func TestBackupDatabase(t *testing.T) {
+	t.Parallel()
+
 	t.Run("backs up existing database file", func(t *testing.T) {
 		tempDir := t.TempDir()
 		dbPath := filepath.Join(tempDir, "test.db")
@@ -745,6 +783,8 @@ func TestBackupDatabase(t *testing.T) {
 // handles orphaned subsession references (where the subsession was deleted
 // but the reference in session_items remains).
 func TestOrphanedSubsessionReference(t *testing.T) {
+	t.Parallel()
+
 	tempDB := filepath.Join(t.TempDir(), "test_orphaned.db")
 
 	store, err := NewSQLiteSessionStore(t.Context(), tempDB)
@@ -803,6 +843,8 @@ func TestOrphanedSubsessionReference(t *testing.T) {
 // TestMigration_ExistingMessagesToSessionItems verifies that the migration
 // properly converts legacy messages JSON to session_items table.
 func TestMigration_ExistingMessagesToSessionItems(t *testing.T) {
+	t.Parallel()
+
 	tempDB := filepath.Join(t.TempDir(), "test_migration.db")
 
 	// First, create a database with the legacy schema (before migrations)
@@ -855,6 +897,8 @@ func TestMigration_ExistingMessagesToSessionItems(t *testing.T) {
 }
 
 func TestAddError_SQLiteRoundTrip(t *testing.T) {
+	t.Parallel()
+
 	tempDB := filepath.Join(t.TempDir(), "test_add_error.db")
 
 	store, err := NewSQLiteSessionStore(t.Context(), tempDB)
@@ -890,6 +934,8 @@ func TestAddError_SQLiteRoundTrip(t *testing.T) {
 }
 
 func TestAddError_InMemoryRoundTrip(t *testing.T) {
+	t.Parallel()
+
 	store := NewInMemorySessionStore()
 
 	session := &Session{ID: "error-session", CreatedAt: time.Now()}
@@ -907,12 +953,16 @@ func TestAddError_InMemoryRoundTrip(t *testing.T) {
 }
 
 func TestAddError_NotFound(t *testing.T) {
+	t.Parallel()
+
 	store := NewInMemorySessionStore()
 	err := store.AddError(t.Context(), "missing", &Error{Message: "boom"})
 	require.ErrorIs(t, err, ErrNotFound)
 }
 
 func TestIsRelativeSessionRef(t *testing.T) {
+	t.Parallel()
+
 	assert.True(t, IsRelativeSessionRef("-1"))
 	assert.True(t, IsRelativeSessionRef("-10"))
 	assert.False(t, IsRelativeSessionRef("550e8400-e29b-41d4-a716-446655440000"))
@@ -921,6 +971,8 @@ func TestIsRelativeSessionRef(t *testing.T) {
 }
 
 func TestParseRelativeSessionRef(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name       string
 		ref        string
@@ -950,6 +1002,8 @@ func TestParseRelativeSessionRef(t *testing.T) {
 }
 
 func TestResolveSessionID_SQLite(t *testing.T) {
+	t.Parallel()
+
 	tempDB := filepath.Join(t.TempDir(), "test_resolve.db")
 
 	store, err := NewSQLiteSessionStore(t.Context(), tempDB)
@@ -1007,6 +1061,8 @@ func TestResolveSessionID_SQLite(t *testing.T) {
 }
 
 func TestResolveSessionID_ExcludesSubSessions(t *testing.T) {
+	t.Parallel()
+
 	tempDB := filepath.Join(t.TempDir(), "test_resolve_subsessions.db")
 
 	store, err := NewSQLiteSessionStore(t.Context(), tempDB)
@@ -1052,6 +1108,8 @@ func TestResolveSessionID_ExcludesSubSessions(t *testing.T) {
 }
 
 func TestResolveSessionID_InMemory(t *testing.T) {
+	t.Parallel()
+
 	store := NewInMemorySessionStore()
 
 	// Create sessions with known timestamps

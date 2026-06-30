@@ -287,6 +287,8 @@ func clearTimestamps(event Event) {
 }
 
 func TestSimple(t *testing.T) {
+	t.Parallel()
+
 	stream := newStreamBuilder().
 		AddContent("Hello").
 		AddStopWithUsage(3, 2).
@@ -325,6 +327,8 @@ func TestSimple(t *testing.T) {
 }
 
 func TestMultipleContentChunks(t *testing.T) {
+	t.Parallel()
+
 	stream := newStreamBuilder().
 		AddContent("Hello ").
 		AddContent("there, ").
@@ -369,6 +373,8 @@ func TestMultipleContentChunks(t *testing.T) {
 }
 
 func TestWithReasoning(t *testing.T) {
+	t.Parallel()
+
 	stream := newStreamBuilder().
 		AddReasoning("Let me think about this...").
 		AddReasoning(" I should respond politely.").
@@ -409,6 +415,8 @@ func TestWithReasoning(t *testing.T) {
 }
 
 func TestMixedContentAndReasoning(t *testing.T) {
+	t.Parallel()
+
 	stream := newStreamBuilder().
 		AddReasoning("The user wants a greeting").
 		AddContent("Hello!").
@@ -451,6 +459,8 @@ func TestMixedContentAndReasoning(t *testing.T) {
 }
 
 func TestToolCallSequence(t *testing.T) {
+	t.Parallel()
+
 	stream := newStreamBuilder().
 		AddToolCallName("call_123", "test_tool").
 		AddToolCallArguments("call_123", `{"param": "value"}`).
@@ -471,6 +481,8 @@ func TestToolCallSequence(t *testing.T) {
 // TestXMLToolCallFallback verifies that <tool_call> blocks in text content
 // are extracted as tool calls and not leaked as AgentChoice events.
 func TestXMLToolCallFallback(t *testing.T) {
+	t.Parallel()
+
 	xmlPayload := `<tool_call>
 {"name": "shell_exec", "arguments": {"cmd": "ls -la"}}
 </tool_call>`
@@ -505,6 +517,8 @@ func TestXMLToolCallFallback(t *testing.T) {
 // TestXMLToolCallFallback_WithPreamble verifies that preamble text before a
 // <tool_call> block is emitted as AgentChoice while the XML is suppressed.
 func TestXMLToolCallFallback_WithPreamble(t *testing.T) {
+	t.Parallel()
+
 	stream := newStreamBuilder().
 		AddContent("I'll list the files for you.\n").
 		AddContent(`<tool_call>{"name": "ls", "arguments": {"path": "/tmp"}}</tool_call>`).
@@ -534,6 +548,8 @@ func TestXMLToolCallFallback_WithPreamble(t *testing.T) {
 }
 
 func TestErrorEvent(t *testing.T) {
+	t.Parallel()
+
 	prov := &mockProviderWithError{id: "test/error-model"}
 	root := agent.New("root", "You are a test agent", agent.WithModel(prov))
 	tm := team.New(team.WithAgents(root))
@@ -566,6 +582,8 @@ func TestErrorEvent(t *testing.T) {
 }
 
 func TestContextCancellation(t *testing.T) {
+	t.Parallel()
+
 	stream := newStreamBuilder().
 		AddContent("This should not complete").
 		AddStopWithUsage(10, 5).
@@ -600,6 +618,8 @@ func TestContextCancellation(t *testing.T) {
 }
 
 func TestToolCallVariations(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name          string
 		streamBuilder func() *streamBuilder
@@ -689,6 +709,8 @@ func (m mockModelStoreWithLimit) GetModel(_ context.Context, _ modelsdev.ID) (*m
 }
 
 func TestCompaction(t *testing.T) {
+	t.Parallel()
+
 	// First stream: assistant issues a tool call and usage exceeds 90% threshold
 	mainStream := newStreamBuilder().
 		AddContent("Hello there").
@@ -751,6 +773,8 @@ func (p *errorProvider) BaseConfig() base.Config { return base.Config{} }
 func (p *errorProvider) MaxTokens() int { return 0 }
 
 func TestCompactionOverflowDoesNotLoop(t *testing.T) {
+	t.Parallel()
+
 	// The model always returns a ContextOverflowError. Without the
 	// max-retry guard this would loop forever because compaction
 	// cannot fix the problem.
@@ -784,6 +808,8 @@ func TestCompactionOverflowDoesNotLoop(t *testing.T) {
 }
 
 func TestSessionWithoutUserMessage(t *testing.T) {
+	t.Parallel()
+
 	stream := newStreamBuilder().AddContent("OK").AddStopWithUsage(1, 1).Build()
 
 	sess := session.New(
@@ -818,6 +844,8 @@ func hasWarningEvent(evs []Event) bool {
 }
 
 func TestGetTools_WarningHandling(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name          string
 		toolsets      []tools.ToolSet
@@ -873,6 +901,8 @@ func TestGetTools_WarningHandling(t *testing.T) {
 }
 
 func TestNewRuntime_NoAgentsError(t *testing.T) {
+	t.Parallel()
+
 	tm := team.New()
 
 	_, err := New(t.Context(), tm, WithModelStore(mockModelStore{}))
@@ -881,6 +911,8 @@ func TestNewRuntime_NoAgentsError(t *testing.T) {
 }
 
 func TestNewRuntime_InvalidCurrentAgentError(t *testing.T) {
+	t.Parallel()
+
 	root := agent.New("root", "You are a test agent")
 	tm := team.New(team.WithAgents(root))
 
@@ -936,6 +968,8 @@ func TestNewRuntime_ModelStorePrecedence(t *testing.T) {
 }
 
 func TestProcessToolCalls_UnknownTool_ReturnsErrorResponse(t *testing.T) {
+	t.Parallel()
+
 	root := agent.New("root", "You are a test agent", agent.WithModel(&mockProvider{}))
 	tm := team.New(team.WithAgents(root))
 
@@ -1044,6 +1078,8 @@ func (s *oauthAwareToolSet) SetUnmanagedOAuthRedirectURI(string) {}
 // mcptools.WithoutInteractivePrompts and defers OAuth to the first
 // RunStream call.
 func TestEmitStartupInfo_DoesNotBlockOnInteractiveOAuth(t *testing.T) {
+	t.Parallel()
+
 	prov := &mockProvider{id: "test/startup-model", stream: &mockStream{}}
 
 	oauthTS := &oauthAwareToolSet{}
@@ -1098,6 +1134,8 @@ func TestEmitStartupInfo_DoesNotBlockOnInteractiveOAuth(t *testing.T) {
 // disappears from the sidebar with only a debug-log trace, leaving the
 // user with no hint about what went wrong.
 func TestEmitStartupInfo_SurfacesToolsetStartFailureAsWarning(t *testing.T) {
+	t.Parallel()
+
 	prov := &mockProvider{id: "test/startup-model", stream: &mockStream{}}
 
 	// A toolset whose Start() always fails with a rich, provider-specific
@@ -1141,6 +1179,8 @@ func TestEmitStartupInfo_SurfacesToolsetStartFailureAsWarning(t *testing.T) {
 // ToolsetInfo{Loading:false} was never emitted (sidebar stuck on "Loading
 // tools…") and EmitStartupInfo's goroutine leaked, also delaying /quit.
 func TestEmitStartupInfo_SkipsToolsetWhoseListingHangs(t *testing.T) {
+	t.Parallel()
+
 	prov := &mockProvider{id: "test/startup-model", stream: &mockStream{}}
 
 	// release is closed on cleanup so the orphaned listing goroutine (whose
@@ -1198,6 +1238,8 @@ func TestEmitStartupInfo_SkipsToolsetWhoseListingHangs(t *testing.T) {
 // sees no warning event for it. The OAuth dialog will appear naturally on
 // the first RunStream, so a pre-announcement would just be noise.
 func TestEmitStartupInfo_AuthRequiredIsSilent(t *testing.T) {
+	t.Parallel()
+
 	prov := &mockProvider{id: "test/startup-model", stream: &mockStream{}}
 
 	deferralErr := &mcptools.AuthorizationRequiredError{URL: "https://example.test/mcp"}
@@ -1241,6 +1283,8 @@ func TestEmitStartupInfo_AuthRequiredIsSilent(t *testing.T) {
 // leaving the user staring at "0 tools" with nothing in the UI explaining
 // why.
 func TestEmitStartupInfo_DeferredAuthDoesNotConsumeFailureGate(t *testing.T) {
+	t.Parallel()
+
 	prov := &mockProvider{id: "test/startup-model", stream: &mockStream{}}
 
 	deferralErr := &mcptools.AuthorizationRequiredError{URL: "https://example.test/mcp"}
@@ -1303,6 +1347,8 @@ func (r *recoveryAuthToolSet) Restart(context.Context) error               { ret
 // before) must remain silent. The streak resets on success so a subsequent
 // background failure produces a fresh notice.
 func TestEmitStartupInfo_RecoveryAuthNoticeEmittedOnce(t *testing.T) {
+	t.Parallel()
+
 	prov := &mockProvider{id: "test/startup-model", stream: &mockStream{}}
 	authErr := &mcptools.AuthorizationRequiredError{URL: "https://example.test/mcp"}
 
@@ -1382,6 +1428,8 @@ func TestEmitStartupInfo_RecoveryAuthNoticeEmittedOnce(t *testing.T) {
 // reconnected, the user saw a notification framed as a warning saying
 // "mcp(…) is now available" — noise, not signal.
 func TestEmitAgentWarnings_OnlyEmitsFailures(t *testing.T) {
+	t.Parallel()
+
 	prov := &mockProvider{id: "test/m", stream: &mockStream{}}
 	root := agent.New("root", "agent", agent.WithModel(prov))
 	tm := team.New(team.WithAgents(root))
@@ -1410,6 +1458,8 @@ func TestEmitAgentWarnings_OnlyEmitsFailures(t *testing.T) {
 // agent with no pending warnings emits nothing — in particular, no empty
 // "Some toolsets failed to initialize" envelope.
 func TestEmitAgentWarnings_NoEventsWhenQueueEmpty(t *testing.T) {
+	t.Parallel()
+
 	prov := &mockProvider{id: "test/m", stream: &mockStream{}}
 	root := agent.New("root", "agent", agent.WithModel(prov))
 	tm := team.New(team.WithAgents(root))
@@ -1422,6 +1472,8 @@ func TestEmitAgentWarnings_NoEventsWhenQueueEmpty(t *testing.T) {
 }
 
 func TestEmitStartupInfo(t *testing.T) {
+	t.Parallel()
+
 	// Create a simple agent with mock provider
 	prov := &mockProvider{id: "test/startup-model", stream: &mockStream{}}
 	root := agent.New("startup-test-agent", "You are a startup test agent",
@@ -1478,6 +1530,8 @@ func TestEmitStartupInfo(t *testing.T) {
 }
 
 func TestEmitStartupInfo_WithSessionTokenData(t *testing.T) {
+	t.Parallel()
+
 	// When restoring a session that already has token data,
 	// EmitStartupInfo should emit a TokenUsageEvent with the context limit
 	// looked up from the model store so the sidebar can display context %.
@@ -1518,6 +1572,8 @@ func TestEmitStartupInfo_WithSessionTokenData(t *testing.T) {
 }
 
 func TestEmitStartupInfo_CostIncludesSubSessions(t *testing.T) {
+	t.Parallel()
+
 	// When restoring a branched session that contains sub-sessions,
 	// the emitted TokenUsageEvent.Cost must include sub-session costs
 	// (TotalCost), not just OwnCost, because sub-sessions won't emit
@@ -1584,6 +1640,8 @@ func TestEmitStartupInfo_CostIncludesSubSessions(t *testing.T) {
 }
 
 func TestEmitStartupInfo_LastMessageFinishReason(t *testing.T) {
+	t.Parallel()
+
 	// When restoring a session whose last assistant message has a
 	// FinishReason, the emitted TokenUsageEvent.LastMessage must carry
 	// that FinishReason so the UI can identify the final response.
@@ -1637,6 +1695,8 @@ func TestEmitStartupInfo_LastMessageFinishReason(t *testing.T) {
 }
 
 func TestEmitStartupInfo_NilSessionNoTokenEvent(t *testing.T) {
+	t.Parallel()
+
 	// When sess is nil, no TokenUsageEvent should be emitted.
 	prov := &mockProvider{id: "test/startup-model", stream: &mockStream{}}
 	root := agent.New("startup-test-agent", "You are a startup test agent",
@@ -1660,6 +1720,8 @@ func TestEmitStartupInfo_NilSessionNoTokenEvent(t *testing.T) {
 }
 
 func TestPermissions_DenyBlocksToolExecution(t *testing.T) {
+	t.Parallel()
+
 	// Test that tools matching deny patterns are blocked
 	permChecker := permissions.NewChecker(&latest.PermissionsConfig{
 		Deny: []string{"dangerous_tool"},
@@ -1711,6 +1773,8 @@ func TestPermissions_DenyBlocksToolExecution(t *testing.T) {
 }
 
 func TestPermissions_AllowAutoApprovesTool(t *testing.T) {
+	t.Parallel()
+
 	// Test that tools matching allow patterns are auto-approved without --yolo
 	permChecker := permissions.NewChecker(&latest.PermissionsConfig{
 		Allow: []string{"safe_*"},
@@ -1758,6 +1822,8 @@ func TestPermissions_AllowAutoApprovesTool(t *testing.T) {
 }
 
 func TestPermissions_DenyTakesPriorityOverAllow(t *testing.T) {
+	t.Parallel()
+
 	// Test that deny patterns take priority over allow patterns
 	permChecker := permissions.NewChecker(&latest.PermissionsConfig{
 		Allow: []string{"*"}, // Allow everything
@@ -1808,6 +1874,8 @@ func TestPermissions_DenyTakesPriorityOverAllow(t *testing.T) {
 }
 
 func TestSessionPermissions_DenyBlocksToolExecution(t *testing.T) {
+	t.Parallel()
+
 	// Test that session-level deny patterns block tools
 	prov := &mockProvider{id: "test/mock-model", stream: &mockStream{}}
 	root := agent.New("root", "You are a test agent", agent.WithModel(prov))
@@ -1855,6 +1923,8 @@ func TestSessionPermissions_DenyBlocksToolExecution(t *testing.T) {
 }
 
 func TestSessionPermissions_AllowAutoApprovesTool(t *testing.T) {
+	t.Parallel()
+
 	// Test that session-level allow patterns auto-approve tools
 	var executed bool
 	agentTools := []tools.Tool{{
@@ -1899,6 +1969,8 @@ func TestSessionPermissions_AllowAutoApprovesTool(t *testing.T) {
 }
 
 func TestSessionPermissions_TakePriorityOverTeamPermissions(t *testing.T) {
+	t.Parallel()
+
 	// Test that session permissions are evaluated before team permissions
 	// Team allows everything, but session denies specific tool
 	teamPermChecker := permissions.NewChecker(&latest.PermissionsConfig{
@@ -1955,6 +2027,8 @@ func TestSessionPermissions_TakePriorityOverTeamPermissions(t *testing.T) {
 }
 
 func TestToolRejectionWithReason(t *testing.T) {
+	t.Parallel()
+
 	// Test that rejection reasons are included in the tool error response
 	agentTools := []tools.Tool{{
 		Name:       "shell",
@@ -2011,6 +2085,8 @@ func TestToolRejectionWithReason(t *testing.T) {
 }
 
 func TestToolRejectionWithoutReason(t *testing.T) {
+	t.Parallel()
+
 	// Test that rejection without a reason still works
 	agentTools := []tools.Tool{{
 		Name:       "shell",
@@ -2067,6 +2143,8 @@ func TestToolRejectionWithoutReason(t *testing.T) {
 }
 
 func TestTransferTaskRejectsNonSubAgent(t *testing.T) {
+	t.Parallel()
+
 	// root has librarian as sub-agent but NOT planner.
 	// planner exists in the team. transfer_task to planner should be rejected.
 	prov := &mockProvider{id: "test/mock-model", stream: &mockStream{}}
@@ -2104,6 +2182,8 @@ func TestTransferTaskRejectsNonSubAgent(t *testing.T) {
 }
 
 func TestTransferTaskAllowsSubAgent(t *testing.T) {
+	t.Parallel()
+
 	// Verify that transfer_task to a valid sub-agent is NOT rejected by the validation.
 	// We can't fully run the child session without a real model, so we just confirm
 	// it gets past validation (it will fail later due to mock stream being empty,
@@ -2221,6 +2301,8 @@ func TestTransferTaskPersistsSubSessionOnError(t *testing.T) {
 }
 
 func TestYoloMode_OverridesPermissionsDeny(t *testing.T) {
+	t.Parallel()
+
 	// Test that --yolo flag takes precedence over deny permissions
 	permChecker := permissions.NewChecker(&latest.PermissionsConfig{
 		Deny: []string{"dangerous_tool"},
@@ -2267,6 +2349,8 @@ func TestYoloMode_OverridesPermissionsDeny(t *testing.T) {
 }
 
 func TestYoloMode_OverridesForceAsk(t *testing.T) {
+	t.Parallel()
+
 	// Test that --yolo flag takes precedence over ForceAsk permissions
 	permChecker := permissions.NewChecker(&latest.PermissionsConfig{
 		Ask: []string{"careful_tool"},
@@ -2313,6 +2397,8 @@ func TestYoloMode_OverridesForceAsk(t *testing.T) {
 }
 
 func TestYoloMode_OverridesSessionDeny(t *testing.T) {
+	t.Parallel()
+
 	// Test that --yolo flag takes precedence over session-level deny
 	var executed bool
 	agentTools := []tools.Tool{{
@@ -2561,6 +2647,8 @@ func TestStripImageContent(t *testing.T) {
 // currentAgent points elsewhere (root). Before the fix, the shared currentAgent
 // field was always used, so background sub-agent tasks ran with root's config.
 func TestResolveSessionAgent_PinnedAgent(t *testing.T) {
+	t.Parallel()
+
 	prov := &mockProvider{id: "test/mock-model", stream: &mockStream{}}
 	worker := agent.New("worker", "Worker agent", agent.WithModel(prov))
 	root := agent.New("root", "Root agent", agent.WithModel(prov))
@@ -2581,6 +2669,8 @@ func TestResolveSessionAgent_PinnedAgent(t *testing.T) {
 // AgentName is set on the session, resolveSessionAgent falls back to the
 // runtime's currentAgent (the normal interactive-session path).
 func TestResolveSessionAgent_FallsBackToCurrentAgent(t *testing.T) {
+	t.Parallel()
+
 	prov := &mockProvider{id: "test/mock-model", stream: &mockStream{}}
 	root := agent.New("root", "Root agent", agent.WithModel(prov))
 	tm := team.New(team.WithAgents(root))
@@ -2597,6 +2687,8 @@ func TestResolveSessionAgent_FallsBackToCurrentAgent(t *testing.T) {
 // AgentName refers to an agent that doesn't exist in the team, we gracefully
 // fall back to currentAgent instead of returning nil (which would panic).
 func TestResolveSessionAgent_InvalidNameFallsBack(t *testing.T) {
+	t.Parallel()
+
 	prov := &mockProvider{id: "test/mock-model", stream: &mockStream{}}
 	root := agent.New("root", "Root agent", agent.WithModel(prov))
 	tm := team.New(team.WithAgents(root))
@@ -2615,6 +2707,8 @@ func TestResolveSessionAgent_InvalidNameFallsBack(t *testing.T) {
 // processToolCalls called r.CurrentAgent() which always returned root for
 // background sessions.
 func TestProcessToolCalls_UsesPinnedAgent(t *testing.T) {
+	t.Parallel()
+
 	var executed bool
 	workerTool := tools.Tool{
 		Name:       "worker_tool",
@@ -2664,6 +2758,8 @@ func TestProcessToolCalls_UsesPinnedAgent(t *testing.T) {
 }
 
 func TestFilterExcludedTools(t *testing.T) {
+	t.Parallel()
+
 	allTools := []tools.Tool{
 		{Name: "read_skill"},
 		{Name: "run_skill"},
@@ -2691,6 +2787,8 @@ func TestFilterExcludedTools(t *testing.T) {
 }
 
 func TestFilterAllowedTools(t *testing.T) {
+	t.Parallel()
+
 	allTools := []tools.Tool{
 		{Name: "read_file"},
 		{Name: "list_directory"},
@@ -2723,6 +2821,8 @@ func TestFilterAllowedTools(t *testing.T) {
 }
 
 func TestToolNameMatchesAny(t *testing.T) {
+	t.Parallel()
+
 	assert.True(t, toolNameMatchesAny("read_file", []string{"read_file"}))
 	assert.True(t, toolNameMatchesAny("read_file", []string{"read_*"}))
 	assert.True(t, toolNameMatchesAny("read_file", []string{"shell", "read_*"}))
@@ -2783,6 +2883,8 @@ func TestSkillSubSessionTools_NoOpForOrdinarySession(t *testing.T) {
 }
 
 func TestMergeExcludedTools(t *testing.T) {
+	t.Parallel()
+
 	t.Run("both empty", func(t *testing.T) {
 		assert.Nil(t, mergeExcludedTools(nil, nil))
 	})
@@ -3682,6 +3784,8 @@ func TestDrainAndEmitSteered_MultiContent(t *testing.T) {
 }
 
 func TestPostToolHookReceivesToolResult(t *testing.T) {
+	t.Parallel()
+
 	var got *hooks.Input
 	registry := hooks.NewRegistry()
 	require.NoError(t, registry.RegisterBuiltin("capture_post_tool", func(_ context.Context, in *hooks.Input, _ []string) (*hooks.Output, error) {
@@ -3737,6 +3841,8 @@ func TestPostToolHookReceivesToolResult(t *testing.T) {
 }
 
 func TestPostToolHookEmitsLifecycleEvents(t *testing.T) {
+	t.Parallel()
+
 	registry := hooks.NewRegistry()
 	require.NoError(t, registry.RegisterBuiltin("noop_post_tool", func(_ context.Context, _ *hooks.Input, _ []string) (*hooks.Output, error) {
 		return nil, nil

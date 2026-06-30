@@ -12,6 +12,8 @@ import (
 )
 
 func TestSetupRecordingProxy_EmptyPath(t *testing.T) {
+	t.Parallel()
+
 	var runConfig config.RuntimeConfig
 
 	cassettePath, cleanup, err := setupRecordingProxy(t.Context(), "", &runConfig)
@@ -39,6 +41,8 @@ func TestSetupRecordingProxy_AutoGeneratesFilename(t *testing.T) {
 }
 
 func TestSetupRecordingProxy_CreatesProxy(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := t.TempDir()
 	cassettePath := filepath.Join(tmpDir, "test-recording")
 

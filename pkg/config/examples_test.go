@@ -46,6 +46,8 @@ func collectExamples(t *testing.T) []string {
 }
 
 func TestParseExamples(t *testing.T) {
+	t.Parallel()
+
 	modelsStore, err := modelsdev.NewStore()
 	require.NoError(t, err)
 
@@ -97,6 +99,8 @@ func TestParseExamples(t *testing.T) {
 }
 
 func TestParseExamplesAfterMarshalling(t *testing.T) {
+	t.Parallel()
+
 	for _, file := range collectExamples(t) {
 		t.Run(file, func(t *testing.T) {
 			t.Parallel()
@@ -122,6 +126,8 @@ func TestParseExamplesAfterMarshalling(t *testing.T) {
 // configuration identical to its .yaml sibling, ensuring the HCL surface
 // stays in sync with the YAML schema.
 func TestHCLExamplesMatchYAML(t *testing.T) {
+	t.Parallel()
+
 	for _, file := range collectExamples(t) {
 		if filepath.Ext(file) != ".hcl" {
 			continue

@@ -19,6 +19,8 @@ import (
 // agent file and --config-dir were appended twice, causing the agent file to be
 // passed as the first message inside the sandbox.
 func TestDockerAgentArgs_NoDuplicateArgs(t *testing.T) {
+	t.Parallel()
+
 	cmd := &cobra.Command{
 		RunE: func(*cobra.Command, []string) error { return nil },
 	}
@@ -66,6 +68,8 @@ func TestDockerAgentArgs_NoDuplicateArgs(t *testing.T) {
 // TestDockerAgentArgs_PreservesUserYolo ensures that if the user explicitly
 // set --yolo, it is not duplicated.
 func TestDockerAgentArgs_PreservesUserYolo(t *testing.T) {
+	t.Parallel()
+
 	cmd := &cobra.Command{
 		RunE: func(*cobra.Command, []string) error { return nil },
 	}
@@ -88,6 +92,8 @@ func TestDockerAgentArgs_PreservesUserYolo(t *testing.T) {
 }
 
 func TestDockerAgentArgs_PreservesExplicitFalseBool(t *testing.T) {
+	t.Parallel()
+
 	cmd := &cobra.Command{
 		RunE: func(*cobra.Command, []string) error { return nil },
 	}
@@ -281,6 +287,8 @@ func TestPrintToolInstallAllowance(t *testing.T) {
 }
 
 func TestResolveSandboxDefault(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	sbxPath := filepath.Join(dir, "runtime-sandbox.yaml")
 	require.NoError(t, os.WriteFile(sbxPath,
@@ -316,6 +324,8 @@ func TestResolveSandboxDefault(t *testing.T) {
 }
 
 func TestPeekAgentSandbox(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name string
 		yaml string
@@ -360,6 +370,8 @@ func TestPeekAgentSandbox(t *testing.T) {
 }
 
 func TestAgentNetworkAllowlist(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := filepath.Join(dir, "agent.yaml")
 	yamlBody := "runtime:\n" +
@@ -376,6 +388,8 @@ func TestAgentNetworkAllowlist(t *testing.T) {
 }
 
 func TestAgentNetworkAllowlist_FiltersMalformed(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := filepath.Join(dir, "agent.yaml")
 	// A YAML where two hosts were typed as one comma-separated string
@@ -396,10 +410,14 @@ func TestAgentNetworkAllowlist_FiltersMalformed(t *testing.T) {
 }
 
 func TestAgentNetworkAllowlist_NilCfg(t *testing.T) {
+	t.Parallel()
+
 	assert.Nil(t, agentNetworkAllowlist(t.Context(), nil))
 }
 
 func TestPrintAgentNetworkAllowlist(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name  string
 		hosts []string

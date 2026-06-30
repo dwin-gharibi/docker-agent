@@ -24,6 +24,8 @@ import (
 // everything, keep nothing" — the agent's next prompt was just the
 // summary and it halted with a confused "no conversation history" reply.
 func TestCompactIfNeeded_IgnoresSubSessionTokens(t *testing.T) {
+	t.Parallel()
+
 	prov := &mockProvider{id: "test/model", stream: &mockStream{}}
 	root := agent.New("root", "agent", agent.WithModel(prov))
 	tm := team.New(team.WithAgents(root))
@@ -70,6 +72,8 @@ func TestCompactIfNeeded_IgnoresSubSessionTokens(t *testing.T) {
 // large tool results recorded directly on the session still trigger the
 // proactive compaction.
 func TestCompactIfNeeded_TriggersOnOwnMessages(t *testing.T) {
+	t.Parallel()
+
 	prov := &mockProvider{id: "test/model", stream: &mockStream{}}
 	root := agent.New("root", "agent", agent.WithModel(prov))
 	tm := team.New(team.WithAgents(root))

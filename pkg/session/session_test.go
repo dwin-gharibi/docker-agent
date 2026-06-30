@@ -23,6 +23,8 @@ func todoToolSet(t *testing.T) tools.ToolSet {
 }
 
 func TestTrimMessagesWithToolCalls(t *testing.T) {
+	t.Parallel()
+
 	messages := []chat.Message{
 		{
 			Role:    chat.MessageRoleUser,
@@ -82,6 +84,8 @@ func TestTrimMessagesWithToolCalls(t *testing.T) {
 }
 
 func TestGetMessagesWithToolCalls(t *testing.T) {
+	t.Parallel()
+
 	testAgent := &agent.Agent{}
 
 	s := New()
@@ -123,6 +127,8 @@ func TestGetMessagesWithToolCalls(t *testing.T) {
 }
 
 func TestGetMessagesWithSummary(t *testing.T) {
+	t.Parallel()
+
 	testAgent := &agent.Agent{}
 
 	s := New()
@@ -170,6 +176,8 @@ func TestGetMessagesWithSummary(t *testing.T) {
 }
 
 func TestGetMessages_Instructions(t *testing.T) {
+	t.Parallel()
+
 	testAgent := agent.New("root", "instructions")
 
 	s := New()
@@ -181,6 +189,8 @@ func TestGetMessages_Instructions(t *testing.T) {
 }
 
 func TestGetMessages_CacheControl(t *testing.T) {
+	t.Parallel()
+
 	testAgent := agent.New("root", "instructions", agent.WithToolSets(todoToolSet(t)))
 
 	s := New()
@@ -195,6 +205,8 @@ func TestGetMessages_CacheControl(t *testing.T) {
 }
 
 func TestGetMessages_CacheControlWithSummary(t *testing.T) {
+	t.Parallel()
+
 	// Caching contract pinned by this test:
 	//
 	//   - The last invariant system message gets a cache-control marker.
@@ -523,6 +535,8 @@ func TestSanitizeToolCalls(t *testing.T) {
 }
 
 func TestGetMessages_SanitizesOrphanedToolCalls(t *testing.T) {
+	t.Parallel()
+
 	testAgent := &agent.Agent{}
 
 	s := New()

@@ -340,6 +340,8 @@ func TestIsClaude_StoreErrorFallsBackToPattern(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestLoadCaps_QualifiedIDRequired(t *testing.T) {
+	t.Parallel()
+
 	store := modelsdev.NewDatabaseStore(&modelsdev.Database{Providers: map[string]modelsdev.Provider{
 		"anthropic": {
 			Models: map[string]modelsdev.Model{
@@ -372,6 +374,8 @@ func TestLoadCaps_QualifiedIDRequired(t *testing.T) {
 }
 
 func TestLoadCaps_VisionModel(t *testing.T) {
+	t.Parallel()
+
 	store := modelsdev.NewDatabaseStore(&modelsdev.Database{Providers: map[string]modelsdev.Provider{
 		"anthropic": {
 			Models: map[string]modelsdev.Model{
@@ -395,6 +399,8 @@ func TestLoadCaps_VisionModel(t *testing.T) {
 }
 
 func TestLoadCaps_TextOnlyModel(t *testing.T) {
+	t.Parallel()
+
 	store := modelsdev.NewDatabaseStore(&modelsdev.Database{Providers: map[string]modelsdev.Provider{
 		"openai": {
 			Models: map[string]modelsdev.Model{
@@ -418,6 +424,8 @@ func TestLoadCaps_TextOnlyModel(t *testing.T) {
 }
 
 func TestLoadCaps_ModelNotFound(t *testing.T) {
+	t.Parallel()
+
 	store := modelsdev.NewDatabaseStore(&modelsdev.Database{Providers: map[string]modelsdev.Provider{}})
 
 	mc := LoadCaps(t.Context(), store, modelsdev.NewID("unknown", "nonexistent-model"))
@@ -428,6 +436,8 @@ func TestLoadCaps_ModelNotFound(t *testing.T) {
 }
 
 func TestLoadCaps_OfficeDocsNotAllowed(t *testing.T) {
+	t.Parallel()
+
 	store := modelsdev.NewDatabaseStore(&modelsdev.Database{Providers: map[string]modelsdev.Provider{
 		"openai": {
 			Models: map[string]modelsdev.Model{
@@ -458,6 +468,8 @@ func TestLoadCaps_OfficeDocsNotAllowed(t *testing.T) {
 }
 
 func TestCapsWith(t *testing.T) {
+	t.Parallel()
+
 	mc := CapsWith(true, false)
 	assert.True(t, mc.Supports("image/jpeg"))
 	assert.False(t, mc.Supports("application/pdf"))
@@ -467,6 +479,8 @@ func TestCapsWith(t *testing.T) {
 }
 
 func TestSupports_AudioVideoRejected(t *testing.T) {
+	t.Parallel()
+
 	mc := CapsWith(true, true)
 
 	for _, mime := range []string{

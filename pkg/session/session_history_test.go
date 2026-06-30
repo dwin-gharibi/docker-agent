@@ -12,6 +12,8 @@ import (
 )
 
 func TestSessionNumHistoryItems(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name                     string
 		numHistoryItems          int
@@ -82,6 +84,8 @@ func TestSessionNumHistoryItems(t *testing.T) {
 }
 
 func TestTrimMessagesPreservesSystemMessages(t *testing.T) {
+	t.Parallel()
+
 	messages := []chat.Message{
 		{Role: chat.MessageRoleSystem, Content: "System instruction 1"},
 		{Role: chat.MessageRoleSystem, Content: "System instruction 2"},
@@ -115,6 +119,8 @@ func TestTrimMessagesPreservesSystemMessages(t *testing.T) {
 }
 
 func TestTrimMessagesConversationLimit(t *testing.T) {
+	t.Parallel()
+
 	messages := []chat.Message{
 		{Role: chat.MessageRoleSystem, Content: "System prompt"},
 		{Role: chat.MessageRoleUser, Content: "Message 1"},
@@ -172,6 +178,8 @@ func TestTrimMessagesConversationLimit(t *testing.T) {
 }
 
 func TestTrimMessagesWithToolCallsPreservation(t *testing.T) {
+	t.Parallel()
+
 	messages := []chat.Message{
 		{Role: chat.MessageRoleSystem, Content: "System prompt"},
 		{Role: chat.MessageRoleUser, Content: "Old message"},
@@ -232,6 +240,8 @@ func TestTrimMessagesWithToolCallsPreservation(t *testing.T) {
 }
 
 func TestTrimMessagesPreservesUserMessagesInAgenticLoop(t *testing.T) {
+	t.Parallel()
+
 	// Simulate a single-turn agentic loop: one user message followed by many tool calls
 	messages := []chat.Message{
 		{Role: chat.MessageRoleSystem, Content: "System prompt"},
@@ -285,6 +295,8 @@ func TestTrimMessagesPreservesUserMessagesInAgenticLoop(t *testing.T) {
 }
 
 func TestTrimMessagesPreservesAllUserMessages(t *testing.T) {
+	t.Parallel()
+
 	// Multiple user messages interspersed with tool calls
 	messages := []chat.Message{
 		{Role: chat.MessageRoleSystem, Content: "System prompt"},

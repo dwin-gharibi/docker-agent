@@ -16,6 +16,8 @@ import (
 // TestCleanupWorktreeAutoRemovesWhenClean verifies a pristine worktree is
 // removed without prompting.
 func TestCleanupWorktreeAutoRemovesWhenClean(t *testing.T) {
+	t.Parallel()
+
 	wt := createTestWorktree(t)
 
 	var f runExecFlags

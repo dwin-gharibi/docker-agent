@@ -17,6 +17,8 @@ func mockHandler(output string) tools.ToolHandler {
 }
 
 func TestToon(t *testing.T) {
+	t.Parallel()
+
 	testcases := []struct {
 		name       string
 		toolResult string

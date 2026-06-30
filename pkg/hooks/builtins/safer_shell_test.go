@@ -14,6 +14,8 @@ import (
 // expected blast-radius level when run under EventPreToolUse against
 // a shell tool call. Metadata carries blast_radius + category + reason.
 func TestSaferShell_MatchesDestructivePatterns(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name        string
 		cmd         string
@@ -57,6 +59,8 @@ func TestSaferShell_MatchesDestructivePatterns(t *testing.T) {
 // unknown-radius prompt — that's the prompt-fatigue trap the safe
 // list exists to avoid.
 func TestSaferShell_SafeCommandsBypassPrompt(t *testing.T) {
+	t.Parallel()
+
 	safeCases := []string{
 		"ls",
 		"ls /tmp",
@@ -131,6 +135,8 @@ func TestSaferShell_SafeCommandsBypassPrompt(t *testing.T) {
 // the safe allowlist (the matcher refuses safe-match on any string
 // containing a shell separator).
 func TestSaferShell_CompoundShellFallsThroughToAsk(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name string
 		cmd  string
@@ -160,6 +166,8 @@ func TestSaferShell_CompoundShellFallsThroughToAsk(t *testing.T) {
 // the canonical "cmd" arg — the shell tool accepts both. Without
 // this the alias path would silently bypass the matcher.
 func TestSaferShell_AcceptsCommandAliasKey(t *testing.T) {
+	t.Parallel()
+
 	out, err := saferShell(t.Context(), &hooks.Input{
 		HookEventName: hooks.EventPreToolUse,
 		ToolName:      shellToolName,
@@ -175,6 +183,8 @@ func TestSaferShell_AcceptsCommandAliasKey(t *testing.T) {
 // pre_tool_use dispatch. It must return nil for tools it doesn't
 // classify.
 func TestSaferShell_NoOpForNonShellTool(t *testing.T) {
+	t.Parallel()
+
 	out, err := saferShell(t.Context(), &hooks.Input{
 		HookEventName: hooks.EventPreToolUse,
 		ToolName:      "filesystem",
@@ -188,6 +198,8 @@ func TestSaferShell_NoOpForNonShellTool(t *testing.T) {
 // EventPreToolUse. An operator who wires it under a different event
 // (e.g. post_tool_use) gets a no-op rather than a misleading verdict.
 func TestSaferShell_NoOpUnderWrongEvent(t *testing.T) {
+	t.Parallel()
+
 	out, err := saferShell(t.Context(), &hooks.Input{
 		HookEventName: hooks.EventPostToolUse,
 		ToolName:      shellToolName,
@@ -202,6 +214,8 @@ func TestSaferShell_NoOpUnderWrongEvent(t *testing.T) {
 // destructive taxonomy nor the safe allowlist still asks, with
 // blast_radius=unknown.
 func TestSaferShell_UnknownCommandAsksWithUnknownRadius(t *testing.T) {
+	t.Parallel()
+
 	out, err := saferShell(t.Context(), &hooks.Input{
 		HookEventName: hooks.EventPreToolUse,
 		ToolName:      shellToolName,
@@ -220,6 +234,8 @@ func TestSaferShell_UnknownCommandAsksWithUnknownRadius(t *testing.T) {
 // does, safer mode wants the user to see the prompt rather than
 // rubber-stamping it.
 func TestSaferShell_EmptyOrMissingCommandAsksWithUnknown(t *testing.T) {
+	t.Parallel()
+
 	cases := []map[string]any{
 		nil,
 		{},
@@ -243,6 +259,8 @@ func TestSaferShell_EmptyOrMissingCommandAsksWithUnknown(t *testing.T) {
 // TestSaferShell_NilInputIsNoOp covers the executor's defensive nil
 // passthrough.
 func TestSaferShell_NilInputIsNoOp(t *testing.T) {
+	t.Parallel()
+
 	out, err := saferShell(t.Context(), nil, nil)
 	require.NoError(t, err)
 	assert.Nil(t, out)
@@ -253,6 +271,8 @@ func TestSaferShell_NilInputIsNoOp(t *testing.T) {
 // a pre_tool_use entry that names the safer_shell builtin and flags
 // PreemptYolo so the entry fires before Decide()/--yolo.
 func TestSaferShell_ApplyAgentDefaultsAutoInjectsBuiltin(t *testing.T) {
+	t.Parallel()
+
 	cfg := ApplyAgentDefaults(nil, AgentDefaults{SaferShell: true})
 	require.NotNil(t, cfg, "SaferShell=true must produce a non-empty config")
 	require.Len(t, cfg.PreToolUse, 1, "expected exactly one pre_tool_use matcher entry")

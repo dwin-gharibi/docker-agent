@@ -12,6 +12,8 @@ import (
 )
 
 func TestNewHandler_WithArguments(t *testing.T) {
+	t.Parallel()
+
 	type Args struct {
 		Name string `json:"name"`
 	}
@@ -33,6 +35,8 @@ func TestNewHandler_WithArguments(t *testing.T) {
 }
 
 func TestNewHandler_EmptyArguments(t *testing.T) {
+	t.Parallel()
+
 	handler := NewHandler(func(_ context.Context, _ map[string]any) (*ToolCallResult, error) {
 		return ResultSuccess("ok"), nil
 	})
@@ -50,6 +54,8 @@ func TestNewHandler_EmptyArguments(t *testing.T) {
 }
 
 func TestNewHandler_EmptyObjectArguments(t *testing.T) {
+	t.Parallel()
+
 	handler := NewHandler(func(_ context.Context, _ map[string]any) (*ToolCallResult, error) {
 		return ResultSuccess("ok"), nil
 	})
@@ -67,6 +73,8 @@ func TestNewHandler_EmptyObjectArguments(t *testing.T) {
 }
 
 func TestNewHandler_InvalidArguments(t *testing.T) {
+	t.Parallel()
+
 	handler := NewHandler(func(_ context.Context, _ map[string]any) (*ToolCallResult, error) {
 		return ResultSuccess("ok"), nil
 	})
@@ -91,6 +99,8 @@ func TestNewHandler_InvalidArguments(t *testing.T) {
 // TestNewHandler_DelegatesToAijson is the wiring canary: if someone swaps
 // aijson.Unmarshal back to encoding/json.Unmarshal, this test catches it.
 func TestNewHandler_DelegatesToAijson(t *testing.T) {
+	t.Parallel()
+
 	type args struct {
 		Paths []string `json:"paths"`
 	}
@@ -169,6 +179,8 @@ func TestNewHandler_NoTelemetryOnValidInput(t *testing.T) {
 }
 
 func TestToolCallResultWithoutPayload(t *testing.T) {
+	t.Parallel()
+
 	result := &ToolCallResult{
 		Output:            "large output",
 		IsError:           true,

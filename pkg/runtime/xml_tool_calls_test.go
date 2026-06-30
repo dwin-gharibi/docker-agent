@@ -10,6 +10,8 @@ import (
 )
 
 func TestExtractXMLToolCalls_NoBlocks(t *testing.T) {
+	t.Parallel()
+
 	calls, textBefore, ok := extractXMLToolCalls("Hello, how can I help?")
 	assert.False(t, ok)
 	assert.Empty(t, calls)
@@ -17,6 +19,8 @@ func TestExtractXMLToolCalls_NoBlocks(t *testing.T) {
 }
 
 func TestExtractXMLToolCalls_SingleCall(t *testing.T) {
+	t.Parallel()
+
 	content := `<tool_call>
 {"name": "get_time", "arguments": {}}
 </tool_call>`
@@ -32,6 +36,8 @@ func TestExtractXMLToolCalls_SingleCall(t *testing.T) {
 }
 
 func TestExtractXMLToolCalls_WithArguments(t *testing.T) {
+	t.Parallel()
+
 	content := `<tool_call>
 {"name": "search", "arguments": {"query": "docker agent"}}
 </tool_call>`
@@ -44,6 +50,8 @@ func TestExtractXMLToolCalls_WithArguments(t *testing.T) {
 }
 
 func TestExtractXMLToolCalls_TextBefore(t *testing.T) {
+	t.Parallel()
+
 	content := "I'll search for that.\n<tool_call>\n{\"name\": \"search\", \"arguments\": {\"q\": \"go\"}}\n</tool_call>"
 
 	calls, textBefore, ok := extractXMLToolCalls(content)
@@ -54,6 +62,8 @@ func TestExtractXMLToolCalls_TextBefore(t *testing.T) {
 }
 
 func TestExtractXMLToolCalls_MultipleCalls(t *testing.T) {
+	t.Parallel()
+
 	content := `<tool_call>
 {"name": "tool_one", "arguments": {"a": 1}}
 </tool_call>
@@ -72,6 +82,8 @@ func TestExtractXMLToolCalls_MultipleCalls(t *testing.T) {
 }
 
 func TestExtractXMLToolCalls_NullArguments(t *testing.T) {
+	t.Parallel()
+
 	content := `<tool_call>{"name": "ping", "arguments": null}</tool_call>`
 
 	calls, _, ok := extractXMLToolCalls(content)
@@ -81,6 +93,8 @@ func TestExtractXMLToolCalls_NullArguments(t *testing.T) {
 }
 
 func TestExtractXMLToolCalls_MissingArguments(t *testing.T) {
+	t.Parallel()
+
 	content := `<tool_call>{"name": "ping"}</tool_call>`
 
 	calls, _, ok := extractXMLToolCalls(content)
@@ -90,6 +104,8 @@ func TestExtractXMLToolCalls_MissingArguments(t *testing.T) {
 }
 
 func TestExtractXMLToolCalls_InvalidJSON(t *testing.T) {
+	t.Parallel()
+
 	content := `<tool_call>not-valid-json</tool_call>`
 
 	calls, _, ok := extractXMLToolCalls(content)
@@ -98,6 +114,8 @@ func TestExtractXMLToolCalls_InvalidJSON(t *testing.T) {
 }
 
 func TestExtractXMLToolCalls_MissingName(t *testing.T) {
+	t.Parallel()
+
 	content := `<tool_call>{"arguments": {"x": 1}}</tool_call>`
 
 	calls, _, ok := extractXMLToolCalls(content)
@@ -106,6 +124,8 @@ func TestExtractXMLToolCalls_MissingName(t *testing.T) {
 }
 
 func TestExtractXMLToolCalls_InlineNoWhitespace(t *testing.T) {
+	t.Parallel()
+
 	content := `<tool_call>{"name":"ls","arguments":{"path":"/tmp"}}</tool_call>`
 
 	calls, _, ok := extractXMLToolCalls(content)
@@ -116,6 +136,8 @@ func TestExtractXMLToolCalls_InlineNoWhitespace(t *testing.T) {
 }
 
 func TestExtractXMLToolCalls_TextAfterCallDiscarded(t *testing.T) {
+	t.Parallel()
+
 	content := "Preamble\n<tool_call>\n{\"name\": \"run\", \"arguments\": {}}\n</tool_call>\nSome trailing text."
 
 	calls, textBefore, ok := extractXMLToolCalls(content)

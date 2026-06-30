@@ -22,6 +22,8 @@ import (
 const schemaFile = "../../agent-schema.json"
 
 func TestJsonSchemaWorksForExamples(t *testing.T) {
+	t.Parallel()
+
 	schemaFile, err := os.ReadFile(schemaFile)
 	require.NoError(t, err)
 

@@ -20,6 +20,8 @@ import (
 // followed by the kept tail. This is what makes the compactor's
 // FirstKeptEntry actually work in the next LLM turn.
 func TestSessionGetMessages_WithFirstKeptEntry(t *testing.T) {
+	t.Parallel()
+
 	items := []session.Item{
 		session.NewMessageItem(&session.Message{
 			Message: chat.Message{Role: chat.MessageRoleUser, Content: "m1"},
@@ -67,6 +69,8 @@ func TestSessionGetMessages_WithFirstKeptEntry(t *testing.T) {
 // compatibility: a summary with no FirstKeptEntry must still work, with
 // the conversation continuing from messages that follow the summary item.
 func TestSessionGetMessages_SummaryWithoutFirstKeptEntry(t *testing.T) {
+	t.Parallel()
+
 	items := []session.Item{
 		session.NewMessageItem(&session.Message{
 			Message: chat.Message{Role: chat.MessageRoleUser, Content: "m1"},
@@ -102,6 +106,8 @@ func TestSessionGetMessages_SummaryWithoutFirstKeptEntry(t *testing.T) {
 // compaction work: no SessionCompactionEvent, no Summary item appended
 // to the session, and no model call.
 func TestDoCompactBeforeHookDeniesSkipsCompaction(t *testing.T) {
+	t.Parallel()
+
 	denyingHooks := &latest.HooksConfig{
 		BeforeCompaction: []latest.HookDefinition{
 			{Type: "command", Command: "echo 'denied for safety' >&2; exit 2", Timeout: 5},
@@ -154,6 +160,8 @@ func TestDoCompactBeforeHookDeniesSkipsCompaction(t *testing.T) {
 // the runtime to apply that summary verbatim and to skip the LLM-based
 // summarization (no new model call).
 func TestDoCompactBeforeHookSuppliesSummary(t *testing.T) {
+	t.Parallel()
+
 	const customSummary = "custom hook-supplied summary"
 	jsonOutput := `{"hook_specific_output":{"hook_event_name":"before_compaction","summary":"` + customSummary + `"}}`
 
@@ -222,6 +230,8 @@ func TestDoCompactBeforeHookSuppliesSummary(t *testing.T) {
 // *pre-compaction* token counts (so observability handlers can
 // express "compacted from X to Y").
 func TestDoCompactAfterHookFires(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	logFile := dir + "/after.log"
 
@@ -280,6 +290,8 @@ func TestDoCompactAfterHookFires(t *testing.T) {
 // emit the same SessionCompaction started/completed pair that all
 // existing UIs depend on.
 func TestDoCompactNoHooksMatchesPriorBehavior(t *testing.T) {
+	t.Parallel()
+
 	summaryStream := newStreamBuilder().
 		AddContent("summary").
 		AddStopWithUsage(1, 1).

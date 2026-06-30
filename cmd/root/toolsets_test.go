@@ -11,6 +11,8 @@ import (
 )
 
 func TestRAGToolsetRegistered(t *testing.T) {
+	t.Parallel()
+
 	registry := loadertoolsets.NewDefaultToolsetRegistry()
 
 	_, err := registry.CreateTool(t.Context(), latest.Toolset{Type: "rag"}, "", &config.RuntimeConfig{}, "")

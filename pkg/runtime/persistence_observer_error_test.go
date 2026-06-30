@@ -13,6 +13,8 @@ import (
 // recorded as a session error item so it survives a reload and is included in
 // a JSON export.
 func TestPersistenceObserver_PersistsErrorEvent(t *testing.T) {
+	t.Parallel()
+
 	store := session.NewInMemorySessionStore()
 	obs := newPersistenceObserver(store)
 	require.NotNil(t, obs)
@@ -42,6 +44,8 @@ func TestPersistenceObserver_PersistsErrorEvent(t *testing.T) {
 // sub-sessions are not persisted into the parent (the parent absorbs only its
 // own scoped events).
 func TestPersistenceObserver_SkipsSubSessionError(t *testing.T) {
+	t.Parallel()
+
 	store := session.NewInMemorySessionStore()
 	obs := newPersistenceObserver(store)
 	require.NotNil(t, obs)

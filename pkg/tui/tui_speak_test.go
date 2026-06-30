@@ -67,6 +67,8 @@ func newSpeakTestModel(tb testing.TB, ft *fakeTranscriber) *appModel {
 }
 
 func TestHandleStartSpeak_NoOpIfAlreadyRunning(t *testing.T) {
+	t.Parallel()
+
 	ft := &fakeTranscriber{running: true}
 	m := newSpeakTestModel(t, ft)
 
@@ -80,6 +82,8 @@ func TestHandleStartSpeak_NoOpIfAlreadyRunning(t *testing.T) {
 }
 
 func TestHandleStartSpeak_ReturnsErrorNotificationOnStartFailure(t *testing.T) {
+	t.Parallel()
+
 	ft := &fakeTranscriber{startErr: errors.New("boom")}
 	m := newSpeakTestModel(t, ft)
 
@@ -109,6 +113,8 @@ func TestHandleStartSpeak_ReturnsErrorNotificationOnStartFailure(t *testing.T) {
 }
 
 func TestHandleStopSpeak_NoOpWhenNotRunning(t *testing.T) {
+	t.Parallel()
+
 	ft := &fakeTranscriber{running: false}
 	m := newSpeakTestModel(t, ft)
 
@@ -122,6 +128,8 @@ func TestHandleStopSpeak_NoOpWhenNotRunning(t *testing.T) {
 }
 
 func TestHandleStopSpeak_StopsAndNotifies(t *testing.T) {
+	t.Parallel()
+
 	ft := &fakeTranscriber{running: true}
 	m := newSpeakTestModel(t, ft)
 	// Pretend a previous start opened a channel.

@@ -29,6 +29,8 @@ func (s *trackingStore) Close() error {
 // store shared with other runtimes (e.g. spawned by the TUI's session
 // browser), making subsequent reads fail with "sql: database is closed".
 func TestRuntimeClose_DoesNotCloseExternalSessionStore(t *testing.T) {
+	t.Parallel()
+
 	store := &trackingStore{Store: session.NewInMemorySessionStore()}
 
 	prov := &mockProvider{id: "test/mock-model", stream: &mockStream{}}

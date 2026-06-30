@@ -10,6 +10,8 @@ import (
 )
 
 func TestCallbackServer_Port(t *testing.T) {
+	t.Parallel()
+
 	cs, err := NewCallbackServer(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -30,6 +32,8 @@ func TestCallbackServer_Port(t *testing.T) {
 // TestBuildRedirectURI tests the pure string-substitution logic without
 // needing to open a listener.
 func TestBuildRedirectURI(t *testing.T) {
+	t.Parallel()
+
 	const fallback = "http://127.0.0.1:12345/callback"
 	const port = 54321
 
@@ -81,6 +85,8 @@ func TestBuildRedirectURI(t *testing.T) {
 // a full result channel. Sends are now non-blocking; the first callback
 // wins and later ones must be dropped without wedging the server.
 func TestCallbackServer_DuplicateCallbacksDoNotBlock(t *testing.T) {
+	t.Parallel()
+
 	cs, err := NewCallbackServer(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -132,6 +138,8 @@ func TestCallbackServer_DuplicateCallbacksDoNotBlock(t *testing.T) {
 // TestCallbackServer_ResolveRedirectURI exercises the method wrapper end-to-end
 // to make sure it stitches GetRedirectURI() and Port() together correctly.
 func TestCallbackServer_ResolveRedirectURI(t *testing.T) {
+	t.Parallel()
+
 	cs, err := NewCallbackServer(t.Context())
 	if err != nil {
 		t.Fatal(err)

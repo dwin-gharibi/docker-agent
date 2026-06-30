@@ -40,6 +40,8 @@ func runWithCache(t *testing.T, c *cache.Cache, prov *messageRecordingProvider, 
 // once, and a subsequent identical question is served from the cache without
 // hitting the model again.
 func TestCache_StoresAndReplaysAnswer(t *testing.T) {
+	t.Parallel()
+
 	c, err := cache.New(cache.Config{Enabled: true})
 	require.NoError(t, err)
 	require.NotNil(t, c)
@@ -82,6 +84,8 @@ func TestCache_StoresAndReplaysAnswer(t *testing.T) {
 // TestCache_CaseInsensitive verifies that case-insensitive matching is the
 // default when CaseSensitive is false.
 func TestCache_CaseInsensitive(t *testing.T) {
+	t.Parallel()
+
 	c, err := cache.New(cache.Config{Enabled: true, CaseSensitive: false})
 	require.NoError(t, err)
 
@@ -115,6 +119,8 @@ func TestCache_CaseInsensitive(t *testing.T) {
 // TestCache_TrimSpaces verifies that whitespace trimming is applied when
 // TrimSpaces is enabled.
 func TestCache_TrimSpaces(t *testing.T) {
+	t.Parallel()
+
 	c, err := cache.New(cache.Config{Enabled: true, TrimSpaces: true})
 	require.NoError(t, err)
 
@@ -152,6 +158,8 @@ func TestCache_TrimSpaces(t *testing.T) {
 // a stop-hook builtin (not as a hard-coded runtime call). It is the
 // regression test for the migration to the hooks mechanism.
 func TestCache_StorageIsAStopHookBuiltin(t *testing.T) {
+	t.Parallel()
+
 	c, err := cache.New(cache.Config{Enabled: true})
 	require.NoError(t, err)
 
@@ -179,6 +187,8 @@ func TestCache_StorageIsAStopHookBuiltin(t *testing.T) {
 }
 
 func TestCache_DisabledHasNoEffect(t *testing.T) {
+	t.Parallel()
+
 	stream1 := newStreamBuilder().AddContent("first").AddStopWithUsage(5, 3).Build()
 	stream2 := newStreamBuilder().AddContent("second").AddStopWithUsage(5, 3).Build()
 
@@ -203,6 +213,8 @@ func TestCache_DisabledHasNoEffect(t *testing.T) {
 // the user staring at a blank reply with no recourse but to ask again,
 // so the model is called every time.
 func TestCache_EmptyResponseIsNotCached(t *testing.T) {
+	t.Parallel()
+
 	c, err := cache.New(cache.Config{Enabled: true})
 	require.NoError(t, err)
 

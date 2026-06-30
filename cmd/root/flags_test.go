@@ -101,6 +101,8 @@ func TestGatewayLogic(t *testing.T) {
 }
 
 func TestGatewayFlags_CallsAncestorPersistentPreRunE(t *testing.T) {
+	t.Parallel()
+
 	// Regression test: addGatewayFlags overrides PersistentPreRunE on the command
 	// it is applied to. When that command is nested under an intermediate parent
 	// (e.g. root → serve → api), the old code only checked cmd.Parent(), so a
@@ -132,6 +134,8 @@ func TestGatewayFlags_CallsAncestorPersistentPreRunE(t *testing.T) {
 }
 
 func TestGatewayFlags_RunsParentBeforeMaterialisingEnvProvider(t *testing.T) {
+	t.Parallel()
+
 	// Regression test: the persistent pre-run for the gateway flags
 	// used to call runConfig.EnvProvider() before invoking the parent
 	// PersistentPreRunE that overrides --config-dir / --cache-dir /

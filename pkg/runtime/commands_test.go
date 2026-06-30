@@ -340,6 +340,8 @@ func TestResolveCommand_ExtraArgsAppended(t *testing.T) {
 }
 
 func TestTokenize(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name     string
 		input    string
@@ -364,6 +366,8 @@ func TestTokenize(t *testing.T) {
 }
 
 func TestParseToolArgs(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name     string
 		input    string
@@ -436,6 +440,8 @@ func TestParseToolArgs(t *testing.T) {
 }
 
 func TestParseValue(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name     string
 		input    string
@@ -462,6 +468,8 @@ func TestParseValue(t *testing.T) {
 }
 
 func TestParseToolCommands(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name        string
 		instruction string

@@ -96,6 +96,8 @@ func TestBuildModelChain(t *testing.T) {
 }
 
 func TestFallbackOrder(t *testing.T) {
+	t.Parallel()
+
 	synctest.Test(t, func(t *testing.T) {
 		primary := &failingProvider{id: "primary/failing", err: errors.New("500 internal server error")}
 		fallback1 := &failingProvider{id: "fallback1/failing", err: errors.New("503 service unavailable")}
@@ -130,6 +132,8 @@ func TestFallbackOrder(t *testing.T) {
 }
 
 func TestFallbackNoRetryOnNonRetryableError(t *testing.T) {
+	t.Parallel()
+
 	synctest.Test(t, func(t *testing.T) {
 		primary := &failingProvider{id: "primary/auth-fail", err: errors.New("401 unauthorized")}
 		successStream := newStreamBuilder().
@@ -164,6 +168,8 @@ func TestFallbackNoRetryOnNonRetryableError(t *testing.T) {
 }
 
 func TestFallbackRetriesWithBackoff(t *testing.T) {
+	t.Parallel()
+
 	synctest.Test(t, func(t *testing.T) {
 		primary := &failingProvider{id: "primary/failing", err: errors.New("500 internal server error")}
 		successStream := newStreamBuilder().
@@ -200,6 +206,8 @@ func TestFallbackRetriesWithBackoff(t *testing.T) {
 }
 
 func TestPrimaryRetriesWithBackoff(t *testing.T) {
+	t.Parallel()
+
 	synctest.Test(t, func(t *testing.T) {
 		successStream := newStreamBuilder().
 			AddContent("Primary success after retries").
@@ -241,6 +249,8 @@ func TestPrimaryRetriesWithBackoff(t *testing.T) {
 }
 
 func TestNoFallbackWhenPrimarySucceeds(t *testing.T) {
+	t.Parallel()
+
 	synctest.Test(t, func(t *testing.T) {
 		primaryStream := newStreamBuilder().
 			AddContent("Primary success").
@@ -283,6 +293,8 @@ func TestNoFallbackWhenPrimarySucceeds(t *testing.T) {
 }
 
 func TestFallback429SkipsToNextModel(t *testing.T) {
+	t.Parallel()
+
 	synctest.Test(t, func(t *testing.T) {
 		primary := &countingProvider{
 			id: "primary/rate-limited", failCount: 100,
@@ -319,6 +331,8 @@ func TestFallback429SkipsToNextModel(t *testing.T) {
 }
 
 func TestFallbackCooldownState(t *testing.T) {
+	t.Parallel()
+
 	synctest.Test(t, func(t *testing.T) {
 		mockModel := &mockProvider{id: "test/model", stream: newStreamBuilder().AddContent("ok").AddStopWithUsage(1, 1).Build()}
 		tm := team.New(team.WithAgents(
@@ -381,6 +395,8 @@ func TestGetEffectiveRetries(t *testing.T) {
 }
 
 func TestFallback429WithFallbacksSkipsToNextModel(t *testing.T) {
+	t.Parallel()
+
 	synctest.Test(t, func(t *testing.T) {
 		// Primary gets rate limited; with fallbacks configured it should skip immediately.
 		primary := &countingProvider{
@@ -419,6 +435,8 @@ func TestFallback429WithFallbacksSkipsToNextModel(t *testing.T) {
 }
 
 func TestFallback429WithoutFallbacksRetriesSameModel(t *testing.T) {
+	t.Parallel()
+
 	synctest.Test(t, func(t *testing.T) {
 		// Primary gets rate limited; with no fallbacks configured it should retry
 		// when the opt-in is enabled.
@@ -458,6 +476,8 @@ func TestFallback429WithoutFallbacksRetriesSameModel(t *testing.T) {
 }
 
 func TestFallback429WithoutFallbacksExhaustsRetries(t *testing.T) {
+	t.Parallel()
+
 	synctest.Test(t, func(t *testing.T) {
 		// Primary always returns 429, no fallbacks, opt-in enabled — should fail after all retries.
 		primary := &failingProvider{
@@ -489,6 +509,8 @@ func TestFallback429WithoutFallbacksExhaustsRetries(t *testing.T) {
 }
 
 func TestFallback500RetryableWithBackoff(t *testing.T) {
+	t.Parallel()
+
 	synctest.Test(t, func(t *testing.T) {
 		// Primary returns 500 (retryable), no fallbacks — should retry with backoff.
 		successStream := newStreamBuilder().
@@ -529,6 +551,8 @@ func TestFallback500RetryableWithBackoff(t *testing.T) {
 // --- WithRetryOnRateLimit gate tests ---
 
 func TestRateLimitGate_DisabledNoFallbacks_FailsImmediately(t *testing.T) {
+	t.Parallel()
+
 	synctest.Test(t, func(t *testing.T) {
 		// With retryOnRateLimit=false (default) and no fallbacks, a 429 should
 		// be treated as non-retryable and fail immediately without any retry.
@@ -564,6 +588,8 @@ func TestRateLimitGate_DisabledNoFallbacks_FailsImmediately(t *testing.T) {
 }
 
 func TestRateLimitGate_EnabledNoFallbacks_RetriesSameModel(t *testing.T) {
+	t.Parallel()
+
 	synctest.Test(t, func(t *testing.T) {
 		// With retryOnRateLimit=true and no fallbacks, a 429 should retry
 		// the same model until it succeeds or retries are exhausted.
@@ -603,6 +629,8 @@ func TestRateLimitGate_EnabledNoFallbacks_RetriesSameModel(t *testing.T) {
 }
 
 func TestRateLimitGate_EnabledWithFallbacks_SkipsToFallback(t *testing.T) {
+	t.Parallel()
+
 	synctest.Test(t, func(t *testing.T) {
 		// Even with retryOnRateLimit=true, when fallbacks are configured
 		// a 429 should skip to the fallback immediately (fallbacks take priority).

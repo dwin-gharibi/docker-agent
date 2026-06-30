@@ -55,6 +55,8 @@ func (b *streamBuilder) AddRefusal() *streamBuilder {
 // the refusal finish reason and stops the loop instead of being mistaken for a
 // normal empty completion.
 func TestHandleStream_Refusal(t *testing.T) {
+	t.Parallel()
+
 	stream := newStreamBuilder().
 		AddRefusal().
 		Build()
@@ -79,6 +81,8 @@ func TestHandleStream_Refusal(t *testing.T) {
 // streamed before the safety classifier ends the turn with "refusal" are NOT
 // executed: the refusal voids the whole turn.
 func TestHandleStream_RefusalDropsPartialToolCalls(t *testing.T) {
+	t.Parallel()
+
 	stream := newStreamBuilder().
 		AddToolCallName("call_1", "rm_rf").
 		AddToolCallArguments("call_1", `{"path":"/"}`).
@@ -106,6 +110,8 @@ func TestHandleStream_RefusalDropsPartialToolCalls(t *testing.T) {
 // dropped tool call leaves the assistant message empty, which surfaces upstream
 // as "No response from agent".
 func TestHandleStream_ToolCallAndStopInSameChunk(t *testing.T) {
+	t.Parallel()
+
 	stream := newStreamBuilder().
 		AddToolCallWithStop("call_1", "company_search", `{"query":"x"}`).
 		Build()
@@ -132,6 +138,8 @@ func TestHandleStream_ToolCallAndStopInSameChunk(t *testing.T) {
 // reason. This already works today and guards against a regression when fixing
 // the same-chunk case above.
 func TestHandleStream_ToolCallThenSeparateStop(t *testing.T) {
+	t.Parallel()
+
 	stream := newStreamBuilder().
 		AddToolCallName("call_1", "company_search").
 		AddToolCallArguments("call_1", `{"query":"x"}`).
