@@ -14,7 +14,7 @@ require (
 	github.com/a2aproject/a2a-go v0.3.15
 	github.com/alecthomas/chroma/v2 v2.27.0
 	github.com/alpkeskin/gotoon v0.1.1
-	github.com/anthropics/anthropic-sdk-go v1.52.0
+	github.com/anthropics/anthropic-sdk-go v1.53.0
 	github.com/atotto/clipboard v0.1.4
 	github.com/aws/aws-sdk-go-v2 v1.42.0
 	github.com/aws/aws-sdk-go-v2/config v1.32.25
@@ -31,7 +31,7 @@ require (
 	github.com/docker/aijson v0.1.0
 	github.com/docker/cli v29.6.1+incompatible
 	github.com/docker/go-units v0.5.0
-	github.com/docker/portcullis v0.0.0-20260610113232-24775d73cb04
+	github.com/docker/portcullis v0.0.0-20260629131418-af46a89c4e49
 	github.com/dop251/goja v0.0.0-20260627200808-0b76000cabdb
 	github.com/expr-lang/expr v1.17.8
 	github.com/fatih/color v1.19.0

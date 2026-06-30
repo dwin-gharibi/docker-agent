@@ -51,8 +51,8 @@ github.com/alpkeskin/gotoon v0.1.1 h1:GQOVwMfWKINnfEA6slrXHJaJYDwnUFmrPlXOtnuja1
 github.com/alpkeskin/gotoon v0.1.1/go.mod h1:XRTz8RM4tz8M2nB37MNRN8rHF4YgeYd8nIXmoU0B0+M=
 github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be h1:9AeTilPcZAjCFIImctFaOjnTIavg87rW78vTPkQqLI8=
 github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be/go.mod h1:ySMOLuWl6zY27l47sB3qLNK6tF2fkHG55UZxx8oIVo4=
-github.com/anthropics/anthropic-sdk-go v1.52.0 h1:1TB9jt4DN87VMwS/hB1VK26tYzK0ipEOtqPaPGFtJQg=
-github.com/anthropics/anthropic-sdk-go v1.52.0/go.mod h1:3EfIfmFqxH6rbiLcIP4tPFyXL/IHakx2wDG4OU+TIEI=
+github.com/anthropics/anthropic-sdk-go v1.53.0 h1:R/99NOmSXlfha2kwVVDUBiDxfoG5eHaxfQ9omcKgITM=
+github.com/anthropics/anthropic-sdk-go v1.53.0/go.mod h1:3EfIfmFqxH6rbiLcIP4tPFyXL/IHakx2wDG4OU+TIEI=
 github.com/apparentlymart/go-textseg/v15 v15.0.0 h1:uYvfpb3DyLSCGWnctWKGj857c6ew1u1fNQOlOtuGxQY=
 github.com/apparentlymart/go-textseg/v15 v15.0.0/go.mod h1:K8XmNZdhEBkdlyDdvbmmsvpAG721bKi0joRfFdHIWJ4=
 github.com/armon/go-socks5 v0.0.0-20160902184237-e75332964ef5 h1:0CwZNZbxp69SHPdPJAN/hZIm0C4OItdklCFmMRWYpio=
@@ -173,8 +173,8 @@ github.com/docker/go-metrics v0.0.1 h1:AgB/0SvBxihN0X8OR4SjsblXkbMvalQ8cjmtKQ2rQ
 github.com/docker/go-metrics v0.0.1/go.mod h1:cG1hvH2utMXtqgqqYE9plW6lDxS3/5ayHzueweSI3Vw=
 github.com/docker/go-units v0.5.0 h1:69rxXcBk27SvSaaxTtLh/8llcHD8vYHT7WSdRZ/jvr4=
 github.com/docker/go-units v0.5.0/go.mod h1:fgPhTUdO+D/Jk86RDLlptpiXQzgHJF7gydDDbaIK4Dk=
-github.com/docker/portcullis v0.0.0-20260610113232-24775d73cb04 h1:BNFyfKzSA7HMMqkqm2u6mHkiE7tvn4dMjd75ijsrM6g=
-github.com/docker/portcullis v0.0.0-20260610113232-24775d73cb04/go.mod h1:FBCDtWLlYquonR/uesgN9HhLvbaDIX3PEC6lgHCnL24=
+github.com/docker/portcullis v0.0.0-20260629131418-af46a89c4e49 h1:2CVzrWyNxCxOgV7UluBfMBnXsIS5vb30/FbdiXz0MjQ=
+github.com/docker/portcullis v0.0.0-20260629131418-af46a89c4e49/go.mod h1:FBCDtWLlYquonR/uesgN9HhLvbaDIX3PEC6lgHCnL24=
 github.com/dop251/goja v0.0.0-20260627200808-0b76000cabdb h1:qxbH9q0zvt7Fwy9UJrHdd9grPTlO07G/vUUE3eqfZ4w=
 github.com/dop251/goja v0.0.0-20260627200808-0b76000cabdb/go.mod h1:Sc+QOu1WruvaaeT/cxFez/pXHpI9ZDjg/E8QNfSVveI=
 github.com/dustin/go-humanize v1.0.1 h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkpeCY=
