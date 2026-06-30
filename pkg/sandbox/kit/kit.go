@@ -331,36 +331,63 @@ func classifyRef(ref string) (tag, key string) {
 // finalDir on return.
 //
 // When finalDir already exists at promote time, it is moved aside
-// to a "<final>.old-<staging-base>" sibling first so the rename can
-// succeed; the old content is removed in the background. A leftover
-// .old-* sibling from a crashed run is harmless and will be reaped on
-// the next successful build.
+// to a "<final>.old-<staging-base>-<attempt>" sibling first so the
+// rename can succeed; the old content is removed in the background. A
+// leftover .old-* sibling from a crashed run is harmless and will be
+// reaped on the next successful build.
+//
+// Publishing is wrapped in a bounded retry loop to absorb a three-way
+// race: between our failed rename and our recovery Stat, a *different*
+// concurrent build can retire finalDir to publish its own kit, leaving
+// finalDir transiently absent. A single Stat would misread that as a
+// hard failure; retrying lets us simply take the now-empty slot. The
+// contention window is microseconds and real concurrency is a handful
+// of builds, so the loop converges in one or two iterations.
 func promote(stagingDir, finalDir string) error {
-	// Move any existing finalDir aside. Concurrent winners can race
-	// here — the loser sees ENOENT, which is fine because the winner
-	// has already taken over.
-	if _, err := os.Stat(finalDir); err == nil {
-		retired := finalDir + ".old-" + filepath.Base(stagingDir)
-		if err := os.Rename(finalDir, retired); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("retiring previous kit: %w", err)
+	const maxAttempts = 100
+	// Retired siblings accumulate across attempts; clean them all up on
+	// return (defer-in-loop would leak the closure until the function
+	// exits anyway, so collect explicitly and remove once).
+	var retiredDirs []string
+	defer func() {
+		for _, d := range retiredDirs {
+			_ = os.RemoveAll(d)
 		}
-		defer func() { _ = os.RemoveAll(retired) }()
-	}
+	}()
 
-	if err := os.Rename(stagingDir, finalDir); err != nil {
+	var lastErr error
+	for attempt := range maxAttempts {
+		// Move any existing finalDir aside so the rename below can
+		// succeed. The retired name is unique per attempt so a retry
+		// can't collide with a sibling we moved aside earlier (which
+		// is pending background removal).
+		if _, err := os.Stat(finalDir); err == nil {
+			retired := fmt.Sprintf("%s.old-%s-%d", finalDir, filepath.Base(stagingDir), attempt)
+			if err := os.Rename(finalDir, retired); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("retiring previous kit: %w", err)
+			}
+			retiredDirs = append(retiredDirs, retired)
+		}
+
+		err := os.Rename(stagingDir, finalDir)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
 		// A concurrent Build may have already promoted its own kit to
 		// finalDir between our Stat above and our Rename here. If
 		// finalDir is now a populated directory, we accept the other
 		// run as the winner: the caller will see a complete kit, and
 		// our staging tree will be cleaned up by Build's deferred
-		// rollback. We only swallow the ENOTEMPTY/EEXIST family of
-		// errors that signal exactly this situation.
+		// rollback.
 		if _, statErr := os.Stat(finalDir); statErr == nil {
 			return nil
 		}
-		return fmt.Errorf("renaming kit: %w", err)
+		// finalDir is transiently absent because another build retired
+		// it mid-promote. stagingDir is still intact (the rename
+		// failed), so loop and try to claim the empty slot.
 	}
-	return nil
+	return fmt.Errorf("renaming kit: %w", lastErr)
 }
 
 func loadConfig(ctx context.Context, opts Options) (*latestcfg.Config, error) {
