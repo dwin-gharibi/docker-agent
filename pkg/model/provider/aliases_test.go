@@ -29,6 +29,20 @@ func TestLookupAlias(t *testing.T) {
 	}
 }
 
+func TestOpenRouterAlias(t *testing.T) {
+	t.Parallel()
+
+	alias, ok := LookupAlias("openrouter")
+	require.True(t, ok)
+	assert.Equal(t, Alias{
+		APIType:     "openai",
+		BaseURL:     "https://openrouter.ai/api/v1",
+		TokenEnvVar: "OPENROUTER_API_KEY",
+	}, alias)
+	assert.True(t, IsKnownProvider("openrouter"))
+	assert.True(t, IsCatalogProvider("openrouter"))
+}
+
 func TestEachAlias(t *testing.T) {
 	t.Parallel()
 

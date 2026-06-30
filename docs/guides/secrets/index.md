@@ -45,6 +45,7 @@ Common variables:
 | `ANTHROPIC_API_KEY` | Anthropic |
 | `GOOGLE_API_KEY` | Google Gemini |
 | `MISTRAL_API_KEY` | Mistral |
+| `OPENROUTER_API_KEY` | OpenRouter |
 | `XAI_API_KEY` | xAI |
 | `NEBIUS_API_KEY` | Nebius |
 

@@ -130,6 +130,7 @@ export OPENAI_API_KEY="sk-..."           # OpenAI
 export ANTHROPIC_API_KEY="sk-ant-..."    # Anthropic
 export GOOGLE_API_KEY="AI..."            # Google Gemini (or GEMINI_API_KEY)
 export MISTRAL_API_KEY="..."             # Mistral
+export OPENROUTER_API_KEY="..."          # OpenRouter
 ```
 
 See [Configuration Overview]({{ '/configuration/overview/#environment-variables' | relative_url }}) for the full list of supported providers and environment variables.

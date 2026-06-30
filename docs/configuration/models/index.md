@@ -17,9 +17,9 @@ models:
     first_available: [list] # Optional: candidate model refs, tried in order by available credentials.
                             # Mutually exclusive with other model settings.
     provider: string # Required unless using first_available. One of: openai, anthropic, google, amazon-bedrock,
-                     # dmr, mistral, xai, nebius, minimax, requesty, azure, ollama,
-                     # github-copilot, or a named provider defined under the top-level
-                     # `providers:` section.
+                     # dmr, mistral, xai, nebius, minimax, requesty, openrouter,
+                     # azure, ollama, github-copilot, or a named provider defined
+                     # under the top-level `providers:` section.
     model: string # Required: model identifier
     temperature: float # Optional: 0.0–2.0 (provider-dependent; e.g. Anthropic caps at 1.0)
     max_tokens: integer # Optional: response length limit
@@ -45,7 +45,7 @@ models:
 | Property              | Type       | Required | Description                                                                           |
 | --------------------- | ---------- | -------- | ------------------------------------------------------------------------------------- |
 | `first_available`     | array      | ✗        | Candidate model references tried in order; selects the first whose credentials are configured. Mutually exclusive with other model settings. |
-| `provider`            | string     | ✓/✗      | Required for regular model definitions; omitted for `first_available` selectors. Provider: `openai`, `anthropic`, `google`, `amazon-bedrock`, `dmr`, `mistral`, `xai`, `nebius`, `minimax`, `requesty`, `azure`, `ollama`, `github-copilot`, or any [named provider]({{ '/providers/custom/' | relative_url }}). |
+| `provider`            | string     | ✓/✗      | Required for regular model definitions; omitted for `first_available` selectors. Provider: `openai`, `anthropic`, `google`, `amazon-bedrock`, `dmr`, `mistral`, `xai`, `nebius`, `minimax`, `requesty`, `openrouter`, `azure`, `ollama`, `github-copilot`, or any [named provider]({{ '/providers/custom/' | relative_url }}). |
 | `model`               | string     | ✓/✗      | Required for regular model definitions; omitted for `first_available` selectors. Model name (e.g., `gpt-4o`, `claude-sonnet-4-5`, `gemini-3.5-flash`) |
 | `temperature`         | float      | ✗        | Sampling randomness. Range is provider-dependent — typically `0.0–2.0` (Anthropic caps at `1.0`). `0.0` is deterministic. |
 | `max_tokens`          | int        | ✗        | Maximum response length in tokens                                                     |
@@ -326,7 +326,7 @@ See the [Anthropic provider page]({{ '/providers/anthropic/#thinking-display' | 
 ## Custom HTTP Headers
 
 For OpenAI-compatible providers (`openai`, `github-copilot`, `mistral`, `xai`,
-`nebius`, `minimax`, `ollama`, and any custom provider using the OpenAI API),
+`nebius`, `minimax`, `requesty`, `openrouter`, `ollama`, and any custom provider using the OpenAI API),
 `provider_opts.http_headers` adds arbitrary HTTP headers to every outgoing
 request:
 
@@ -373,6 +373,11 @@ models:
     model: global.anthropic.claude-sonnet-4-5-20250929-v1:0
     provider_opts:
       region: us-east-1
+
+  # OpenRouter
+  openrouter:
+    provider: openrouter
+    model: meta-llama/llama-3.3-70b-instruct
 
   # Docker Model Runner (local)
   local:

@@ -49,6 +49,11 @@ var Aliases = map[string]Alias{
 		BaseURL:     "https://api.studio.nebius.com/v1",
 		TokenEnvVar: "NEBIUS_API_KEY",
 	},
+	"openrouter": {
+		APIType:     "openai",
+		BaseURL:     "https://openrouter.ai/api/v1",
+		TokenEnvVar: "OPENROUTER_API_KEY",
+	},
 	"mistral": {
 		APIType:     "openai",
 		BaseURL:     "https://api.mistral.ai/v1",

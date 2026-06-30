@@ -130,6 +130,8 @@ func APIKeyHeaderUpdater(host string, req *http.Request) {
 		req.Header.Set("X-Goog-Api-Key", os.Getenv("GOOGLE_API_KEY"))
 	case "https://api.mistral.ai/v1":
 		req.Header.Set("Authorization", "Bearer "+os.Getenv("MISTRAL_API_KEY"))
+	case "https://openrouter.ai/api/v1":
+		req.Header.Set("Authorization", "Bearer "+os.Getenv("OPENROUTER_API_KEY"))
 	}
 }
 
@@ -286,6 +288,10 @@ func TargetURLForHost(host string) func(req *http.Request) string {
 	case "https://api.mistral.ai/v1":
 		return func(req *http.Request) string {
 			return "https://api.mistral.ai" + req.URL.Redacted()
+		}
+	case "https://openrouter.ai/api/v1":
+		return func(req *http.Request) string {
+			return "https://openrouter.ai/api" + req.URL.Redacted()
 		}
 	default:
 		return nil

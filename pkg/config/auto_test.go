@@ -49,6 +49,13 @@ func TestAvailableProviders_NoGateway(t *testing.T) {
 			expectedProvider: "mistral",
 		},
 		{
+			name: "openrouter api key present",
+			envVars: map[string]string{
+				"OPENROUTER_API_KEY": "test-key",
+			},
+			expectedProvider: "openrouter",
+		},
+		{
 			name:             "no api keys - defaults to dmr",
 			envVars:          map[string]string{},
 			expectedProvider: "dmr",
@@ -202,6 +209,15 @@ func TestAutoModelConfig(t *testing.T) {
 			expectedMaxTokens: 32000,
 		},
 		{
+			name: "openrouter provider",
+			envVars: map[string]string{
+				"OPENROUTER_API_KEY": "test-key",
+			},
+			expectedProvider:  "openrouter",
+			expectedModel:     "meta-llama/llama-3.3-70b-instruct",
+			expectedMaxTokens: 32000,
+		},
+		{
 			name:              "dmr provider (no api keys)",
 			envVars:           map[string]string{},
 			expectedProvider:  "dmr",
@@ -259,6 +275,10 @@ func TestPreferredMaxTokens(t *testing.T) {
 			expectedTokens: 32000,
 		},
 		{
+			provider:       "openrouter",
+			expectedTokens: 32000,
+		},
+		{
 			provider:       "unknown-provider",
 			expectedTokens: 32000,
 		},
@@ -279,7 +299,7 @@ func TestDefaultModels(t *testing.T) {
 	t.Parallel()
 
 	// Test that DefaultModels map has all expected providers
-	expectedProviders := []string{"openai", "anthropic", "google", "dmr", "mistral", "amazon-bedrock", "opencode-zen", "opencode-go"}
+	expectedProviders := []string{"openai", "anthropic", "google", "dmr", "mistral", "openrouter", "amazon-bedrock", "opencode-zen", "opencode-go"}
 
 	for _, provider := range expectedProviders {
 		t.Run(provider, func(t *testing.T) {
@@ -295,6 +315,7 @@ func TestDefaultModels(t *testing.T) {
 	assert.Equal(t, "gemini-3.5-flash", DefaultModels["google"])
 	assert.Equal(t, "ai/qwen3:latest", DefaultModels["dmr"])
 	assert.Equal(t, "mistral-small-latest", DefaultModels["mistral"])
+	assert.Equal(t, "meta-llama/llama-3.3-70b-instruct", DefaultModels["openrouter"])
 	assert.Equal(t, "global.anthropic.claude-sonnet-4-5-20250929-v1:0", DefaultModels["amazon-bedrock"])
 	assert.Equal(t, "deepseek-v4-flash", DefaultModels["opencode-go"])
 	assert.Equal(t, "deepseek-v4-flash-free", DefaultModels["opencode-zen"])
@@ -304,7 +325,7 @@ func TestAutoModelConfig_IntegrationWithDefaultModels(t *testing.T) {
 	t.Parallel()
 
 	// Verify that AutoModelConfig always returns a model from DefaultModels
-	providers := []string{"openai", "anthropic", "google", "mistral", "opencode-zen"}
+	providers := []string{"openai", "anthropic", "google", "mistral", "openrouter", "opencode-zen"}
 
 	for _, provider := range providers {
 		t.Run(provider, func(t *testing.T) {
@@ -322,6 +343,8 @@ func TestAutoModelConfig_IntegrationWithDefaultModels(t *testing.T) {
 				envVars["GOOGLE_API_KEY"] = "test-key"
 			case "mistral":
 				envVars["MISTRAL_API_KEY"] = "test-key"
+			case "openrouter":
+				envVars["OPENROUTER_API_KEY"] = "test-key"
 			case "opencode-zen":
 				envVars["OPENCODE_API_KEY"] = "test-key"
 			}
@@ -396,11 +419,20 @@ func TestAvailableProviders_PrecedenceOrder(t *testing.T) {
 
 	// No anthropic, openai, or google - mistral should win
 	env = environment.NewMapEnvProvider(map[string]string{
-		"MISTRAL_API_KEY":  "test-key",
-		"OPENCODE_API_KEY": "test-key",
+		"MISTRAL_API_KEY":    "test-key",
+		"OPENROUTER_API_KEY": "test-key",
+		"OPENCODE_API_KEY":   "test-key",
 	})
 	providers = AvailableProviders(t.Context(), "", env)
 	assert.Equal(t, "mistral", providers[0])
+
+	// No higher-priority providers - openrouter should win before opencode
+	env = environment.NewMapEnvProvider(map[string]string{
+		"OPENROUTER_API_KEY": "test-key",
+		"OPENCODE_API_KEY":   "test-key",
+	})
+	providers = AvailableProviders(t.Context(), "", env)
+	assert.Equal(t, "openrouter", providers[0])
 
 	// Only OPENCODE_API_KEY set - opencode-zen should win (higher priority than opencode-go)
 	env = environment.NewMapEnvProvider(map[string]string{

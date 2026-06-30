@@ -184,6 +184,7 @@ API keys and secrets are read from environment variables — never stored in con
 | `NEBIUS_API_KEY`           | Nebius                                              |
 | `MINIMAX_API_KEY`          | MiniMax                                             |
 | `REQUESTY_API_KEY`         | Requesty                                            |
+| `OPENROUTER_API_KEY`       | OpenRouter                                          |
 | `GITHUB_TOKEN`             | GitHub Copilot (PAT with `copilot` scope)           |
 | `AZURE_API_KEY`            | Azure OpenAI (override with `token_key`)            |
 | `AWS_BEARER_TOKEN_BEDROCK` | AWS Bedrock (or the standard AWS credentials chain) |
