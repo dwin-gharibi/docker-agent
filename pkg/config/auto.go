@@ -44,6 +44,7 @@ var cloudProviders = []providerConfig{
 	}, "GOOGLE_API_KEY (or GEMINI_API_KEY, GOOGLE_GENAI_USE_VERTEXAI)"},
 	{"mistral", []string{"MISTRAL_API_KEY"}, "MISTRAL_API_KEY"},
 	{"openrouter", []string{"OPENROUTER_API_KEY"}, "OPENROUTER_API_KEY"},
+	{"baseten", []string{"BASETEN_API_KEY"}, "BASETEN_API_KEY"},
 	{"amazon-bedrock", []string{
 		"AWS_BEARER_TOKEN_BEDROCK",
 		"AWS_ACCESS_KEY_ID",
@@ -107,6 +108,7 @@ var DefaultModels = map[string]string{
 	"dmr":            "ai/qwen3:latest",
 	"mistral":        "mistral-small-latest",
 	"openrouter":     "meta-llama/llama-3.3-70b-instruct",
+	"baseten":        "deepseek-ai/DeepSeek-V3.1",
 	"amazon-bedrock": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
 	"opencode-go":    "deepseek-v4-flash",
 	"opencode-zen":   "deepseek-v4-flash-free",

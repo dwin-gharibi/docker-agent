@@ -43,6 +43,20 @@ func TestOpenRouterAlias(t *testing.T) {
 	assert.True(t, IsCatalogProvider("openrouter"))
 }
 
+func TestBasetenAlias(t *testing.T) {
+	t.Parallel()
+
+	alias, ok := LookupAlias("baseten")
+	require.True(t, ok)
+	assert.Equal(t, Alias{
+		APIType:     "openai",
+		BaseURL:     "https://inference.baseten.co/v1",
+		TokenEnvVar: "BASETEN_API_KEY",
+	}, alias)
+	assert.True(t, IsKnownProvider("baseten"))
+	assert.True(t, IsCatalogProvider("baseten"))
+}
+
 func TestEachAlias(t *testing.T) {
 	t.Parallel()
 

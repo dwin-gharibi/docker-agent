@@ -27,6 +27,27 @@ import (
 func TestChatCompletions_MergesConsecutiveSystemMessages(t *testing.T) {
 	t.Parallel()
 
+	assertMergesConsecutiveMessages(t, &latest.ModelConfig{
+		Provider:     "custom",
+		Model:        "qwen3",
+		TokenKey:     "MY_TOKEN",
+		ProviderOpts: map[string]any{"api_type": "openai_chatcompletions"},
+	})
+}
+
+func TestBaseten_MergesConsecutiveSystemMessages(t *testing.T) {
+	t.Parallel()
+
+	assertMergesConsecutiveMessages(t, &latest.ModelConfig{
+		Provider: "baseten",
+		Model:    "zai-org/GLM-5.2",
+		TokenKey: "MY_TOKEN",
+	})
+}
+
+func assertMergesConsecutiveMessages(t *testing.T, cfg *latest.ModelConfig) {
+	t.Helper()
+
 	var (
 		body []byte
 		mu   sync.Mutex
@@ -40,16 +61,11 @@ func TestChatCompletions_MergesConsecutiveSystemMessages(t *testing.T) {
 	}))
 	defer server.Close()
 
-	cfg := &latest.ModelConfig{
-		Provider:     "custom",
-		Model:        "qwen3",
-		BaseURL:      server.URL,
-		TokenKey:     "MY_TOKEN",
-		ProviderOpts: map[string]any{"api_type": "openai_chatcompletions"},
-	}
+	requestCfg := *cfg
+	requestCfg.BaseURL = server.URL
 	env := environment.NewMapEnvProvider(map[string]string{"MY_TOKEN": "secret"})
 
-	client, err := NewClient(t.Context(), cfg, env)
+	client, err := NewClient(t.Context(), &requestCfg, env)
 	require.NoError(t, err)
 
 	stream, err := client.CreateChatCompletionStream(

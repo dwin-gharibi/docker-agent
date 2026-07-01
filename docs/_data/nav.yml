@@ -145,6 +145,8 @@
       url: /providers/xai/
     - title: Nebius
       url: /providers/nebius/
+    - title: Baseten
+      url: /providers/baseten/
     - title: MiniMax
       url: /providers/minimax/
     - title: OpenRouter

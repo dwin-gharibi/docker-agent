@@ -216,17 +216,23 @@ func (c *Client) Close() {
 func (c *Client) convertMessages(ctx context.Context, messages []chat.Message) []openai.ChatCompletionMessageParamUnion {
 	converted := oaistream.ConvertMessages(ctx, messages, c.ID(), c.ModelOptions.ModelsDevStore(), c.CapsOverride())
 	// Coalesce consecutive same-role (system/user) messages into one for generic
-	// OpenAI-compatible endpoints (api_type: openai_chatcompletions). docker-agent
-	// emits a separate system message per source (the agent instruction plus each
-	// toolset's instructions), but some such backends (e.g. OVHcloud's Qwen3.5)
-	// silently return an empty stream when a request carries more than one system
-	// message. The DMR client already applies this merge for the same reason.
-	// Scoped to the explicit openai_chatcompletions api_type so first-class
-	// providers (OpenAI, Mistral, ...) are left untouched. See #3145.
-	if getAPIType(&c.ModelConfig) == "openai_chatcompletions" {
+	// OpenAI-compatible endpoints. docker-agent emits a separate system message
+	// per source (the agent instruction plus each toolset's instructions), but
+	// some such backends silently return an empty stream when a request carries
+	// more than one system message. The DMR client already applies this merge
+	// for the same reason. Apply it to explicit openai_chatcompletions configs
+	// and Baseten's built-in OpenAI-compatible endpoint.
+	if shouldMergeConsecutiveMessages(&c.ModelConfig) {
 		return oaistream.MergeConsecutiveMessages(converted)
 	}
 	return converted
+}
+
+func shouldMergeConsecutiveMessages(cfg *latest.ModelConfig) bool {
+	if getAPIType(cfg) == "openai_chatcompletions" {
+		return true
+	}
+	return cfg != nil && cfg.Provider == "baseten"
 }
 
 // CreateChatCompletionStream creates a streaming chat completion request

@@ -68,6 +68,11 @@ var Aliases = map[string]Alias{
 		BaseURL:     "https://api.minimax.io/v1",
 		TokenEnvVar: "MINIMAX_API_KEY",
 	},
+	"baseten": {
+		APIType:     "openai",
+		BaseURL:     "https://inference.baseten.co/v1",
+		TokenEnvVar: "BASETEN_API_KEY",
+	},
 	"github-copilot": {
 		APIType:     "openai",
 		BaseURL:     "https://api.githubcopilot.com",
