@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/crane"
@@ -165,7 +166,15 @@ func (reg *testRegistry) start(t *testing.T) *httptest.Server {
 func newTestSession(t *testing.T, opts ...crane.Option) *session {
 	t.Helper()
 	opts = append(opts, crane.Insecure)
-	s, err := newSession(crane.GetOptions(opts...))
+	o := crane.GetOptions(opts...)
+	// Keep the default retry count but drop the default backoff (1s+3s
+	// sleeps): the 429 rate-limit test otherwise idles for ~4s.
+	o.Remote = append(o.Remote, v1remote.WithRetryBackoff(v1remote.Backoff{
+		Duration: time.Millisecond,
+		Factor:   1,
+		Steps:    3,
+	}))
+	s, err := newSession(o)
 	require.NoError(t, err)
 	return s
 }
