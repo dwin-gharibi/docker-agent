@@ -4113,3 +4113,62 @@ func TestEmptyTurnEmitsWarning(t *testing.T) {
 	require.NotNil(t, warn, "expected a Warning event for an empty turn")
 	assert.Contains(t, warn.Message, "empty response")
 }
+
+// TestEmptyTrailingTurnAfterToolCallsIsSilent verifies that a natural empty
+// stop immediately following a tool-call turn does NOT emit the empty-response
+// warning. This is the common fork-skill tail (the last action is a tool call
+// such as commit/open-pr, then the model stops with nothing left to say); the
+// scary rate-limit / token-cap warning there is pure noise. Turns that stop
+// empty WITHOUT preceding tool work still warn (covered by TestEmptyTurnEmitsWarning).
+func TestEmptyTrailingTurnAfterToolCallsIsSilent(t *testing.T) {
+	t.Parallel()
+
+	doneTool := tools.Tool{
+		Name:       "do_thing",
+		Parameters: map[string]any{},
+		Handler: func(_ context.Context, _ tools.ToolCall) (*tools.ToolCallResult, error) {
+			return tools.ResultSuccess("done"), nil
+		},
+	}
+
+	// Turn 1: model calls the tool and keeps going.
+	// Turn 2: model stops with no content and no tool calls (benign tail).
+	turn1 := newStreamBuilder().
+		AddToolCallName("c1", "do_thing").
+		AddToolCallArguments("c1", `{}`).
+		AddToolCallStopWithUsage(5, 5).
+		Build()
+	turn2 := newStreamBuilder().
+		AddStopWithUsage(3, 0).
+		Build()
+
+	prov := &recordingProvider{
+		id:      "test/mock-model",
+		streams: []*mockStream{turn1, turn2},
+	}
+
+	ts := newStubToolSet(nil, []tools.Tool{doneTool}, nil)
+	root := agent.New("root", "test", agent.WithModel(prov), agent.WithToolSets(ts))
+	tm := team.New(team.WithAgents(root))
+
+	rt, err := NewLocalRuntime(t.Context(), tm, WithSessionCompaction(false), WithModelStore(mockModelStore{}))
+	require.NoError(t, err)
+	rt.registerDefaultTools()
+
+	sess := session.New(session.WithUserMessage("Do the thing"))
+	sess.Title = "empty trailing turn test"
+	sess.ToolsApproved = true
+
+	evCh := rt.RunStream(t.Context(), sess)
+	var events []Event
+	for ev := range evCh {
+		events = append(events, ev)
+	}
+
+	for _, ev := range events {
+		if w, ok := ev.(*WarningEvent); ok {
+			assert.NotContains(t, w.Message, "empty response",
+				"a benign empty stop right after tool calls must not emit the empty-response warning")
+		}
+	}
+}

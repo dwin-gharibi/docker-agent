@@ -563,6 +563,13 @@ type loopState struct {
 	sessionStartMsgs    []chat.Message
 	userPromptMsgs      []chat.Message
 	exitReason          string
+	// prevTurnMadeToolCalls reports whether the immediately preceding
+	// turn emitted tool calls. Used to classify an empty trailing turn:
+	// a natural stop right after tool work is benign (the model already
+	// did its job and has nothing left to say — common at the tail of a
+	// fork-skill sequence), not the rate-limit / token-cap case the
+	// empty-response warning would otherwise imply.
+	prevTurnMadeToolCalls bool
 }
 
 // runTurn performs one iteration of the run-stream loop, from
@@ -743,23 +750,37 @@ func (r *LocalRuntime) runTurn(
 		if reason == "" {
 			reason = chat.FinishReasonNull
 		}
-		var warning string
-		if strings.TrimSpace(res.ReasoningContent) != "" {
-			warning = fmt.Sprintf(
+		switch {
+		case res.Stopped && ls.prevTurnMadeToolCalls:
+			// Benign trailing empty turn: the model naturally stopped right
+			// after doing tool work and had nothing left to add. Common at
+			// the tail of a fork-skill sequence (e.g. the last action is a
+			// commit / open-pr tool call). The real answer is the previous,
+			// non-empty assistant message, so a UI warning here is noise.
+			// Log at debug for traceability without alarming the user.
+			slog.DebugContext(ctx, "Empty trailing turn after tool calls (benign natural stop)",
+				"agent", a.Name(), "model", modelID.String(),
+				"finish_reason", string(reason), "session_id", sess.ID)
+		case strings.TrimSpace(res.ReasoningContent) != "":
+			warning := fmt.Sprintf(
 				"Model %s produced only reasoning and no reply (stop reason: %s). "+
 					"Thinking-mode models can emit reasoning tokens without a final answer; "+
 					"the reasoning is not used as the response.",
 				modelID.String(), reason)
-		} else {
-			warning = fmt.Sprintf(
+			slog.WarnContext(ctx, "Empty assistant turn",
+				"agent", a.Name(), "model", modelID.String(),
+				"finish_reason", string(reason), "reasoning_length", len(res.ReasoningContent), "session_id", sess.ID)
+			events.Emit(Warning(warning, a.Name()))
+		default:
+			warning := fmt.Sprintf(
 				"Model %s returned an empty response (stop reason: %s). "+
 					"This usually means the provider rate-limited the request or the output token limit was reached.",
 				modelID.String(), reason)
+			slog.WarnContext(ctx, "Empty assistant turn",
+				"agent", a.Name(), "model", modelID.String(),
+				"finish_reason", string(reason), "reasoning_length", len(res.ReasoningContent), "session_id", sess.ID)
+			events.Emit(Warning(warning, a.Name()))
 		}
-		slog.WarnContext(ctx, "Empty assistant turn",
-			"agent", a.Name(), "model", modelID.String(),
-			"finish_reason", string(reason), "reasoning_length", len(res.ReasoningContent), "session_id", sess.ID)
-		events.Emit(Warning(warning, a.Name()))
 	}
 
 	msgUsage := r.recordAssistantMessage(sess, a, res, agentTools, modelID.String(), msgCost, events)
@@ -830,6 +851,12 @@ func (r *LocalRuntime) runTurn(
 		endReason = turnEndReasonHookBlocked
 		return turnExit
 	}
+
+	// Record whether this turn made tool calls so the next iteration can
+	// classify a trailing empty turn as a benign post-tool stop rather than
+	// a rate-limit / token-cap event. Set after processToolCalls so it
+	// reflects the turn just completed.
+	ls.prevTurnMadeToolCalls = len(res.Calls) > 0
 
 	// Record per-toolset model override for the next LLM turn.
 	ls.toolModelOverride = toolexec.ResolveModelOverride(res.Calls, agentTools)
