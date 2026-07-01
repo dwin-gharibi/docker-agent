@@ -43,23 +43,22 @@ func (c *Client) floorMaxTokensForNoThinking(maxTokens int64) int64 {
 // Anthropic's max_tokens represents the combined budget for thinking + output tokens.
 // Returns the adjusted maxTokens value and an error if user-set max_tokens is too low.
 //
-// Only fixed token budgets need adjustment. Adaptive and effort-based budgets
-// don't need it since the model manages its own thinking allocation.
+// It operates on the resolved budget (see [Client.resolveThinkingBudget]) so an
+// effort level that falls back to a token budget on a non-adaptive model gets
+// the same headroom as any other token budget. Only fixed token budgets need
+// adjustment; adaptive and effort-based budgets are managed by the model itself.
 func (c *Client) adjustMaxTokensForThinking(maxTokens int64) (int64, error) {
-	if c.ModelConfig.ThinkingBudget == nil {
+	budget := c.resolveThinkingBudget()
+	if budget == nil {
 		return maxTokens, nil
 	}
-	// Adaptive and effort-based budgets: no token adjustment needed.
-	if _, ok := anthropicThinkingEffort(c.ModelConfig.ThinkingBudget); ok {
-		return maxTokens, nil
-	}
-	// Models that require adaptive thinking will have their token budget coerced
-	// to adaptive at request time, so no adjustment is needed here either.
-	if modelinfo.RejectsTokenThinking(c.ModelConfig.Model) {
+	// Adaptive and effort-based budgets: no token adjustment needed; the model
+	// manages its own thinking allocation within max_tokens.
+	if _, ok := anthropicThinkingEffort(budget); ok {
 		return maxTokens, nil
 	}
 
-	thinkingTokens := int64(c.ModelConfig.ThinkingBudget.Tokens)
+	thinkingTokens := int64(budget.Tokens)
 	if thinkingTokens <= 0 {
 		return maxTokens, nil
 	}
@@ -131,31 +130,71 @@ func validThinkingTokens(tokens, maxTokens int64) (int64, bool) {
 	return tokens, true
 }
 
-// coerceAdaptiveThinking returns an adaptive ThinkingBudget when the configured
-// model rejects token-based thinking budgets but the user supplied one.
-// Otherwise it returns the configured budget unchanged. It never mutates
-// c.ModelConfig.ThinkingBudget.
-func (c *Client) coerceAdaptiveThinking() *latest.ThinkingBudget {
+// resolveThinkingBudget returns the ThinkingBudget to actually send to the API,
+// adapting the configured budget to what the target model accepts. It never
+// mutates c.ModelConfig.ThinkingBudget.
+//
+// Two model-specific rewrites happen here, in opposite directions:
+//   - A token budget on a model that rejects token-based thinking (Opus 4.6+)
+//     becomes adaptive thinking.
+//   - An effort or adaptive budget on a model that does not support adaptive
+//     thinking (Haiku 4.5, Sonnet 4.5 and earlier, ...) becomes a token budget,
+//     since `thinking.type=adaptive`/`output_config.effort` are rejected with a
+//     400 on those models (issue #3362). This is the "regular thinking options"
+//     path for effort levels set via the TUI Shift+Tab cycle.
+//
+// Disabled, zero, and negative budgets are passed through unchanged so
+// downstream code keeps treating them as "thinking off".
+func (c *Client) resolveThinkingBudget() *latest.ThinkingBudget {
 	budget := c.ModelConfig.ThinkingBudget
-	if budget == nil {
-		return nil
-	}
-	if _, ok := anthropicThinkingEffort(budget); ok {
-		return budget // already adaptive or effort-based.
-	}
-	// Only coerce a real, positive token budget. Disabled/zero/negative
-	// budgets are passed through so downstream code keeps treating them as
-	// "thinking off" instead of silently enabling adaptive thinking.
-	if budget.IsDisabled() || budget.Tokens <= 0 {
+	if budget == nil || budget.IsDisabled() {
 		return budget
 	}
-	if !modelinfo.RejectsTokenThinking(c.ModelConfig.Model) {
+
+	if _, ok := anthropicThinkingEffort(budget); ok {
+		// Effort or adaptive budget.
+		if modelinfo.SupportsAdaptiveThinking(c.ModelConfig.Model) {
+			return budget
+		}
+		tokens, ok := effortBudgetTokens(budget)
+		if !ok {
+			return budget
+		}
+		slog.Warn("Anthropic: model does not support adaptive thinking; using token-based thinking budget",
+			"model", c.ModelConfig.Model,
+			"effort", budget.Effort,
+			"budget_tokens", tokens)
+		return &latest.ThinkingBudget{Tokens: tokens}
+	}
+
+	// Token budget. Only coerce a real, positive value.
+	if budget.Tokens <= 0 || !modelinfo.RejectsTokenThinking(c.ModelConfig.Model) {
 		return budget
 	}
 	slog.Warn("Anthropic: model rejects token-based thinking budgets; switching to adaptive thinking",
 		"model", c.ModelConfig.Model,
 		"thinking_budget_tokens", budget.Tokens)
 	return &latest.ThinkingBudget{Effort: "adaptive"}
+}
+
+// effortBudgetTokens maps an effort-based or adaptive ThinkingBudget onto a
+// token budget, for models that only support token-based extended thinking.
+// It covers both plain effort levels ("high") and adaptive forms ("adaptive",
+// "adaptive/low"). Returns (0, false) for token-count or unrecognised budgets.
+func effortBudgetTokens(b *latest.ThinkingBudget) (int, bool) {
+	level, ok := b.AdaptiveEffort()
+	if !ok {
+		l, ok := b.EffortLevel()
+		if !ok {
+			return 0, false
+		}
+		return effort.BedrockTokens(l)
+	}
+	l, ok := effort.Parse(level)
+	if !ok {
+		return 0, false
+	}
+	return effort.BedrockTokens(l)
 }
 
 // anthropicThinkingEffort returns the Anthropic API effort level for the given
@@ -218,7 +257,7 @@ func anthropicThinkingDisplay(opts map[string]any) (string, bool) {
 // based on the model's ThinkingBudget and provider_opts.thinking_display.
 // Returns true when thinking is enabled (i.e., temperature/top_p must not be set).
 func (c *Client) applyThinkingConfig(params *anthropic.MessageNewParams, maxTokens int64) bool {
-	budget := c.coerceAdaptiveThinking()
+	budget := c.resolveThinkingBudget()
 	if budget == nil {
 		return false
 	}
@@ -250,7 +289,7 @@ func (c *Client) applyThinkingConfig(params *anthropic.MessageNewParams, maxToke
 // applyBetaThinkingConfig configures extended thinking on a BetaMessageNewParams
 // based on the model's ThinkingBudget and provider_opts.thinking_display.
 func (c *Client) applyBetaThinkingConfig(params *anthropic.BetaMessageNewParams, maxTokens int64) {
-	budget := c.coerceAdaptiveThinking()
+	budget := c.resolveThinkingBudget()
 	if budget == nil {
 		return
 	}
