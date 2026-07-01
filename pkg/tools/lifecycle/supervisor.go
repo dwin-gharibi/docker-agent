@@ -334,12 +334,17 @@ func (s *Supervisor) connect(ctx context.Context) (Session, error) {
 	if p == nil {
 		p = &pendingConnect{done: make(chan struct{})}
 		s.inflightConnect = p
+		// Detach from this caller's ctx: the goroutine outlives the Start
+		// that launched it (it may be adopted by a later Start after this one
+		// times out), so a cancellation of the original ctx must not surface
+		// as a stale context.Canceled to the adopter. Matches Stop and watch.
+		connectCtx := context.WithoutCancel(ctx)
 		go func() {
-			sess, err := s.connector.Connect(ctx)
+			sess, err := s.connector.Connect(connectCtx)
 			s.mu.Lock()
+			defer s.mu.Unlock()
 			p.res = connectResult{sess: sess, err: err}
 			close(p.done)
-			s.mu.Unlock()
 		}()
 	}
 	s.mu.Unlock()
@@ -361,6 +366,13 @@ func (s *Supervisor) connect(ctx context.Context) (Session, error) {
 		}
 		res := p.res
 		s.mu.Unlock()
+		// Defensive: a well-behaved connector returns (sess, nil) or
+		// (nil, err), but if it returns both, close the session rather than
+		// leak it since Start discards sess when err is non-nil.
+		if res.err != nil && res.sess != nil {
+			_ = res.sess.Close(context.WithoutCancel(ctx))
+			return nil, res.err
+		}
 		return res.sess, res.err
 	case <-timer.C:
 		return nil, wrap(ErrInitTimeout, fmt.Errorf("%q did not connect within %s", s.name, s.policy.StartupTimeout))

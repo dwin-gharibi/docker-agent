@@ -209,6 +209,31 @@ func TestSupervisor_StartAdoptsLateConnect(t *testing.T) {
 	assert.NilError(t, s.Stop(t.Context()))
 }
 
+// TestSupervisor_StartAdoptsLateConnectAfterFirstCtxCancelled verifies that
+// the in-flight Connect is detached from the first caller's context: when that
+// context is cancelled after the first Start times out, a connector that
+// respects ctx cancellation still completes, and the adopting Start does not
+// receive a stale context.Canceled.
+func TestSupervisor_StartAdoptsLateConnectAfterFirstCtxCancelled(t *testing.T) {
+	t.Parallel()
+
+	c := &blockingConnector{release: make(chan struct{}), session: newFakeSession()}
+	s := lifecycle.New("test", c, lifecycle.Policy{StartupTimeout: 20 * time.Millisecond})
+
+	ctx, cancel := context.WithCancel(t.Context())
+	assert.Check(t, errors.Is(s.Start(ctx), lifecycle.ErrInitTimeout))
+	// Cancelling the first caller's context must not poison the detached
+	// in-flight Connect: blockingConnector returns ctx.Err() if its ctx is done.
+	cancel()
+
+	close(c.release)
+	assert.NilError(t, s.Start(t.Context()))
+	assert.Check(t, is.Equal(s.State().State, lifecycle.StateReady))
+	assert.Check(t, is.Equal(c.calls.Load(), int32(1)))
+
+	assert.NilError(t, s.Stop(t.Context()))
+}
+
 // TestSupervisor_StopReapsLateConnect verifies that when Stop is called while a
 // timed-out Connect is still in flight, the session it eventually produces is
 // closed rather than leaked.
