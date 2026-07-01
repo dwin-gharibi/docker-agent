@@ -29,7 +29,7 @@ import (
 	"github.com/docker/docker-agent/pkg/version"
 )
 
-const AppName = "docker-agent"
+const AppName = version.AppName
 
 // initOTelSDK initializes OpenTelemetry SDK with OTLP exporter
 func initOTelSDK(ctx context.Context) (err error) {

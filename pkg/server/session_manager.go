@@ -29,6 +29,7 @@ import (
 	"github.com/docker/docker-agent/pkg/teamloader"
 	loaderdefaults "github.com/docker/docker-agent/pkg/teamloader/defaults"
 	"github.com/docker/docker-agent/pkg/tools"
+	"github.com/docker/docker-agent/pkg/version"
 )
 
 type activeRuntimes struct {
@@ -975,7 +976,7 @@ func (sm *SessionManager) runtimeForSession(ctx context.Context, sess *session.S
 		// Match the tracer scope used by the CLI; without this the
 		// API-server runtime's startSpan is a no-op so all the
 		// runtime.* spans go silent in HTTP-server mode.
-		runtime.WithTracer(otel.Tracer("cagent")),
+		runtime.WithTracer(otel.Tracer(version.AppName)),
 		runtime.WithModelSwitcherConfig(modelSwitcherCfg),
 	}
 	run, err := runtime.New(ctx, t, opts...)

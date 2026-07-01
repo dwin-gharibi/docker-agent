@@ -142,7 +142,7 @@ func (a *Agent) newRuntime(ctx context.Context, workingDir string) (runtime.Runt
 		runtime.WithProviderRegistry(a.providerRegistry),
 		// Match the CLI tracer scope; without this the ACP-mode
 		// runtime's `startSpan` is a no-op for every runtime.* span.
-		runtime.WithTracer(otel.Tracer("cagent")),
+		runtime.WithTracer(otel.Tracer(version.AppName)),
 	}
 	if workingDir != "" {
 		opts = append(opts, runtime.WithWorkingDir(workingDir))

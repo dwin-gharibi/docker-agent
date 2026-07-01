@@ -21,6 +21,7 @@ import (
 	"github.com/docker/docker-agent/pkg/session"
 	"github.com/docker/docker-agent/pkg/team"
 	cgenai "github.com/docker/docker-agent/pkg/telemetry/genai"
+	"github.com/docker/docker-agent/pkg/version"
 )
 
 // newDockerAgentAdapter creates a new ADK agent adapter from a docker agent team and agent name.
@@ -103,7 +104,7 @@ func runDockerAgent(ctx agent.InvocationContext, t *team.Team, agentName string,
 			// returns no-op spans for runtime.session, runtime.stream,
 			// runtime.tool.call, runtime.fallback, runtime.run_skill,
 			// hook events, and so on.
-			runtime.WithTracer(otel.Tracer("cagent")),
+			runtime.WithTracer(otel.Tracer(version.AppName)),
 		)
 		if err != nil {
 			yield(nil, fmt.Errorf("failed to create runtime: %w", err))

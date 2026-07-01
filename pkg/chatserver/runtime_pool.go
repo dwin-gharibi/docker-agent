@@ -9,6 +9,7 @@ import (
 
 	"github.com/docker/docker-agent/pkg/runtime"
 	"github.com/docker/docker-agent/pkg/team"
+	"github.com/docker/docker-agent/pkg/version"
 )
 
 // runtimePool keeps a small set of `runtime.Runtime` instances ready for
@@ -66,7 +67,7 @@ func (p *runtimePool) Get(agent string) (runtime.Runtime, error) {
 	// spans go silent in OpenAI-compatible chat-completions mode.
 	rt, err := runtime.New(p.ctx(), p.team,
 		runtime.WithCurrentAgent(agent),
-		runtime.WithTracer(otel.Tracer("cagent")),
+		runtime.WithTracer(otel.Tracer(version.AppName)),
 	)
 	if err != nil {
 		return nil, err

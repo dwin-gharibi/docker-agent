@@ -217,7 +217,7 @@ func CreateToolHandler(t *team.Team, agentName string) func(context.Context, *mc
 			// See pkg/a2a/adapter.go for rationale — without this
 			// the runtime's startSpan is a no-op when cagent runs as
 			// an MCP server, so all our runtime.* spans go silent.
-			runtime.WithTracer(otel.Tracer("cagent")),
+			runtime.WithTracer(otel.Tracer(version.AppName)),
 		)
 		if err != nil {
 			return nil, ToolOutput{}, fmt.Errorf("failed to create runtime: %w", err)

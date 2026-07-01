@@ -10,9 +10,8 @@ import (
 )
 
 const (
-	modulePath             = "github.com/docker/docker-agent"
-	appTracerName          = "docker-agent"
-	legacySharedTracerName = "cagent"
+	modulePath    = "github.com/docker/docker-agent"
+	appTracerName = "docker-agent"
 )
 
 // OTelTracerName enforces package-scoped OpenTelemetry instrumentation names.
@@ -21,15 +20,13 @@ const (
 // service. Spans created directly by a package should therefore use that
 // package's import path, so traces can be attributed to the code that emitted
 // them. Runtime wiring is the exception: it intentionally passes the shared
-// application tracer into runtime code. Prefer otel.Tracer(AppName) for that
-// path; existing otel.Tracer("cagent") calls are kept as legacy shared-tracer
-// exceptions.
+// application tracer into runtime code via otel.Tracer(AppName).
 //
 // Per-line suppression: `//rubocop:disable Lint/OTelTracerName`.
 var OTelTracerName = &cop.Func{
 	Meta: cop.Meta{
 		Name:        "Lint/OTelTracerName",
-		Description: "otel.Tracer names must be AppName, cagent, or the current package import path",
+		Description: "otel.Tracer names must be AppName or the current package import path",
 		Severity:    cop.Error,
 	},
 	Types: true,
@@ -42,11 +39,16 @@ var OTelTracerName = &cop.Func{
 			if !isOTelTracerCall(p.Info, call) || len(call.Args) == 0 {
 				return
 			}
-			name, ok := tracerName(p, call.Args[0])
-			if !ok || name == expected || isSharedTracerName(p, call.Args[0], name) {
+			arg := call.Args[0]
+			name, ok := tracerName(p, arg)
+			if !ok || name == expected || isAppName(p.Info, arg, name) {
 				return
 			}
-			p.Reportf(call.Args[0], "otel.Tracer name must be %q for this package, AppName for the shared application tracer, or %q for legacy shared runtime tracing; got %q", expected, legacySharedTracerName, name)
+			if name == "cagent" {
+				p.Report(arg, `use otel.Tracer(AppName) instead of otel.Tracer("cagent") for the shared application tracer`)
+				return
+			}
+			p.Reportf(arg, "otel.Tracer name must be %q for this package or AppName for the shared application tracer; got %q", expected, name)
 		})
 	},
 }
@@ -70,35 +72,48 @@ func packageImportPath(pkgPath string) string {
 	return modulePath + "/" + strings.TrimPrefix(pkgPath, "./")
 }
 
-func isSharedTracerName(p *cop.Pass, expr ast.Expr, name string) bool {
-	if name == legacySharedTracerName {
-		return true
+func isAppName(info *types.Info, expr ast.Expr, name string) bool {
+	if name != appTracerName {
+		return false
 	}
-	ident, ok := expr.(*ast.Ident)
-	return ok && ident.Name == "AppName" && name == appTracerName && packageImportPath(p.Package.Path()) == modulePath+"/cmd/root"
+	c, ok := constObject(info, expr)
+	return ok && c.Name() == "AppName"
 }
 
-func stringConstValue(info *types.Info, ident *ast.Ident) (string, bool) {
-	if info == nil {
-		return "", false
-	}
-	c, ok := info.Uses[ident].(*types.Const)
+func constStringValue(info *types.Info, expr ast.Expr) (string, bool) {
+	c, ok := constObject(info, expr)
 	if !ok || c.Val().Kind() != constant.String {
 		return "", false
 	}
 	return constant.StringVal(c.Val()), true
 }
 
+func constObject(info *types.Info, expr ast.Expr) (*types.Const, bool) {
+	if info == nil {
+		return nil, false
+	}
+	switch e := expr.(type) {
+	case *ast.Ident:
+		c, ok := info.Uses[e].(*types.Const)
+		return c, ok
+	case *ast.SelectorExpr:
+		c, ok := info.Uses[e.Sel].(*types.Const)
+		return c, ok
+	default:
+		return nil, false
+	}
+}
+
 func tracerName(p *cop.Pass, expr ast.Expr) (string, bool) {
 	if name, ok := stringLit(expr); ok {
+		return name, true
+	}
+	if name, ok := constStringValue(p.Info, expr); ok {
 		return name, true
 	}
 	ident, ok := expr.(*ast.Ident)
 	if !ok {
 		return "", false
-	}
-	if name, ok := stringConstValue(p.Info, ident); ok {
-		return name, true
 	}
 	if val, ok := p.StringConsts()[ident.Name]; ok {
 		return val, true
