@@ -161,7 +161,10 @@ type agentPickerModel struct {
 func newAgentPickerModel(choices []agentChoice) *agentPickerModel {
 	vp := viewport.New()
 	vp.FillHeight = true
-	vp.SoftWrap = true
+	// Truncate long lines instead of soft-wrapping them: the config's long
+	// instruction blocks would otherwise wrap across dozens of rows and bloat
+	// the viewer. Horizontal scrolling remains available.
+	vp.SoftWrap = false
 	return &agentPickerModel{
 		choices:        choices,
 		details:        vp,
@@ -272,8 +275,8 @@ func (m *agentPickerModel) handleMouseClick(msg tea.MouseClickMsg) (tea.Model, t
 // moves or resizes while scrolling. They shrink only when the terminal is too
 // small to hold the preferred size.
 const (
-	detailsDialogWidth  = 90
-	detailsDialogHeight = 28
+	detailsDialogWidth  = 110
+	detailsDialogHeight = 36
 
 	// detailsChromeRows is the number of rows used by the dialog around the
 	// scrollable content: border (2) + padding (2) + title (1) + help (1).
