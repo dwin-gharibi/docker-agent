@@ -4,7 +4,6 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 
 	"github.com/docker/docker-agent/pkg/tui/styles"
 )
@@ -29,6 +28,21 @@ type Model struct {
 
 	trackChar string
 	thumbChar string
+
+	cache viewCache
+}
+
+// viewCache memoizes the rendered scrollbar. View() is called on every frame
+// while scrolling, but its output only changes when the thumb geometry moves
+// or the styled cells change (drag state, theme switch). The styled cells are
+// part of the key, so a theme change naturally invalidates the cache.
+type viewCache struct {
+	height      int
+	thumbTop    int
+	thumbHeight int
+	trackCell   string
+	thumbCell   string
+	result      string
 }
 
 func New() *Model {
@@ -102,28 +116,43 @@ func (m *Model) View() string {
 	}
 
 	thumbTop, thumbHeight := m.calculateThumbPosition()
-	lines := make([]string, m.height)
 
-	for i := range m.height {
-		var style lipgloss.Style
-		var char string
+	thumbStyle := styles.ThumbStyle
+	if m.dragging {
+		thumbStyle = styles.ThumbActiveStyle
+	}
+	// Render each styled cell once instead of once per line.
+	trackCell := styles.TrackStyle.Render(strings.Repeat(m.trackChar, m.width))
+	thumbCell := thumbStyle.Render(strings.Repeat(m.thumbChar, m.width))
 
-		if i >= thumbTop && i < thumbTop+thumbHeight {
-			if m.dragging {
-				style = styles.ThumbActiveStyle
-			} else {
-				style = styles.ThumbStyle
-			}
-			char = m.thumbChar
-		} else {
-			style = styles.TrackStyle
-			char = m.trackChar
-		}
-
-		lines[i] = style.Render(strings.Repeat(char, m.width))
+	c := &m.cache
+	if c.result != "" && c.height == m.height && c.thumbTop == thumbTop && c.thumbHeight == thumbHeight &&
+		c.trackCell == trackCell && c.thumbCell == thumbCell {
+		return c.result
 	}
 
-	return strings.Join(lines, "\n")
+	var b strings.Builder
+	b.Grow((max(len(trackCell), len(thumbCell)) + 1) * m.height)
+	for i := range m.height {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		if i >= thumbTop && i < thumbTop+thumbHeight {
+			b.WriteString(thumbCell)
+		} else {
+			b.WriteString(trackCell)
+		}
+	}
+
+	m.cache = viewCache{
+		height:      m.height,
+		thumbTop:    thumbTop,
+		thumbHeight: thumbHeight,
+		trackCell:   trackCell,
+		thumbCell:   thumbCell,
+		result:      b.String(),
+	}
+	return m.cache.result
 }
 
 func (m *Model) calculateThumbPosition() (top, height int) {
