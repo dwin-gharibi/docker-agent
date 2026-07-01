@@ -11,7 +11,6 @@ import (
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/docker/docker-agent/pkg/tui/components/scrollbar"
@@ -350,29 +349,43 @@ func (m *Model) compose(lines []string, baseLine int) string {
 
 	contentView := strings.Join(lines, "\n")
 
-	// Build the right-side column (scrollbar, placeholder, or nothing)
-	if m.NeedsScrollbar() {
-		return lipgloss.JoinHorizontal(lipgloss.Top, contentView, m.buildColumn(m.gapWidth), m.sb.View())
+	// Zip the right-side column (scrollbar or placeholder) directly: every
+	// line is exactly contentWidth wide at this point, so JoinHorizontal's
+	// per-line re-measuring would be pure overhead.
+	switch {
+	case m.NeedsScrollbar():
+		sbLines := m.sb.ViewLines()
+		gap := strings.Repeat(" ", m.gapWidth)
+		var b strings.Builder
+		b.Grow(len(contentView) + len(lines)*(m.gapWidth+scrollbar.Width*4))
+		for i, line := range lines {
+			if i > 0 {
+				b.WriteByte('\n')
+			}
+			b.WriteString(line)
+			b.WriteString(gap)
+			if i < len(sbLines) {
+				b.WriteString(sbLines[i])
+			} else {
+				b.WriteString(strings.Repeat(" ", scrollbar.Width))
+			}
+		}
+		return b.String()
+	case m.reserveScrollbarSpace:
+		blank := strings.Repeat(" ", m.gapWidth+scrollbar.Width)
+		var b strings.Builder
+		b.Grow(len(contentView) + len(lines)*len(blank))
+		for i, line := range lines {
+			if i > 0 {
+				b.WriteByte('\n')
+			}
+			b.WriteString(line)
+			b.WriteString(blank)
+		}
+		return b.String()
+	default:
+		return contentView
 	}
-	if m.reserveScrollbarSpace {
-		return lipgloss.JoinHorizontal(lipgloss.Top, contentView, m.buildColumnN(m.gapWidth+scrollbar.Width, len(lines)))
-	}
-	return contentView
-}
-
-// buildColumn returns a column of spaces with the given width and m.height lines.
-func (m *Model) buildColumn(colWidth int) string {
-	return m.buildColumnN(colWidth, m.height)
-}
-
-// buildColumnN returns a column of spaces with the given width and n lines.
-func (m *Model) buildColumnN(colWidth, n int) string {
-	col := strings.Repeat(" ", colWidth)
-	lines := make([]string, n)
-	for i := range lines {
-		lines[i] = col
-	}
-	return strings.Join(lines, "\n")
 }
 
 func (m *Model) updateScrollbarPosition() {

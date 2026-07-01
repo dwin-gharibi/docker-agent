@@ -42,6 +42,7 @@ type viewCache struct {
 	thumbHeight int
 	trackCell   string
 	thumbCell   string
+	lines       []string
 	result      string
 }
 
@@ -111,8 +112,18 @@ func (m *Model) handleClick(y int) (*Model, tea.Cmd) {
 }
 
 func (m *Model) View() string {
-	if m.height <= 0 || m.totalHeight <= m.viewHeight {
+	if m.ViewLines() == nil {
 		return ""
+	}
+	return m.cache.result
+}
+
+// ViewLines returns the rendered scrollbar as one string per track line.
+// The returned slice is shared with the internal cache and must not be
+// mutated. Returns nil when no scrollbar is needed.
+func (m *Model) ViewLines() []string {
+	if m.height <= 0 || m.totalHeight <= m.viewHeight {
+		return nil
 	}
 
 	thumbTop, thumbHeight := m.calculateThumbPosition()
@@ -126,21 +137,17 @@ func (m *Model) View() string {
 	thumbCell := thumbStyle.Render(strings.Repeat(m.thumbChar, m.width))
 
 	c := &m.cache
-	if c.result != "" && c.height == m.height && c.thumbTop == thumbTop && c.thumbHeight == thumbHeight &&
+	if c.lines != nil && c.height == m.height && c.thumbTop == thumbTop && c.thumbHeight == thumbHeight &&
 		c.trackCell == trackCell && c.thumbCell == thumbCell {
-		return c.result
+		return c.lines
 	}
 
-	var b strings.Builder
-	b.Grow((max(len(trackCell), len(thumbCell)) + 1) * m.height)
-	for i := range m.height {
-		if i > 0 {
-			b.WriteByte('\n')
-		}
+	lines := make([]string, m.height)
+	for i := range lines {
 		if i >= thumbTop && i < thumbTop+thumbHeight {
-			b.WriteString(thumbCell)
+			lines[i] = thumbCell
 		} else {
-			b.WriteString(trackCell)
+			lines[i] = trackCell
 		}
 	}
 
@@ -150,9 +157,10 @@ func (m *Model) View() string {
 		thumbHeight: thumbHeight,
 		trackCell:   trackCell,
 		thumbCell:   thumbCell,
-		result:      b.String(),
+		lines:       lines,
+		result:      strings.Join(lines, "\n"),
 	}
-	return m.cache.result
+	return m.cache.lines
 }
 
 func (m *Model) calculateThumbPosition() (top, height int) {
