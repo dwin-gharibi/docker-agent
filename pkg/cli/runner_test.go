@@ -227,6 +227,38 @@ func TestMaxIterationsRejectInJSONModeWithoutYolo(t *testing.T) {
 	assert.Equal(t, resumes[0].Type, runtime.ResumeTypeReject)
 }
 
+// JSON mode has no stdin user — a ToolCallConfirmationEvent must be
+// rejected even under --yolo (AutoApprove=true), because the event
+// only fires when a preempt-yolo hook overrode yolo. Without this,
+// eval containers hang on the Resume channel.
+func TestToolCallConfirmationRejectedInJSONModeUnderYolo(t *testing.T) {
+	t.Parallel()
+
+	rt := &mockRuntime{
+		events: []runtime.Event{
+			&runtime.ToolCallConfirmationEvent{
+				Type: "tool_call_confirmation",
+				ToolCall: tools.ToolCall{
+					ID:       "call-1",
+					Function: tools.FunctionCall{Name: "shell", Arguments: `{"cmd":"rm -rf /tmp/x"}`},
+				},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	out := NewPrinter(&buf)
+	sess := session.New()
+	cfg := Config{AutoApprove: true, OutputJSON: true}
+
+	err := Run(t.Context(), out, cfg, rt, sess, []string{"hello"})
+	assert.NilError(t, err)
+
+	resumes := rt.getResumes()
+	assert.Equal(t, len(resumes), 1, "one Resume expected")
+	assert.Equal(t, resumes[0].Type, runtime.ResumeTypeReject, "JSON+yolo must reject confirmation events")
+}
+
 func TestElicitationAutoDeclineInJSONMode(t *testing.T) {
 	t.Parallel()
 

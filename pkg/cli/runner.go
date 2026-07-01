@@ -118,9 +118,11 @@ func Run(ctx context.Context, out *Printer, cfg Config, rt runtime.Runtime, sess
 			for event := range rt.RunStream(ctx, sess) {
 				switch e := event.(type) {
 				case *runtime.ToolCallConfirmationEvent:
-					if !cfg.AutoApprove {
-						rt.Resume(ctx, runtime.ResumeReject(""))
-					}
+					// JSON mode has no user at stdin — reject unconditionally.
+					// A confirmation event under AutoApprove means a
+					// preempt-yolo hook overrode --yolo; the safe answer is
+					// still Reject (the hook said Ask, not Approve).
+					rt.Resume(ctx, runtime.ResumeReject(""))
 				case *runtime.ElicitationRequestEvent:
 					_ = rt.ResumeElicitation(ctx, "decline", nil)
 				case *runtime.MaxIterationsReachedEvent:
