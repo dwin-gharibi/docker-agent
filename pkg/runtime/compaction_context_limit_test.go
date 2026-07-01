@@ -56,6 +56,7 @@ func TestProviderContextLimit(t *testing.T) {
 		{name: "missing key", opts: map[string]any{"other": 123}, want: 0},
 		{name: "int", opts: map[string]any{"context_size": 32768}, want: 32768},
 		{name: "int64", opts: map[string]any{"context_size": int64(65536)}, want: 65536},
+		{name: "uint64 (yaml)", opts: map[string]any{"context_size": uint64(262144)}, want: 262144},
 		{name: "float64 (json)", opts: map[string]any{"context_size": float64(8192)}, want: 8192},
 		{name: "string decimal", opts: map[string]any{"context_size": "16384"}, want: 16384},
 		{name: "string with whitespace", opts: map[string]any{"context_size": "  4096 "}, want: 4096},

@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1043,6 +1045,58 @@ func (m *ModelConfig) DisplayOrModel() string {
 func (m *ModelConfig) UnloadAPI() string {
 	v, _ := m.ProviderOpts["unload_api"].(string)
 	return v
+}
+
+// ContextSizeFromProviderOpts reads a positive `context_size` from a
+// provider_opts map, returning 0 when the key is absent, non-positive, or not
+// parseable as an integer. Accepted shapes mirror what the YAML/JSON decoders
+// produce: goccy/go-yaml decodes a positive integer as uint64 (and a negative
+// one as int64), JSON decodes numbers as float64, and env expansion can leave a
+// decimal string. Shared by the runtime (context-limit resolution) and the
+// provider clients (max_tokens clamping) so the two never diverge on how
+// context_size is interpreted.
+func ContextSizeFromProviderOpts(opts map[string]any) int64 {
+	v, ok := opts["context_size"]
+	if !ok {
+		return 0
+	}
+	var n int64
+	switch t := v.(type) {
+	case int64:
+		n = t
+	case int:
+		n = int64(t)
+	case int32:
+		n = int64(t)
+	case uint64:
+		if t > math.MaxInt64 {
+			return 0
+		}
+		n = int64(t)
+	case uint:
+		if uint64(t) > math.MaxInt64 {
+			return 0
+		}
+		n = int64(t)
+	case uint32:
+		n = int64(t)
+	case float64:
+		n = int64(t)
+	case float32:
+		n = int64(t)
+	case string:
+		parsed, err := strconv.ParseInt(strings.TrimSpace(t), 10, 64)
+		if err != nil {
+			return 0
+		}
+		n = parsed
+	default:
+		return 0
+	}
+	if n <= 0 {
+		return 0
+	}
+	return n
 }
 
 // ExpandEnv rewrites the model config's value-bearing string fields in place by

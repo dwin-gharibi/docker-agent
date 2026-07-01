@@ -244,7 +244,7 @@
         },
         "max_tokens": {
           "type": "integer",
-          "description": "Default maximum number of tokens for models using this provider."
+          "description": "Default maximum output tokens per response for models using this provider. This is the completion budget, NOT the context window: OpenAI-compatible servers require prompt_tokens + max_tokens to fit the context window, so a value close to the window leaves no room for the prompt. Set provider_opts.context_size to declare the window."
         },
         "top_p": {
           "type": "number",
@@ -1443,7 +1443,7 @@
         },
         "max_tokens": {
           "type": "integer",
-          "description": "Maximum number of tokens",
+          "description": "Maximum output tokens per response (the completion budget), NOT the context window. OpenAI-compatible servers require prompt_tokens + max_tokens to fit the context window, so a value close to the window leaves no room for the prompt. Set provider_opts.context_size to declare the window.",
           "minimum": 1
         },
         "top_p": {

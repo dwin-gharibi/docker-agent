@@ -66,6 +66,7 @@ func Load(ctx context.Context, source Source) (*latest.Config, error) {
 	}
 
 	warnExpansionMismatches(ctx, slog.Default(), &config)
+	warnMaxTokensVsContextWindow(ctx, slog.Default(), &config)
 
 	return &config, nil
 }
