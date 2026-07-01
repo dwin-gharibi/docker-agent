@@ -418,20 +418,23 @@ func (r *Runner) runDockerAgentInContainer(ctx context.Context, imageID string, 
 	)
 
 	var env []string
+	// addEnv forwards a variable to the container: "-e NAME" tells docker to
+	// pass it through, and NAME=VALUE sets it on the docker process.
+	addEnv := func(name, value string) {
+		args = append(args, "-e", name)
+		env = append(env, name+"="+value)
+	}
 
 	if r.runConfig.ModelsGateway != "" {
-		args = append(args, "-e", "DOCKER_AGENT_MODELS_GATEWAY")
-		env = append(env, "DOCKER_AGENT_MODELS_GATEWAY="+r.runConfig.ModelsGateway)
+		addEnv("DOCKER_AGENT_MODELS_GATEWAY", r.runConfig.ModelsGateway)
 
 		if token, ok := r.runConfig.EnvProvider().Get(ctx, environment.DockerDesktopTokenEnv); ok && token != "" {
-			args = append(args, "-e", environment.DockerDesktopTokenEnv)
-			env = append(env, environment.DockerDesktopTokenEnv+"="+token)
+			addEnv(environment.DockerDesktopTokenEnv, token)
 		}
 	} else {
 		for _, name := range config.ProviderAPIKeyEnvVars() {
 			if val, ok := r.runConfig.EnvProvider().Get(ctx, name); ok && val != "" {
-				args = append(args, "-e", name)
-				env = append(env, name+"="+val)
+				addEnv(name, val)
 			}
 		}
 	}
@@ -440,11 +443,9 @@ func (r *Runner) runDockerAgentInContainer(ctx context.Context, imageID string, 
 	// Format: KEY or KEY=VALUE
 	for _, entry := range r.EnvVars {
 		if key, val, hasValue := strings.Cut(entry, "="); hasValue && key != "" {
-			args = append(args, "-e", key)
-			env = append(env, key+"="+val)
+			addEnv(key, val)
 		} else if val, ok := r.runConfig.EnvProvider().Get(ctx, entry); ok && entry != "" {
-			args = append(args, "-e", entry)
-			env = append(env, entry+"="+val)
+			addEnv(entry, val)
 		}
 	}
 
