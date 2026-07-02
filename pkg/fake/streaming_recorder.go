@@ -2,6 +2,7 @@ package fake
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"net/http"
 	"sync"
@@ -9,6 +10,15 @@ import (
 	"github.com/goccy/go-yaml"
 	"gopkg.in/dnaeon/go-vcr.v4/pkg/cassette"
 )
+
+type recordURLKey struct{}
+
+// WithRecordURL overrides the URL stored in the cassette for a request.
+// Used when recording through an upstream models gateway so interactions are
+// saved under the canonical provider URL and stay replayable.
+func WithRecordURL(ctx context.Context, url string) context.Context {
+	return context.WithValue(ctx, recordURLKey{}, url)
+}
 
 // StreamingRecorder wraps an http.RoundTripper to record interactions while
 // allowing streaming responses to pass through in real-time.
@@ -88,6 +98,11 @@ func (r *StreamingRecorder) addInteraction(req *http.Request, reqBody []byte, re
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	recordedURL := req.URL.String()
+	if override, ok := req.Context().Value(recordURLKey{}).(string); ok && override != "" {
+		recordedURL = override
+	}
+
 	interaction := cassette.Interaction{
 		Request: cassette.Request{
 			Proto:         req.Proto,
@@ -96,7 +111,7 @@ func (r *StreamingRecorder) addInteraction(req *http.Request, reqBody []byte, re
 			ContentLength: req.ContentLength,
 			Host:          req.Host,
 			Method:        req.Method,
-			URL:           req.URL.String(),
+			URL:           recordedURL,
 			Body:          string(reqBody),
 			// Headers intentionally omitted for security
 		},

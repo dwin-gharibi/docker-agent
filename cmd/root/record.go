@@ -24,8 +24,10 @@ func setupFakeProxy(ctx context.Context, fakeResponses string, streamDelayMs int
 
 // setupRecordingProxy starts a recording proxy if recordPath is non-empty.
 // It configures the runtime config's ModelsGateway to point to the proxy.
+// Any models gateway already configured becomes the proxy's upstream, so
+// recording keeps routing (and auth) through the user's gateway.
 func setupRecordingProxy(ctx context.Context, recordPath string, runConfig *config.RuntimeConfig) (cassettePath string, cleanup func() error, err error) {
-	cassettePath, proxyURL, cleanupFn, err := recording.SetupRecordingProxy(ctx, recordPath)
+	cassettePath, proxyURL, cleanupFn, err := recording.SetupRecordingProxy(ctx, recordPath, runConfig.ModelsGateway)
 	if err != nil {
 		return "", nil, err
 	}

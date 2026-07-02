@@ -43,9 +43,11 @@ func SetupFakeProxy(ctx context.Context, fakeResponses string, streamDelayMs int
 // SetupRecordingProxy starts a recording proxy if recordPath is non-empty.
 // It handles auto-generating a filename when recordPath is "true" (from NoOptDefVal),
 // and normalizes the path by stripping any .yaml suffix.
+// When upstreamGateway is non-empty, recorded requests are forwarded through
+// that models gateway instead of the providers' public endpoints.
 // Returns the cassette path (with .yaml extension), the proxy URL, and a cleanup function.
 // The cleanup function must be called when done (typically via defer).
-func SetupRecordingProxy(ctx context.Context, recordPath string) (cassettePath, proxyURL string, cleanup func() error, err error) {
+func SetupRecordingProxy(ctx context.Context, recordPath, upstreamGateway string) (cassettePath, proxyURL string, cleanup func() error, err error) {
 	if recordPath == "" {
 		return "", "", noop, nil
 	}
@@ -57,7 +59,7 @@ func SetupRecordingProxy(ctx context.Context, recordPath string) (cassettePath, 
 		recordPath = strings.TrimSuffix(recordPath, ".yaml")
 	}
 
-	proxyURL, cleanupFn, err := fake.StartRecordingProxy(ctx, recordPath)
+	proxyURL, cleanupFn, err := fake.StartRecordingProxy(ctx, recordPath, upstreamGateway)
 	if err != nil {
 		return "", "", nil, fmt.Errorf("failed to start recording proxy: %w", err)
 	}
