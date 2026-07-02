@@ -1,15 +1,17 @@
-# markdownlint configuration for Jekyll docs
+# markdownlint configuration for the docs.
 #
-# These docs mix Markdown with HTML blocks (callouts, cards, feature grids).
-# Rules that conflict with this pattern are disabled.
+# Content is portable Markdown (GFM alerts, relative .md links) that
+# renders on GitHub Pages (Jekyll) and docs.docker.com (Hugo module
+# mount). Rules that conflict with the house style are disabled.
 
 config:
   default: true
 
-  # Allow inline HTML — callouts, cards, and feature-grids are HTML
+  # Allow inline HTML — the github.io landing page (index.md) keeps
+  # theme HTML, and content pages use <kbd> for keyboard keys
   MD033: false
 
-  # Don't enforce line length — HTML blocks and tables often exceed 80 chars
+  # Don't enforce line length — tables often exceed 80 chars
   MD013: false
 
   # Allow multiple top-level headings — front matter title + # Heading is normal
@@ -22,6 +24,21 @@ config:
   # Allow trailing punctuation in headings (e.g. "xAI (Grok)")
   MD026:
     punctuation: ".,;:!。，；：！"
+
+  # House style shows shell prompts as "$ cmd" without output
+  MD014: false
+
+  # Adjacent GFM alerts are separate blockquotes by design
+  MD028: false
+
+  # The italic lead line under each page title is intentional
+  MD036: false
+
+  # Emphasis style is mixed on purpose (_lead lines_, **bold**, *stars*)
+  MD049: false
+
+  # Table pipe alignment is not enforced
+  MD060: false
 
 # Glob patterns
 globs:

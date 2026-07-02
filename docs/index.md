@@ -104,6 +104,7 @@ while True:
   # …parse tool_use blocks, dispatch, append, loop…
   if resp.stop_reason == "end_turn": break
 ```
+
   </div>
   <div class="compare-side compare-with" markdown="1">
     <div class="compare-label">With Docker Agent</div>
@@ -123,6 +124,7 @@ agents:
 ```bash
 $ docker agent run agent.yaml
 ```
+
   </div>
 </div>
 
