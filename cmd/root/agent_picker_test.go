@@ -13,6 +13,23 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestRenderTags(t *testing.T) {
+	t.Parallel()
+
+	// No tags renders nothing.
+	assert.Empty(t, renderTags(nil, 40))
+	assert.Empty(t, renderTags([]string{"go"}, 0))
+
+	// Tags render as "#tag" chips joined by spaces (ANSI stripped).
+	assert.Equal(t, "#go #cli", ansi.Strip(renderTags([]string{"go", "cli"}, 40)))
+
+	// Blank/whitespace tags are skipped.
+	assert.Equal(t, "#go", ansi.Strip(renderTags([]string{" ", "go"}, 40)))
+
+	// Chips that don't fit the width are dropped instead of overflowing.
+	assert.Equal(t, "#go", ansi.Strip(renderTags([]string{"go", "verylongtag"}, 4)))
+}
+
 func TestParseAgentPickerRefs(t *testing.T) {
 	t.Parallel()
 
@@ -60,7 +77,7 @@ func TestAgentPickerRenderNoPanic(t *testing.T) {
 	t.Parallel()
 
 	choices := []agentChoice{
-		{ref: "default", description: "A helpful AI assistant", yaml: "agents:\n  root:\n    model: auto\n"},
+		{ref: "default", description: "A helpful AI assistant", tags: []string{"general", "assistant"}, yaml: "agents:\n  root:\n    model: auto\n"},
 		{ref: "agentcatalog/some-really-long-agent-reference-name", description: strings.Repeat("very long description ", 20)},
 		{ref: "broken", err: errors.New("multi\nline\nerror that is also quite long and should be truncated cleanly")},
 	}

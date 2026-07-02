@@ -1,3 +1,8 @@
+metadata:
+  tags:
+    - coding
+    - agentic
+
 models:
   default:
     first_available:

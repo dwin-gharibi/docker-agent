@@ -31,10 +31,11 @@ var errAgentPickerCancelled = errors.New("agent selection cancelled")
 
 // agentChoice is a single entry in the agent picker.
 type agentChoice struct {
-	ref         string // agent reference as passed on the command line
-	description string // one-line description loaded from the agent config
-	yaml        string // raw config YAML, shown in the details dialog
-	err         error  // non-nil when the config could not be loaded
+	ref         string   // agent reference as passed on the command line
+	description string   // one-line description loaded from the agent config
+	tags        []string // metadata tags shown as coloured chips
+	yaml        string   // raw config YAML, shown in the details dialog
+	err         error    // non-nil when the config could not be loaded
 }
 
 // loadAgentChoices resolves and loads metadata for each ref so the picker can
@@ -71,6 +72,7 @@ func loadAgentChoices(ctx context.Context, refs []string, env environment.Provid
 		if cfg.Metadata.Description != "" {
 			choice.description = cfg.Metadata.Description
 		}
+		choice.tags = cfg.Metadata.Tags
 		choices = append(choices, choice)
 	}
 	return choices
@@ -159,7 +161,10 @@ type agentPickerModel struct {
 func newAgentPickerModel(choices []agentChoice) *agentPickerModel {
 	vp := viewport.New()
 	vp.FillHeight = true
-	vp.SoftWrap = true
+	// Truncate long lines instead of soft-wrapping them: the config's long
+	// instruction blocks would otherwise wrap across dozens of rows and bloat
+	// the viewer. Horizontal scrolling remains available.
+	vp.SoftWrap = false
 	return &agentPickerModel{
 		choices:        choices,
 		details:        vp,
@@ -270,12 +275,13 @@ func (m *agentPickerModel) handleMouseClick(msg tea.MouseClickMsg) (tea.Model, t
 // moves or resizes while scrolling. They shrink only when the terminal is too
 // small to hold the preferred size.
 const (
-	detailsDialogWidth  = 90
-	detailsDialogHeight = 28
+	detailsDialogWidth  = 110
+	detailsDialogHeight = 36
 
 	// detailsChromeRows is the number of rows used by the dialog around the
-	// scrollable content: border (2) + padding (2) + title (1) + help (1).
-	detailsChromeRows = 6
+	// scrollable content: border (2) + padding (2) + title (1) + blank (1) +
+	// help (1).
+	detailsChromeRows = 7
 	// detailsChromeCols is the number of columns used by the dialog around
 	// the content: border (2) + padding (4) + scrollbar (1).
 	detailsChromeCols = 2 + 4 + scrollbar.Width
@@ -425,29 +431,33 @@ func (m *agentPickerModel) View() tea.View {
 
 // agent picker card dimensions.
 const (
-	agentPickerCardWidth    = 64
+	agentPickerCardWidth    = 70
 	agentPickerMinCardWidth = 24
 
-	// agentPickerCardHeight is the rendered height of a card: 2 content rows
-	// (header + detail) wrapped by a top and bottom border.
-	agentPickerCardHeight = 4
+	// agentPickerCardHeight is the rendered height of a card: 3 content rows
+	// (header + detail + tags) wrapped by one row of vertical padding and a
+	// border on the top and bottom.
+	agentPickerCardHeight = 7
+
+	// agentPickerCardGap is the number of blank rows between adjacent cards.
+	agentPickerCardGap = 0
 
 	// agentPickerCardsTop is the number of rows from the panel's top edge to
-	// the first card: border (1) + padding (1) + title (1) + subtitle (1) +
-	// blank separator (1).
-	agentPickerCardsTop = 5
+	// the first card: border (1) + padding (1) + title (1) + blank (1) +
+	// subtitle (1) + blank separator (1).
+	agentPickerCardsTop = 6
 	// agentPickerCardsLeft is the number of columns from the panel's left
-	// edge to a card: border (1) + padding (3).
-	agentPickerCardsLeft = 4
+	// edge to a card: border (1) + padding (4).
+	agentPickerCardsLeft = 5
 )
 
 // cardWidth returns the card width to use, shrinking to fit narrow terminals.
-// The card is wrapped by the outer panel border (1) + padding (3) on each
+// The card is wrapped by the outer panel border (1) + padding (4) on each
 // side, so it must leave room for that chrome.
 func (m *agentPickerModel) cardWidth() int {
 	w := agentPickerCardWidth
 	if m.width > 0 {
-		if fit := m.width - 2*(1+3); fit < w {
+		if fit := m.width - 2*(1+4); fit < w {
 			w = fit
 		}
 	}
@@ -472,7 +482,13 @@ func (m *agentPickerModel) cardAt(x, y int) (int, bool) {
 	if relX < 0 || relX >= cardWidth || relY < 0 {
 		return 0, false
 	}
-	i := relY / agentPickerCardHeight
+	// Cards are stacked with a blank gap between them; a click landing in the
+	// gap belongs to no card.
+	stride := agentPickerCardHeight + agentPickerCardGap
+	if relY%stride >= agentPickerCardHeight {
+		return 0, false
+	}
+	i := relY / stride
 	if i >= len(m.choices) {
 		return 0, false
 	}
@@ -491,10 +507,12 @@ func (m *agentPickerModel) panelSize() (w, h int) {
 		lipgloss.Width(subtitle),
 		lipgloss.Width(help),
 	)
-	// Horizontal chrome: border (1) + padding (3) on each side.
-	w = contentWidth + 2*(1+3)
-	// Content rows: title + subtitle + blank + cards + blank + help.
-	rows := 3 + len(m.choices)*agentPickerCardHeight + 2
+	// Horizontal chrome: border (1) + padding (4) on each side.
+	w = contentWidth + 2*(1+4)
+	// Content rows: title + blank + subtitle + blank + cards (with gaps) +
+	// blank + help.
+	cardRows := len(m.choices)*agentPickerCardHeight + max(len(m.choices)-1, 0)*agentPickerCardGap
+	rows := 4 + cardRows + 2
 	// Vertical chrome: border (2) + padding (2).
 	h = rows + 4
 	return w, h
@@ -520,16 +538,20 @@ func (m *agentPickerModel) headerText() (title, subtitle, help string) {
 func (m *agentPickerModel) render() string {
 	title, subtitle, help := m.headerText()
 
-	cards := make([]string, 0, len(m.choices))
 	cardWidth := m.cardWidth()
+	blocks := make([]string, 0, len(m.choices)*2)
 	for i, choice := range m.choices {
-		cards = append(cards, m.renderCard(choice, cardWidth, i == m.cursor))
+		if i > 0 && agentPickerCardGap > 0 {
+			blocks = append(blocks, strings.Repeat("\n", agentPickerCardGap-1))
+		}
+		blocks = append(blocks, m.renderCard(choice, cardWidth, i == m.cursor))
 	}
-	list := lipgloss.JoinVertical(lipgloss.Left, cards...)
+	list := lipgloss.JoinVertical(lipgloss.Left, blocks...)
 
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,
 		title,
+		"",
 		subtitle,
 		"",
 		list,
@@ -540,7 +562,7 @@ func (m *agentPickerModel) render() string {
 	return styles.BaseStyle.
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(styles.BorderSecondary).
-		Padding(1, 3).
+		Padding(1, 4).
 		Render(content)
 }
 
@@ -566,14 +588,19 @@ func (m *agentPickerModel) renderDetails() string {
 		bar,
 	)
 
-	help := styles.DialogHelpStyle.
+	help := styles.MutedStyle.
 		Width(contentWidth).
-		Render("↑↓ scroll  •  " + percentLabel(m.details.ScrollPercent()) + "   esc/? close")
+		Render(strings.Join([]string{
+			"↑↓ scroll",
+			percentLabel(m.details.ScrollPercent()),
+			"esc/? close",
+		}, "   "))
 
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,
 		title,
 		body,
+		"",
 		help,
 	)
 
@@ -616,14 +643,54 @@ func (m *agentPickerModel) renderCard(choice agentChoice, cardWidth int, selecte
 		detail = styles.MutedStyle.Render("No description available")
 	}
 
-	card := lipgloss.JoinVertical(lipgloss.Left, header, "  "+detail)
+	card := lipgloss.JoinVertical(lipgloss.Left, header, "  "+detail, "  "+renderTags(choice.tags, detailWidth))
 
 	return styles.BaseStyle.
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(borderColor).
 		Width(cardWidth).
-		Padding(0, 1).
+		Padding(1, 1).
 		Render(card)
+}
+
+// tagChipStyles are the rotating colour palette used to render tag chips so
+// adjacent tags are visually distinct.
+var tagChipStyles = []lipgloss.Style{
+	styles.BaseStyle.Foreground(styles.BadgePurple).Bold(true),
+	styles.BaseStyle.Foreground(styles.BadgeCyan).Bold(true),
+	styles.BaseStyle.Foreground(styles.BadgeGreen).Bold(true),
+	styles.BaseStyle.Foreground(styles.Info).Bold(true),
+}
+
+// renderTags renders the agent's metadata tags as coloured chips, collapsed
+// onto a single line and truncated to width so they can't break the card
+// layout. It returns an empty (blank) line when there are no tags, keeping the
+// card height uniform for hit-testing.
+func renderTags(tags []string, width int) string {
+	if len(tags) == 0 || width <= 0 {
+		return ""
+	}
+	chips := make([]string, 0, len(tags))
+	used := 0
+	for i, tag := range tags {
+		tag = stripControl(strings.TrimSpace(tag))
+		if tag == "" {
+			continue
+		}
+		label := "#" + tag
+		// Account for the single-space separator between chips.
+		sep := 0
+		if len(chips) > 0 {
+			sep = 1
+		}
+		if used+sep+lipgloss.Width(label) > width {
+			break
+		}
+		used += sep + lipgloss.Width(label)
+		style := tagChipStyles[i%len(tagChipStyles)]
+		chips = append(chips, style.Render(label))
+	}
+	return strings.Join(chips, " ")
 }
 
 // truncateDetail collapses whitespace (including newlines) into single spaces,
