@@ -65,6 +65,7 @@ Examples that wire up one of the toolsets shipped with docker-agent
 | File | What it shows |
 |------|---------------|
 | [`shell.yaml`](shell.yaml) | Plain `shell` toolset. |
+| [`docker-wiki.yaml`](docker-wiki.yaml) | OpenWiki-inspired documentation agent that initializes and updates a `docker-wiki/` directory with `/init`, `/update`, and `/status` commands. |
 | [`shell_safer.yaml`](shell_safer.yaml) | Shell toolset wired with the `safer_shell` builtin under `pre_tool_use` with `preempt_yolo: true` — destructive commands force confirmation regardless of `--yolo`; known-safe reads pass through silently. |
 | [`filesystem.yaml`](filesystem.yaml) | Plain `filesystem` toolset. |
 | [`filesystem_allow_deny.yaml`](filesystem_allow_deny.yaml) | Restricting the filesystem tool with allow/deny path lists. |
