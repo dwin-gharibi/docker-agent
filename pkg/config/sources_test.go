@@ -1,6 +1,8 @@
 package config
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -9,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/empty"
@@ -19,6 +22,7 @@ import (
 
 	"github.com/docker/docker-agent/pkg/content"
 	"github.com/docker/docker-agent/pkg/environment"
+	"github.com/docker/docker-agent/pkg/memoize"
 	"github.com/docker/docker-agent/pkg/remote"
 )
 
@@ -73,6 +77,180 @@ func TestOCISource_DigestReference_ServesFromCache(t *testing.T) {
 	// Also verify that IsDigestReference correctly identifies this.
 	assert.True(t, remote.IsDigestReference(digestRef))
 	assert.False(t, remote.IsDigestReference(ref))
+}
+
+// storeTestArtifact writes an agent YAML artifact into the default content
+// store (rooted at $HOME, which the caller must point at a temp dir) under
+// the given tag reference.
+func storeTestArtifact(t *testing.T, ref string, data []byte) string {
+	t.Helper()
+
+	store, err := content.NewStore()
+	require.NoError(t, err)
+
+	layer := static.NewLayer(data, "application/yaml")
+	img, err := mutate.AppendLayers(empty.Image, layer)
+	require.NoError(t, err)
+	img = mutate.Annotations(img, map[string]string{
+		"io.docker.agent.version": "test",
+	}).(v1.Image)
+
+	digest, err := store.StoreArtifact(img, ref)
+	require.NoError(t, err)
+	return digest
+}
+
+// stubOCIPull replaces the registry pull with fn for the test's duration.
+func stubOCIPull(t *testing.T, fn func(ctx context.Context, ref string, force bool) (string, error)) {
+	t.Helper()
+	original := pullOCIArtifact
+	pullOCIArtifact = fn
+	t.Cleanup(func() { pullOCIArtifact = original })
+}
+
+// resetOCIMemoizer swaps in a fresh read memoizer so tests neither observe
+// nor leak cached reads across tests and repeated runs (-count=2).
+func resetOCIMemoizer(t *testing.T) {
+	t.Helper()
+	original := ociReadMemoizer
+	ociReadMemoizer = memoize.New[[]byte](time.Minute)
+	t.Cleanup(func() { ociReadMemoizer = original })
+}
+
+// Not parallel: stubs the package-level pullOCIArtifact and re-homes the
+// default content store via t.Setenv.
+func TestOCISource_Read_MemoizesSuccessfulReads(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	resetOCIMemoizer(t)
+
+	testData := []byte("version: v1\nname: memoized-agent")
+	ref := "test-memoize/agent:latest"
+	storeTestArtifact(t, ref, testData)
+
+	var pulls atomic.Int32
+	stubOCIPull(t, func(context.Context, string, bool) (string, error) {
+		pulls.Add(1)
+		return "", nil
+	})
+
+	source := NewOCISource(ref)
+	for range 3 {
+		data, err := source.Read(t.Context())
+		require.NoError(t, err)
+		assert.Equal(t, testData, data)
+	}
+	assert.Equal(t, int32(1), pulls.Load(), "repeated reads of the same ref must pull only once")
+
+	// An equivalent form of the same reference must hit the same cache entry.
+	data, err := NewOCISource("index.docker.io/test-memoize/agent:latest").Read(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, testData, data)
+	assert.Equal(t, int32(1), pulls.Load(), "equivalent refs must share the cache entry")
+}
+
+// Not parallel: stubs the package-level pullOCIArtifact and re-homes the
+// default content store via t.Setenv.
+func TestOCISource_Read_DoesNotCacheFailures(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	resetOCIMemoizer(t)
+
+	ref := "test-memoize-errors/agent:latest"
+
+	// No local artifact and a failing pull: Read must fail.
+	var pulls atomic.Int32
+	stubOCIPull(t, func(context.Context, string, bool) (string, error) {
+		pulls.Add(1)
+		return "", errors.New("registry unreachable")
+	})
+
+	source := NewOCISource(ref)
+	_, err := source.Read(t.Context())
+	require.Error(t, err)
+
+	// Make the artifact available and the pull succeed: the earlier failure
+	// must not have been cached, so Read retries and succeeds.
+	testData := []byte("version: v1\nname: retried-agent")
+	storeTestArtifact(t, ref, testData)
+	stubOCIPull(t, func(context.Context, string, bool) (string, error) {
+		pulls.Add(1)
+		return "", nil
+	})
+
+	data, err := source.Read(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, testData, data)
+	assert.Equal(t, int32(2), pulls.Load(), "a failed read must be retried, not served from cache")
+}
+
+// Not parallel: stubs the package-level pullOCIArtifact and re-homes the
+// default content store via t.Setenv.
+func TestOCISource_Read_CacheIsScopedToRegistry(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	resetOCIMemoizer(t)
+
+	// Same repository and tag on two different registries: distinct trust
+	// boundaries, so each must do its own pull instead of sharing an entry.
+	testData := []byte("version: v1\nname: scoped-agent")
+	storeTestArtifact(t, "test-scoped/agent:latest", testData)
+
+	var pulls atomic.Int32
+	stubOCIPull(t, func(context.Context, string, bool) (string, error) {
+		pulls.Add(1)
+		return "", nil
+	})
+
+	_, err := NewOCISource("registry-a.example.com/test-scoped/agent:latest").Read(t.Context())
+	require.NoError(t, err)
+	_, err = NewOCISource("registry-b.example.com/test-scoped/agent:latest").Read(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, int32(2), pulls.Load(), "refs differing only by registry must not share a cache entry")
+}
+
+// Not parallel: stubs the package-level pullOCIArtifact and re-homes the
+// default content store via t.Setenv.
+func TestOCISource_Read_DoesNotCacheDegradedFallback(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	resetOCIMemoizer(t)
+
+	// Artifact is available locally but the registry is unreachable: Read
+	// succeeds by falling back to the local store.
+	testData := []byte("version: v1\nname: degraded-agent")
+	ref := "test-degraded/agent:latest"
+	storeTestArtifact(t, ref, testData)
+
+	var pulls atomic.Int32
+	stubOCIPull(t, func(context.Context, string, bool) (string, error) {
+		pulls.Add(1)
+		return "", errors.New("registry unreachable")
+	})
+
+	source := NewOCISource(ref)
+	for i := 1; i <= 2; i++ {
+		data, err := source.Read(t.Context())
+		require.NoError(t, err)
+		assert.Equal(t, testData, data)
+		assert.Equal(t, int32(i), pulls.Load(), "a degraded fallback read must not be cached; the registry must be retried")
+	}
+
+	// Once the registry recovers, the validated read IS cached.
+	stubOCIPull(t, func(context.Context, string, bool) (string, error) {
+		pulls.Add(1)
+		return "", nil
+	})
+	for range 2 {
+		data, err := source.Read(t.Context())
+		require.NoError(t, err)
+		assert.Equal(t, testData, data)
+	}
+	assert.Equal(t, int32(3), pulls.Load(), "a validated read must be cached again")
 }
 
 func TestURLSource_Read(t *testing.T) {

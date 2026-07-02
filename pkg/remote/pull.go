@@ -21,12 +21,30 @@ import (
 // store key that Pull uses to store artifacts. This ensures that equivalent
 // references (e.g. "agentcatalog/review-pr" and
 // "index.docker.io/agentcatalog/review-pr:latest") map to the same key.
+//
+// The registry host is deliberately stripped, so references that differ only
+// by registry map to the same key. Callers that need a registry-scoped
+// identity (e.g. cache keys spanning trust boundaries) must use
+// FullyQualifiedReference instead.
 func NormalizeReference(registryRef string) (string, error) {
 	ref, err := name.ParseReference(registryRef)
 	if err != nil {
 		return "", fmt.Errorf("parsing registry reference %s: %w", registryRef, err)
 	}
 	return ref.Context().RepositoryStr() + separator(ref) + ref.Identifier(), nil
+}
+
+// FullyQualifiedReference returns the fully-qualified form of an OCI
+// reference, including the registry host (e.g.
+// "index.docker.io/agentcatalog/review-pr:latest"). Equivalent shorthand
+// forms map to the same value, while references that differ only by registry
+// map to different values — unlike NormalizeReference, which strips the host.
+func FullyQualifiedReference(registryRef string) (string, error) {
+	ref, err := name.ParseReference(registryRef)
+	if err != nil {
+		return "", fmt.Errorf("parsing registry reference %s: %w", registryRef, err)
+	}
+	return ref.Name(), nil
 }
 
 // IsDigestReference reports whether the given reference pins a specific
