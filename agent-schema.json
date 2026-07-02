@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://github.com/docker/docker-agent/blob/main/agent-schema.json",
   "title": "Docker Agent Configuration",
-  "description": "Configuration schema for Docker Agent v11",
+  "description": "Configuration schema for Docker Agent v12",
   "type": "object",
   "properties": {
     "version": {
@@ -20,7 +20,8 @@
         "8",
         "9",
         "10",
-        "11"
+        "11",
+        "12"
       ],
       "examples": [
         "0",
@@ -34,7 +35,8 @@
         "8",
         "9",
         "10",
-        "11"
+        "11",
+        "12"
       ]
     },
     "providers": {
