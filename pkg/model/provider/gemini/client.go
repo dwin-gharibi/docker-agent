@@ -1,7 +1,6 @@
 package gemini
 
 import (
-	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -47,10 +46,7 @@ func NewClient(ctx context.Context, cfg *latest.ModelConfig, env environment.Pro
 		return nil, errors.New("model type must be 'google'")
 	}
 
-	var globalOptions options.ModelOptions
-	for _, opt := range opts {
-		opt(&globalOptions)
-	}
+	globalOptions := options.Apply(opts...)
 
 	var clientFn func(context.Context) (*genai.Client, error)
 	if gateway := globalOptions.Gateway(); gateway == "" {
@@ -115,13 +111,7 @@ func NewClient(ctx context.Context, cfg *latest.ModelConfig, env environment.Pro
 			httpClient = httpclient.NewHTTPClient(ctx)
 		}
 
-		if w := globalOptions.TransportWrapper(); w != nil {
-			if wrapped := w(httpClient.Transport); wrapped != nil {
-				httpClient.Transport = wrapped
-			} else {
-				slog.WarnContext(ctx, "HTTP transport wrapper returned nil; using original transport")
-			}
-		}
+		globalOptions.WrapTransport(ctx, httpClient)
 
 		client, err := genai.NewClient(ctx, &genai.ClientConfig{
 			APIKey:     apiKey,
@@ -143,23 +133,17 @@ func NewClient(ctx context.Context, cfg *latest.ModelConfig, env environment.Pro
 	} else {
 		// When using a Gateway targeting a Docker domain, tokens are short-lived.
 		// Only require and inject the Docker JWT if the gateway is a .docker.com URL.
-		if environment.IsTrustedDockerURL(gateway) {
-			// Fail fast if Docker Desktop's auth token isn't available
-			if token, _ := env.Get(ctx, environment.DockerDesktopTokenEnv); token == "" {
-				slog.ErrorContext(ctx, "Gemini client creation failed", "error", "failed to get Docker Desktop's authentication token")
-				return nil, errors.New("sorry, you first need to sign in Docker Desktop to use the Docker AI Gateway")
-			}
+		if err := base.VerifyDockerGatewayAuth(ctx, env, gateway); err != nil {
+			slog.ErrorContext(ctx, "Gemini client creation failed", "error", "failed to get Docker Desktop's authentication token")
+			return nil, err
 		}
 
 		// When using a Gateway, tokens are short-lived.
 		clientFn = func(ctx context.Context) (*genai.Client, error) {
-			var authToken string
-			if environment.IsTrustedDockerURL(gateway) {
-				// Query a fresh auth token each time the client is used
-				authToken, _ = env.Get(ctx, environment.DockerDesktopTokenEnv)
-				if authToken == "" {
-					return nil, errors.New(base.NoDesktopTokenErrorMessage)
-				}
+			// Query a fresh auth token each time the client is used.
+			authToken, err := base.GatewayAuthToken(ctx, env, gateway)
+			if err != nil {
+				return nil, err
 			}
 
 			url, err := url.Parse(gateway)
@@ -168,16 +152,7 @@ func NewClient(ctx context.Context, cfg *latest.ModelConfig, env environment.Pro
 			}
 			baseURL := fmt.Sprintf("%s://%s%s/", url.Scheme, url.Host, url.Path)
 
-			httpOptions := []httpclient.Opt{
-				httpclient.WithProxiedBaseURL(cmp.Or(cfg.BaseURL, "https://generativelanguage.googleapis.com/")),
-				httpclient.WithProvider(cfg.Provider),
-				httpclient.WithModel(cfg.Model),
-				httpclient.WithModelName(cfg.Name),
-				httpclient.WithQuery(url.Query()),
-			}
-			if globalOptions.GeneratingTitle() {
-				httpOptions = append(httpOptions, httpclient.WithHeader("X-Cagent-GeneratingTitle", "1"))
-			}
+			httpOptions := base.GatewayHTTPOptions(url, "https://generativelanguage.googleapis.com/", cfg, globalOptions.GeneratingTitle())
 
 			httpOpts := genai.HTTPOptions{
 				BaseURL: baseURL,
@@ -189,13 +164,7 @@ func NewClient(ctx context.Context, cfg *latest.ModelConfig, env environment.Pro
 			}
 
 			gatewayHTTPClient := httpclient.NewHTTPClient(ctx, httpOptions...)
-			if w := globalOptions.TransportWrapper(); w != nil {
-				if wrapped := w(gatewayHTTPClient.Transport); wrapped != nil {
-					gatewayHTTPClient.Transport = wrapped
-				} else {
-					slog.WarnContext(ctx, "HTTP transport wrapper returned nil; using original transport")
-				}
-			}
+			globalOptions.WrapTransport(ctx, gatewayHTTPClient)
 
 			return genai.NewClient(ctx, &genai.ClientConfig{
 				APIKey:      authToken,
@@ -703,7 +672,7 @@ func (c *Client) CreateChatCompletionStream(
 
 	// Build a fresh client per request when using the gateway
 	iter := client.Models.GenerateContentStream(ctx, c.ModelConfig.Model, contents, config)
-	trackUsage := c.ModelConfig.TrackUsage == nil || *c.ModelConfig.TrackUsage
+	trackUsage := c.TrackUsageEnabled()
 	return NewStreamAdapter(iter, c.ModelConfig.Model, trackUsage), nil
 }
 

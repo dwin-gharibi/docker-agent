@@ -1,7 +1,6 @@
 package anthropic
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -58,12 +57,7 @@ func NewClient(ctx context.Context, cfg *latest.ModelConfig, env environment.Pro
 		return nil, errors.New("environment provider is required")
 	}
 
-	var globalOptions options.ModelOptions
-	for _, opt := range opts {
-		if opt != nil {
-			opt(&globalOptions)
-		}
-	}
+	globalOptions := options.Apply(opts...)
 
 	anthropicClient := &Client{
 		Config: base.Config{
@@ -80,13 +74,7 @@ func NewClient(ctx context.Context, cfg *latest.ModelConfig, env environment.Pro
 			return nil, err
 		}
 		httpClient := httpclient.NewHTTPClient(ctx)
-		if w := globalOptions.TransportWrapper(); w != nil {
-			if wrapped := w(httpClient.Transport); wrapped != nil {
-				httpClient.Transport = wrapped
-			} else {
-				slog.WarnContext(ctx, "HTTP transport wrapper returned nil; using original transport")
-			}
-		}
+		globalOptions.WrapTransport(ctx, httpClient)
 		requestOptions := append([]option.RequestOption{
 			option.WithHTTPClient(httpClient),
 		}, authOpts...)
@@ -103,23 +91,17 @@ func NewClient(ctx context.Context, cfg *latest.ModelConfig, env environment.Pro
 		}
 		// When using a Gateway targeting a Docker domain, tokens are short-lived.
 		// Only require and inject the Docker JWT if the gateway is a .docker.com URL.
-		if environment.IsTrustedDockerURL(gateway) {
-			// Fail fast if Docker Desktop's auth token isn't available
-			if token, _ := env.Get(ctx, environment.DockerDesktopTokenEnv); token == "" {
-				slog.ErrorContext(ctx, "Anthropic client creation failed", "error", "failed to get Docker Desktop's authentication token")
-				return nil, errors.New("sorry, you first need to sign in Docker Desktop to use the Docker AI Gateway")
-			}
+		if err := base.VerifyDockerGatewayAuth(ctx, env, gateway); err != nil {
+			slog.ErrorContext(ctx, "Anthropic client creation failed", "error", "failed to get Docker Desktop's authentication token")
+			return nil, err
 		}
 
 		// When using a Gateway, tokens are short-lived.
 		anthropicClient.clientFn = func(ctx context.Context) (anthropic.Client, error) {
-			var authToken string
-			if environment.IsTrustedDockerURL(gateway) {
-				// Query a fresh auth token each time the client is used
-				authToken, _ = env.Get(ctx, environment.DockerDesktopTokenEnv)
-				if authToken == "" {
-					return anthropic.Client{}, errors.New(base.NoDesktopTokenErrorMessage)
-				}
+			// Query a fresh auth token each time the client is used.
+			authToken, err := base.GatewayAuthToken(ctx, env, gateway)
+			if err != nil {
+				return anthropic.Client{}, err
 			}
 
 			url, err := url.Parse(gateway)
@@ -129,25 +111,10 @@ func NewClient(ctx context.Context, cfg *latest.ModelConfig, env environment.Pro
 			baseURL := fmt.Sprintf("%s://%s%s/", url.Scheme, url.Host, url.Path)
 
 			// Configure a custom HTTP client to inject headers and query params used by the Gateway.
-			httpOptions := []httpclient.Opt{
-				httpclient.WithProxiedBaseURL(cmp.Or(cfg.BaseURL, "https://api.anthropic.com/")),
-				httpclient.WithProvider(cfg.Provider),
-				httpclient.WithModel(cfg.Model),
-				httpclient.WithModelName(cfg.Name),
-				httpclient.WithQuery(url.Query()),
-			}
-			if globalOptions.GeneratingTitle() {
-				httpOptions = append(httpOptions, httpclient.WithHeader("X-Cagent-GeneratingTitle", "1"))
-			}
+			httpOptions := base.GatewayHTTPOptions(url, "https://api.anthropic.com/", cfg, globalOptions.GeneratingTitle())
 
 			gatewayHTTPClient := httpclient.NewHTTPClient(ctx, httpOptions...)
-			if w := globalOptions.TransportWrapper(); w != nil {
-				if wrapped := w(gatewayHTTPClient.Transport); wrapped != nil {
-					gatewayHTTPClient.Transport = wrapped
-				} else {
-					slog.WarnContext(ctx, "HTTP transport wrapper returned nil; using original transport")
-				}
-			}
+			globalOptions.WrapTransport(ctx, gatewayHTTPClient)
 			clientOptions := []option.RequestOption{
 				option.WithBaseURL(baseURL),
 				option.WithHTTPClient(gatewayHTTPClient),
@@ -330,7 +297,7 @@ func (c *Client) CreateChatCompletionStream(
 	requestOpts = append(requestOpts, option.WithHeader("anthropic-beta", betas))
 
 	stream := client.Messages.NewStreaming(ctx, params, requestOpts...)
-	trackUsage := c.ModelConfig.TrackUsage == nil || *c.ModelConfig.TrackUsage
+	trackUsage := c.TrackUsageEnabled()
 	ad := c.newStreamAdapter(stream, trackUsage)
 
 	// Set up single retry for context length errors

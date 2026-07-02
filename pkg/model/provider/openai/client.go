@@ -25,6 +25,7 @@ import (
 	"github.com/docker/docker-agent/pkg/model/provider/base"
 	"github.com/docker/docker-agent/pkg/model/provider/oaistream"
 	"github.com/docker/docker-agent/pkg/model/provider/options"
+	"github.com/docker/docker-agent/pkg/model/provider/providerutil"
 	"github.com/docker/docker-agent/pkg/modelinfo"
 	"github.com/docker/docker-agent/pkg/rag/prompts"
 	"github.com/docker/docker-agent/pkg/rag/types"
@@ -50,10 +51,7 @@ func NewClient(ctx context.Context, cfg *latest.ModelConfig, env environment.Pro
 		return nil, errors.New("model configuration is required")
 	}
 
-	var globalOptions options.ModelOptions
-	for _, opt := range opts {
-		opt(&globalOptions)
-	}
+	globalOptions := options.Apply(opts...)
 
 	var clientFn func(context.Context) (*openai.Client, error)
 	if gateway := globalOptions.Gateway(); gateway == "" {
@@ -103,13 +101,7 @@ func NewClient(ctx context.Context, cfg *latest.ModelConfig, env environment.Pro
 		clientOptions = append(clientOptions, option.WithMiddleware(oaistream.ErrorBodyMiddleware()))
 
 		httpClient := httpclient.NewHTTPClient(ctx)
-		if w := globalOptions.TransportWrapper(); w != nil {
-			if wrapped := w(httpClient.Transport); wrapped != nil {
-				httpClient.Transport = wrapped
-			} else {
-				slog.WarnContext(ctx, "HTTP transport wrapper returned nil; using original transport")
-			}
-		}
+		globalOptions.WrapTransport(ctx, httpClient)
 		clientOptions = append(clientOptions, option.WithHTTPClient(httpClient))
 
 		client := openai.NewClient(clientOptions...)
@@ -119,23 +111,17 @@ func NewClient(ctx context.Context, cfg *latest.ModelConfig, env environment.Pro
 	} else {
 		// When using a Gateway targeting a Docker domain, tokens are short-lived.
 		// Only require and inject the Docker JWT if the gateway is a .docker.com URL.
-		if environment.IsTrustedDockerURL(gateway) {
-			// Fail fast if Docker Desktop's auth token isn't available
-			if token, _ := env.Get(ctx, environment.DockerDesktopTokenEnv); token == "" {
-				slog.ErrorContext(ctx, "OpenAI client creation failed", "error", "failed to get Docker Desktop's authentication token")
-				return nil, errors.New("sorry, you first need to sign in Docker Desktop to use the Docker AI Gateway")
-			}
+		if err := base.VerifyDockerGatewayAuth(ctx, env, gateway); err != nil {
+			slog.ErrorContext(ctx, "OpenAI client creation failed", "error", "failed to get Docker Desktop's authentication token")
+			return nil, err
 		}
 
 		// When using a Gateway, tokens are short-lived.
 		clientFn = func(ctx context.Context) (*openai.Client, error) {
-			var authToken string
-			if environment.IsTrustedDockerURL(gateway) {
-				// Query a fresh auth token each time the client is used
-				authToken, _ = env.Get(ctx, environment.DockerDesktopTokenEnv)
-				if authToken == "" {
-					return nil, errors.New(base.NoDesktopTokenErrorMessage)
-				}
+			// Query a fresh auth token each time the client is used.
+			authToken, err := base.GatewayAuthToken(ctx, env, gateway)
+			if err != nil {
+				return nil, err
 			}
 
 			url, err := url.Parse(gateway)
@@ -145,25 +131,10 @@ func NewClient(ctx context.Context, cfg *latest.ModelConfig, env environment.Pro
 			baseURL := fmt.Sprintf("%s://%s%s/v1/", url.Scheme, url.Host, url.Path)
 
 			// Configure a custom HTTP client to inject headers and query params used by the Gateway.
-			httpOptions := []httpclient.Opt{
-				httpclient.WithProxiedBaseURL(cmp.Or(cfg.BaseURL, "https://api.openai.com/v1")),
-				httpclient.WithProvider(cfg.Provider),
-				httpclient.WithModel(cfg.Model),
-				httpclient.WithModelName(cfg.Name),
-				httpclient.WithQuery(url.Query()),
-			}
-			if globalOptions.GeneratingTitle() {
-				httpOptions = append(httpOptions, httpclient.WithHeader("X-Cagent-GeneratingTitle", "1"))
-			}
+			httpOptions := base.GatewayHTTPOptions(url, "https://api.openai.com/v1", cfg, globalOptions.GeneratingTitle())
 
 			gatewayHTTPClient := httpclient.NewHTTPClient(ctx, httpOptions...)
-			if w := globalOptions.TransportWrapper(); w != nil {
-				if wrapped := w(gatewayHTTPClient.Transport); wrapped != nil {
-					gatewayHTTPClient.Transport = wrapped
-				} else {
-					slog.WarnContext(ctx, "HTTP transport wrapper returned nil; using original transport")
-				}
-			}
+			globalOptions.WrapTransport(ctx, gatewayHTTPClient)
 			clientOptions := []option.RequestOption{
 				option.WithBaseURL(baseURL),
 				option.WithHTTPClient(gatewayHTTPClient),
@@ -363,7 +334,7 @@ func (c *Client) CreateChatCompletionStream(
 		return nil, errors.New("at least one message is required")
 	}
 
-	trackUsage := c.ModelConfig.TrackUsage == nil || *c.ModelConfig.TrackUsage
+	trackUsage := c.TrackUsageEnabled()
 
 	params := openai.ChatCompletionNewParams{
 		Model:    c.ModelConfig.Model,
@@ -642,7 +613,7 @@ func (c *Client) CreateResponseStream(
 	// dials raw TCP and never calls http.RoundTripper, so the wrapper cannot intercept those
 	// connections. Fall back to SSE so the wrapper applies to all requests.
 	transport := getTransport(&c.ModelConfig)
-	trackUsage := c.ModelConfig.TrackUsage == nil || *c.ModelConfig.TrackUsage
+	trackUsage := c.TrackUsageEnabled()
 
 	switch {
 	case transport == "websocket" && c.ModelOptions.Gateway() == "" && c.ModelOptions.TransportWrapper() == nil:
@@ -1153,7 +1124,7 @@ func (c *Client) Rerank(ctx context.Context, query string, documents []types.Doc
 		return nil, err
 	}
 
-	scores, err := parseRerankScores(raw, len(documents))
+	scores, err := providerutil.ParseRerankScores(raw, len(documents))
 	if err != nil {
 		slog.ErrorContext(ctx, "Failed to parse OpenAI rerank scores", "error", err)
 		return nil, err
@@ -1206,42 +1177,6 @@ func extractOpenAIContentAsString(msg openai.ChatCompletionMessage) (string, err
 	default:
 		return "", fmt.Errorf("unsupported OpenAI content JSON type %T", v)
 	}
-}
-
-// parseRerankScores parses a JSON payload of the form {"scores":[...]} and validates length.
-func parseRerankScores(raw string, expected int) ([]float64, error) {
-	type rerankResponse struct {
-		Scores []float64 `json:"scores"`
-	}
-
-	raw = strings.TrimSpace(raw)
-
-	tryParse := func(s string) ([]float64, error) {
-		var rr rerankResponse
-		if err := json.Unmarshal([]byte(s), &rr); err != nil {
-			return nil, err
-		}
-		if len(rr.Scores) != expected {
-			return nil, fmt.Errorf("expected %d scores, got %d", expected, len(rr.Scores))
-		}
-		return rr.Scores, nil
-	}
-
-	// First attempt: parse whole string as JSON.
-	if scores, err := tryParse(raw); err == nil {
-		return scores, nil
-	}
-
-	// Fallback: extract the first {...} block and try again, in case the model added prose.
-	start := strings.Index(raw, "{")
-	end := strings.LastIndex(raw, "}")
-	if start >= 0 && end > start {
-		if scores, err := tryParse(raw[start : end+1]); err == nil {
-			return scores, nil
-		}
-	}
-
-	return nil, fmt.Errorf("invalid rerank JSON: %s", raw)
 }
 
 // getAPIType extracts the api_type from ProviderOpts if present.

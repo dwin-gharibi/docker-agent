@@ -1,6 +1,8 @@
 package options
 
 import (
+	"context"
+	"log/slog"
 	"net/http"
 
 	"github.com/docker/docker-agent/pkg/config/latest"
@@ -52,7 +54,36 @@ func (c *ModelOptions) TransportWrapper() func(http.RoundTripper) http.RoundTrip
 	return c.transportWrapper
 }
 
+// WrapTransport applies the registered transport wrapper (if any) to client's
+// transport in place. A wrapper that returns nil is treated as a no-op and the
+// original transport is kept (with a warning). No-op when client is nil or no
+// wrapper is registered.
+func (c *ModelOptions) WrapTransport(ctx context.Context, client *http.Client) {
+	w := c.transportWrapper
+	if w == nil || client == nil {
+		return
+	}
+	if wrapped := w(client.Transport); wrapped != nil {
+		client.Transport = wrapped
+	} else {
+		slog.WarnContext(ctx, "HTTP transport wrapper returned nil; using original transport")
+	}
+}
+
 type Opt func(*ModelOptions)
+
+// Apply builds a ModelOptions from a list of Opts, skipping nil entries.
+// It centralises the accumulation loop that every provider constructor
+// otherwise repeats.
+func Apply(opts ...Opt) ModelOptions {
+	var m ModelOptions
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&m)
+		}
+	}
+	return m
+}
 
 func WithGateway(gateway string) Opt {
 	return func(cfg *ModelOptions) {

@@ -77,10 +77,7 @@ func NewClient(ctx context.Context, cfg *latest.ModelConfig, opts ...options.Opt
 		return nil, errors.New("model type must be 'dmr'")
 	}
 
-	var globalOptions options.ModelOptions
-	for _, opt := range opts {
-		opt(&globalOptions)
-	}
+	globalOptions := options.Apply(opts...)
 
 	// Skip docker model status query when BaseURL is explicitly provided.
 	// This avoids unnecessary exec calls and speeds up tests/CI scenarios.
@@ -186,7 +183,7 @@ func (c *Client) CreateChatCompletionStream(ctx context.Context, messages []chat
 		return nil, errors.New("at least one message is required")
 	}
 
-	trackUsage := c.ModelConfig.TrackUsage == nil || *c.ModelConfig.TrackUsage
+	trackUsage := c.TrackUsageEnabled()
 
 	params := openai.ChatCompletionNewParams{
 		Model:    c.ModelConfig.Model,

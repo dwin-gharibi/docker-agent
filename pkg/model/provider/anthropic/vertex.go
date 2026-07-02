@@ -44,12 +44,7 @@ func NewVertexClient(ctx context.Context, cfg *latest.ModelConfig, env environme
 		return nil, errors.New("vertex AI requires a GCP location")
 	}
 
-	var globalOptions options.ModelOptions
-	for _, opt := range opts {
-		if opt != nil {
-			opt(&globalOptions)
-		}
-	}
+	globalOptions := options.Apply(opts...)
 
 	// Resolve GCP credentials up front so we can return a descriptive error
 	// instead of the panic that vertex.WithGoogleAuth would raise.

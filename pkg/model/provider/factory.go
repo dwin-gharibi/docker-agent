@@ -38,12 +38,7 @@ func (r *Registry) NewWithModels(ctx context.Context, cfg *latest.ModelConfig, m
 		// bypass to every child so the whole routing subtree dials directly.
 		// Routed targets that are named models can still set their own flag.
 		if cfg.BypassModelsGateway {
-			var globalOptions options.ModelOptions
-			for _, opt := range opts {
-				if opt != nil {
-					opt(&globalOptions)
-				}
-			}
+			globalOptions := options.Apply(opts...)
 			if globalOptions.Gateway() != "" {
 				slog.DebugContext(ctx, "Bypassing models gateway for routing model", "provider", cfg.Provider, "model", cfg.Model)
 				opts = append(opts, options.WithGateway(""))
@@ -83,10 +78,7 @@ func (r *Registry) createDirectProvider(ctx context.Context, cfg *latest.ModelCo
 	if r == nil {
 		r = DefaultRegistry()
 	}
-	var globalOptions options.ModelOptions
-	for _, opt := range opts {
-		opt(&globalOptions)
-	}
+	globalOptions := options.Apply(opts...)
 	enhancedCfg := applyProviderDefaults(cfg, globalOptions.Providers())
 	if err := expandModelConfigEnv(ctx, enhancedCfg, env); err != nil {
 		return nil, err
