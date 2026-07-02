@@ -18,6 +18,7 @@ import (
 	"github.com/docker/docker-agent/pkg/browser"
 	"github.com/docker/docker-agent/pkg/effort"
 	"github.com/docker/docker-agent/pkg/evaluation"
+	"github.com/docker/docker-agent/pkg/modelinfo"
 	"github.com/docker/docker-agent/pkg/runtime"
 	"github.com/docker/docker-agent/pkg/session"
 	"github.com/docker/docker-agent/pkg/shellpath"
@@ -563,14 +564,14 @@ func (m *appModel) handleCycleThinkingLevel() (tea.Model, tea.Cmd) {
 
 // handleSetThinkingLevel applies the /effort command: it sets the current
 // model's reasoning-effort level to the requested value. An empty level
-// shows usage; unsupported levels surface the model's supported list via
-// the runtime error.
+// opens the effort picker dialog; unsupported levels surface the model's
+// supported list via the runtime error.
 func (m *appModel) handleSetThinkingLevel(level string) (tea.Model, tea.Cmd) {
 	if !m.application.SupportsModelSwitching() {
 		return m, notification.InfoCmd("Thinking levels can't be changed with remote runtimes")
 	}
 	if level == "" {
-		return m, notification.InfoCmd("Usage: /effort <none|minimal|low|medium|high|xhigh|max>")
+		return m.openEffortPicker()
 	}
 	parsed, ok := effort.Parse(level)
 	if !ok {
@@ -584,6 +585,26 @@ func (m *appModel) handleSetThinkingLevel(level string) (tea.Model, tea.Cmd) {
 		return m, notification.ErrorCmd(fmt.Sprintf("Failed to set thinking level: %v", err))
 	}
 	return m, notification.SuccessCmd("Reasoning effort set to " + applied.String())
+}
+
+// openEffortPicker opens the effort picker dialog listing the thinking-effort
+// levels supported by the current agent's model (/effort without arguments).
+// The sidebar's thinking label doubles as the support signal: it is empty
+// exactly when the runtime reports no selectable thinking configuration.
+func (m *appModel) openEffortPicker() (tea.Model, tea.Cmd) {
+	agent := m.sessionState.GetCurrentAgent()
+	if agent.Thinking == "" {
+		return m, notification.InfoCmd("Current model does not support thinking levels")
+	}
+	levels := modelinfo.SupportedThinkingLevels(agent.Provider, agent.Model)
+	// "off" maps onto none; adaptive/token labels leave no level marked current.
+	current, ok := effort.Parse(agent.Thinking)
+	if !ok && agent.Thinking == "off" {
+		current = effort.None
+	}
+	return m, core.CmdHandler(dialog.OpenDialogMsg{
+		Model: dialog.NewEffortPickerDialog(levels, current),
+	})
 }
 
 func (m *appModel) handleChangeModel(modelRef string) (tea.Model, tea.Cmd) {
