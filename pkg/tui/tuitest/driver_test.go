@@ -74,6 +74,25 @@ func TestDriver_WaitForPollsAsyncFrames(t *testing.T) {
 	d.Press('x').WaitFor(Contains("later"))
 }
 
+// quitModel quits the program on 'q'. It guards against sendSync deadlocking
+// when the sent message terminates the program before the barrier sentinel
+// is processed.
+type quitModel struct{ echoModel }
+
+func (m *quitModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if key, ok := msg.(tea.KeyPressMsg); ok && key.Code == 'q' {
+		return m, tea.Quit
+	}
+	// echoModel.Update mutates the embedded value in place.
+	_, cmd := m.echoModel.Update(msg)
+	return m, cmd
+}
+
+func TestDriver_SendSyncReturnsWhenMessageQuitsProgram(t *testing.T) {
+	d := New(t, &quitModel{}, 80, 24, WithTimeout(2*time.Second))
+	d.Press('q') // must not hang or fail even though no frame follows
+}
+
 func TestDriver_MouseHelpers(t *testing.T) {
 	d := New(t, &echoModel{}, 80, 24)
 	d.Type("target")
