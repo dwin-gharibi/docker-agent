@@ -3,12 +3,11 @@ package runtime
 import (
 	"context"
 	"log/slog"
-	"strconv"
-	"strings"
 
 	"github.com/docker/docker-agent/pkg/agent"
 	"github.com/docker/docker-agent/pkg/chat"
 	"github.com/docker/docker-agent/pkg/compaction"
+	"github.com/docker/docker-agent/pkg/config/latest"
 	"github.com/docker/docker-agent/pkg/hooks"
 	"github.com/docker/docker-agent/pkg/model/provider"
 	"github.com/docker/docker-agent/pkg/model/provider/options"
@@ -246,44 +245,14 @@ func (r *LocalRuntime) resolveContextLimit(ctx context.Context, p provider.Provi
 // models.dev catalogue does not have an entry for the configured
 // model (typically Docker Model Runner with a HuggingFace GGUF model).
 //
-// Accepted shapes mirror what YAML/JSON decoders may produce: int,
-// int64, float64, and decimal strings. Negative or zero values are
-// treated as "unset" so callers don't accidentally trigger
-// compaction with a degenerate limit.
+// The parsing is shared with the provider clients (which clamp max_tokens
+// against the same window) via [latest.ContextSizeFromProviderOpts], so the
+// two never disagree on how context_size is interpreted.
 func providerContextLimit(p provider.Provider) int64 {
 	if p == nil {
 		return 0
 	}
-	opts := p.BaseConfig().ModelConfig.ProviderOpts
-	v, ok := opts["context_size"]
-	if !ok {
-		return 0
-	}
-	var n int64
-	switch t := v.(type) {
-	case int64:
-		n = t
-	case int:
-		n = int64(t)
-	case int32:
-		n = int64(t)
-	case float64:
-		n = int64(t)
-	case float32:
-		n = int64(t)
-	case string:
-		parsed, err := strconv.ParseInt(strings.TrimSpace(t), 10, 64)
-		if err != nil {
-			return 0
-		}
-		n = parsed
-	default:
-		return 0
-	}
-	if n <= 0 {
-		return 0
-	}
-	return n
+	return latest.ContextSizeFromProviderOpts(p.BaseConfig().ModelConfig.ProviderOpts)
 }
 
 // runCompactionAgent runs an agent against a sub-session for compaction.

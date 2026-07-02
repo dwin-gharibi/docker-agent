@@ -284,6 +284,46 @@ func shouldMergeConsecutiveMessages(cfg *latest.ModelConfig) bool {
 	return openModelHostProviders[cfg.Provider]
 }
 
+// contextLimit returns this model's context window in tokens, preferring an
+// explicit provider_opts.context_size (authoritative for self-hosted
+// endpoints) and falling back to the models.dev catalogue. It returns 0 when
+// the window cannot be determined, in which case [clampMaxTokens] leaves
+// max_tokens untouched.
+func (c *Client) contextLimit(ctx context.Context) int64 {
+	if n := latest.ContextSizeFromProviderOpts(c.ModelConfig.ProviderOpts); n > 0 {
+		return n
+	}
+	return modelinfo.ContextLimit(ctx, c.ModelOptions.ModelsDevStore(), c.ID(), 0)
+}
+
+// clampMaxTokens caps a configured max_tokens (the per-response completion
+// budget) so it cannot consume the whole context window, leaving headroom for
+// the prompt. OpenAI-compatible servers such as vLLM reject a request when
+// prompt_tokens + max_tokens exceeds the model's context window, so a
+// max_tokens set equal to the window makes even a one-token prompt fail with a
+// "maximum context length" error (issue #3387). When the window is unknown (0)
+// the value is returned unchanged; a genuinely oversized prompt is then handled
+// by the runtime's overflow detection and compaction, not here.
+func clampMaxTokens(ctx context.Context, configured, window int64, model string) int64 {
+	if window <= 0 {
+		return configured
+	}
+	const safety = int64(1024)
+	capped := max(window-safety, 1)
+	if configured > capped {
+		slog.WarnContext(ctx,
+			"max_tokens exceeds the context window minus headroom; clamping to leave room for the prompt",
+			"configured", configured,
+			"clamped", capped,
+			"context_window", window,
+			"model", model,
+			"see", "https://github.com/docker/docker-agent/issues/3387",
+		)
+		return capped
+	}
+	return configured
+}
+
 // CreateChatCompletionStream creates a streaming chat completion request
 // It returns a stream that can be iterated over to get completion chunks
 func (c *Client) CreateChatCompletionStream(
@@ -347,11 +387,12 @@ func (c *Client) CreateChatCompletionStream(
 	}
 
 	if maxToken := c.ModelConfig.MaxTokens; maxToken != nil && *maxToken > 0 {
+		effective := clampMaxTokens(ctx, *maxToken, c.contextLimit(ctx), c.ModelConfig.Model)
 		if !modelinfo.SupportsResponsesAPI(c.ModelConfig.Model) {
-			params.MaxTokens = openai.Int(*maxToken)
-			slog.DebugContext(ctx, "OpenAI request configured with max tokens", "max_tokens", *maxToken, "model", c.ModelConfig.Model)
+			params.MaxTokens = openai.Int(effective)
+			slog.DebugContext(ctx, "OpenAI request configured with max tokens", "max_tokens", effective, "model", c.ModelConfig.Model)
 		} else {
-			params.MaxCompletionTokens = openai.Int(*maxToken)
+			params.MaxCompletionTokens = openai.Int(effective)
 			slog.DebugContext(ctx, "using max_completion_tokens instead of max_tokens for Responses-API models", "model", c.ModelConfig.Model)
 		}
 	}
@@ -490,7 +531,7 @@ func (c *Client) CreateResponseStream(
 	}
 
 	if maxToken := c.ModelConfig.MaxTokens; maxToken != nil && *maxToken > 0 {
-		maxTokens := *maxToken
+		maxTokens := clampMaxTokens(ctx, *maxToken, c.contextLimit(ctx), c.ModelConfig.Model)
 		params.MaxOutputTokens = param.NewOpt(maxTokens)
 		slog.DebugContext(ctx, "OpenAI responses request configured with max output tokens", "max_output_tokens", maxTokens)
 	}
