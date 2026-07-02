@@ -276,7 +276,7 @@ agents:
 <div class="callout callout-warning" markdown="1">
 <div class="callout-title">Toolset order matters
 </div>
-  <p>If multiple toolsets provide a tool with the same name, the first one wins. Order your toolsets intentionally.</p>
+  <p>If multiple toolsets provide a tool with the same name, the first one wins: the duplicate from the later toolset is ignored and a warning identifies both toolsets. Order your toolsets intentionally. To keep both tools callable, give the MCP toolset a unique <code>name:</code> (its tools are then exposed as <code>&lt;name&gt;_&lt;tool&gt;</code>) or restrict the overlapping toolset with its <code>tools:</code> filter.</p>
 </div>
 
 ## See Also

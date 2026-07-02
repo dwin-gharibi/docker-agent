@@ -57,6 +57,12 @@ type Agent struct {
 	// the TUI and session manager.
 	warningsMu      sync.Mutex
 	pendingWarnings []string
+
+	// collisionsMu guards reportedCollisions, the once-per-streak guard for
+	// duplicate-tool-name warnings. collectTools may run concurrently from
+	// the runtime loop and MCP notification handlers.
+	collisionsMu       sync.Mutex
+	reportedCollisions map[string]bool
 }
 
 // New creates a new agent
@@ -380,8 +386,30 @@ func (a *Agent) StartedTools(ctx context.Context) ([]tools.Tool, error) {
 }
 
 // collectTools gathers tools from all started toolsets plus static tools.
+// Tool names must be unique across the whole set (providers such as
+// Anthropic reject requests with duplicate tool names, and the dispatcher
+// resolves calls by name), so duplicates are dropped as they are collected:
+// the first toolset in configuration order wins, as documented in the MCP
+// toolset docs. Each collision is surfaced to the user once per streak via
+// reportCollisions. See #2251.
 func (a *Agent) collectTools(ctx context.Context) ([]tools.Tool, error) {
 	var agentTools []tools.Tool
+	origins := make(map[string]string)
+	collisions := make(map[string]string)
+
+	collect := func(candidates []tools.Tool, origin string) {
+		for _, tool := range candidates {
+			if firstOrigin, exists := origins[tool.Name]; exists {
+				collisions[collisionKey(tool.Name, firstOrigin, origin)] = fmt.Sprintf(
+					"duplicate tool %q: kept from %s, ignored from %s (first toolset in config wins) — set a unique 'name:' on the MCP toolset or use its 'tools:' filter to disambiguate",
+					tool.Name, firstOrigin, origin)
+				continue
+			}
+			origins[tool.Name] = origin
+			agentTools = append(agentTools, tool)
+		}
+	}
+
 	for _, toolSet := range a.toolsets {
 		if !toolSet.IsStarted() {
 			// Toolset not started; skip it
@@ -402,16 +430,54 @@ func (a *Agent) collectTools(ctx context.Context) ([]tools.Tool, error) {
 			}
 			continue
 		}
-		agentTools = append(agentTools, ta...)
+		collect(ta, tools.DescribeToolSet(toolSet))
 	}
 
-	agentTools = append(agentTools, a.tools...)
+	collect(a.tools, "agent static tools")
+
+	a.reportCollisions(ctx, collisions)
 
 	if a.addDescriptionParameter {
 		agentTools = tools.AddDescriptionParameter(agentTools)
 	}
 
 	return agentTools, nil
+}
+
+// collisionKey identifies one (tool, kept origin, dropped origin) collision so
+// the same persistent collision is reported once per streak, while a new
+// collision (e.g. introduced by an MCP ToolListChanged notification) is
+// reported as fresh.
+func collisionKey(toolName, keptOrigin, droppedOrigin string) string {
+	return toolName + "\x00" + keptOrigin + "\x00" + droppedOrigin
+}
+
+// reportCollisions surfaces duplicate-tool-name collisions to the user once
+// per streak: a collision present on consecutive collectTools runs is only
+// logged at debug level after the first report, and a collision that
+// disappears then reappears is reported again. This mirrors the
+// once-per-streak semantics of toolset start/list failure warnings so the
+// user is alerted without being spammed on every conversation turn.
+func (a *Agent) reportCollisions(ctx context.Context, collisions map[string]string) {
+	a.collisionsMu.Lock()
+	defer a.collisionsMu.Unlock()
+
+	if len(collisions) == 0 {
+		a.reportedCollisions = nil
+		return
+	}
+
+	reported := make(map[string]bool, len(collisions))
+	for key, msg := range collisions {
+		if a.reportedCollisions[key] {
+			slog.DebugContext(ctx, "Duplicate tool name still present", "agent", a.Name(), "detail", msg)
+		} else {
+			slog.WarnContext(ctx, "Duplicate tool name; keeping first occurrence", "agent", a.Name(), "detail", msg)
+			a.AddToolWarning(msg)
+		}
+		reported[key] = true
+	}
+	a.reportedCollisions = reported
 }
 
 func (a *Agent) ToolSets() []tools.ToolSet {
