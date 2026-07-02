@@ -49,7 +49,7 @@ toolsets:
     safer: true
 ```
 
-This auto-registers the [`safer_shell`](../../configuration/hooks/#built-in-hooks) builtin
+This auto-registers the [`safer_shell`](../../configuration/hooks/index.md#built-in-hooks) builtin
 under `pre_tool_use` with `preempt_yolo: true` so the entry fires
 before `Decide()` / `--yolo`. Three behaviors:
 
