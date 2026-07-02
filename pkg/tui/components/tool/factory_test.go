@@ -16,6 +16,7 @@ import (
 
 // withCleanToolRegistry snapshots the package-global custom renderer registry and
 // restores it when the test finishes, so Register calls don't leak across tests.
+// Tests using it must not run in parallel: they would race on the shared registry.
 func withCleanToolRegistry(t *testing.T) {
 	t.Helper()
 	customMu.Lock()
@@ -30,7 +31,6 @@ func withCleanToolRegistry(t *testing.T) {
 }
 
 func TestRegisterAndResolve(t *testing.T) {
-	t.Parallel()
 	withCleanToolRegistry(t)
 
 	// Unknown, unregistered key resolves to nothing.
@@ -71,7 +71,6 @@ func TestRegisterAndResolve(t *testing.T) {
 // and category — so this holds for built-in, Go-SDK, and MCP tools alike. (For an
 // end-to-end custom renderer over a real MCP tool, see examples/golibrary/renderer.)
 func TestNew_Dispatch(t *testing.T) {
-	t.Parallel()
 	ss := service.StaticSessionState{}
 
 	newMsg := func() *types.Message {
@@ -133,7 +132,6 @@ func TestNew_Dispatch(t *testing.T) {
 // full body), list_plans (many plans) and delete_plan (no status) intentionally
 // fall through to the default renderer.
 func TestPlanToolsRouting(t *testing.T) {
-	t.Parallel()
 	withCleanToolRegistry(t)
 
 	for _, name := range []string{
