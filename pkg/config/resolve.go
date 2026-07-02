@@ -114,6 +114,43 @@ func resolveOne(resolvedPath string, envProvider environment.Provider) (string, 
 	}
 }
 
+// StableSourceKey reduces a Sources map key to its stable identity: the part
+// that persists across variant selectors and caller/environment metadata.
+//
+// For URL references the identity is the URL's path (scheme + host + path); the
+// entire query string and fragment are treated as volatile. This is what lets a
+// session created under one variant (e.g. ?gordonTag=v9-light) resume under
+// another (?gordonTag=v9-dev) after the server is relaunched with a different
+// tag: only the query differs, so both share one identity. Treating the whole
+// query as volatile — rather than an enumerated denylist — keeps this robust as
+// new query parameters are introduced by callers.
+//
+// Keys for URL references are url.QueryEscape'd URLs; this decodes the key
+// before parsing. For keys that are not URL references (local files, OCI refs,
+// built-ins) or that cannot be decoded/parsed, the key is returned unchanged,
+// so callers can compare identities without special-casing the source type.
+//
+// The resume fallback that consumes this (see the session manager's
+// resolveSource) always prefers an exact key match and only uses the stable
+// identity when it resolves unambiguously, so collapsing distinct query strings
+// to one identity never silently selects the wrong side-by-side variant.
+func StableSourceKey(key string) string {
+	decoded, err := url.QueryUnescape(key)
+	if err != nil {
+		return key
+	}
+	if !IsURLReference(decoded) {
+		return key
+	}
+	u, err := url.Parse(decoded)
+	if err != nil {
+		return key
+	}
+	u.RawQuery = ""
+	u.Fragment = ""
+	return u.String()
+}
+
 // resolveDirectory enumerates YAML files in a directory and resolves each one.
 func resolveDirectory(dirPath string, envProvider environment.Provider) (Sources, error) {
 	entries, err := os.ReadDir(dirPath)

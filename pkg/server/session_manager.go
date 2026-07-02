@@ -1000,9 +1000,9 @@ func (sm *SessionManager) runtimeForSession(ctx context.Context, sess *session.S
 }
 
 func (sm *SessionManager) loadTeam(ctx context.Context, agentFilename string, runConfig *config.RuntimeConfig) (*team.Team, error) {
-	agentSource, found := sm.Sources[agentFilename]
-	if !found {
-		return nil, fmt.Errorf("agent not found: %s", agentFilename)
+	agentSource, err := sm.resolveSource(agentFilename)
+	if err != nil {
+		return nil, err
 	}
 
 	return teamloader.Load(ctx, agentSource, runConfig, loaderdefaults.Opts()...)
@@ -1011,12 +1011,46 @@ func (sm *SessionManager) loadTeam(ctx context.Context, agentFilename string, ru
 // loadTeamWithConfig is like loadTeam but also returns the loaded model and
 // provider configuration so the runtime can be wired for model switching.
 func (sm *SessionManager) loadTeamWithConfig(ctx context.Context, agentFilename string, runConfig *config.RuntimeConfig) (*teamloader.LoadResult, error) {
-	agentSource, found := sm.Sources[agentFilename]
-	if !found {
-		return nil, fmt.Errorf("agent not found: %s", agentFilename)
+	agentSource, err := sm.resolveSource(agentFilename)
+	if err != nil {
+		return nil, err
 	}
 
 	return teamloader.LoadWithConfig(ctx, agentSource, runConfig, loaderdefaults.Opts()...)
+}
+
+// resolveSource looks up the agent source for agentFilename.
+//
+// An exact match is always preferred so that distinct variants served side by
+// side (e.g. two gordonTag values in the same process) keep their own sources.
+// When there is no exact match, it falls back to matching on a stable identity
+// that ignores volatile URL query parameters (see config.StableSourceKey). This
+// lets a session created under one variant resume under another after the
+// server is relaunched with a different tag — the exact key recorded by the
+// client no longer exists, but the underlying agent does.
+//
+// The fallback only fires when it is unambiguous: if several live sources share
+// the same stable identity, resolving would be a guess, so it returns the
+// not-found error instead of silently picking one.
+func (sm *SessionManager) resolveSource(agentFilename string) (config.Source, error) {
+	if agentSource, found := sm.Sources[agentFilename]; found {
+		return agentSource, nil
+	}
+
+	want := config.StableSourceKey(agentFilename)
+	var match config.Source
+	var matches int
+	for key, source := range sm.Sources {
+		if config.StableSourceKey(key) == want {
+			match = source
+			matches++
+		}
+	}
+	if matches == 1 {
+		return match, nil
+	}
+
+	return nil, fmt.Errorf("agent not found: %s", agentFilename)
 }
 
 // applyRunModelOverride applies modelRef as the per-agent model override

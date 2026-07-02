@@ -805,3 +805,69 @@ func TestResolveSources_URLEncodedKey(t *testing.T) {
 	// The source Name() should still return the original URL for fetching
 	assert.Equal(t, testURL, source.Name())
 }
+
+func TestStableSourceKey(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		key  string
+		want string
+	}{
+		{
+			name: "strips query from url key",
+			key:  url.QueryEscape("http://localhost:7777/gordon-agent?gordonTag=v9-light&desktopVersion=4.81.0&origin=desktop"),
+			want: "http://localhost:7777/gordon-agent",
+		},
+		{
+			name: "another variant normalises to the same identity",
+			key:  url.QueryEscape("http://localhost:7777/gordon-agent?gordonTag=v9-dev&desktopVersion=4.81.0&origin=desktop"),
+			want: "http://localhost:7777/gordon-agent",
+		},
+		{
+			name: "strips all query params, keeping the path identity",
+			key:  url.QueryEscape("http://localhost:7777/gordon-agent?team=blue&gordonTag=v9"),
+			want: "http://localhost:7777/gordon-agent",
+		},
+		{
+			name: "strips fragment as well",
+			key:  url.QueryEscape("http://localhost:7777/gordon-agent?gordonTag=v9#section"),
+			want: "http://localhost:7777/gordon-agent",
+		},
+		{
+			name: "distinct paths keep distinct identities",
+			key:  url.QueryEscape("http://localhost:7777/other-agent?gordonTag=v9"),
+			want: "http://localhost:7777/other-agent",
+		},
+		{
+			name: "non-url key is returned unchanged",
+			key:  "docker_gordon.yaml",
+			want: "docker_gordon.yaml",
+		},
+		{
+			name: "local file key is returned unchanged",
+			key:  "my-agent",
+			want: "my-agent",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, tt.want, StableSourceKey(tt.key))
+		})
+	}
+}
+
+// TestStableSourceKey_VariantsCollide is the property the resume fallback
+// relies on: two source keys that differ only by volatile query parameters
+// must produce the same stable identity.
+func TestStableSourceKey_VariantsCollide(t *testing.T) {
+	t.Parallel()
+
+	light := url.QueryEscape("http://localhost:7777/gordon-agent?gordonTag=v9-light&origin=desktop")
+	dev := url.QueryEscape("http://localhost:7777/gordon-agent?gordonTag=v9-dev&origin=desktop")
+
+	assert.Equal(t, StableSourceKey(light), StableSourceKey(dev))
+}
