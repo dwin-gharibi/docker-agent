@@ -615,10 +615,12 @@ func (m *model) View() string {
 	visibleLines = m.applyURLUnderline(visibleLines, startLine)
 
 	// Sync scroll state and delegate rendering to scrollview which guarantees
-	// fixed-width padding, pinned scrollbar, and exact height.
+	// fixed-width padding, pinned scrollbar, and exact height. Selection and
+	// URL-hover restyling preserve display width, so the scrollview can reuse
+	// memoized line widths instead of re-measuring every visible line.
 	m.scrollview.SetContent(m.renderedLines, m.totalScrollableHeight())
 	m.scrollview.SetScrollOffset(m.scrollOffset)
-	return m.scrollview.ViewWithLines(visibleLines)
+	return m.scrollview.ViewWithRestyledLines(visibleLines)
 }
 
 // updateScrollState recomputes rendered content, bottom slack and scroll

@@ -15,6 +15,7 @@ import (
 	"github.com/docker/docker-agent/pkg/session"
 	"github.com/docker/docker-agent/pkg/tools"
 	"github.com/docker/docker-agent/pkg/tui/animation"
+	"github.com/docker/docker-agent/pkg/tui/components/message"
 	"github.com/docker/docker-agent/pkg/tui/components/reasoningblock"
 	"github.com/docker/docker-agent/pkg/tui/core/layout"
 	tuimessages "github.com/docker/docker-agent/pkg/tui/messages"
@@ -921,6 +922,39 @@ func BenchmarkMessagesView_LargeHistory(b *testing.B) {
 	for i := range b.N {
 		m.scrollOffset = (i % 100) * 5
 		m.scrollview.SetScrollOffset(m.scrollOffset)
+		_ = m.View()
+	}
+}
+
+// BenchmarkMessagesView_StreamingLargeHistory benchmarks the dirty-rebuild
+// path: each streamed chunk invalidates the last message and forces
+// ensureAllItemsRendered to rebuild the line buffer on the next View().
+// The streaming message is reset periodically so the per-op cost reflects a
+// steady-state medium message rather than one unbounded message.
+func BenchmarkMessagesView_StreamingLargeHistory(b *testing.B) {
+	sessionState := &service.SessionState{}
+	m := NewScrollableView(120, 40, sessionState).(*model)
+	m.SetSize(120, 40)
+
+	for i := range 500 {
+		content := "Message " + strconv.Itoa(i) + ": " + strings.Repeat("content ", 20)
+		msg := types.Agent(types.MessageTypeAssistant, "root", content)
+		m.messages = append(m.messages, msg)
+		m.views = append(m.views, m.createMessageView(msg))
+	}
+	m.View()
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for i := range b.N {
+		if i%200 == 0 {
+			last := m.messages[len(m.messages)-1]
+			last.Content = "restart: "
+			m.views[len(m.views)-1].(message.Model).SetMessage(last)
+			m.invalidateItem(len(m.messages) - 1)
+		}
+		_ = m.AppendToLastMessage("root", "chunk "+strconv.Itoa(i%10)+" ")
 		_ = m.View()
 	}
 }
