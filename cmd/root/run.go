@@ -454,7 +454,7 @@ func (f *runExecFlags) runOrExec(ctx context.Context, out *cli.Printer, args []s
 		return f.handleExecMode(ctx, out, rt, sess, args)
 	}
 
-	listenOpt, err := f.startAttachedServer(ctx, out, rt, sess)
+	coordinatorOpt, err := f.startSessionCoordinator(ctx, out, rt, sess)
 	if err != nil {
 		return err
 	}
@@ -464,8 +464,8 @@ func (f *runExecFlags) runOrExec(ctx context.Context, out *cli.Printer, args []s
 	if err != nil {
 		return err
 	}
-	if listenOpt != nil {
-		opts = append(opts, listenOpt)
+	if coordinatorOpt != nil {
+		opts = append(opts, coordinatorOpt)
 	}
 
 	eventHooks, err := parseOnEventFlags(f.onEventSpecs)
@@ -1088,6 +1088,9 @@ func (f *runExecFlags) createSessionSpawner(agentSource config.Source, sessStore
 		}
 		if ctrl != nil {
 			appOpts = append(appOpts, app.WithSnapshotController(ctrl))
+		}
+		if coordinatorOpt := f.recallCoordinatorOpt(spawnCtx, localRt, newSess); coordinatorOpt != nil {
+			appOpts = append(appOpts, coordinatorOpt)
 		}
 
 		a := app.New(spawnCtx, localRt, newSess, appOpts...)

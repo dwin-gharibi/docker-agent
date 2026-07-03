@@ -206,6 +206,25 @@ func (m *mockProvider) BaseConfig() base.Config { return base.Config{} }
 
 func (m *mockProvider) MaxTokens() int { return 0 }
 
+type activeRootBlockingProvider struct {
+	id      string
+	release <-chan struct{}
+}
+
+func (p *activeRootBlockingProvider) ID() modelsdev.ID { return modelsdev.ParseIDOrZero(p.id) }
+
+func (p *activeRootBlockingProvider) CreateChatCompletionStream(ctx context.Context, _ []chat.Message, _ []tools.Tool) (chat.MessageStream, error) {
+	select {
+	case <-p.release:
+		return newStreamBuilder().AddStopWithUsage(1, 1).Build(), nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (p *activeRootBlockingProvider) BaseConfig() base.Config { return base.Config{} }
+func (p *activeRootBlockingProvider) MaxTokens() int          { return 0 }
+
 type mockProviderWithError struct {
 	id string
 }
@@ -497,6 +516,26 @@ func TestToolCallSequence(t *testing.T) {
 
 	require.True(t, hasEventType(t, events, &StreamStartedEvent{}), "Expected StreamStartedEvent")
 	require.True(t, hasEventType(t, events, &StreamStoppedEvent{}), "Expected StreamStoppedEvent")
+}
+
+func TestRunStreamIncrementsActiveRootStreamsBeforeReturning(t *testing.T) {
+	t.Parallel()
+
+	release := make(chan struct{})
+	prov := &activeRootBlockingProvider{id: "test/mock-model", release: release}
+	root := agent.New("root", "You are a test agent", agent.WithModel(prov))
+	rt, err := NewLocalRuntime(t.Context(), team.New(team.WithAgents(root)), WithSessionCompaction(false), WithModelStore(mockModelStore{}))
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	events := rt.RunStream(ctx, session.New(session.WithUserMessage("block")))
+	assert.Equal(t, int32(1), rt.activeRootStreams.Load())
+
+	cancel()
+	for range events {
+	}
+	assert.Equal(t, int32(0), rt.activeRootStreams.Load())
+	close(release)
 }
 
 func TestRecallUsesSteerWhileRootStreamActive(t *testing.T) {

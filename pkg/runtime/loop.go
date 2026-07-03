@@ -225,10 +225,13 @@ func (r *LocalRuntime) finalizeEventChannel(ctx context.Context, sess *session.S
 func (r *LocalRuntime) RunStream(ctx context.Context, sess *session.Session) <-chan Event {
 	slog.DebugContext(ctx, "Starting runtime stream", "agent", r.currentAgentName(), "session_id", sess.ID)
 	events := make(chan Event, defaultEventChannelCapacity)
+	rootStream := !sess.IsSubSession()
+	if rootStream {
+		r.activeRootStreams.Add(1)
+	}
 
 	go func() {
-		if !sess.IsSubSession() {
-			r.activeRootStreams.Add(1)
+		if rootStream {
 			defer r.activeRootStreams.Add(-1)
 		}
 		r.runStreamLoop(ctx, sess, events)
