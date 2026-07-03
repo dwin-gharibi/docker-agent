@@ -66,7 +66,7 @@ $ docker agent run [config] [message...] [flags]
 | `--hook-stop <cmd>`                     | Add a stop hook command, fired when the model finishes responding (repeatable)                                                            |
 | `--fake <path>`                         | Replay AI responses from a cassette file (for testing). Mutually exclusive with `--record`.                                               |
 | `--fake-stream [ms]`                    | When replaying with `--fake`, simulate streaming with a delay between chunks (defaults to 15ms when given without a value).               |
-| `--record [path]`                       | Record AI API interactions to a cassette file and generate a TUI e2e test from the session (auto-generates filename if no path given)     |
+| `--record [path]`                       | Record AI API interactions to a cassette file and generate a TUI e2e test from the session (auto-generates filename if no path given). Routes through `--models-gateway` when one is configured. |
 | `-d, --debug`                           | Enable debug logging                                                                                                                      |
 | `--log-file <path>`                     | Custom debug log location                                                                                                                 |
 | `-o, --otel`                            | Enable OpenTelemetry observability: traces, metrics, and logs. Requires `OTEL_EXPORTER_OTLP_ENDPOINT` to export to a collector. |
@@ -213,7 +213,7 @@ $ docker agent serve api <agent-file>|<agents-dir>|<registry-ref> [flags]
 | `-s, --session-db <path>`  | `session.db`       | Path to the SQLite session database (relative paths resolve against the working directory).                |
 | `--pull-interval <minutes>`| `0`                | Periodically re-pull OCI/URL references and refresh the agent definition. `0` disables auto-pull.          |
 | `--fake <path>`             | (none)             | Replay AI responses from a cassette file (for testing). Mutually exclusive with `--record`.               |
-| `--record [path]`           | (none)             | Record AI API interactions to a cassette file.                                                            |
+| `--record [path]`           | (none)             | Record AI API interactions to a cassette file. Routes through `--models-gateway` when one is configured. |
 | `--mcp-oauth-redirect-uri <url>` | (none)        | OAuth redirect URI for the unmanaged MCP OAuth flow in server mode. When set, the runtime drives PKCE and code exchange in-process and sends the full authorize URL to the client via elicitation. See [Remote MCP](../remote-mcp/index.md) for details. |
 
 > **Diagnostics:** Set `CAGENT_PPROF_ADDR=127.0.0.1:6060` (or `--pprof-addr`, a hidden flag) to start a live Go pprof server at `/debug/pprof/`. Use a loopback address; a non-loopback binding logs a security warning.
