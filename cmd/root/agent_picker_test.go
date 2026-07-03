@@ -333,8 +333,14 @@ func TestAgentPickerWindowing(t *testing.T) {
 	assert.Equal(t, wantH, gotH)
 
 	// Moving down past the window scrolls it, keeping the cursor visible.
+	// The panel geometry must not shift while scrolling, or mouse
+	// hit-testing would mis-track the cards.
+	w0, h0 := m.panelSize()
 	for range 5 {
 		m.moveDown()
+		w, h := m.panelSize()
+		assert.Equal(t, w0, w, "panel width changed while scrolling")
+		assert.Equal(t, h0, h, "panel height changed while scrolling")
 	}
 	assert.Equal(t, 5, m.cursor)
 	assert.Equal(t, 4, m.offset)

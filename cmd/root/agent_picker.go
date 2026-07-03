@@ -57,6 +57,9 @@ func agentRefsInDir(dir string) []string {
 			continue
 		}
 		ref := filepath.Join(dir, entry.Name())
+		// TOCTOU: the file could be swapped for a special file between this
+		// check and the config read. Acceptable for a single-user CLI — the
+		// check guards against stray FIFOs/sockets, not races.
 		if info, err := os.Stat(ref); err != nil || !info.Mode().IsRegular() {
 			continue
 		}
@@ -260,7 +263,9 @@ func (m *agentPickerModel) moveDown() {
 
 // visibleCount returns the number of cards shown at once: all of them when
 // they fit (or before the first WindowSizeMsg), otherwise as many as fit the
-// terminal height, at least one.
+// terminal height, at least one. The panel is centred within the terminal,
+// so the bound is the terminal height minus the panel's non-card rows; fit
+// can exceed the number of cards on tall terminals and is clamped.
 func (m *agentPickerModel) visibleCount() int {
 	n := len(m.choices)
 	if m.height <= 0 {
@@ -558,8 +563,8 @@ const (
 	// agentPickerPanelOverhead is the number of panel rows that are not
 	// cards: border (2) + padding (2) + title (1) + blank (1) + subtitle (1)
 	// + blank (1) + blank (1) + lean checkbox (1) + blank (1) + help (1).
-	// Used to window the card list to the terminal height; must stay in sync
-	// with panelSize.
+	// Shared by panelSize and visibleCount so the windowing math can't drift
+	// from the rendered chrome.
 	agentPickerPanelOverhead = 12
 )
 
@@ -655,11 +660,7 @@ func (m *agentPickerModel) panelSize() (w, h int) {
 	)
 	// Horizontal chrome: border (1) + padding (4) on each side.
 	w = contentWidth + 2*(1+4)
-	// Content rows: title + blank + subtitle + blank + cards (with gaps) +
-	// blank + lean checkbox + blank + help.
-	rows := 4 + m.cardRows() + 4
-	// Vertical chrome: border (2) + padding (2).
-	h = rows + 4
+	h = m.cardRows() + agentPickerPanelOverhead
 	return w, h
 }
 
@@ -669,8 +670,12 @@ func (m *agentPickerModel) headerText() (title, subtitle, help string) {
 	title = styles.HighlightWhiteStyle.Render("Choose an agent to run")
 	subtitleText := "Pick the agent you want to start a session with, or double-click a card."
 	if n := m.visibleCount(); n < len(m.choices) {
-		subtitleText = fmt.Sprintf("Pick an agent (%d–%d of %d, scroll with ↑↓), or double-click a card.",
-			m.offset+1, m.offset+n, len(m.choices))
+		// Pad the indices to the total's width so the subtitle — and thus the
+		// centred panel geometry mouse hit-testing relies on — keeps a
+		// constant width while scrolling.
+		d := len(strconv.Itoa(len(m.choices)))
+		subtitleText = fmt.Sprintf("Pick an agent (%*d–%*d of %d, scroll with ↑↓), or double-click a card.",
+			d, m.offset+1, d, m.offset+n, len(m.choices))
 	}
 	subtitle = styles.MutedStyle.Render(subtitleText)
 	help = styles.MutedStyle.Render(
