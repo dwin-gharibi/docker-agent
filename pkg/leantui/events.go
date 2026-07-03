@@ -20,21 +20,21 @@ func (m *model) handleEvent(ctx context.Context, ev any) {
 		m.trackStreamStopped()
 		m.handleStreamStopped(ctx)
 	case *runtime.AgentChoiceReasoningEvent:
-		m.appendPending(blockReasoning, e.Content)
+		m.transcript.appendPending(blockReasoning, e.Content)
 	case *runtime.AgentChoiceEvent:
-		m.appendPending(blockAssistant, e.Content)
+		m.transcript.appendPending(blockAssistant, e.Content)
 	case *runtime.PartialToolCallEvent:
-		m.flushPending()
+		m.transcript.flushPending()
 		toolDef := tools.Tool{Name: e.ToolCall.Function.Name}
 		if e.ToolDefinition != nil {
 			toolDef = *e.ToolDefinition
 		}
-		m.toolz.upsert(e.GetAgentName(), e.ToolCall, toolDef, tuitypes.ToolStatusPending)
+		m.transcript.upsertTool(e.GetAgentName(), e.ToolCall, toolDef, tuitypes.ToolStatusPending)
 	case *runtime.ToolCallEvent:
-		m.flushPending()
-		m.toolz.upsert(e.GetAgentName(), e.ToolCall, e.ToolDefinition, tuitypes.ToolStatusRunning)
+		m.transcript.flushPending()
+		m.transcript.upsertTool(e.GetAgentName(), e.ToolCall, e.ToolDefinition, tuitypes.ToolStatusRunning)
 	case *runtime.ToolCallOutputEvent:
-		if tv := m.toolz.get(e.ToolCallID); tv != nil && tv.message != nil {
+		if tv := m.transcript.tool(e.ToolCallID); tv != nil && tv.message != nil {
 			tv.message.AppendToolOutput(e.Output)
 			if tv.message.ToolStatus == tuitypes.ToolStatusPending {
 				tv.message.ToolStatus = tuitypes.ToolStatusRunning
@@ -45,9 +45,9 @@ func (m *model) handleEvent(ctx context.Context, ev any) {
 			}
 		}
 	case *runtime.ToolCallResponseEvent:
-		m.finishTool(e)
+		m.transcript.finishTool(e, m.sessionState)
 	case *runtime.ToolCallConfirmationEvent:
-		m.toolz.remove(toolViewID(e.ToolCall))
+		m.transcript.removeTool(toolViewID(e.ToolCall))
 		toolDef := ensureToolDefinition(e.ToolCall, e.ToolDefinition)
 		m.confirm = &confirmState{
 			tool:     toolDef.Name,
@@ -71,13 +71,13 @@ func (m *model) handleEvent(ctx context.Context, ev any) {
 	case *runtime.SessionCompactionEvent:
 		m.handleSessionCompaction(ctx, e)
 	case *runtime.ErrorEvent:
-		m.flushPending()
+		m.transcript.flushPending()
 		m.addNotice("✗ ", e.Error, stError())
 	case *runtime.WarningEvent:
 		m.addNotice("⚠ ", e.Message, stWarning())
 	case *runtime.ShellOutputEvent:
 		output := e.Output
-		m.addBlock(func(w int) []string { return renderToolOutput(output, w) })
+		m.transcript.addBlock(func(w int) []string { return renderToolOutput(output, w) })
 	case *runtime.AgentSwitchingEvent:
 		if e.Switching && e.ToAgent != "" {
 			m.addNotice("→ ", "Switching to "+e.ToAgent, stMuted())
@@ -111,7 +111,7 @@ func (m *model) handleSessionCompaction(ctx context.Context, e *runtime.SessionC
 // finishBusy clears the busy state at the end of a run and starts the next
 // queued message, if any. It reports whether a queued run was started.
 func (m *model) finishBusy(ctx context.Context) bool {
-	m.flushPending()
+	m.transcript.flushPending()
 	m.busy = false
 	m.runCancel = nil
 
@@ -122,42 +122,6 @@ func (m *model) finishBusy(ctx context.Context) bool {
 		return true
 	}
 	return false
-}
-
-func (m *model) appendPending(kind blockKind, content string) {
-	if content == "" {
-		return
-	}
-	if m.pending == nil || m.pending.kind != kind {
-		m.flushPending()
-		m.pending = &pendingBlock{kind: kind}
-	}
-	m.pending.text.WriteString(content)
-}
-
-// flushPending finalizes the in-progress streamed block into the conversation.
-func (m *model) flushPending() {
-	if m.pending == nil {
-		return
-	}
-	text := m.pending.text.String()
-	kind := m.pending.kind
-	m.pending = nil
-
-	switch kind {
-	case blockReasoning:
-		m.addBlock(func(w int) []string { return renderReasoningLines(text, w) })
-	case blockAssistant:
-		m.addBlock(func(w int) []string { return renderAssistantLines(text, w) })
-	}
-}
-
-func (m *model) finishTool(e *runtime.ToolCallResponseEvent) {
-	view := m.toolz.finish(e)
-	if view == nil {
-		return
-	}
-	m.addBlock(func(w int) []string { return renderToolWithState(view, w, 0, m.sessionState) })
 }
 
 func (m *model) applyTeamInfo(ctx context.Context, e *runtime.TeamInfoEvent) {

@@ -89,7 +89,7 @@ func (m *model) handleInterrupt() {
 			m.runCancel()
 		}
 		m.queue = nil
-		m.addBlock(func(int) []string { return []string{stWarning().Render("⏹ Cancelled")} })
+		m.transcript.addBlock(func(int) []string { return []string{stWarning().Render("⏹ Cancelled")} })
 	case !m.editor.isEmpty():
 		m.editor.reset()
 		m.ac.dismiss()
@@ -359,8 +359,7 @@ func (m *model) resetConversation() {
 		m.runCancel()
 		m.runCancel = nil
 	}
-	m.pending = nil
-	m.toolz.reset()
+	m.transcript.clearActive()
 	m.queue = nil
 	m.busy = false
 	m.confirm = nil
@@ -384,15 +383,15 @@ func (m *model) quit() {
 }
 
 func (m *model) addUserEcho(text string) {
-	m.addBlock(func(w int) []string { return renderUserLines(text, w) })
+	m.transcript.addBlock(func(w int) []string { return renderUserLines(text, w) })
 }
 
 func (m *model) addNotice(prefix, text string, style lipgloss.Style) {
-	m.addBlock(func(w int) []string { return renderNoticeLines(prefix, text, w, style) })
+	m.transcript.addBlock(func(w int) []string { return renderNoticeLines(prefix, text, w, style) })
 }
 
 func (m *model) commitHelp() {
-	m.addBlock(func(int) []string {
+	m.transcript.addBlock(func(int) []string {
 		return []string{
 			stBold().Render("Commands"),
 			stMuted().Render("  /new       start a new session"),
