@@ -3,6 +3,7 @@ title: "OpenAI"
 description: "Use GPT-4o, GPT-5, GPT-5-mini, and other OpenAI models with docker-agent."
 keywords: docker agent, ai agents, model providers, llm, openai
 weight: 200
+canonical: https://docs.docker.com/ai/docker-agent/providers/openai/
 ---
 
 _Use GPT-4o, GPT-5, GPT-5-mini, and other OpenAI models with docker-agent._

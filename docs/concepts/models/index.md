@@ -3,6 +3,7 @@ title: "Models"
 description: "Models are the AI brains behind your agents. docker-agent supports multiple providers and flexible configuration."
 keywords: docker agent, ai agents, concepts, models
 weight: 20
+canonical: https://docs.docker.com/ai/docker-agent/concepts/models/
 ---
 
 _Models are the AI brains behind your agents. docker-agent supports multiple providers and flexible configuration._

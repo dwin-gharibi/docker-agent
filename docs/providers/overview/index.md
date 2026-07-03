@@ -4,6 +4,7 @@ description: "docker-agent supports multiple AI model providers. Choose the righ
 keywords: docker agent, ai agents, model providers, llm
 linkTitle: "Overview"
 weight: 10
+canonical: https://docs.docker.com/ai/docker-agent/providers/overview/
 aliases:
   - /ai/docker-agent/model-providers/
 ---

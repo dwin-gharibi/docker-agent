@@ -3,6 +3,7 @@ title: "Evaluation"
 description: "Measure agent quality with automated evaluations — tool call accuracy, response relevance, output size, and more."
 keywords: docker agent, ai agents, features, evaluation
 weight: 100
+canonical: https://docs.docker.com/ai/docker-agent/features/evaluation/
 aliases:
   - /ai/docker-agent/evals/
 ---

@@ -3,6 +3,7 @@ title: "Tools"
 description: "Tools give agents the ability to interact with the world — read files, run commands, search the web, query databases, and more."
 keywords: docker agent, ai agents, concepts, tools
 weight: 30
+canonical: https://docs.docker.com/ai/docker-agent/concepts/tools/
 ---
 
 _Tools give agents the ability to interact with the world — read files, run commands, search the web, query databases, and more._

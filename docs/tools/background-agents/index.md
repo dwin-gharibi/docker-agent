@@ -4,6 +4,7 @@ description: "Dispatch work to sub-agents concurrently and collect results async
 keywords: docker agent, ai agents, tools, toolsets, background agents tool
 linkTitle: "Background Agents"
 weight: 90
+canonical: https://docs.docker.com/ai/docker-agent/tools/background-agents/
 ---
 
 _Dispatch work to sub-agents concurrently and collect results asynchronously._

@@ -4,6 +4,7 @@ description: "docker-agent uses YAML or HCL configuration files to define agents
 keywords: docker agent, ai agents, configuration, yaml, configuration overview
 linkTitle: "Overview"
 weight: 10
+canonical: https://docs.docker.com/ai/docker-agent/configuration/overview/
 aliases:
   - /ai/docker-agent/reference/config/
 ---

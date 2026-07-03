@@ -4,6 +4,7 @@ description: "Expose docker-agent agents via the Agent Client Protocol for integ
 keywords: docker agent, ai agents, features, acp (agent client protocol)
 linkTitle: "ACP"
 weight: 70
+canonical: https://docs.docker.com/ai/docker-agent/features/acp/
 aliases:
   - /ai/docker-agent/integrations/acp/
 ---

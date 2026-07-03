@@ -3,6 +3,7 @@ title: "Remote MCP Servers"
 description: "Connect docker-agent to cloud services via remote MCP servers with built-in OAuth authentication."
 keywords: docker agent, ai agents, features, remote mcp servers
 weight: 120
+canonical: https://docs.docker.com/ai/docker-agent/features/remote-mcp/
 ---
 
 _Connect docker-agent to cloud services via remote MCP servers with built-in OAuth authentication._

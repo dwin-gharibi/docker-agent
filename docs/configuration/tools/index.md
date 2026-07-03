@@ -4,6 +4,7 @@ description: "Complete reference for configuring built-in tools, MCP tools, and 
 keywords: docker agent, ai agents, configuration, yaml, tool configuration
 linkTitle: "Tool Config"
 weight: 50
+canonical: https://docs.docker.com/ai/docker-agent/configuration/tools/
 aliases:
   - /ai/docker-agent/reference/toolsets/
 ---

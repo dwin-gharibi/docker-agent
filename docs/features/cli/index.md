@@ -3,6 +3,7 @@ title: "CLI Reference"
 description: "Complete reference for all docker-agent command-line commands and flags."
 keywords: docker agent, ai agents, features, cli reference
 weight: 30
+canonical: https://docs.docker.com/ai/docker-agent/features/cli/
 aliases:
   - /ai/docker-agent/reference/cli/
 ---

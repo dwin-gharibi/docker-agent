@@ -4,6 +4,7 @@ description: "Execute arbitrary shell commands in the user's environment."
 keywords: docker agent, ai agents, tools, toolsets, shell tool
 linkTitle: "Shell"
 weight: 20
+canonical: https://docs.docker.com/ai/docker-agent/tools/shell/
 ---
 
 _Execute arbitrary shell commands in the user's environment._

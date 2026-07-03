@@ -3,6 +3,7 @@ title: "Troubleshooting"
 description: "Common issues and how to resolve them when working with docker-agent."
 keywords: docker agent, ai agents, community, troubleshooting
 weight: 20
+canonical: https://docs.docker.com/ai/docker-agent/community/troubleshooting/
 ---
 
 _Common issues and how to resolve them when working with docker-agent._

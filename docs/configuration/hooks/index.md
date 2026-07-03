@@ -3,6 +3,7 @@ title: "Hooks"
 description: "Run shell commands at various points during agent execution for deterministic control over behavior."
 keywords: docker agent, ai agents, configuration, yaml, hooks
 weight: 60
+canonical: https://docs.docker.com/ai/docker-agent/configuration/hooks/
 ---
 
 _Run shell commands at various points during agent execution for deterministic control over behavior._
