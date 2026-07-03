@@ -246,13 +246,18 @@ func (f *runExecFlags) runRunCommand(cmd *cobra.Command, args []string) (command
 		}
 		refs := parseAgentPickerRefs(f.agentPickerSpec)
 		applyTheme(f.theme)
-		chosen, err := selectAgentRef(ctx, refs, f.runConfig.EnvProvider())
+		chosen, lean, err := selectAgentRef(ctx, refs, f.runConfig.EnvProvider())
 		if err != nil {
 			if errors.Is(err, errAgentPickerCancelled) {
 				cli.NewPrinter(cmd.OutOrStdout()).Println("Agent selection cancelled.")
 				return nil
 			}
 			return err
+		}
+		// The picker's "Lean Mode" checkbox opts into the lean TUI; unticked
+		// keeps the normal run mode (whatever the flags/user config decide).
+		if lean {
+			f.lean = true
 		}
 		// With --agent-picker the agent comes from the picker, so any
 		// positional args are messages. Prepend the chosen ref so the rest

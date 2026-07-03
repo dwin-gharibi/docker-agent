@@ -78,15 +78,16 @@ func loadAgentChoices(ctx context.Context, refs []string, env environment.Provid
 	return choices
 }
 
-// selectAgentRef shows a full-screen picker and returns the chosen agent ref.
-// When only a single ref is supplied there is nothing to choose, so it is
-// returned directly without showing any UI.
-func selectAgentRef(ctx context.Context, refs []string, env environment.Provider) (string, error) {
+// selectAgentRef shows a full-screen picker and returns the chosen agent ref
+// along with whether the user ticked the "Lean Mode" checkbox. When only a
+// single ref is supplied there is nothing to choose, so it is returned
+// directly without showing any UI.
+func selectAgentRef(ctx context.Context, refs []string, env environment.Provider) (ref string, lean bool, err error) {
 	if len(refs) == 0 {
-		return "", errors.New("no agent refs to choose from")
+		return "", false, errors.New("no agent refs to choose from")
 	}
 	if len(refs) == 1 {
-		return refs[0], nil
+		return refs[0], false, nil
 	}
 
 	choices := loadAgentChoices(ctx, refs, env)
@@ -95,14 +96,14 @@ func selectAgentRef(ctx context.Context, refs []string, env environment.Provider
 	p := tea.NewProgram(m, tea.WithContext(ctx))
 	final, err := p.Run()
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 
 	result, ok := final.(*agentPickerModel)
 	if !ok || result.cancelled {
-		return "", errAgentPickerCancelled
+		return "", false, errAgentPickerCancelled
 	}
-	return result.choices[result.cursor].ref, nil
+	return result.choices[result.cursor].ref, result.leanMode, nil
 }
 
 // agentPickerKeyMap holds the key bindings for the agent picker.
@@ -111,6 +112,7 @@ type agentPickerKeyMap struct {
 	Down    key.Binding
 	Choose  key.Binding
 	Details key.Binding
+	Lean    key.Binding
 	Quit    key.Binding
 }
 
@@ -131,6 +133,10 @@ var agentPickerKeys = agentPickerKeyMap{
 		key.WithKeys("?"),
 		key.WithHelp("?", "view yaml"),
 	),
+	Lean: key.NewBinding(
+		key.WithKeys("l"),
+		key.WithHelp("l", "toggle lean mode"),
+	),
 	Quit: key.NewBinding(
 		key.WithKeys("esc", "ctrl+c", "q"),
 		key.WithHelp("esc", "cancel"),
@@ -144,6 +150,10 @@ type agentPickerModel struct {
 	width     int
 	height    int
 	cancelled bool
+
+	// leanMode mirrors the "Lean Mode" checkbox: when ticked the chosen
+	// agent runs in the lean TUI instead of the full one. Off by default.
+	leanMode bool
 
 	// showDetails toggles the scrollable YAML dialog overlay for the
 	// currently selected agent.
@@ -223,6 +233,9 @@ func (m *agentPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, agentPickerKeys.Details):
 			m.openDetails()
 			return m, nil
+		case key.Matches(msg, agentPickerKeys.Lean):
+			m.leanMode = !m.leanMode
+			return m, nil
 		case key.Matches(msg, agentPickerKeys.Choose):
 			return m, tea.Quit
 		}
@@ -252,6 +265,11 @@ func (m *agentPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // selection. Clicks are ignored while the YAML dialog is open.
 func (m *agentPickerModel) handleMouseClick(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 	if m.showDetails || msg.Button != tea.MouseLeft {
+		return m, nil
+	}
+	if m.leanCheckboxAt(msg.X, msg.Y) {
+		m.leanMode = !m.leanMode
+		m.lastClickIndex = -1
 		return m, nil
 	}
 	i, ok := m.cardAt(msg.X, msg.Y)
@@ -495,6 +513,32 @@ func (m *agentPickerModel) cardAt(x, y int) (int, bool) {
 	return i, true
 }
 
+// leanCheckboxAt reports whether terminal coordinates land on the "Lean
+// Mode" checkbox row. It mirrors the layout produced by render: the checkbox
+// sits one blank row below the last card, at the cards' left offset.
+func (m *agentPickerModel) leanCheckboxAt(x, y int) bool {
+	panelWidth, panelHeight := m.panelSize()
+	originX := max((m.width-panelWidth)/2, 0)
+	originY := max((m.height-panelHeight)/2, 0)
+
+	cardRows := len(m.choices)*agentPickerCardHeight + max(len(m.choices)-1, 0)*agentPickerCardGap
+	checkboxY := originY + agentPickerCardsTop + cardRows + 1
+	if y != checkboxY {
+		return false
+	}
+	relX := x - originX - agentPickerCardsLeft
+	return relX >= 0 && relX < lipgloss.Width(m.leanCheckbox())
+}
+
+// leanCheckbox renders the "Lean Mode" checkbox line.
+func (m *agentPickerModel) leanCheckbox() string {
+	box := "[ ]"
+	if m.leanMode {
+		box = styles.SuccessStyle.Render("[x]")
+	}
+	return box + " " + styles.SecondaryStyle.Render("Lean Mode")
+}
+
 // panelSize returns the outer dimensions of the rendered picker panel without
 // rendering every card. cardAt relies on it to place hit zones, and it is
 // called on every mouse-motion event, so it must stay cheap: cards all share
@@ -510,9 +554,9 @@ func (m *agentPickerModel) panelSize() (w, h int) {
 	// Horizontal chrome: border (1) + padding (4) on each side.
 	w = contentWidth + 2*(1+4)
 	// Content rows: title + blank + subtitle + blank + cards (with gaps) +
-	// blank + help.
+	// blank + lean checkbox + blank + help.
 	cardRows := len(m.choices)*agentPickerCardHeight + max(len(m.choices)-1, 0)*agentPickerCardGap
-	rows := 4 + cardRows + 2
+	rows := 4 + cardRows + 4
 	// Vertical chrome: border (2) + padding (2).
 	h = rows + 4
 	return w, h
@@ -529,6 +573,7 @@ func (m *agentPickerModel) headerText() (title, subtitle, help string) {
 			"double-click select",
 			agentPickerKeys.Choose.Help().Key + " " + agentPickerKeys.Choose.Help().Desc,
 			agentPickerKeys.Details.Help().Key + " " + agentPickerKeys.Details.Help().Desc,
+			agentPickerKeys.Lean.Help().Key + " " + agentPickerKeys.Lean.Help().Desc,
 			agentPickerKeys.Quit.Help().Key + " " + agentPickerKeys.Quit.Help().Desc,
 		}, "   "),
 	)
@@ -555,6 +600,8 @@ func (m *agentPickerModel) render() string {
 		subtitle,
 		"",
 		list,
+		"",
+		m.leanCheckbox(),
 		"",
 		help,
 	)
