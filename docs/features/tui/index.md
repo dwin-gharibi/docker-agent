@@ -81,6 +81,7 @@ Type `/` during a session to see available commands, or press <kbd>Ctrl</kbd>+<k
 | `/attach`          | Attach a file to your message                                                        |
 | `/shell`           | Open a shell                                                                         |
 | `/star`            | Star/unstar the current session                                                      |
+| `/context`         | Show a context-window breakdown: estimated tokens per category (system prompt, tool definitions, prompt files, messages, tool results, compaction summary) |
 | `/cost`            | Show cost breakdown for this session                                                 |
 | `/eval`            | Create an evaluation report                                                          |
 | `/pause`           | Pause/resume the runtime loop. While the agent is mid-request, the resize handle shows "Pausing…" until the in-flight request completes; once the loop is blocked the indicator changes to "⏸ Paused". Run `/pause` again to resume. |

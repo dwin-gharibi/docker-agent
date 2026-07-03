@@ -175,6 +175,42 @@ func TestGetMessagesWithSummary(t *testing.T) {
 	assert.Equal(t, 3, userAssistantMessages, "should only include messages after summary")
 }
 
+func TestLastSummary(t *testing.T) {
+	t.Parallel()
+
+	s := New()
+	assert.Empty(t, s.LastSummary(), "fresh session has no summary")
+
+	s.AddMessage(NewAgentMessage("", &chat.Message{Role: chat.MessageRoleUser, Content: "hi"}))
+	s.Messages = append(s.Messages, Item{Summary: "first summary"})
+	s.AddMessage(NewAgentMessage("", &chat.Message{Role: chat.MessageRoleUser, Content: "more"}))
+	s.Messages = append(s.Messages, Item{Summary: "second summary"})
+
+	assert.Equal(t, "second summary", s.LastSummary(), "most recent summary wins")
+}
+
+// TestSummaryMessageContentMatchesGetMessages pins the contract consumers
+// (e.g. the runtime context breakdown) rely on: the synthetic summary
+// message in GetMessages output equals SummaryMessageContent(LastSummary()).
+func TestSummaryMessageContentMatchesGetMessages(t *testing.T) {
+	t.Parallel()
+
+	s := New()
+	s.Messages = append(s.Messages, Item{Summary: "what happened before"})
+
+	messages := s.GetMessages(&agent.Agent{})
+	require.NotEmpty(t, messages)
+
+	want := SummaryMessageContent(s.LastSummary())
+	found := false
+	for _, msg := range messages {
+		if msg.Role == chat.MessageRoleUser && msg.Content == want {
+			found = true
+		}
+	}
+	assert.True(t, found, "GetMessages output must contain the exact SummaryMessageContent string")
+}
+
 func TestGetMessages_Instructions(t *testing.T) {
 	t.Parallel()
 

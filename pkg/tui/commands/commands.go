@@ -118,6 +118,17 @@ func builtInSessionCommands() []Item {
 			},
 		},
 		{
+			ID:           "session.context",
+			Label:        "Context",
+			SlashCommand: "/context",
+			Description:  "Show what is consuming the context window, by category",
+			Category:     "Session",
+			Immediate:    true,
+			Execute: func(string) tea.Cmd {
+				return core.CmdHandler(messages.ShowContextDialogMsg{})
+			},
+		},
+		{
 			ID:           "session.cost",
 			Label:        "Cost",
 			SlashCommand: "/cost",

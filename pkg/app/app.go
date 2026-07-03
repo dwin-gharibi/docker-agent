@@ -896,6 +896,25 @@ func (a *App) Session() *session.Session {
 	return a.session
 }
 
+// contextBreakdownProvider is an optional runtime capability: computing the
+// estimated context-window composition for a session. Only the local runtime
+// (which holds the agent and its tools) implements it; remote runtimes
+// don't, so the /context dialog reports the feature as unavailable.
+type contextBreakdownProvider interface {
+	ContextBreakdown(ctx context.Context, sess *session.Session) (*runtime.ContextBreakdown, error)
+}
+
+// ContextBreakdown returns the estimated context-window composition for the
+// current session. Returns an error wrapping [runtime.ErrUnsupported] when
+// the runtime cannot compute it (e.g. remote runtimes).
+func (a *App) ContextBreakdown(ctx context.Context) (*runtime.ContextBreakdown, error) {
+	cp, ok := a.runtime.(contextBreakdownProvider)
+	if !ok {
+		return nil, fmt.Errorf("context breakdown: %w", runtime.ErrUnsupported)
+	}
+	return cp.ContextBreakdown(ctx, a.Session())
+}
+
 // PermissionsInfo returns combined permissions info from team and session.
 // Returns nil if no permissions are configured at either level.
 func (a *App) PermissionsInfo() *runtime.PermissionsInfo {

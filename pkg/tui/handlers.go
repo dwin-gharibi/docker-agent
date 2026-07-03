@@ -447,6 +447,32 @@ func (m *appModel) handleShowCostDialog() (tea.Model, tea.Cmd) {
 	})
 }
 
+// handleShowContextDialog computes the context breakdown in a tea.Cmd
+// goroutine: the computation lists the agent's tools, which may start
+// not-yet-started toolsets (e.g. MCP servers) and block for a while, so it
+// must not run inside the Update loop. The dialog opens when the data is
+// ready.
+func (m *appModel) handleShowContextDialog() (tea.Model, tea.Cmd) {
+	appRef := m.application
+	ctx := m.ctx()
+	return m, func() tea.Msg {
+		breakdown, err := appRef.ContextBreakdown(ctx)
+		switch {
+		case errors.Is(err, runtime.ErrUnsupported):
+			return notification.ShowMsg{
+				Text: "Context breakdown is not supported with remote runtimes",
+				Type: notification.TypeInfo,
+			}
+		case err != nil:
+			return notification.ShowMsg{
+				Text: fmt.Sprintf("Failed to compute context breakdown: %v", err),
+				Type: notification.TypeError,
+			}
+		}
+		return dialog.OpenDialogMsg{Model: dialog.NewContextDialog(breakdown)}
+	}
+}
+
 func (m *appModel) handleShowPermissionsDialog() (tea.Model, tea.Cmd) {
 	perms := m.application.PermissionsInfo()
 	sess := m.application.Session()

@@ -1,0 +1,220 @@
+package runtime
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/docker/docker-agent/pkg/agent"
+	"github.com/docker/docker-agent/pkg/chat"
+	"github.com/docker/docker-agent/pkg/compaction"
+	"github.com/docker/docker-agent/pkg/session"
+	"github.com/docker/docker-agent/pkg/team"
+	"github.com/docker/docker-agent/pkg/tools"
+)
+
+// newBreakdownRuntime builds a LocalRuntime around a single agent with a
+// mock model whose context window is 1000 tokens.
+func newBreakdownRuntime(t *testing.T, agentOpts ...agent.Opt) *LocalRuntime {
+	t.Helper()
+
+	opts := append([]agent.Opt{
+		agent.WithModel(&mockProvider{id: "test/mock-model"}),
+	}, agentOpts...)
+	root := agent.New("root", "You are a test agent", opts...)
+	tm := team.New(team.WithAgents(root))
+
+	rt, err := NewLocalRuntime(t.Context(), tm,
+		WithSessionCompaction(false),
+		WithModelStore(mockModelStoreWithLimit{limit: 1000}),
+	)
+	require.NoError(t, err)
+	return rt
+}
+
+func TestContextBreakdown_CategorizesMessages(t *testing.T) {
+	t.Parallel()
+
+	promptDir := t.TempDir()
+	promptFile := "CONTEXT_BREAKDOWN_TEST_PROMPT.md"
+	promptContent := "Always be excellent to each other."
+	require.NoError(t, os.WriteFile(filepath.Join(promptDir, promptFile), []byte(promptContent), 0o600))
+
+	rt := newBreakdownRuntime(t,
+		agent.WithTools(
+			tools.Tool{Name: "echo", Description: "Echoes input", Parameters: map[string]any{"type": "object"}},
+			tools.Tool{Name: "list", Description: "Lists files"},
+		),
+		agent.WithAddPromptFiles([]string{promptFile}),
+	)
+	rt.workingDir = promptDir
+
+	sess := session.New(session.WithUserMessage("hello"))
+	sess.AddMessage(&session.Message{Message: chat.Message{
+		Role:      chat.MessageRoleAssistant,
+		Content:   "let me check",
+		ToolCalls: []tools.ToolCall{{ID: "call_1", Function: tools.FunctionCall{Name: "echo", Arguments: `{"text":"hi"}`}}},
+	}})
+	sess.AddMessage(&session.Message{Message: chat.Message{
+		Role:       chat.MessageRoleTool,
+		ToolCallID: "call_1",
+		Content:    "hi",
+	}})
+
+	b, err := rt.ContextBreakdown(t.Context(), sess)
+	require.NoError(t, err)
+
+	assert.Equal(t, "test/mock-model", b.Model)
+	assert.Equal(t, int64(1000), b.ContextLimit)
+
+	// One invariant system message: the agent instruction.
+	assert.Equal(t, 1, b.SystemPrompt.Items)
+	assert.Positive(t, b.SystemPrompt.Tokens)
+
+	// Two static tools.
+	assert.Equal(t, 2, b.ToolDefinitions.Items)
+	assert.Positive(t, b.ToolDefinitions.Tokens)
+
+	// One prompt file found in the working directory.
+	assert.Equal(t, 1, b.PromptFiles.Items)
+	expectedPromptTokens := compaction.EstimateMessageTokens(&chat.Message{
+		Role:    chat.MessageRoleSystem,
+		Content: promptContent,
+	})
+	assert.Equal(t, expectedPromptTokens, b.PromptFiles.Tokens)
+
+	// user + assistant turns; the tool result is its own category.
+	assert.Equal(t, 2, b.Messages.Items)
+	assert.Positive(t, b.Messages.Tokens)
+	assert.Equal(t, 1, b.ToolResults.Items)
+	assert.Positive(t, b.ToolResults.Tokens)
+
+	// No compaction happened.
+	assert.Zero(t, b.CompactionSummary.Items)
+	assert.Zero(t, b.CompactionSummary.Tokens)
+
+	total := b.SystemPrompt.Tokens + b.ToolDefinitions.Tokens + b.PromptFiles.Tokens +
+		b.Messages.Tokens + b.ToolResults.Tokens + b.CompactionSummary.Tokens
+	assert.Equal(t, total, b.TotalTokens())
+}
+
+func TestContextBreakdown_CompactionSummary(t *testing.T) {
+	t.Parallel()
+
+	rt := newBreakdownRuntime(t)
+
+	items := []session.Item{
+		session.NewMessageItem(&session.Message{Message: chat.Message{Role: chat.MessageRoleUser, Content: "old question"}}),
+		session.NewMessageItem(&session.Message{Message: chat.Message{Role: chat.MessageRoleAssistant, Content: "old answer"}}),
+		{Summary: "We discussed old things."},
+		session.NewMessageItem(&session.Message{Message: chat.Message{Role: chat.MessageRoleUser, Content: "new question"}}),
+	}
+	sess := session.New(session.WithMessages(items))
+
+	b, err := rt.ContextBreakdown(t.Context(), sess)
+	require.NoError(t, err)
+
+	// The synthetic summary message lands in its own category; the
+	// pre-compaction turns are gone and only the new question remains.
+	assert.Equal(t, 1, b.CompactionSummary.Items)
+	assert.Positive(t, b.CompactionSummary.Tokens)
+	assert.Equal(t, 1, b.Messages.Items)
+}
+
+// TestContextBreakdown_UserMessageLooksLikeSummary pins the exact-match
+// classification: a user message that merely starts with the summary prefix
+// must stay in the conversation bucket.
+func TestContextBreakdown_UserMessageLooksLikeSummary(t *testing.T) {
+	t.Parallel()
+
+	rt := newBreakdownRuntime(t)
+	sess := session.New(session.WithUserMessage("Session Summary: not actually one"))
+
+	b, err := rt.ContextBreakdown(t.Context(), sess)
+	require.NoError(t, err)
+
+	assert.Zero(t, b.CompactionSummary.Items)
+	assert.Equal(t, 1, b.Messages.Items)
+}
+
+func TestContextBreakdown_ReportedUsageWins(t *testing.T) {
+	t.Parallel()
+
+	rt := newBreakdownRuntime(t)
+
+	sess := session.New(session.WithUserMessage("hi"))
+	sess.AddMessage(&session.Message{Message: chat.Message{
+		Role:    chat.MessageRoleAssistant,
+		Content: "hello there",
+		Usage:   &chat.Usage{InputTokens: 10, OutputTokens: 42},
+	}})
+
+	b, err := rt.ContextBreakdown(t.Context(), sess)
+	require.NoError(t, err)
+
+	// The assistant turn carries provider-reported usage, so its estimate is
+	// the reported output count (plus the per-message overhead), not the
+	// chars-per-token heuristic. The user turn stays heuristic.
+	userTokens := compaction.EstimateMessageTokens(&chat.Message{Role: chat.MessageRoleUser, Content: "hi"})
+	assistantTokens := compaction.EstimateMessageTokens(&chat.Message{
+		Role: chat.MessageRoleAssistant, Content: "hello there",
+		Usage: &chat.Usage{InputTokens: 10, OutputTokens: 42},
+	})
+	assert.Equal(t, userTokens+assistantTokens, b.Messages.Tokens)
+	assert.Equal(t, 2, b.Messages.Items)
+}
+
+func TestContextBreakdown_UnknownContextLimit(t *testing.T) {
+	t.Parallel()
+
+	root := agent.New("root", "You are a test agent",
+		agent.WithModel(&mockProvider{id: "test/mock-model"}))
+	tm := team.New(team.WithAgents(root))
+	rt, err := NewLocalRuntime(t.Context(), tm,
+		WithSessionCompaction(false),
+		WithModelStore(mockModelStore{}), // no catalogue entry
+	)
+	require.NoError(t, err)
+
+	b, err := rt.ContextBreakdown(t.Context(), session.New(session.WithUserMessage("hi")))
+	require.NoError(t, err)
+	assert.Zero(t, b.ContextLimit)
+	assert.Positive(t, b.TotalTokens())
+}
+
+func TestContextBreakdown_NilSession(t *testing.T) {
+	t.Parallel()
+
+	rt := newBreakdownRuntime(t)
+	_, err := rt.ContextBreakdown(t.Context(), nil)
+	require.Error(t, err)
+}
+
+func TestContextBreakdown_NoPromptFiles(t *testing.T) {
+	t.Parallel()
+
+	rt := newBreakdownRuntime(t)
+	rt.workingDir = t.TempDir()
+
+	b, err := rt.ContextBreakdown(t.Context(), session.New(session.WithUserMessage("hi")))
+	require.NoError(t, err)
+	assert.Zero(t, b.PromptFiles.Items)
+	assert.Zero(t, b.PromptFiles.Tokens)
+}
+
+func TestEstimateToolDefinitionTokens(t *testing.T) {
+	t.Parallel()
+
+	withSchema := estimateToolDefinitionTokens(&tools.Tool{
+		Name:        "shell",
+		Description: "Run a shell command",
+		Parameters:  map[string]any{"type": "object", "properties": map[string]any{"cmd": map[string]any{"type": "string"}}},
+	})
+	withoutSchema := estimateToolDefinitionTokens(&tools.Tool{Name: "noop"})
+
+	assert.Positive(t, withoutSchema)
+	assert.Greater(t, withSchema, withoutSchema, "the parameters schema must contribute to the estimate")
+}

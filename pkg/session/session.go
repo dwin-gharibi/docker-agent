@@ -1123,6 +1123,32 @@ func buildInvariantSystemMessages(a *agent.Agent) []chat.Message {
 	return messages
 }
 
+// summaryMessagePrefix prefixes the synthetic user message that carries a
+// compaction summary into the prompt. Shared by buildSessionSummaryMessages
+// and CompactionInput; exposed to callers via SummaryMessageContent.
+const summaryMessagePrefix = "Session Summary: "
+
+// SummaryMessageContent returns the content of the synthetic user message
+// that GetMessages emits to carry a compaction summary into the prompt.
+// Callers that need to recognize that message in GetMessages output (e.g.
+// the runtime's context-window breakdown) match against this exact string
+// instead of duplicating the prefix.
+func SummaryMessageContent(summary string) string {
+	return summaryMessagePrefix + summary
+}
+
+// LastSummary returns the most recent compaction summary stored in the
+// session history, or "" when the session has never been compacted.
+func (s *Session) LastSummary() string {
+	items := s.snapshotItems()
+	for i := range slices.Backward(items) {
+		if items[i].Summary != "" {
+			return items[i].Summary
+		}
+	}
+	return ""
+}
+
 // buildSessionSummaryMessages builds system messages containing the session summary
 // if one exists. Session summaries are context-specific per session and thus should not have a checkpoint (they will be cached alongside the first user message anyway)
 //
@@ -1146,7 +1172,7 @@ func (s *Session) buildSessionSummaryMessages(items []Item) ([]chat.Message, int
 	if lastSummaryIndex >= 0 && lastSummaryIndex < len(items) {
 		messages = append(messages, chat.Message{
 			Role:      chat.MessageRoleUser,
-			Content:   "Session Summary: " + items[lastSummaryIndex].Summary,
+			Content:   SummaryMessageContent(items[lastSummaryIndex].Summary),
 			CreatedAt: s.now().Format(time.RFC3339),
 		})
 	}
@@ -1211,7 +1237,7 @@ func (s *Session) CompactionInput() ([]chat.Message, []int) {
 	if lastSummaryIndex >= 0 {
 		messages = append(messages, chat.Message{
 			Role:      chat.MessageRoleUser,
-			Content:   "Session Summary: " + items[lastSummaryIndex].Summary,
+			Content:   SummaryMessageContent(items[lastSummaryIndex].Summary),
 			CreatedAt: s.now().Format(time.RFC3339),
 		})
 		// The synthetic message stands in for the prior summary item;

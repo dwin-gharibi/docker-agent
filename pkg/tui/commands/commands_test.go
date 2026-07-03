@@ -125,6 +125,15 @@ func TestParseSlashCommand_OtherCommands(t *testing.T) {
 		assert.True(t, ok)
 	})
 
+	t.Run("context command", func(t *testing.T) {
+		t.Parallel()
+		cmd := parser.Parse("/context")
+		require.NotNil(t, cmd)
+		msg := cmd()
+		_, ok := msg.(messages.ShowContextDialogMsg)
+		assert.True(t, ok)
+	})
+
 	t.Run("effort command with level", func(t *testing.T) {
 		t.Parallel()
 		cmd := parser.Parse("/effort high")

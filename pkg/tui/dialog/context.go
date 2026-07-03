@@ -1,0 +1,377 @@
+package dialog
+
+import (
+	"fmt"
+	"image/color"
+	"strings"
+
+	"charm.land/bubbles/v2/key"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/atotto/clipboard"
+
+	"github.com/docker/docker-agent/pkg/runtime"
+	"github.com/docker/docker-agent/pkg/tui/components/notification"
+	"github.com/docker/docker-agent/pkg/tui/components/scrollview"
+	"github.com/docker/docker-agent/pkg/tui/core"
+	"github.com/docker/docker-agent/pkg/tui/core/layout"
+	"github.com/docker/docker-agent/pkg/tui/styles"
+)
+
+// ---------------------------------------------------------------------------
+// contextDialog – TUI dialog displaying the context-window composition
+// ---------------------------------------------------------------------------
+
+type contextDialog struct {
+	BaseDialog
+
+	breakdown  *runtime.ContextBreakdown
+	keyMap     contextDialogKeyMap
+	scrollview *scrollview.Model
+}
+
+type contextDialogKeyMap struct {
+	Close, Copy key.Binding
+}
+
+// NewContextDialog creates the /context dialog showing the estimated
+// context-window composition by category.
+func NewContextDialog(breakdown *runtime.ContextBreakdown) Dialog {
+	if breakdown == nil {
+		breakdown = &runtime.ContextBreakdown{}
+	}
+	return &contextDialog{
+		breakdown: breakdown,
+		scrollview: scrollview.New(
+			scrollview.WithKeyMap(scrollview.ReadOnlyScrollKeyMap()),
+			scrollview.WithReserveScrollbarSpace(true),
+		),
+		keyMap: contextDialogKeyMap{
+			Close: key.NewBinding(key.WithKeys("esc", "enter", "q"), key.WithHelp("Esc", "close")),
+			Copy:  key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "copy")),
+		},
+	}
+}
+
+func (d *contextDialog) Init() tea.Cmd { return nil }
+
+func (d *contextDialog) Update(msg tea.Msg) (layout.Model, tea.Cmd) {
+	if handled, cmd := d.scrollview.Update(msg); handled {
+		return d, cmd
+	}
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		cmd := d.SetSize(msg.Width, msg.Height)
+		return d, cmd
+	case tea.KeyPressMsg:
+		switch {
+		case key.Matches(msg, d.keyMap.Close):
+			return d, core.CmdHandler(CloseDialogMsg{})
+		case key.Matches(msg, d.keyMap.Copy):
+			_ = clipboard.WriteAll(d.renderPlainText())
+			return d, notification.SuccessCmd("Context breakdown copied to clipboard.")
+		}
+	}
+	return d, nil
+}
+
+func (d *contextDialog) dialogSize() (dialogWidth, maxHeight, contentWidth int) {
+	dialogWidth = d.ComputeDialogWidth(70, 50, 100)
+	maxHeight = min(d.Height()*70/100, 30)
+	contentWidth = d.ContentWidth(dialogWidth, 2) - d.scrollview.ReservedCols()
+	return dialogWidth, maxHeight, contentWidth
+}
+
+func (d *contextDialog) Position() (row, col int) {
+	dialogWidth, maxHeight, _ := d.dialogSize()
+	return CenterPosition(d.Width(), d.Height(), dialogWidth, maxHeight)
+}
+
+func (d *contextDialog) View() string {
+	dialogWidth, maxHeight, contentWidth := d.dialogSize()
+	content := d.renderContent(contentWidth, maxHeight)
+	return styles.DialogStyle.Padding(1, 2).Width(dialogWidth).Render(content)
+}
+
+// ---------------------------------------------------------------------------
+// Row model – one renderable category
+// ---------------------------------------------------------------------------
+
+// contextRow is one line of the breakdown: a category (or the free-space
+// remainder) with its estimated token count and item count.
+type contextRow struct {
+	label  string
+	tokens int64
+	items  int
+	noun   string // singular item noun ("message", "tool", "file", "result")
+	free   bool   // true for the free-space remainder row
+}
+
+// contextRows flattens the breakdown into display order. Categories are
+// always listed (zero values included) so users see every bucket the
+// runtime accounts for; the free-space row is appended only when the
+// context limit is known and not already exceeded by the estimate.
+func contextRows(b *runtime.ContextBreakdown) []contextRow {
+	rows := []contextRow{
+		{label: "System prompt", tokens: b.SystemPrompt.Tokens, items: b.SystemPrompt.Items, noun: "message"},
+		{label: "Tool definitions", tokens: b.ToolDefinitions.Tokens, items: b.ToolDefinitions.Items, noun: "tool"},
+		{label: "Prompt files", tokens: b.PromptFiles.Tokens, items: b.PromptFiles.Items, noun: "file"},
+		{label: "Messages", tokens: b.Messages.Tokens, items: b.Messages.Items, noun: "message"},
+		{label: "Tool results", tokens: b.ToolResults.Tokens, items: b.ToolResults.Items, noun: "result"},
+		{label: "Compaction summary", tokens: b.CompactionSummary.Tokens, items: b.CompactionSummary.Items, noun: "summary"},
+	}
+	if free := b.ContextLimit - b.TotalTokens(); b.ContextLimit > 0 && free > 0 {
+		rows = append(rows, contextRow{label: "Free space", tokens: free, free: true})
+	}
+	return rows
+}
+
+// itemsSuffix returns the parenthesized item count, e.g. "(12 messages)".
+func (r *contextRow) itemsSuffix() string {
+	if r.free || r.items == 0 {
+		return ""
+	}
+	noun := r.noun
+	if r.items > 1 {
+		noun += "s"
+	}
+	return fmt.Sprintf("(%d %s)", r.items, noun)
+}
+
+// scaleTokens returns the denominator percentages and the usage bar are
+// computed against: the context limit when known, otherwise the estimated
+// total (the bar then shows relative composition instead of fill level).
+func scaleTokens(b *runtime.ContextBreakdown) int64 {
+	if b.ContextLimit > 0 {
+		return max(b.ContextLimit, b.TotalTokens())
+	}
+	return b.TotalTokens()
+}
+
+// percentLabel formats tokens as a percentage of scale: "<1%" for tiny
+// non-zero slices, "-" for empty ones.
+func percentLabel(tokens, scale int64) string {
+	if tokens <= 0 || scale <= 0 {
+		return "-"
+	}
+	pct := float64(tokens) / float64(scale) * 100
+	if pct < 1 {
+		return "<1%"
+	}
+	return fmt.Sprintf("%.0f%%", pct)
+}
+
+// ---------------------------------------------------------------------------
+// Styled rendering (TUI view)
+// ---------------------------------------------------------------------------
+
+// contextBarGlyphs are the block glyphs of the stacked usage bar.
+const (
+	contextBarFilled = "█"
+	contextBarFree   = "░"
+	contextRowMarker = "■"
+)
+
+// contextEstimateNote labels every figure in the dialog as an estimate, as
+// the counts come from a heuristic rather than the provider's tokenizer.
+const contextEstimateNote = "Token counts are estimates; the provider's tokenizer may count differently."
+
+// categoryColors returns the per-category accent colors, aligned with the
+// order of contextRows. Hues are used categorically (Error's rose tint
+// carries no alarm semantics here); each maps to a distinct color in the
+// bundled themes. A function (not a var) so it picks up theme changes.
+func categoryColors() []color.Color {
+	return []color.Color{
+		styles.MobyBlue,    // system prompt
+		styles.Info,        // tool definitions
+		styles.BadgePurple, // prompt files
+		styles.Success,     // messages
+		styles.Warning,     // tool results
+		styles.Error,       // compaction summary
+	}
+}
+
+func (d *contextDialog) renderContent(contentWidth, maxHeight int) string {
+	b := d.breakdown
+	rows := contextRows(b)
+	scale := scaleTokens(b)
+
+	header := RenderTitle("Context Window", contentWidth, styles.DialogTitleStyle)
+	if meta := contextHeaderMeta(b); meta != "" {
+		header += "\n" + styles.DialogOptionsStyle.Width(contentWidth).Render(meta)
+	}
+
+	lines := []string{
+		header,
+		RenderSeparator(contentWidth),
+		"",
+		renderContextBar(rows, scale, contentWidth),
+		styles.MutedStyle.Render(usageSummary(b)),
+		"",
+	}
+
+	labelWidth := contextLabelWidth(rows)
+	colors := categoryColors()
+	for i, row := range rows {
+		lines = append(lines, renderContextRow(&row, scale, labelWidth, markerColor(i, row, colors)))
+	}
+
+	lines = append(lines, "")
+	lines = append(lines, wrapMutedLines(contextEstimateNote, contentWidth)...)
+
+	return d.applyScrolling(lines, contentWidth, maxHeight)
+}
+
+// wrapMutedLines wraps text to width in the muted style and returns the
+// individual lines, so the scrollview's line accounting stays exact.
+func wrapMutedLines(text string, width int) []string {
+	return strings.Split(styles.MutedStyle.Width(width).Render(text), "\n")
+}
+
+// markerColor picks the row's accent color: its category color, or muted
+// for the free-space remainder.
+func markerColor(i int, row contextRow, colors []color.Color) color.Color {
+	if row.free || i >= len(colors) {
+		return styles.TextMutedGray
+	}
+	return colors[i]
+}
+
+// contextHeaderMeta returns the "model • limit" line under the title.
+func contextHeaderMeta(b *runtime.ContextBreakdown) string {
+	var parts []string
+	if b.Model != "" {
+		parts = append(parts, b.Model)
+	}
+	if b.ContextLimit > 0 {
+		parts = append(parts, "limit: "+formatTokenCount(b.ContextLimit)+" tokens")
+	} else {
+		parts = append(parts, "context limit unknown")
+	}
+	return strings.Join(parts, "  •  ")
+}
+
+// usageSummary is the line under the bar: "~24.5K of 128.0K tokens (19%)",
+// or just the estimated total when the limit is unknown.
+func usageSummary(b *runtime.ContextBreakdown) string {
+	total := b.TotalTokens()
+	if b.ContextLimit <= 0 {
+		return "~" + formatTokenCount(total) + " tokens estimated"
+	}
+	return fmt.Sprintf("~%s of %s tokens (%s)",
+		formatTokenCount(total),
+		formatTokenCount(b.ContextLimit),
+		percentLabel(total, scaleTokens(b)))
+}
+
+// renderContextBar renders the stacked usage bar: one colored segment per
+// category, proportional to its share of scale, with the remainder drawn
+// as muted free-space cells. Cumulative rounding keeps the bar exactly
+// barWidth cells wide with no drift.
+func renderContextBar(rows []contextRow, scale int64, barWidth int) string {
+	if barWidth < 1 || scale <= 0 {
+		return ""
+	}
+	colors := categoryColors()
+	var bar strings.Builder
+	cells := 0
+	var cum int64
+	for i, row := range rows {
+		if row.free {
+			continue
+		}
+		cum += row.tokens
+		end := int(float64(cum) / float64(scale) * float64(barWidth))
+		if n := min(end, barWidth) - cells; n > 0 {
+			bar.WriteString(lipgloss.NewStyle().
+				Foreground(markerColor(i, row, colors)).
+				Render(strings.Repeat(contextBarFilled, n)))
+			cells += n
+		}
+	}
+	if n := barWidth - cells; n > 0 {
+		bar.WriteString(styles.MutedStyle.Render(strings.Repeat(contextBarFree, n)))
+	}
+	return bar.String()
+}
+
+// contextLabelWidth returns the widest row label, so token columns align.
+func contextLabelWidth(rows []contextRow) int {
+	width := 0
+	for _, row := range rows {
+		width = max(width, len(row.label))
+	}
+	return width
+}
+
+// renderContextRow renders one category line:
+// "■ Tool definitions   8.4K   7%  (23 tools)".
+func renderContextRow(row *contextRow, scale int64, labelWidth int, markerCol color.Color) string {
+	marker := lipgloss.NewStyle().Foreground(markerCol).Render(contextRowMarker)
+	label := row.label + strings.Repeat(" ", labelWidth-len(row.label))
+	if row.free {
+		label = styles.MutedStyle.Render(label)
+	} else {
+		label = labelStyle().Render(label)
+	}
+	line := fmt.Sprintf("%s %s  %s  %s",
+		marker,
+		label,
+		valueStyle().Render(padRight(formatTokenCount(row.tokens))),
+		valueStyle().Render(fmt.Sprintf("%4s", percentLabel(row.tokens, scale))))
+	if suffix := row.itemsSuffix(); suffix != "" {
+		line += "  " + styles.MutedStyle.Render(suffix)
+	}
+	return line
+}
+
+func (d *contextDialog) applyScrolling(allLines []string, contentWidth, maxHeight int) string {
+	const headerLines = 3 // title + separator + space
+	const footerLines = 2 // space + help
+
+	visibleLines := max(1, maxHeight-headerLines-footerLines-4)
+	contentLines := allLines[headerLines:]
+
+	regionWidth := contentWidth + d.scrollview.ReservedCols()
+	d.scrollview.SetSize(regionWidth, visibleLines)
+
+	dialogRow, dialogCol := d.Position()
+	d.scrollview.SetPosition(dialogCol+3, dialogRow+2+headerLines)
+	d.scrollview.SetContent(contentLines, len(contentLines))
+
+	parts := make([]string, 0, headerLines+3)
+	parts = append(parts, allLines[:headerLines]...)
+	parts = append(parts, d.scrollview.View(), "", RenderHelpKeys(regionWidth, "↑↓", "scroll", "c", "copy", "Esc", "close"))
+	return lipgloss.JoinVertical(lipgloss.Left, parts...)
+}
+
+// ---------------------------------------------------------------------------
+// Plain-text rendering (clipboard copy)
+// ---------------------------------------------------------------------------
+
+func (d *contextDialog) renderPlainText() string {
+	b := d.breakdown
+	rows := contextRows(b)
+	scale := scaleTokens(b)
+	labelWidth := contextLabelWidth(rows)
+
+	lines := []string{"Context Window"}
+	if meta := contextHeaderMeta(b); meta != "" {
+		lines = append(lines, meta)
+	}
+	lines = append(lines, "", usageSummary(b), "")
+
+	for _, row := range rows {
+		line := fmt.Sprintf("%s  %-8s %4s",
+			row.label+strings.Repeat(" ", labelWidth-len(row.label)),
+			formatTokenCount(row.tokens),
+			percentLabel(row.tokens, scale))
+		if suffix := row.itemsSuffix(); suffix != "" {
+			line += "  " + suffix
+		}
+		lines = append(lines, line)
+	}
+
+	lines = append(lines, "", contextEstimateNote)
+	return strings.Join(lines, "\n")
+}
