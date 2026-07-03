@@ -23,15 +23,15 @@ func bareModel(height int) *model {
 	var buf bytes.Buffer
 	w := bufio.NewWriter(&buf)
 	return &model{
-		width:          width,
-		height:         height,
-		r:              newRenderer(w, width, height),
-		editor:         newEditor("type here"),
-		ac:             newAutocomplete(),
-		tools:          map[string]*toolView{},
-		status:         statusData{workingDir: "/tmp/project"},
-		sessionState:   service.NewSessionState(nil),
-		usageBySession: map[string]usageSnapshot{},
+		width:        width,
+		height:       height,
+		r:            newRenderer(w, width, height),
+		editor:       newEditor("type here"),
+		ac:           newAutocomplete(),
+		toolz:        newToolTracker(),
+		status:       statusData{workingDir: "/tmp/project"},
+		sessionState: service.NewSessionState(nil),
+		usage:        newUsageTracker(),
 	}
 }
 
@@ -85,14 +85,14 @@ func TestToolConfirmationReplacesRunningTool(t *testing.T) {
 	t.Parallel()
 	m := bareModel(24)
 	tv := shellToolView(tuitypes.ToolStatusRunning)
-	m.upsertTool("root", tv.message.ToolCall, tv.message.ToolDefinition, tuitypes.ToolStatusRunning)
-	require.Len(t, m.toolOrder, 1)
+	m.toolz.upsert("root", tv.message.ToolCall, tv.message.ToolDefinition, tuitypes.ToolStatusRunning)
+	require.Len(t, m.toolz.order, 1)
 
 	event := runtime.ToolCallConfirmation(tv.message.ToolCall, tv.message.ToolDefinition, "root", nil)
 	m.handleEvent(t.Context(), event)
 
-	assert.Empty(t, m.toolOrder)
-	assert.Empty(t, m.tools)
+	assert.Empty(t, m.toolz.order)
+	assert.Empty(t, m.toolz.byID)
 	require.NotNil(t, m.confirm)
 }
 

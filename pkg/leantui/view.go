@@ -65,13 +65,11 @@ func (m *model) conversationLines(width int) []string {
 		lines = append(lines, m.pendingLines(width)...)
 		lines = append(lines, "")
 	}
-	for _, id := range m.toolOrder {
-		if tv := m.tools[id]; tv != nil {
-			lines = append(lines, renderToolWithState(tv, width, m.spinnerFrame, m.sessionState)...)
-			lines = append(lines, "")
-		}
-	}
-	if m.busy && m.pending == nil && len(m.toolOrder) == 0 {
+	m.toolz.forEach(func(tv *toolView) {
+		lines = append(lines, renderToolWithState(tv, width, m.spinnerFrame, m.sessionState)...)
+		lines = append(lines, "")
+	})
+	if m.busy && m.pending == nil && m.toolz.empty() {
 		lines = append(lines, m.spinnerLine(), "")
 	}
 	return lines

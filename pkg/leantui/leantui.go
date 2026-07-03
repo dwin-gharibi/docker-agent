@@ -158,17 +158,13 @@ type model struct {
 	status       statusData
 	sessionState *service.SessionState
 
-	usageBySession       map[string]usageSnapshot
-	rootSessionID        string
-	latestUsageSessionID string
-	sessionStack         []string
+	usage *usageTracker
 
 	blocks       []*block
 	busy         bool
 	spinnerFrame int
 	pending      *pendingBlock
-	tools        map[string]*toolView
-	toolOrder    []string
+	toolz        *toolTracker
 
 	runCancel context.CancelFunc
 	queue     []string
@@ -204,10 +200,10 @@ func newModel(term *terminal, cfg Config) *model {
 		height:           h,
 		editor:           newEditor("Type a message, / for commands"),
 		ac:               newAutocomplete(),
-		tools:            make(map[string]*toolView),
+		toolz:            newToolTracker(),
 		status:           statusData{workingDir: cfg.WorkingDir, branch: gitBranch(cfg.WorkingDir)},
 		sessionState:     sessionState,
-		usageBySession:   make(map[string]usageSnapshot),
+		usage:            newUsageTracker(),
 		appName:          appName,
 		disabledCommands: disabled,
 	}
