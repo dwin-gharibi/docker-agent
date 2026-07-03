@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sync"
@@ -402,15 +403,12 @@ func TestConcurrentAddsPreserveAllRows(t *testing.T) {
 		require.NoError(t, err)
 		dbs[i] = db
 		memDB := db.(*MemoryDatabase)
-		defer func() { _ = memDB.Close() }()
+		t.Cleanup(func() { _ = memDB.Close() })
 	}
 
 	var wg sync.WaitGroup
 	for worker := range workers {
-		worker := worker
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for i := range perWorker {
 				id := fmt.Sprintf("worker-%d-%d", worker, i)
 				require.NoError(t, dbs[worker].AddMemory(t.Context(), database.UserMemory{
@@ -419,7 +417,7 @@ func TestConcurrentAddsPreserveAllRows(t *testing.T) {
 					Memory:    "concurrent add",
 				}))
 			}
-		}()
+		})
 	}
 	wg.Wait()
 
@@ -469,7 +467,7 @@ func TestConcurrentReadsDuringWrites(t *testing.T) {
 			}
 			for _, memory := range memories {
 				if memory.ID == "" {
-					readErr <- fmt.Errorf("read malformed memory with empty ID")
+					readErr <- errors.New("read malformed memory with empty ID")
 					return
 				}
 			}

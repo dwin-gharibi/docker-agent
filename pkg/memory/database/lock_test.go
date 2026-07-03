@@ -1,7 +1,6 @@
 package database
 
 import (
-	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -30,7 +29,7 @@ func TestFileLockSerializesAcrossProcesses(t *testing.T) {
 	lock := NewFileLock(lockPath)
 	require.NoError(t, lock.Lock(t.Context()))
 
-	cmd := exec.Command(os.Args[0], "-test.run=TestFileLockHelperProcess", "--", lockPath)
+	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=TestFileLockHelperProcess", "--", lockPath)
 	cmd.Env = append(os.Environ(), "MEMORY_LOCK_HELPER=1")
 
 	done := make(chan error, 1)
@@ -63,7 +62,7 @@ func TestFileLockHelperProcess(t *testing.T) {
 	for i, arg := range args {
 		if arg == "--" && i+1 < len(args) {
 			lock := NewFileLock(args[i+1])
-			if err := lock.Lock(context.Background()); err != nil {
+			if err := lock.Lock(t.Context()); err != nil {
 				os.Exit(2)
 			}
 			if err := lock.Unlock(); err != nil {

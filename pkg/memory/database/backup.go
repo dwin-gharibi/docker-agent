@@ -71,7 +71,7 @@ func ExportSnapshot(ctx context.Context, dbPath, finalPath string) error {
 }
 
 func vacuumInto(ctx context.Context, db *sql.DB, path string) error {
-	stmt := "VACUUM INTO " + sqliteString(path)
+	stmt := "VACUUM INTO " + sqliteString(path) // #nosec G202 -- VACUUM INTO does not accept bound parameters; sqliteString quotes the file path.
 	if _, err := db.ExecContext(ctx, stmt); err != nil {
 		return fmt.Errorf("exporting memory snapshot: %w", err)
 	}

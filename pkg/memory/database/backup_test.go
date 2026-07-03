@@ -49,7 +49,7 @@ func TestExportSnapshotIncludesOpenWALWrites(t *testing.T) {
 	source := db.(*sqlite.MemoryDatabase)
 	defer source.Close()
 
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		require.NoError(t, db.AddMemory(t.Context(), database.UserMemory{
 			ID:        string(rune('a' + i)),
 			CreatedAt: time.Now().Format(time.RFC3339),
