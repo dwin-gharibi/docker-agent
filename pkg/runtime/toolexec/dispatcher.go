@@ -119,7 +119,7 @@ type HookDispatcher interface {
 // ToolCall/ToolCallResponse themselves. Handlers that need to emit other
 // event types should be wired by the caller to capture the relevant
 // channel via closure when registering the handler.
-type ToolHandler func(ctx context.Context, sess *session.Session, tc tools.ToolCall) (*tools.ToolCallResult, error)
+type ToolHandler func(ctx context.Context, sess *session.Session, tc tools.ToolCall, rt tools.Runtime) (*tools.ToolCallResult, error)
 
 // ResumeRequest carries the user's response to a tool-confirmation prompt.
 // The runtime aliases this type publicly via runtime.ResumeRequest so the
@@ -167,6 +167,12 @@ type Dispatcher struct {
 	// handoff, change_model, ...). Tools not in this map are routed to
 	// their toolset Handler.
 	Handlers map[string]ToolHandler
+
+	// Recall enqueues a tool-produced steering message. Tool handlers reach it
+	// through their [tools.Runtime] handle and may call it after the handler
+	// has returned. When nil, [tools.Runtime.Recall] reports
+	// [tools.ErrRecallNotSupported].
+	Recall func(ctx context.Context, sess *session.Session, a *agent.Agent, message string) error
 
 	confirmationMu sync.Mutex
 	approvalMu     sync.Mutex
@@ -825,7 +831,7 @@ func (c *call) handleResume(ctx context.Context, req ResumeRequest, runTool func
 // returned [CallOutcome].
 func (c *call) runToolset(ctx context.Context) CallOutcome {
 	res := c.invoke(ctx, "runtime.tool.handler", func(ctx context.Context) (*tools.ToolCallResult, time.Duration, error) {
-		res, err := c.tool.Handler(ctx, c.tc)
+		res, err := c.tool.Handler(ctx, c.tc, callRuntime{c})
 		return res, 0, err
 	})
 
@@ -839,9 +845,38 @@ func (c *call) runToolset(ctx context.Context) CallOutcome {
 func (c *call) runHandler(ctx context.Context, handler ToolHandler) {
 	c.invoke(ctx, "runtime.tool.handler.runtime", func(ctx context.Context) (*tools.ToolCallResult, time.Duration, error) {
 		start := time.Now()
-		res, err := handler(ctx, c.sess, c.tc)
+		res, err := handler(ctx, c.sess, c.tc, callRuntime{c})
 		return res, time.Since(start), err
 	})
+}
+
+// callRuntime is the [tools.Runtime] handed to tool handlers. It carries only
+// per-call state (no context); every method takes ctx from the caller, so
+// handles held by background work stay valid after the tool call returns.
+type callRuntime struct {
+	c *call
+}
+
+func (r callRuntime) EmitOutput(ctx context.Context, output string) {
+	output = r.c.applyToolResponseTransform(ctx, output, false)
+	r.c.em.EmitToolCallOutput(r.c.tc.ID, r.c.tool, output, r.c.a.Name())
+}
+
+func (r callRuntime) Recall(ctx context.Context, message string) error {
+	if r.c.d.Recall == nil {
+		return tools.ErrRecallNotSupported
+	}
+	return r.c.d.Recall(ctx, r.c.sess, r.c.a, message)
+}
+
+func (r callRuntime) Supports(capability tools.Capability) bool {
+	switch capability {
+	case tools.CapabilityOutput:
+		return true
+	case tools.CapabilityRecall:
+		return r.c.d.Recall != nil
+	}
+	return false
 }
 
 // invoke is the common pipeline shared by toolset tools and runtime-
@@ -873,11 +908,7 @@ func (c *call) invoke(ctx context.Context, spanName string, exec func(ctx contex
 
 	c.em.EmitToolCall(c.tc, c.tool, c.a.Name())
 
-	toolCtx := tools.WithToolOutputEmitter(ctx, func(output string) {
-		output = c.applyToolResponseTransform(ctx, output, false)
-		c.em.EmitToolCallOutput(c.tc.ID, c.tool, output, c.a.Name())
-	})
-	res, duration, err := exec(toolCtx)
+	res, duration, err := exec(ctx)
 	telemetry.RecordToolCall(ctx, c.tc.Function.Name, c.sess.ID, c.a.Name(), duration, err)
 
 	if err != nil {

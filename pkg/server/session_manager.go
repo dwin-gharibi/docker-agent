@@ -63,12 +63,10 @@ type SessionManager struct {
 	sessionReady     chan struct{}
 	sessionReadyOnce sync.Once
 
-	// followUpInjectors routes a follow-up for an attached session to its
-	// owner (the TUI App) instead of the runtime follow-up queue. The queue
-	// is only drained mid-stream, so for an idle attached session it would
-	// never be consumed; the injector starts a real turn whose events reach
-	// the TUI and every SSE subscriber. Keyed by session ID; set via
-	// RegisterFollowUpInjector.
+	// followUpInjectors routes follow-ups and idle recalls for an attached
+	// session to its owner instead of queues that are only drained mid-stream.
+	// The injector starts a real turn whose events reach the owner and every
+	// SSE subscriber. Keyed by session ID; set via RegisterFollowUpInjector.
 	followUpInjectors *concurrent.Map[string, FollowUpInjector]
 
 	// followUpKeys deduplicates follow-up requests per session by their
@@ -82,9 +80,10 @@ type SessionManager struct {
 // must be safe to call concurrently across requests.
 type EventSource func(ctx context.Context, send func(any))
 
-// FollowUpInjector delivers a follow-up message to the session's owner (the
-// TUI App) as if a user had submitted it, starting a real turn. Registered by
-// the attached control plane via [SessionManager.RegisterFollowUpInjector].
+// FollowUpInjector delivers a follow-up or idle recall message to the
+// session's owner as if a user had submitted it, starting a real turn.
+// Registered by the attached control plane via
+// [SessionManager.RegisterFollowUpInjector].
 type FollowUpInjector func(ctx context.Context, content string)
 
 // NewSessionManager creates a new session manager.
@@ -179,6 +178,24 @@ func (sm *SessionManager) RegisterFollowUpInjector(sessionID string, fn FollowUp
 	sm.followUpInjectors.Store(sessionID, fn)
 }
 
+type recallHandlerSetter interface {
+	SetRecallHandler(handler runtime.RecallHandler)
+}
+
+func (sm *SessionManager) registerRecallHandler(sessionID string, rt runtime.Runtime) {
+	setter, ok := rt.(recallHandlerSetter)
+	if !ok {
+		return
+	}
+	setter.SetRecallHandler(func(ctx context.Context, msg runtime.QueuedMessage) bool {
+		if err := sm.recallSession(ctx, sessionID, msg); err != nil {
+			slog.WarnContext(ctx, "Failed to handle tool recall", "session_id", sessionID, "error", err)
+			return false
+		}
+		return true
+	})
+}
+
 // StreamEvents replays and tails the events buffered for sessionID, calling
 // send for each one with its sequence number. When since is non-nil only
 // events newer than *since are replayed before tailing (see [eventLog.stream]
@@ -210,6 +227,7 @@ func (sm *SessionManager) AttachRuntime(ctx context.Context, sessionID string, r
 		cancel:  cancel,
 		session: sess,
 	})
+	sm.registerRecallHandler(sessionID, rt)
 	sm.markReady()
 }
 
@@ -505,7 +523,9 @@ func (sm *SessionManager) DeleteSession(ctx context.Context, sessionID string) e
 	}
 
 	if sessionRuntime, ok := sm.runtimeSessions.Load(sess.ID); ok {
-		sessionRuntime.cancel()
+		if sessionRuntime.cancel != nil {
+			sessionRuntime.cancel()
+		}
 		// Keep the entry in deletedSessions so WaitStopped can probe the
 		// streaming mutex after the runtime is deregistered.
 		sm.deletedSessions.Store(sess.ID, sessionRuntime)
@@ -613,6 +633,7 @@ func (sm *SessionManager) RunSession(ctx context.Context, sessionID, agentFilena
 			titleGen: titleGen,
 		}
 		sm.runtimeSessions.Store(sessionID, runtimeSession)
+		sm.registerRecallHandler(sessionID, rt)
 		sm.markReady()
 	} else {
 		titleGen = runtimeSession.titleGen
@@ -626,6 +647,7 @@ func (sm *SessionManager) RunSession(ctx context.Context, sessionID, agentFilena
 		cancel()
 		return nil, ErrSessionBusy
 	}
+	runtimeSession.cancel = cancel
 
 	// Apply the model override (if any) before persisting the user
 	// messages so that an invalid ref does not leave an orphaned user
@@ -809,6 +831,72 @@ func (sm *SessionManager) FollowUpSession(ctx context.Context, sessionID string,
 	}
 
 	return streaming, false, nil
+}
+
+func (sm *SessionManager) recallSession(ctx context.Context, sessionID string, msg runtime.QueuedMessage) error {
+	if inject, ok := sm.followUpInjectors.Load(sessionID); ok {
+		inject(ctx, msg.Content)
+		return nil
+	}
+
+	rt, exists := sm.runtimeSessions.Load(sessionID)
+	if !exists {
+		return ErrSessionNotRunning
+	}
+	if !rt.streaming.TryLock() {
+		return rt.runtime.Steer(ctx, msg)
+	}
+
+	runCtx, runCancel := context.WithCancel(context.WithoutCancel(ctx))
+	sm.mux.Lock()
+	if _, stillExists := sm.runtimeSessions.Load(sessionID); !stillExists {
+		sm.mux.Unlock()
+		rt.streaming.Unlock()
+		runCancel()
+		return ErrSessionNotRunning
+	}
+	sess := rt.session
+	if sess == nil {
+		var err error
+		sess, err = sm.sessionStore.GetSession(ctx, sessionID)
+		if err != nil {
+			sm.mux.Unlock()
+			rt.streaming.Unlock()
+			runCancel()
+			return err
+		}
+	}
+	sess.AddMessage(session.UserMessage(msg.Content, msg.MultiContent...))
+	if err := sm.sessionStore.UpdateSession(ctx, sess); err != nil {
+		sm.mux.Unlock()
+		rt.streaming.Unlock()
+		runCancel()
+		return err
+	}
+	rt.session = sess
+	rt.cancel = runCancel
+	sm.mux.Unlock()
+
+	go func() {
+		defer rt.streaming.Unlock()
+		defer runCancel()
+		stream := rt.runtime.RunStream(runCtx, sess)
+		for event := range stream {
+			if pe, ok := sm.eventLogs.Load(sessionID); ok {
+				pe.log.append(event)
+			}
+		}
+		sm.mux.Lock()
+		defer sm.mux.Unlock()
+		if _, stillExists := sm.runtimeSessions.Load(sessionID); !stillExists {
+			return
+		}
+		if err := sm.sessionStore.UpdateSession(context.WithoutCancel(ctx), sess); err != nil {
+			slog.WarnContext(ctx, "Failed to persist recalled session", "session_id", sessionID, "error", err)
+		}
+	}()
+
+	return nil
 }
 
 // ResumeElicitation resumes an elicitation request.

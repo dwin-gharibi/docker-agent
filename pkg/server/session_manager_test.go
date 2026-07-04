@@ -5,6 +5,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -79,6 +80,7 @@ func newTestSessionManager(t *testing.T, sess *session.Session, fake *fakeRuntim
 	sm := &SessionManager{
 		runtimeSessions:   concurrent.NewMap[string, *activeRuntimes](),
 		deletedSessions:   concurrent.NewMap[string, *activeRuntimes](),
+		eventLogs:         concurrent.NewMap[string, *pumpedEventLog](),
 		followUpInjectors: concurrent.NewMap[string, FollowUpInjector](),
 		followUpKeys:      concurrent.NewMap[string, *idempotencyCache](),
 		sessionStore:      store,
@@ -342,6 +344,27 @@ func TestFollowUpSession_UnknownSession(t *testing.T) {
 
 	_, _, err := sm.FollowUpSession(t.Context(), "does-not-exist", []api.Message{{Content: "x"}}, "")
 	assert.ErrorIs(t, err, ErrSessionNotRunning)
+}
+
+func TestRecallSession_DeleteCancelsRecalledRunAndDoesNotResurrect(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	sess := session.New()
+	fake := &fakeRuntime{release: make(chan struct{})}
+	sm := newTestSessionManager(t, sess, fake)
+
+	recall := runtime.QueuedMessage{Content: "background job finished"}
+	require.NoError(t, sm.recallSession(ctx, sess.ID, recall))
+	require.Eventually(t, func() bool {
+		return fake.concurrentStreams.Load() == 1
+	}, time.Second, 10*time.Millisecond)
+
+	require.NoError(t, sm.DeleteSession(ctx, sess.ID))
+	require.NoError(t, sm.WaitStopped(ctx, sess.ID, time.Second))
+
+	_, err := sm.sessionStore.GetSession(ctx, sess.ID)
+	assert.ErrorIs(t, err, session.ErrNotFound)
 }
 
 // TestFollowUpSession_IdempotencyKeyDedupes verifies that two follow-ups with

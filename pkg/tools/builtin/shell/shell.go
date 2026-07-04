@@ -34,6 +34,8 @@ const (
 	ToolNameViewBackgroundJob  = "view_background_job"
 	ToolNameStopBackgroundJob  = "stop_background_job"
 	ToolNameWaitBackgroundJob  = "wait_background_job"
+
+	maxBackgroundJobOutputBytes = 10 * 1024 * 1024
 )
 
 // ToolSet provides shell command execution capabilities.
@@ -57,6 +59,7 @@ type shellHandler struct {
 	workingDir      string
 	jobs            *concurrent.Map[string, *backgroundJob]
 	jobCounter      atomic.Int64
+	recall          bool
 
 	// sudoAskpass opts this toolset into the one-time sudo privilege
 	// escalation flow (SUDO_ASKPASS bridged to the elicitation handler).
@@ -91,6 +94,9 @@ type backgroundJob struct {
 	err          error
 	// done is closed by monitorJob when the job finishes (any terminal state).
 	done chan struct{}
+	// rt is set only when the caller requested recall; monitorJob uses it
+	// to steer the agent loop once the job finishes.
+	rt tools.Runtime
 }
 
 // limitedWriter wraps a buffer and stops writing after maxSize bytes.
@@ -116,14 +122,17 @@ func (lw *limitedWriter) Write(p []byte) (n int, err error) {
 }
 
 type commandOutput struct {
-	emit tools.ToolOutputEmitter
+	emit func(output string)
 	mu   sync.Mutex
 	buf  bytes.Buffer
 }
 
-func newCommandOutput(ctx context.Context) *commandOutput {
-	emit, _ := tools.ToolOutputEmitterFromContext(ctx)
-	return &commandOutput{emit: emit}
+// newCommandOutput adapts rt.EmitOutput to the ctx-less io.Writer contract
+// of exec.Cmd; the closure scopes ctx to this command run.
+func newCommandOutput(ctx context.Context, rt tools.Runtime) *commandOutput {
+	return &commandOutput{emit: func(output string) {
+		rt.EmitOutput(ctx, output)
+	}}
 }
 
 func (o *commandOutput) Write(p []byte) (int, error) {
@@ -180,6 +189,12 @@ type RunShellBackgroundArgs struct {
 	Cwd string `json:"cwd,omitempty" jsonschema:"Working directory (default \".\")"`
 }
 
+type RunShellBackgroundRecallArgs struct {
+	Cmd    string `json:"cmd" jsonschema:"Shell command to run in background"`
+	Cwd    string `json:"cwd,omitempty" jsonschema:"Working directory (default \".\")"`
+	Recall bool   `json:"recall,omitempty" jsonschema:"Ask to be recalled with a steering message when the background job finishes"`
+}
+
 // UnmarshalJSON accepts both "cmd" (canonical) and "command" (common alias),
 // mirroring RunShellArgs.UnmarshalJSON. See its comment for rationale.
 func (a *RunShellBackgroundArgs) UnmarshalJSON(data []byte) error {
@@ -193,6 +208,24 @@ func (a *RunShellBackgroundArgs) UnmarshalJSON(data []byte) error {
 	}
 	a.Cmd = preferNonBlank(raw.Cmd, raw.Command)
 	a.Cwd = raw.Cwd
+	return nil
+}
+
+// UnmarshalJSON accepts both "cmd" (canonical) and "command" (common alias),
+// mirroring RunShellArgs.UnmarshalJSON. See its comment for rationale.
+func (a *RunShellBackgroundRecallArgs) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Cmd     string `json:"cmd"`
+		Command string `json:"command"`
+		Cwd     string `json:"cwd"`
+		Recall  bool   `json:"recall"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	a.Cmd = preferNonBlank(raw.Cmd, raw.Command)
+	a.Cwd = raw.Cwd
+	a.Recall = raw.Recall
 	return nil
 }
 
@@ -235,7 +268,7 @@ func statusToString(status int32) string {
 	return "unknown"
 }
 
-func (h *shellHandler) RunShell(ctx context.Context, params RunShellArgs) (*tools.ToolCallResult, error) {
+func (h *shellHandler) RunShell(ctx context.Context, params RunShellArgs, rt tools.Runtime) (*tools.ToolCallResult, error) {
 	if strings.TrimSpace(params.Cmd) == "" {
 		return tools.ResultError(`Error: missing or empty "cmd" parameter. Pass the shell command as {"cmd": "..."}.`), nil
 	}
@@ -265,7 +298,7 @@ func (h *shellHandler) RunShell(ctx context.Context, params RunShellArgs) (*tool
 
 	slog.DebugContext(ctx, "Executing native shell command", "command", params.Cmd, "cwd", cwd)
 
-	return h.runNativeCommand(timeoutCtx, ctx, params.Cmd, cwd, timeout), nil
+	return h.runNativeCommand(timeoutCtx, ctx, rt, params.Cmd, cwd, timeout), nil
 }
 
 // waitDelayAfterShellExit caps how long cmd.Wait() blocks on stdout/stderr
@@ -283,7 +316,7 @@ func (h *shellHandler) RunShell(ctx context.Context, params RunShellArgs) (*tool
 // shell itself produced is already flushed by the time it exits.
 const waitDelayAfterShellExit = 500 * time.Millisecond
 
-func (h *shellHandler) runNativeCommand(timeoutCtx, ctx context.Context, command, cwd string, timeout time.Duration) *tools.ToolCallResult {
+func (h *shellHandler) runNativeCommand(timeoutCtx, ctx context.Context, rt tools.Runtime, command, cwd string, timeout time.Duration) *tools.ToolCallResult {
 	// Cancellation is handled manually below (timeoutCtx + Process.Kill +
 	// process group + WaitDelay), so we use exec.Command rather than
 	// exec.CommandContext to keep that flow in one place.
@@ -294,7 +327,7 @@ func (h *shellHandler) runNativeCommand(timeoutCtx, ctx context.Context, command
 	cmd.SysProcAttr = platformSpecificSysProcAttr()
 	cmd.WaitDelay = waitDelayAfterShellExit
 
-	output := newCommandOutput(ctx)
+	output := newCommandOutput(ctx, rt)
 	cmd.Stdout = output
 	cmd.Stderr = output
 
@@ -335,9 +368,32 @@ func (h *shellHandler) runNativeCommand(timeoutCtx, ctx context.Context, command
 	return tools.ResultSuccess(formattedOutput)
 }
 
-func (h *shellHandler) RunShellBackground(ctx context.Context, params RunShellBackgroundArgs) (*tools.ToolCallResult, error) {
+type runShellBackgroundParams struct {
+	Cmd    string
+	Cwd    string
+	Recall bool
+}
+
+func (h *shellHandler) RunShellBackground(ctx context.Context, params RunShellBackgroundArgs, rt tools.Runtime) (*tools.ToolCallResult, error) {
+	return h.runShellBackground(ctx, rt, runShellBackgroundParams{Cmd: params.Cmd, Cwd: params.Cwd})
+}
+
+func (h *shellHandler) RunShellBackgroundWithRecall(ctx context.Context, params RunShellBackgroundRecallArgs, rt tools.Runtime) (*tools.ToolCallResult, error) {
+	return h.runShellBackground(ctx, rt, runShellBackgroundParams(params))
+}
+
+func (h *shellHandler) runShellBackground(ctx context.Context, rt tools.Runtime, params runShellBackgroundParams) (*tools.ToolCallResult, error) {
 	if strings.TrimSpace(params.Cmd) == "" {
 		return tools.ResultError(`Error: missing or empty "cmd" parameter. Pass the shell command as {"cmd": "..."}.`), nil
+	}
+
+	if params.Recall {
+		if !h.recall {
+			return tools.ResultError(`Error: "recall" is not enabled for this shell toolset. Set recall: true on the shell toolset before requesting recall.`), nil
+		}
+		if !rt.Supports(tools.CapabilityRecall) {
+			return tools.ResultError(`Error: recall requested but the host does not support recall.`), nil
+		}
 	}
 
 	counter := h.jobCounter.Add(1)
@@ -357,11 +413,14 @@ func (h *shellHandler) RunShellBackground(ctx context.Context, params RunShellBa
 		startTime: time.Now(),
 		done:      make(chan struct{}),
 	}
+	if params.Recall {
+		job.rt = rt
+	}
 
 	// The limitedWriter shares the job's outputMu so that readers
 	// (ViewBackgroundJob, ListBackgroundJobs) and the pipe-copy
 	// goroutines spawned by exec.Cmd use the same lock.
-	lw := &limitedWriter{mu: &job.outputMu, buf: job.output, maxSize: 10 * 1024 * 1024}
+	lw := &limitedWriter{mu: &job.outputMu, buf: job.output, maxSize: maxBackgroundJobOutputBytes}
 	cmd.Stdout = lw
 	cmd.Stderr = lw
 
@@ -382,13 +441,20 @@ func (h *shellHandler) RunShellBackground(ctx context.Context, params RunShellBa
 	job.status.Store(statusRunning)
 	h.jobs.Store(jobID, job)
 
-	go h.monitorJob(job, cmd)
+	// The job outlives this tool call: keep ctx values (trace, session id)
+	// for the recall but drop cancellation.
+	go h.monitorJob(context.WithoutCancel(ctx), job, cmd)
 
-	return tools.ResultSuccess(fmt.Sprintf("Background job started with ID: %s\nCommand: %s\nWorking directory: %s",
-		jobID, params.Cmd, params.Cwd)), nil
+	var recallStatus string
+	if params.Recall {
+		recallStatus = "\nRecall: requested; a steering message will be sent when the job finishes."
+	}
+
+	return tools.ResultSuccess(fmt.Sprintf("Background job started with ID: %s\nCommand: %s\nWorking directory: %s%s",
+		jobID, params.Cmd, params.Cwd, recallStatus)), nil
 }
 
-func (h *shellHandler) monitorJob(job *backgroundJob, cmd *exec.Cmd) {
+func (h *shellHandler) monitorJob(ctx context.Context, job *backgroundJob, cmd *exec.Cmd) {
 	// close done after all fields are written so WaitBackgroundJob readers see
 	// the final state. Defers are LIFO: Unlock runs before close(done).
 	defer close(job.done)
@@ -396,9 +462,8 @@ func (h *shellHandler) monitorJob(job *backgroundJob, cmd *exec.Cmd) {
 	err := cmd.Wait()
 
 	job.outputMu.Lock()
-	defer job.outputMu.Unlock()
-
 	if job.status.Load() == statusStopped {
+		job.outputMu.Unlock()
 		return
 	}
 
@@ -413,6 +478,19 @@ func (h *shellHandler) monitorJob(job *backgroundJob, cmd *exec.Cmd) {
 	} else {
 		job.exitCode = 0
 		job.status.Store(statusCompleted)
+	}
+
+	status := job.status.Load()
+	exitCode := job.exitCode
+	output := job.output.String()
+	rt := job.rt
+	job.outputMu.Unlock()
+
+	if rt != nil {
+		message := formatBackgroundJobRecall(job, status, exitCode, output)
+		if err := rt.Recall(ctx, message); err != nil {
+			slog.WarnContext(ctx, "Failed to enqueue background job recall", "job_id", job.id, "error", err)
+		}
 	}
 }
 
@@ -469,7 +547,7 @@ func renderBackgroundJob(job *backgroundJob) string {
 		result.WriteString("<no output>\n")
 	} else {
 		result.WriteString(output)
-		if len(output) >= 10*1024*1024 {
+		if len(output) >= maxBackgroundJobOutputBytes {
 			result.WriteString("\n\n[Output truncated at 10MB limit]")
 		}
 	}
@@ -533,6 +611,22 @@ func (h *shellHandler) StopBackgroundJob(_ context.Context, params StopBackgroun
 	return tools.ResultSuccess(fmt.Sprintf("Job %s stopped successfully", params.JobID)), nil
 }
 
+func formatBackgroundJobRecall(job *backgroundJob, status int32, exitCode int, output string) string {
+	var result strings.Builder
+	fmt.Fprintf(&result, "Background job %s finished with status %s (exit code %d).\n", job.id, statusToString(status), exitCode)
+	fmt.Fprintf(&result, "Command: %s\n\n", job.cmd)
+	result.WriteString("--- Output ---\n")
+	if output == "" {
+		result.WriteString("<no output>\n")
+	} else {
+		result.WriteString(output)
+		if len(output) >= maxBackgroundJobOutputBytes {
+			result.WriteString("\n\n[Output truncated at 10MB limit]")
+		}
+	}
+	return result.String()
+}
+
 // reapSpawnedChild terminates a child that we've started but decided not
 // to run (e.g. follow-up setup failed) and waits for it so we don't leak a
 // zombie or its stdout/stderr pipes. SIGTERM is sent first; if the child
@@ -571,6 +665,9 @@ func CreateToolSet(ctx context.Context, toolset latest.Toolset, runConfig *confi
 	ts := New(env, runConfig)
 	if toolset.SudoAskpass != nil && *toolset.SudoAskpass {
 		ts.handler.sudoAskpass = true
+	}
+	if toolset.Recall != nil && *toolset.Recall {
+		ts.handler.recall = true
 	}
 	return ts, nil
 }
@@ -628,7 +725,7 @@ func formatCommandOutput(timeoutCtx, ctx context.Context, err error, rawOutput s
 }
 
 func (t *ToolSet) Instructions() string {
-	return `## Shell Tools
+	instructions := `## Shell Tools
 
 - Each call runs in a fresh shell session — no state persists between calls
 - Default timeout: 30s. Set "timeout" for longer operations (builds, tests)
@@ -641,6 +738,34 @@ func (t *ToolSet) Instructions() string {
 Use run_background_job for long-running processes (servers, watchers). Output capped at 10MB per job. All jobs auto-terminate when the agent stops.
 
 Use wait_background_job to block until a job finishes and retrieve its exit code and full output. Pass an optional timeout (seconds) to cap how long to wait; the job keeps running if the timeout fires.`
+	if t.handler.recall {
+		instructions += `
+
+When starting a background job, set "recall": true if you want the agent loop to be steered automatically with a short completion message and the job output when it finishes.`
+	}
+	return instructions
+}
+
+func (t *ToolSet) runBackgroundJobDescription() string {
+	description := `Starts a shell command in the background and returns immediately with a job ID. Use this for long-running processes like servers, watches, or any command that should run while other tasks are performed.`
+	if t.handler.recall {
+		description += ` Set recall=true to receive a steering message with the job output when it finishes.`
+	}
+	return description
+}
+
+func runShellBackgroundParameters(recall bool) any {
+	if recall {
+		return tools.MustSchemaFor[RunShellBackgroundRecallArgs]()
+	}
+	return tools.MustSchemaFor[RunShellBackgroundArgs]()
+}
+
+func (t *ToolSet) runBackgroundJobHandler() tools.ToolHandler {
+	if t.handler.recall {
+		return tools.NewRuntimeHandler(t.handler.RunShellBackgroundWithRecall)
+	}
+	return tools.NewRuntimeHandler(t.handler.RunShellBackground)
 }
 
 func (t *ToolSet) Tools(context.Context) ([]tools.Tool, error) {
@@ -651,17 +776,17 @@ func (t *ToolSet) Tools(context.Context) ([]tools.Tool, error) {
 			Description:             `Executes the given shell command in the user's default shell.`,
 			Parameters:              tools.MustSchemaFor[RunShellArgs](),
 			OutputSchema:            tools.MustSchemaFor[string](),
-			Handler:                 tools.NewHandler(t.handler.RunShell),
+			Handler:                 tools.NewRuntimeHandler(t.handler.RunShell),
 			Annotations:             tools.ToolAnnotations{Title: "Shell"},
 			AddDescriptionParameter: true,
 		},
 		{
 			Name:                    ToolNameRunShellBackground,
 			Category:                "shell",
-			Description:             `Starts a shell command in the background and returns immediately with a job ID. Use this for long-running processes like servers, watches, or any command that should run while other tasks are performed.`,
-			Parameters:              tools.MustSchemaFor[RunShellBackgroundArgs](),
+			Description:             t.runBackgroundJobDescription(),
+			Parameters:              runShellBackgroundParameters(t.handler.recall),
 			OutputSchema:            tools.MustSchemaFor[string](),
-			Handler:                 tools.NewHandler(t.handler.RunShellBackground),
+			Handler:                 t.runBackgroundJobHandler(),
 			Annotations:             tools.ToolAnnotations{Title: "Background Job"},
 			AddDescriptionParameter: true,
 		},

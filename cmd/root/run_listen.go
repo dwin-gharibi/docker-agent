@@ -17,14 +17,25 @@ import (
 	"github.com/docker/docker-agent/pkg/session"
 )
 
-// startAttachedServer exposes the in-process runtime over HTTP so external
-// processes can drive the running TUI (steer, followup, resume, ...). It
-// returns an app.Opt that, once the App is constructed, registers the App's
-// event stream as the session's event source so /events SSE works. No-op
-// when --listen is empty.
-func (f *runExecFlags) startAttachedServer(ctx context.Context, out *cli.Printer, rt runtime.Runtime, sess *session.Session) (app.Opt, error) {
+// recallCoordinatorOpt wires the session manager's recall handler to this
+// in-process runtime even when the HTTP control plane is disabled. That lets a
+// background tool wake an idle local TUI by routing through the same injector
+// used by control-plane follow-ups.
+func (f *runExecFlags) recallCoordinatorOpt(ctx context.Context, rt runtime.Runtime, sess *session.Session) app.Opt {
+	sm := server.NewSessionManager(ctx, nil, rt.SessionStore(), 0, &f.runConfig)
+	sm.AttachRuntime(ctx, sess.ID, rt, sess)
+	return func(a *app.App) {
+		sm.RegisterFollowUpInjector(sess.ID, a.InjectUserMessage)
+	}
+}
+
+// startSessionCoordinator wires local recall delivery for the in-process
+// runtime and, when --listen is set, exposes that runtime over HTTP so
+// external processes can drive the running TUI (steer, followup, resume, ...).
+// It returns an app.Opt that registers the App as the attached session owner.
+func (f *runExecFlags) startSessionCoordinator(ctx context.Context, out *cli.Printer, rt runtime.Runtime, sess *session.Session) (app.Opt, error) {
 	if f.listenAddr == "" {
-		return nil, nil
+		return f.recallCoordinatorOpt(ctx, rt, sess), nil
 	}
 
 	sm := server.NewSessionManager(ctx, nil, rt.SessionStore(), 0, &f.runConfig)
@@ -67,9 +78,8 @@ func (f *runExecFlags) startAttachedServer(ctx context.Context, out *cli.Printer
 				}
 			})
 		})
-		// Route control-plane follow-ups into the TUI App so each starts a
-		// real turn (even when the agent is idle) and streams events to the
-		// TUI and SSE subscribers alike.
+		// Route control-plane follow-ups and idle recalls into the TUI App so
+		// each starts a real turn and streams events to every subscriber.
 		sm.RegisterFollowUpInjector(sess.ID, a.InjectUserMessage)
 	}, nil
 }

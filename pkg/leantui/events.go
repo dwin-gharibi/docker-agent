@@ -6,6 +6,7 @@ import (
 
 	"github.com/docker/docker-agent/pkg/runtime"
 	"github.com/docker/docker-agent/pkg/tools"
+	msgtypes "github.com/docker/docker-agent/pkg/tui/messages"
 	tuitypes "github.com/docker/docker-agent/pkg/tui/types"
 )
 
@@ -13,6 +14,8 @@ import (
 // updating the conversation, tool state, status footer, or busy state.
 func (m *model) handleEvent(ctx context.Context, ev any) {
 	switch e := ev.(type) {
+	case msgtypes.SendMsg:
+		m.submit(ctx, e.Content)
 	case *runtime.StreamStartedEvent:
 		m.busy = true
 		m.trackStreamStarted(e.SessionID)
