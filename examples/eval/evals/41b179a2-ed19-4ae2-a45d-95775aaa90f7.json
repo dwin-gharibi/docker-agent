@@ -5,7 +5,7 @@
         {
             "message": {
                 "agentFilename": "./agent.yaml",
-                "agentName": "",
+                "agent_name": "",
                 "message": {
                     "role": "user",
                     "content": "How many files in the local folder?",
@@ -16,7 +16,7 @@
         {
             "message": {
                 "agentFilename": "",
-                "agentName": "root",
+                "agent_name": "root",
                 "message": {
                     "role": "assistant",
                     "content": "",
@@ -37,7 +37,7 @@
         {
             "message": {
                 "agentFilename": "",
-                "agentName": "root",
+                "agent_name": "root",
                 "message": {
                     "role": "tool",
                     "content": "FILE README.md\nFILE agent.yaml\n",
@@ -49,7 +49,7 @@
         {
             "message": {
                 "agentFilename": "",
-                "agentName": "root",
+                "agent_name": "root",
                 "message": {
                     "role": "assistant",
                     "content": "There are 2 files in the local folder:\n\n1. `README.md`\n2. `agent.yaml`",

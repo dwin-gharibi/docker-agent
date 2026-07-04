@@ -1,10 +1,10 @@
 [
   {
-    "agentName": "",
+    "agent_name": "",
     "message": { "role": "user", "content": "What is 1 + 2?" }
   },
   {
-    "agentName": "root",
+    "agent_name": "root",
     "message": {
       "role": "assistant",
       "content": "",
@@ -18,7 +18,7 @@
     }
   },
   {
-    "agentName": "root",
+    "agent_name": "root",
     "message": {
       "role": "tool",
       "content": "3",
@@ -26,7 +26,7 @@
     }
   },
   {
-    "agentName": "root",
+    "agent_name": "root",
     "message": { "role": "assistant", "content": "1 + 2 equals 3." }
   }
 ]
