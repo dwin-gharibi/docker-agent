@@ -2,7 +2,10 @@ package toolexec_test
 
 import (
 	"context"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -20,6 +23,8 @@ import (
 // channel signals when a confirmation event lands so cancellation tests
 // don't need to busy-wait.
 type captureEmitter struct {
+	mu               sync.Mutex
+	confirmedOnce    sync.Once
 	calls            []tools.ToolCall
 	outputs          []outputRecord
 	responses        []responseRecord
@@ -47,14 +52,20 @@ type hookBlockRecord struct {
 }
 
 func (e *captureEmitter) EmitToolCall(tc tools.ToolCall, _ tools.Tool, _ string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	e.calls = append(e.calls, tc)
 }
 
 func (e *captureEmitter) EmitToolCallOutput(toolCallID string, _ tools.Tool, output, _ string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	e.outputs = append(e.outputs, outputRecord{ToolCallID: toolCallID, Output: output})
 }
 
 func (e *captureEmitter) EmitToolCallResponse(toolCallID string, _ tools.Tool, result *tools.ToolCallResult, output, _ string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	e.responses = append(e.responses, responseRecord{
 		ToolCallID: toolCallID,
 		Output:     output,
@@ -63,23 +74,24 @@ func (e *captureEmitter) EmitToolCallResponse(toolCallID string, _ tools.Tool, r
 }
 
 func (e *captureEmitter) EmitToolCallConfirmation(tc tools.ToolCall, _ tools.Tool, _ string, metadata map[string]string) {
+	e.mu.Lock()
 	e.confirmations = append(e.confirmations, tc)
 	e.confirmationMeta = append(e.confirmationMeta, metadata)
+	e.mu.Unlock()
 	if e.confirmed != nil {
-		select {
-		case <-e.confirmed:
-			// already closed
-		default:
-			close(e.confirmed)
-		}
+		e.confirmedOnce.Do(func() { close(e.confirmed) })
 	}
 }
 
 func (e *captureEmitter) EmitHookBlocked(tc tools.ToolCall, _ tools.Tool, message, _ string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	e.hookBlocks = append(e.hookBlocks, hookBlockRecord{ToolCall: tc, Message: message})
 }
 
 func (e *captureEmitter) EmitMessageAdded(_ string, msg *session.Message, _ string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	e.messages = append(e.messages, msg)
 }
 
@@ -116,6 +128,67 @@ func TestDispatcher_RoutesToToolsetHandler(t *testing.T) {
 	require.Len(t, em.responses, 1)
 	assert.Equal(t, `hello {"x":1}`, em.responses[0].Output)
 	assert.False(t, em.responses[0].IsError)
+}
+
+func TestDispatcher_RunsToolHandlersInParallel(t *testing.T) {
+	t.Parallel()
+	a := newAgent()
+	sess := session.New()
+	sess.ToolsApproved = true
+
+	started := make(chan string, 2)
+	release := make(chan struct{})
+	var running atomic.Int32
+	var maxRunning atomic.Int32
+	tool := tools.Tool{
+		Name: "slow",
+		Handler: func(ctx context.Context, tc tools.ToolCall) (*tools.ToolCallResult, error) {
+			current := running.Add(1)
+			for {
+				observed := maxRunning.Load()
+				if current <= observed || maxRunning.CompareAndSwap(observed, current) {
+					break
+				}
+			}
+			started <- tc.ID
+			defer running.Add(-1)
+			select {
+			case <-release:
+				return tools.ResultSuccess("done " + tc.ID), nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		},
+	}
+
+	d := &toolexec.Dispatcher{AgentFor: func(*session.Session) *agent.Agent { return a }}
+	em := &captureEmitter{}
+	done := make(chan struct{})
+	go func() {
+		d.Process(t.Context(), sess, []tools.ToolCall{
+			{ID: "a", Function: tools.FunctionCall{Name: "slow", Arguments: `{}`}},
+			{ID: "b", Function: tools.FunctionCall{Name: "slow", Arguments: `{}`}},
+		}, []tools.Tool{tool}, em)
+		close(done)
+	}()
+
+	for range 2 {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for both tool handlers to start")
+		}
+	}
+	close(release)
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Process to finish")
+	}
+
+	assert.GreaterOrEqual(t, maxRunning.Load(), int32(2))
+	require.Len(t, em.responses, 2)
 }
 
 func TestDispatcher_EmitsToolOutputFromHandlerContext(t *testing.T) {
@@ -245,7 +318,7 @@ func TestDispatcher_UnknownToolEmitsErrorResponse(t *testing.T) {
 	assert.Contains(t, em.responses[0].Output, "not available")
 }
 
-func TestDispatcher_UserCancellationStopsBatchAndSynthesizesRemaining(t *testing.T) {
+func TestDispatcher_UserCancellationStopsBatchAndErrorsAllCalls(t *testing.T) {
 	t.Parallel()
 	a := newAgent()
 	sess := session.New()
@@ -264,9 +337,9 @@ func TestDispatcher_UserCancellationStopsBatchAndSynthesizesRemaining(t *testing
 	}
 
 	// Cancel as soon as the dispatcher asks for confirmation on the first
-	// call. The remaining two calls in the batch must receive synthetic
-	// error responses so the conversation history stays consistent (the
-	// Responses API rejects orphaned tool calls).
+	// call. Every call in the batch must receive an error response so the
+	// conversation history stays consistent (the Responses API rejects
+	// orphaned tool calls).
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 	go func() {
@@ -284,10 +357,8 @@ func TestDispatcher_UserCancellationStopsBatchAndSynthesizesRemaining(t *testing
 	require.Len(t, em.responses, 3, "every call must produce a response")
 	for _, r := range em.responses {
 		assert.True(t, r.IsError, "every cancelled call must surface as an error response")
+		assert.Contains(t, r.Output, "canceled")
 	}
-	assert.Contains(t, em.responses[0].Output, "canceled by the user")
-	assert.Contains(t, em.responses[1].Output, "previous tool call")
-	assert.Contains(t, em.responses[2].Output, "previous tool call")
 }
 
 func TestDispatcher_ResumeApproveRunsTool(t *testing.T) {

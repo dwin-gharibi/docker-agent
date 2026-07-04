@@ -9,6 +9,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -60,11 +61,10 @@ const (
 // observed by the dispatcher.
 //
 // Canceled and StopRun are mutually exclusive in practice but signal
-// different things to the caller: cancellation halts the current batch
-// silently (the run loop continues so the synthesised tool error
-// responses can be sent back to the model on the next turn); StopRun
-// also terminates the agent's run loop with a user-visible reason
-// produced by a post_tool_use hook deny verdict.
+// different things to the caller: cancellation cancels sibling calls in
+// the current batch while letting the run loop continue with tool error
+// responses; StopRun also terminates the agent's run loop with a
+// user-visible reason produced by a post_tool_use hook deny verdict.
 type CallOutcome struct {
 	Canceled    bool
 	StopRun     bool
@@ -74,6 +74,9 @@ type CallOutcome struct {
 // Emitter receives the events the [Dispatcher] emits while processing a
 // batch of tool calls. Runtimes typically implement this by sending typed
 // events to their event channel.
+//
+// Implementations must be safe for concurrent use: the dispatcher runs
+// independent tool calls from the same batch in parallel.
 //
 // The dispatcher emits the events below. Runtime-managed handlers
 // (registered via [Dispatcher.Handlers]) emit any additional runtime-specific
@@ -164,17 +167,27 @@ type Dispatcher struct {
 	// handoff, change_model, ...). Tools not in this map are routed to
 	// their toolset Handler.
 	Handlers map[string]ToolHandler
+
+	confirmationMu sync.Mutex
+	approvalMu     sync.Mutex
 }
 
-// Process runs every tool call in calls in order, emitting events through
-// em.
+var (
+	errBatchCanceledByUser = errors.New("tool batch canceled by user")
+	errBatchStoppedByHook  = errors.New("tool batch stopped by post_tool_use hook")
+)
+
+// Process runs every tool call in calls, emitting events through em. Calls in
+// the same model batch are independent and execute in parallel; interactive
+// confirmations are still serialized because resume decisions are not keyed by
+// tool-call ID.
 //
 // Returns (stopRun, message) when a post_tool_use hook signalled a
 // terminating verdict during this batch; the run loop then fans out the
 // standard Error / notification / on_error stanzas before exiting.
 // (false, "") in every other path — including user cancellation, which
-// halts the *batch* but keeps the loop alive so the synthesised tool
-// error responses can be sent back to the model on the next turn.
+// halts the *batch* but keeps the loop alive so the tool error responses can
+// be sent back to the model on the next turn.
 func (d *Dispatcher) Process(ctx context.Context, sess *session.Session, calls []tools.ToolCall, agentTools []tools.Tool, em Emitter) (stopRun bool, stopMessage string) {
 	a := d.AgentFor(sess)
 	slog.DebugContext(ctx, "Processing tool calls", "agent", a.Name(), "call_count", len(calls))
@@ -184,29 +197,29 @@ func (d *Dispatcher) Process(ctx context.Context, sess *session.Session, calls [
 		toolByName[t.Name] = t
 	}
 
-	// synthesizeRemaining adds error responses for tool calls we won't
-	// run because the batch was halted (user cancellation or post-tool
-	// stopRun). Orphan function calls without matching outputs are
-	// rejected by the Responses API, so we surface them as errors
-	// rather than dropping them.
-	synthesizeRemaining := func(remaining []tools.ToolCall, reason string) {
-		for _, rc := range remaining {
-			c := d.newCall(sess, em, a, rc, toolByName)
-			c.errorResponse(ctx, reason)
-		}
-	}
+	batchCtx, cancelBatch := context.WithCancelCause(ctx)
+	defer cancelBatch(nil)
 
+	outcomes := make([]CallOutcome, len(calls))
+	var stopOnce sync.Once
+	var wg sync.WaitGroup
 	for i, tc := range calls {
-		c := d.newCall(sess, em, a, tc, toolByName)
-		outcome := c.run(ctx)
-		switch {
-		case outcome.Canceled:
-			synthesizeRemaining(calls[i+1:],
-				"The tool call was canceled because a previous tool call in the same batch was canceled by the user.")
-			return false, ""
-		case outcome.StopRun:
-			synthesizeRemaining(calls[i+1:],
-				"The tool call was skipped because a post_tool_use hook signalled run termination.")
+		wg.Go(func() {
+			c := d.newCall(sess, em, a, tc, toolByName)
+			outcome := c.run(batchCtx)
+			outcomes[i] = outcome
+			switch {
+			case outcome.Canceled:
+				stopOnce.Do(func() { cancelBatch(errBatchCanceledByUser) })
+			case outcome.StopRun:
+				stopOnce.Do(func() { cancelBatch(errBatchStoppedByHook) })
+			}
+		})
+	}
+	wg.Wait()
+
+	for _, outcome := range outcomes {
+		if outcome.StopRun {
 			return true, outcome.StopMessage
 		}
 	}
@@ -287,6 +300,13 @@ func (c *call) run(ctx context.Context) CallOutcome {
 	defer span.End()
 
 	slog.DebugContext(ctx, "Processing tool call", "agent", c.a.Name(), "tool", c.tc.Function.Name, "session_id", c.sess.ID)
+
+	if ctx.Err() != nil {
+		msg := c.cancellationMessage(ctx)
+		c.errorResponse(ctx, msg)
+		span.SetStatus(codes.Ok, msg)
+		return c.cancellationOutcome(ctx)
+	}
 
 	// After a handoff the model may hallucinate tools it saw earlier in
 	// the conversation. Reject unknown tools with an error response so it
@@ -371,20 +391,9 @@ func (c *call) approveAndRun(ctx context.Context, runTool func() CallOutcome) Ca
 		// DecisionAllow / "" → advisory; fall through to Decide().
 	}
 
-	var checkers []NamedChecker
-	if c.d.Permissions != nil {
-		checkers = c.d.Permissions(c.sess)
-	}
-
 	// readOnlyHint is intentionally false here so the pre_tool_use hook
 	// gets a turn before the read-only fast-path applies.
-	decision := Decide(
-		c.sess.ToolsApproved,
-		checkers,
-		c.tc.Function.Name,
-		ParseToolInput(c.tc.Function.Arguments),
-		false,
-	)
+	decision := c.permissionDecision(false)
 
 	switch decision.Outcome {
 	case OutcomeAllow:
@@ -416,6 +425,49 @@ func (c *call) approveAndRun(ctx context.Context, runTool func() CallOutcome) Ca
 		return runTool()
 	}
 	return c.askUser(ctx, runTool)
+}
+
+func (c *call) permissionDecision(readOnlyHint bool) PermissionDecision {
+	c.d.approvalMu.Lock()
+	defer c.d.approvalMu.Unlock()
+
+	var checkers []NamedChecker
+	if c.d.Permissions != nil {
+		checkers = c.d.Permissions(c.sess)
+	}
+	return Decide(
+		c.sess.ToolsApproved,
+		checkers,
+		c.tc.Function.Name,
+		ParseToolInput(c.tc.Function.Arguments),
+		readOnlyHint,
+	)
+}
+
+func (c *call) autoApprovalAfterConfirmationWait() (PermissionDecision, bool) {
+	if c.preYoloResult != nil && c.preYoloResult.Decision == hooks.DecisionAsk {
+		return PermissionDecision{}, false
+	}
+	decision := c.permissionDecision(c.tool.Annotations.ReadOnlyHint)
+	return decision, decision.Outcome == OutcomeAllow
+}
+
+func (c *call) cancellationMessage(ctx context.Context) string {
+	switch {
+	case errors.Is(context.Cause(ctx), errBatchCanceledByUser):
+		return "The tool call was canceled because another tool call in the same batch was canceled by the user."
+	case errors.Is(context.Cause(ctx), errBatchStoppedByHook):
+		return "The tool call was skipped because a post_tool_use hook signalled run termination."
+	default:
+		return "The tool call was canceled by the user."
+	}
+}
+
+func (c *call) cancellationOutcome(ctx context.Context) CallOutcome {
+	if errors.Is(context.Cause(ctx), errBatchStoppedByHook) {
+		return CallOutcome{}
+	}
+	return CallOutcome{Canceled: true}
 }
 
 // consultPreToolUsePreYolo dispatches the preempt-yolo lane of the
@@ -602,6 +654,25 @@ func (c *call) askUser(ctx context.Context, runTool func() CallOutcome) CallOutc
 		return CallOutcome{}
 	}
 
+	// ResumeRequest has no tool-call ID, so only one confirmation can be
+	// visible and waiting on the shared channel at a time.
+	c.d.confirmationMu.Lock()
+
+	if ctx.Err() != nil {
+		c.d.confirmationMu.Unlock()
+		slog.DebugContext(ctx, "Context cancelled before confirmation", "tool", c.tc.Function.Name, "session_id", c.sess.ID)
+		c.notifyApproval(ctx, ApprovalDecisionCanceled, ApprovalSourceContextCanceled)
+		c.errorResponse(ctx, c.cancellationMessage(ctx))
+		return c.cancellationOutcome(ctx)
+	}
+
+	if decision, ok := c.autoApprovalAfterConfirmationWait(); ok {
+		c.d.confirmationMu.Unlock()
+		c.logAllow(decision)
+		c.notifyApproval(ctx, ApprovalDecisionAllow, allowSourceForDecision(decision))
+		return runTool()
+	}
+
 	slog.DebugContext(ctx, "Tools not approved, waiting for resume", "tool", c.tc.Function.Name, "session_id", c.sess.ID)
 	c.em.EmitToolCallConfirmation(c.tc, c.tool, c.a.Name(), c.confirmationMetadata(hookMeta))
 
@@ -611,12 +682,14 @@ func (c *call) askUser(ctx context.Context, runTool func() CallOutcome) CallOutc
 
 	select {
 	case req := <-c.d.Resume:
+		c.d.confirmationMu.Unlock()
 		return c.handleResume(ctx, req, runTool)
 	case <-ctx.Done():
+		c.d.confirmationMu.Unlock()
 		slog.DebugContext(ctx, "Context cancelled while waiting for resume", "tool", c.tc.Function.Name, "session_id", c.sess.ID)
 		c.notifyApproval(ctx, ApprovalDecisionCanceled, ApprovalSourceContextCanceled)
-		c.errorResponse(ctx, "The tool call was canceled by the user.")
-		return CallOutcome{Canceled: true}
+		c.errorResponse(ctx, c.cancellationMessage(ctx))
+		return c.cancellationOutcome(ctx)
 	}
 }
 
@@ -710,7 +783,9 @@ func (c *call) handleResume(ctx context.Context, req ResumeRequest, runTool func
 		return runTool()
 	case ResumeTypeApproveSession:
 		slog.DebugContext(ctx, "Resume signal received, approving session", "tool", c.tc.Function.Name, "session_id", c.sess.ID)
+		c.d.approvalMu.Lock()
 		c.sess.ToolsApproved = true
+		c.d.approvalMu.Unlock()
 		c.notifyApproval(ctx, ApprovalDecisionAllow, ApprovalSourceUserApprovedSession)
 		return runTool()
 	case ResumeTypeApproveTool:
@@ -718,12 +793,14 @@ func (c *call) handleResume(ctx context.Context, req ResumeRequest, runTool func
 		if approvedTool == "" {
 			approvedTool = c.tc.Function.Name
 		}
+		c.d.approvalMu.Lock()
 		if c.sess.Permissions == nil {
 			c.sess.Permissions = &session.PermissionsConfig{}
 		}
 		if !slices.Contains(c.sess.Permissions.Allow, approvedTool) {
 			c.sess.Permissions.Allow = append(c.sess.Permissions.Allow, approvedTool)
 		}
+		c.d.approvalMu.Unlock()
 		slog.DebugContext(ctx, "Resume signal received, approving tool permanently", "tool", approvedTool, "session_id", c.sess.ID)
 		c.notifyApproval(ctx, ApprovalDecisionAllow, ApprovalSourceUserApprovedTool)
 		return runTool()
@@ -864,9 +941,10 @@ func (c *call) applyToolResponseTransform(ctx context.Context, payload string, i
 // recorded as an error.
 func (c *call) translateError(ctx context.Context, span trace.Span, err error) *tools.ToolCallResult {
 	if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
+		msg := c.cancellationMessage(ctx)
 		slog.DebugContext(ctx, "Tool handler canceled by context", "tool", c.tc.Function.Name, "agent", c.a.Name(), "session_id", c.sess.ID)
-		span.SetStatus(codes.Ok, "tool handler canceled by user")
-		return tools.ResultError("The tool call was canceled by the user.")
+		span.SetStatus(codes.Ok, msg)
+		return tools.ResultError(msg)
 	}
 	span.RecordError(err)
 	span.SetStatus(codes.Error, "tool handler error")

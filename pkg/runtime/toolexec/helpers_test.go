@@ -2,6 +2,7 @@ package toolexec_test
 
 import (
 	"context"
+	"sync"
 
 	"github.com/docker/docker-agent/pkg/agent"
 	"github.com/docker/docker-agent/pkg/config/latest"
@@ -30,6 +31,7 @@ func newDenyChecker(toolName string) *permissions.Checker {
 // fires (the field doubles as a witness that post_tool_use
 // participated at all).
 type stubHookDispatcher struct {
+	mu                sync.Mutex
 	on                map[hooks.EventType]*hooks.Result
 	lastPostToolInput *hooks.Input
 	// dispatched records every event the dispatcher asked us to fire,
@@ -39,6 +41,8 @@ type stubHookDispatcher struct {
 }
 
 func (s *stubHookDispatcher) Dispatch(_ context.Context, _ *agent.Agent, event hooks.EventType, in *hooks.Input) *hooks.Result {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.dispatched = append(s.dispatched, event)
 	if event == hooks.EventPostToolUse {
 		s.lastPostToolInput = in
