@@ -30,9 +30,9 @@ func bareModel(height int) *model {
 		editor:       ui.NewEditor("type here"),
 		ac:           ui.NewAutocomplete(),
 		transcript:   newTranscript(),
-		status:       statusData{workingDir: "/tmp/project"},
+		status:       ui.StatusModel{WorkingDir: "/tmp/project"},
 		sessionState: service.NewSessionState(nil),
-		usage:        newUsageTracker(),
+		usage:        ui.NewUsageTracker(),
 	}
 }
 

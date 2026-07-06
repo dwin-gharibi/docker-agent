@@ -66,15 +66,15 @@ func (m *model) handleEvent(ctx context.Context, ev any) {
 	case *runtime.TokenUsageEvent:
 		m.setTokenUsage(e.SessionID, e.Usage)
 	case *runtime.AgentInfoEvent:
-		m.status.agent = e.AgentName
+		m.status.Agent = e.AgentName
 		if m.sessionState != nil {
 			m.sessionState.SetCurrentAgentName(e.AgentName)
 		}
 		if e.Model != "" {
-			m.status.model = e.Model
+			m.status.Model = e.Model
 		}
 		if e.ContextLimit > 0 {
-			m.status.contextLimit = e.ContextLimit
+			m.status.ContextLimit = e.ContextLimit
 		}
 	case *runtime.TeamInfoEvent:
 		m.applyTeamInfo(ctx, e)
@@ -162,14 +162,14 @@ func (m *model) applyTeamInfo(ctx context.Context, e *runtime.TeamInfoEvent) {
 		if a.Name != e.CurrentAgent {
 			continue
 		}
-		m.status.agent = a.Name
+		m.status.Agent = a.Name
 		switch {
 		case a.Provider != "" && a.Model != "":
-			m.status.model = a.Provider + "/" + a.Model
+			m.status.Model = a.Provider + "/" + a.Model
 		case a.Model != "":
-			m.status.model = a.Model
+			m.status.Model = a.Model
 		}
-		m.status.thinking = a.Thinking
+		m.status.Thinking = a.Thinking
 	}
 	m.refreshCommands(ctx)
 }

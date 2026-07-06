@@ -132,7 +132,7 @@ func TestShiftTabCyclesThinkingLevel(t *testing.T) {
 	m.handleKey(t.Context(), ui.Key{Typ: ui.KeyShiftTab})
 
 	assert.Equal(t, 1, rt.cycleCalls)
-	assert.Equal(t, "high", m.status.thinking)
+	assert.Equal(t, "high", m.status.Thinking)
 	assert.Empty(t, m.transcript.blocks)
 }
 
@@ -145,7 +145,7 @@ func TestShiftTabReportsUnsupportedThinkingLevel(t *testing.T) {
 	m.handleKey(t.Context(), ui.Key{Typ: ui.KeyShiftTab})
 
 	assert.Equal(t, 1, rt.cycleCalls)
-	assert.Empty(t, m.status.thinking)
+	assert.Empty(t, m.status.Thinking)
 	assert.Len(t, m.transcript.blocks, 1)
 }
 
@@ -159,7 +159,7 @@ func TestEffortCommandSetsThinkingLevel(t *testing.T) {
 
 	assert.Equal(t, 1, rt.setCalls)
 	assert.Equal(t, effort.High, rt.setLevel)
-	assert.Equal(t, "high", m.status.thinking)
+	assert.Equal(t, "high", m.status.Thinking)
 }
 
 func TestEffortCommandRejectsUnknownLevel(t *testing.T) {
@@ -171,7 +171,7 @@ func TestEffortCommandRejectsUnknownLevel(t *testing.T) {
 	m.handleSetThinkingLevel(t.Context(), "turbo")
 
 	assert.Zero(t, rt.setCalls)
-	assert.Empty(t, m.status.thinking)
+	assert.Empty(t, m.status.Thinking)
 	assert.Len(t, m.transcript.blocks, 1)
 }
 

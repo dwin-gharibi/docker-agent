@@ -131,7 +131,7 @@ func (m *model) handleCycleThinkingLevel(ctx context.Context) {
 		m.reportThinkingLevelError("change", err)
 		return
 	}
-	m.status.thinking = level.String()
+	m.status.Thinking = level.String()
 }
 
 // handleSetThinkingLevel applies the /effort command: it sets the current
@@ -154,7 +154,7 @@ func (m *model) handleSetThinkingLevel(ctx context.Context, level string) {
 		m.reportThinkingLevelError("set", err)
 		return
 	}
-	m.status.thinking = applied.String()
+	m.status.Thinking = applied.String()
 	m.addNotice("", "Reasoning effort set to "+applied.String(), ui.StMuted())
 }
 
@@ -400,12 +400,12 @@ func (m *model) resetConversation() {
 	m.ignoredUsers = nil
 	m.busy = false
 	m.confirm = nil
-	m.usage.reset()
-	m.status.contextLength = 0
-	m.status.contextLimit = 0
-	m.status.tokens = 0
-	m.status.cost = 0
-	m.status.costKnown = false
+	m.usage.Reset()
+	m.status.ContextLength = 0
+	m.status.ContextLimit = 0
+	m.status.Tokens = 0
+	m.status.Cost = 0
+	m.status.CostKnown = false
 }
 
 func (m *model) clearScreen() {

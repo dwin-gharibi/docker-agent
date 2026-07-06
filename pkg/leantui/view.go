@@ -28,7 +28,7 @@ func (m *model) buildLines() (lines []string, cursorLine, cursorCol int) {
 	}
 
 	lines = append(lines, "")
-	lines = append(lines, renderStatus(m.status, width)...)
+	lines = append(lines, ui.RenderStatus(m.status, width)...)
 
 	return lines, cursorLine, cursorCol
 }

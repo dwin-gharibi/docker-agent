@@ -147,9 +147,9 @@ type model struct {
 	editor *ui.Editor
 	ac     *ui.Autocomplete
 
-	status       statusData
+	status       ui.StatusModel
 	sessionState *service.SessionState
-	usage        *usageTracker
+	usage        *ui.UsageTracker
 
 	transcript   *transcript
 	busy         bool
@@ -191,9 +191,9 @@ func newModel(term *ui.Terminal, cfg Config) *model {
 		editor:           ui.NewEditor("Type a message, / for commands"),
 		ac:               ui.NewAutocomplete(),
 		transcript:       newTranscript(),
-		status:           statusData{workingDir: cfg.WorkingDir, branch: gitbranch.Current(cfg.WorkingDir)},
+		status:           ui.StatusModel{WorkingDir: cfg.WorkingDir, Branch: gitbranch.Current(cfg.WorkingDir)},
 		sessionState:     sessionState,
-		usage:            newUsageTracker(),
+		usage:            ui.NewUsageTracker(),
 		appName:          appName,
 		disabledCommands: disabled,
 	}
