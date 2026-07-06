@@ -345,6 +345,7 @@ func (sm *SessionManager) GetSessionSnapshot(ctx context.Context, id string) (*a
 		Streaming:     streaming,
 		Agent:         agent,
 		LastEventSeq:  lastSeq,
+		Cost:          sess.TotalCost(),
 	}, nil
 }
 

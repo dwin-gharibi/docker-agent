@@ -327,6 +327,10 @@ type SessionSnapshotResponse struct {
 	// Zero when the session has no event stream (no events yet, or not
 	// attached to a control plane).
 	LastEventSeq uint64 `json:"last_event_seq"`
+	// Cost is the session's cumulative cost in US dollars, including
+	// sub-sessions and item-level costs (e.g. compaction). Clients should
+	// prefer it over summing per-message costs, which misses those.
+	Cost float64 `json:"cost"`
 }
 
 // RunAgentRequest is the body of POST /api/sessions/:id/agent/:agent[/:agent_name].
