@@ -805,6 +805,12 @@ func (a *App) removeSubscriber(ch chan tea.Msg) {
 // scatters every message to all currently-registered subscribers. Sends are
 // non-blocking; if a subscriber's buffer is full the event is dropped for
 // that subscriber so one slow consumer cannot stall the others.
+//
+// Turn-boundary events are the exception: dropping a stream_started or
+// stream_stopped skews a consumer's turn accounting for good (the SSE replay
+// buffer never sees the event, so reconnecting cannot recover it). For those,
+// the oldest pending message — almost always a content delta, which the next
+// delta supersedes — is evicted to make room instead.
 func (a *App) startFanOut() {
 	throttled := a.throttleEvents(a.ctx(), a.events)
 	go func() {
@@ -816,11 +822,45 @@ func (a *App) startFanOut() {
 				select {
 				case ch <- msg:
 				default:
-					slog.Warn("app: subscriber buffer full, dropping event")
+					if !isTurnBoundaryEvent(msg) {
+						slog.Warn("app: subscriber buffer full, dropping event")
+						continue
+					}
+					// Evict the oldest pending message (racing the subscriber's
+					// own receive is fine: either way a slot frees up), then
+					// retry once. Still full means the subscriber is wedged;
+					// drop as before rather than block the fan-out.
+					select {
+					case <-ch:
+					default:
+					}
+					select {
+					case ch <- msg:
+					default:
+						slog.Warn("app: subscriber buffer full, dropping turn-boundary event")
+					}
 				}
 			}
 		}
 	}()
+}
+
+// isTurnBoundaryEvent reports whether msg is one of the events consumers use
+// to track turn state (running/waiting/failed/paused) and identity (title).
+// These are low-frequency and irrecoverable when lost, unlike the content
+// deltas that dominate the stream, so the fan-out prefers them on overflow.
+func isTurnBoundaryEvent(msg tea.Msg) bool {
+	switch msg.(type) {
+	case *runtime.StreamStartedEvent,
+		*runtime.StreamStoppedEvent,
+		*runtime.UserMessageEvent,
+		*runtime.ErrorEvent,
+		*runtime.PausedEvent,
+		*runtime.SessionTitleEvent:
+		return true
+	default:
+		return false
+	}
 }
 
 // Resume resumes the runtime with the given confirmation request
