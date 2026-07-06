@@ -178,10 +178,10 @@ models:
 
   claude:
     provider: anthropic
-    model: claude-sonnet-4-0
+    model: claude-sonnet-4-5
     max_tokens: 64000
 
   opus:
     provider: anthropic
-    model: claude-opus-4-0
+    model: claude-opus-4-6
     max_tokens: 32000

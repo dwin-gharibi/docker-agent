@@ -14,7 +14,7 @@
 agents:
   # Minimal fallback configuration - just specify models, defaults handle the rest
   root:
-    model: anthropic/claude-sonnet-4-0
+    model: anthropic/claude-sonnet-4-5
     fallback:
       models:
         - openai/gpt-4o
@@ -36,7 +36,7 @@ agents:
 # Example with explicit configuration (for power users):
 # agents:
 #   root:
-#     model: anthropic/claude-sonnet-4-0
+#     model: anthropic/claude-sonnet-4-5
 #     fallback:
 #       models:
 #         - fast_backup

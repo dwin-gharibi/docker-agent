@@ -23,7 +23,7 @@
 
 agents:
   root:
-    model: anthropic/claude-sonnet-4-0
+    model: anthropic/claude-sonnet-4-5
     description: "Agent demonstrating environment variable placeholder expansion"
     instruction: |
       You are a helpful assistant that responds to user requests.
