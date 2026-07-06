@@ -4272,6 +4272,50 @@ func TestRunAgentPersistsSubSessionOnError(t *testing.T) {
 		"parent session must record the sub-session even when the background agent errored")
 }
 
+// TestRunAgentForwardsTokenUsageOutOfBand verifies runCollecting surfaces the
+// background sub-session's TokenUsageEvents through OnBackgroundEvent — the
+// out-of-band path that lets the TUI keep per-agent context accounting for
+// background agents — tagged with the sub-session id and the worker's name,
+// and forwards nothing else.
+func TestRunAgentForwardsTokenUsageOutOfBand(t *testing.T) {
+	t.Parallel()
+
+	workerStream := newStreamBuilder().AddContent("worker done").AddStopWithUsage(100, 50).Build()
+	parentProv := &mockProvider{id: "test/mock-model", stream: &mockStream{}}
+	workerProv := &mockProvider{id: "test/mock-model", stream: workerStream}
+
+	worker := agent.New("worker", "Worker agent", agent.WithModel(workerProv))
+	root := agent.New("root", "Root agent", agent.WithModel(parentProv))
+	agent.WithSubAgents(worker)(root)
+
+	tm := team.New(team.WithAgents(root, worker))
+	rt, err := NewLocalRuntime(t.Context(), tm, WithSessionCompaction(false), WithModelStore(mockModelStore{}))
+	require.NoError(t, err)
+
+	var forwarded []Event
+	rt.OnBackgroundEvent(func(event Event) { forwarded = append(forwarded, event) })
+
+	sess := session.New(session.WithUserMessage("Test"), session.WithToolsApproved(true))
+	result := rt.RunAgent(t.Context(), agenttool.RunParams{
+		AgentName:     "worker",
+		Task:          "do something",
+		ParentSession: sess,
+	})
+	require.Empty(t, result.ErrMsg, "RunAgent should succeed")
+
+	require.NotEmpty(t, forwarded, "the background task's token usage must be forwarded out-of-band")
+	for _, event := range forwarded {
+		usage, ok := event.(*TokenUsageEvent)
+		require.Truef(t, ok, "only TokenUsageEvents may be forwarded, got %T", event)
+		assert.Equal(t, "worker", usage.AgentName, "usage is attributed to the background agent")
+		assert.NotEqual(t, sess.ID, usage.SessionID, "usage carries the sub-session id, not the parent's")
+		assert.NotEmpty(t, usage.SessionID)
+	}
+	last := forwarded[len(forwarded)-1].(*TokenUsageEvent)
+	require.NotNil(t, last.Usage)
+	assert.Equal(t, int64(150), last.Usage.ContextLength, "final snapshot carries the worker's cumulative usage")
+}
+
 // TestReasoningOnlyTurnEmitsWarning is a regression test for
 // https://github.com/docker/docker-agent/issues/3145. A thinking-mode model
 // (e.g. Qwen3 via an openai_chatcompletions provider) can stream only reasoning

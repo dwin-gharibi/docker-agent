@@ -702,6 +702,10 @@ func (r *RemoteRuntime) TogglePause(ctx context.Context) (bool, error) {
 // than via an out-of-band callback.
 func (r *RemoteRuntime) OnToolsChanged(func(Event)) {}
 
+// OnBackgroundEvent is a no-op for remote runtimes; background agent tasks
+// run server-side and their events are not forwarded out-of-band.
+func (r *RemoteRuntime) OnBackgroundEvent(func(Event)) {}
+
 // Close is a no-op for remote runtimes.
 func (r *RemoteRuntime) Close() error {
 	return nil

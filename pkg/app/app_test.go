@@ -105,6 +105,7 @@ func (m *mockRuntime) SetAgentThinkingLevel(context.Context, string, effort.Leve
 func (m *mockRuntime) AvailableModels(context.Context) []runtime.ModelChoice { return nil }
 func (m *mockRuntime) SupportsModelSwitching() bool                          { return false }
 func (m *mockRuntime) OnToolsChanged(func(runtime.Event))                    {}
+func (m *mockRuntime) OnBackgroundEvent(func(runtime.Event))                 {}
 
 // Verify mockRuntime implements runtime.Runtime
 var _ runtime.Runtime = (*mockRuntime)(nil)
@@ -170,6 +171,49 @@ func TestApp_Retry_SuppressesReEmittedUserMessage(t *testing.T) {
 	// (steered) user message is kept.
 	assert.Equal(t, []string{"steered"}, userMessages,
 		"only the post-StreamStarted user message should be forwarded")
+}
+
+// backgroundEventMockRuntime captures the handler App.Start registers via
+// OnBackgroundEvent so tests can emit background events through it.
+type backgroundEventMockRuntime struct {
+	mockRuntime
+
+	handler func(runtime.Event)
+}
+
+func (m *backgroundEventMockRuntime) OnBackgroundEvent(handler func(runtime.Event)) {
+	m.handler = handler
+}
+
+// TestApp_Start_ForwardsBackgroundEvents verifies Start wires the runtime's
+// out-of-band background-event hook into the app's event stream, so token
+// usage from background agent tasks reaches the TUI subscribers.
+func TestApp_Start_ForwardsBackgroundEvents(t *testing.T) {
+	t.Parallel()
+
+	rt := &backgroundEventMockRuntime{}
+	events := make(chan tea.Msg, 16)
+	app := &App{
+		runtime: rt,
+		session: session.New(),
+		events:  events,
+	}
+
+	app.Start(t.Context())
+	require.NotNil(t, rt.handler, "Start must register the background-event handler")
+
+	usage := runtime.NewTokenUsageEvent("bg-session", "worker", &runtime.Usage{
+		ContextLength: 150,
+		ContextLimit:  1000,
+	})
+	rt.handler(usage)
+
+	select {
+	case msg := <-events:
+		assert.Equal(t, usage, msg, "the background event must reach the app's event stream unchanged")
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the forwarded background event")
+	}
 }
 
 // stubSnapshotController is a tiny SnapshotController used by the app

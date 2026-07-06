@@ -57,6 +57,12 @@ type SessionState struct {
 	currentAgentName string
 	availableAgents  []runtime.AgentDetails
 	pauseState       PauseState
+
+	// agentUsage holds the latest token-usage snapshot per agent name,
+	// fed by TokenUsageEvents (including those of sub-sessions and
+	// background agent tasks). It backs the per-agent context display in
+	// the sidebar roster and the agent-details dialog.
+	agentUsage map[string]runtime.Usage
 }
 
 func NewSessionState(s *session.Session) *SessionState {
@@ -169,4 +175,24 @@ func (s *SessionState) GetCurrentAgent() runtime.AgentDetails {
 	}
 
 	return runtime.AgentDetails{}
+}
+
+// SetAgentUsage records the latest token-usage snapshot for the named agent.
+// Each snapshot carries cumulative totals for the agent's most recent
+// session, so the last write always reflects its current context usage.
+func (s *SessionState) SetAgentUsage(agentName string, usage runtime.Usage) {
+	if agentName == "" {
+		return
+	}
+	if s.agentUsage == nil {
+		s.agentUsage = make(map[string]runtime.Usage)
+	}
+	s.agentUsage[agentName] = usage
+}
+
+// AgentUsage returns the latest token-usage snapshot recorded for the named
+// agent, and whether one exists (an agent that has not run yet has none).
+func (s *SessionState) AgentUsage(agentName string) (runtime.Usage, bool) {
+	usage, ok := s.agentUsage[agentName]
+	return usage, ok
 }
