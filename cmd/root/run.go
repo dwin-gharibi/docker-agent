@@ -827,7 +827,10 @@ func (f *runExecFlags) createLocalRuntimeAndSession(ctx context.Context, loadRes
 		sess, err = sessStore.GetSession(ctx, resolvedID)
 		switch {
 		case err == nil:
-			sess.ToolsApproved = req.ToolsApproved
+			// Via the option, not a raw field write: WithToolsApproved
+			// backfills SafetyPolicy=unsafe so safer_shell honours --yolo
+			// on resumed sessions too.
+			session.WithToolsApproved(req.ToolsApproved)(sess)
 			sess.HideToolResults = req.HideToolResults
 
 			// Apply any stored model overrides from the session
