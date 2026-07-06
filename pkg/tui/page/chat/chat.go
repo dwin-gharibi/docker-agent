@@ -2,7 +2,6 @@ package chat
 
 import (
 	"context"
-	"encoding/base64"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -814,13 +813,15 @@ func (p *chatPage) extractAttachmentsFromSession(position int) []msgtypes.Attach
 
 		if part.Type == chat.MessagePartTypeDocument && part.Document != nil {
 			content := part.Document.Source.InlineText
-			if content == "" && len(part.Document.Source.InlineData) > 0 {
-				content = "data:" + part.Document.MimeType + ";base64," + base64.StdEncoding.EncodeToString(part.Document.Source.InlineData)
-			}
-			if content != "" {
+			data := part.Document.Source.InlineData
+			mimeType := part.Document.MimeType
+
+			if content != "" || len(data) > 0 {
 				attachments = append(attachments, msgtypes.Attachment{
-					Name:    part.Document.Name,
-					Content: content,
+					Name:     part.Document.Name,
+					Content:  content,
+					MimeType: mimeType,
+					Data:     data,
 				})
 			}
 			continue

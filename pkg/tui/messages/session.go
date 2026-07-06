@@ -18,6 +18,10 @@ type Attachment struct {
 	// backing temp file is cleaned up before the message reaches the app layer.
 	// Empty for file-reference attachments that are read from disk.
 	Content string
+	// MimeType is the MIME type of the binary data, if Data is present.
+	MimeType string
+	// Data holds raw binary content for non-text inline attachments.
+	Data []byte
 }
 
 // Session lifecycle messages control session state and persistence.
