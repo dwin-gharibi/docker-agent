@@ -168,6 +168,16 @@ func (a *App) Start(ctx context.Context) {
 			case <-ctx.Done():
 			}
 		})
+
+		// Forward events surfaced from detached background work (token usage
+		// from background agent tasks) so the sidebar and agent inspector can
+		// account for background agents' context usage.
+		a.runtime.OnBackgroundEvent(func(event runtime.Event) {
+			select {
+			case a.events <- event:
+			case <-ctx.Done():
+			}
+		})
 	})
 }
 

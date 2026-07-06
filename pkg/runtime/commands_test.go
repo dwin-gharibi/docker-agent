@@ -92,6 +92,7 @@ func (m *mockRuntime) SetAgentThinkingLevel(context.Context, string, effort.Leve
 func (m *mockRuntime) AvailableModels(context.Context) []ModelChoice { return nil }
 func (m *mockRuntime) SupportsModelSwitching() bool                  { return false }
 func (m *mockRuntime) OnToolsChanged(func(Event))                    {}
+func (m *mockRuntime) OnBackgroundEvent(func(Event))                 {}
 
 func (m *mockRuntime) RegenerateTitle(context.Context, *session.Session, chan Event) {
 }

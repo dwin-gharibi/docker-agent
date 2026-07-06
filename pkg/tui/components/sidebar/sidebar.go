@@ -260,6 +260,12 @@ func (m *model) SetTokenUsage(event *runtime.TokenUsageEvent) {
 	usage := *event.Usage
 	m.sessionUsage[event.SessionID] = &usage
 
+	// Record the per-agent snapshot in the shared session state so the
+	// agent roster and the agent-details dialog can show per-agent context
+	// usage. Background agent tasks reach this path too: their usage
+	// events are forwarded out-of-band by the runtime.
+	m.sessionState.SetAgentUsage(event.AgentName, usage)
+
 	// Mark session as having content once we receive token usage
 	m.sessionHasContent = true
 	m.invalidateCache()
@@ -559,9 +565,28 @@ func (m *model) activeSessionTokens() (tokens int64, found bool) {
 
 // contextPercent returns a context usage percentage string for the active session.
 func (m *model) contextPercent() string {
-	if usage, ok := m.activeSessionUsage(); ok && usage.ContextLimit > 0 {
-		percent := (float64(usage.ContextLength) / float64(usage.ContextLimit)) * 100
-		return fmt.Sprintf("%.0f%%", percent)
+	if usage, ok := m.activeSessionUsage(); ok {
+		return usageContextPercent(usage)
+	}
+	return ""
+}
+
+// usageContextPercent formats a usage snapshot's context fill as "N%", or ""
+// when the snapshot is missing or its context limit is unknown.
+func usageContextPercent(usage *runtime.Usage) string {
+	if usage == nil || usage.ContextLimit <= 0 {
+		return ""
+	}
+	percent := (float64(usage.ContextLength) / float64(usage.ContextLimit)) * 100
+	return fmt.Sprintf("%.0f%%", percent)
+}
+
+// agentContextPercent returns the latest known context usage percentage for
+// the named agent ("N%"), or "" when the agent has not run yet or its
+// context limit is unknown.
+func (m *model) agentContextPercent(agentName string) string {
+	if usage, ok := m.sessionState.AgentUsage(agentName); ok {
+		return usageContextPercent(&usage)
 	}
 	return ""
 }
@@ -1178,7 +1203,8 @@ func (m *model) queueSection(contentWidth int) string {
 // agentInfo renders the Agents panel: every agent as a two-line entry, with a
 // blank separator line between entries. Line 1 shows the agent's name (in its
 // accent color), the thinking badge right-aligned, and the "^N" switch shortcut
-// flush against the right edge; line 2 shows the indented provider/model. The
+// flush against the right edge; line 2 shows the indented provider/model with
+// the agent's latest context usage percentage right-aligned once known. The
 // current agent is marked with ▶ (or the spinner while it works); the other
 // agents pad that marker column so their names stay aligned. Descriptions are
 // deliberately omitted. Each content line is owned by its agent (agentLineOwners)
@@ -1332,15 +1358,17 @@ func padLeft(s string, width int) string {
 // renderAgentLine renders a single agent as two lines:
 //
 //	▶ name            <thinking> ^N
-//	  provider/model
+//	  provider/model         <ctx%>
 //
 // Line 1: the name is left-aligned in its accent color, the thinking badge is
 // right-aligned in a shared column, and the "^N" switch shortcut sits flush
 // against the right edge. The current agent is marked with ▶ (or the spinner
 // while it — or any agent — is working); other agents pad the marker column so
 // the names stay aligned. Line 2: the indented provider/model, left-truncated
-// so its informative tail survives. The description is omitted. Agents past the
-// 9th have no shortcut.
+// so its informative tail survives, with the agent's latest known context
+// usage percentage right-aligned once the agent has run (background agent
+// tasks included). The description is omitted. Agents past the 9th have no
+// shortcut.
 func (m *model) renderAgentLine(agent runtime.AgentDetails, index, contentWidth, nameWidth, badgeWidth int, glyphOnly, current bool) []string {
 	agentStyle := styles.AgentAccentStyleFor(agent.Name)
 
@@ -1371,8 +1399,17 @@ func (m *model) renderAgentLine(agent runtime.AgentDetails, index, contentWidth,
 	if agent.Provider != "" {
 		modelText = agent.Provider + "/" + agent.Model
 	}
-	model := toolcommon.TruncateTextLeft(modelText, max(1, contentWidth-agentMarkerWidth))
+	ctxPercent := m.agentContextPercent(agent.Name)
+	modelWidth := contentWidth - agentMarkerWidth
+	if ctxPercent != "" {
+		modelWidth -= lipgloss.Width(ctxPercent) + 1
+	}
+	model := toolcommon.TruncateTextLeft(modelText, max(1, modelWidth))
 	line2 := strings.Repeat(" ", agentMarkerWidth) + styles.MutedStyle.Render(model)
+	if ctxPercent != "" {
+		gap := max(1, contentWidth-lipgloss.Width(line2)-lipgloss.Width(ctxPercent))
+		line2 += strings.Repeat(" ", gap) + styles.MutedStyle.Render(ctxPercent)
+	}
 
 	return []string{line1, line2}
 }

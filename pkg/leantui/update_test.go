@@ -118,6 +118,7 @@ func (r *cycleThinkingRuntime) SetAgentThinkingLevel(_ context.Context, _ string
 func (r *cycleThinkingRuntime) AvailableModels(context.Context) []runtime.ModelChoice { return nil }
 func (r *cycleThinkingRuntime) SupportsModelSwitching() bool                          { return r.supports }
 func (r *cycleThinkingRuntime) OnToolsChanged(func(runtime.Event))                    {}
+func (r *cycleThinkingRuntime) OnBackgroundEvent(func(runtime.Event))                 {}
 
 var _ runtime.Runtime = (*cycleThinkingRuntime)(nil)
 

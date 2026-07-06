@@ -329,13 +329,19 @@ func (m *appModel) handleSwitchAgent(agentName string) (tea.Model, tea.Cmd) {
 }
 
 // handleShowAgentDetails opens the read-only agent-details dialog for the named
-// agent, looking it up in the available-agents roster.
+// agent, looking it up in the available-agents roster. The agent's latest
+// token-usage snapshot (if it has run) rides along so the dialog can show its
+// context usage.
 func (m *appModel) handleShowAgentDetails(agentName string) (tea.Model, tea.Cmd) {
 	for _, agent := range m.sessionState.AvailableAgents() {
 		if agent.Name == agentName {
 			cfg := m.application.AgentConfigInfo(m.ctx(), agentName)
+			var usage *runtime.Usage
+			if u, ok := m.sessionState.AgentUsage(agentName); ok {
+				usage = &u
+			}
 			return m, core.CmdHandler(dialog.OpenDialogMsg{
-				Model: dialog.NewAgentDetailsDialog(agent, cfg),
+				Model: dialog.NewAgentDetailsDialog(agent, cfg, usage),
 			})
 		}
 	}

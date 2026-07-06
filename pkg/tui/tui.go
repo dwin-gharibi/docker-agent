@@ -1229,8 +1229,13 @@ func (m *appModel) handleRoutedMsg(msg messages.RoutedMsg) (tea.Model, tea.Cmd) 
 	// Update session state for inactive sessions
 	if event, isRuntimeEvent := msg.Inner.(runtime.Event); isRuntimeEvent {
 		if sessionState, ok := m.sessionStates[msg.SessionID]; ok {
-			if agentName := event.GetAgentName(); agentName != "" {
-				sessionState.SetCurrentAgentName(agentName)
+			// Token-usage events are accounting, not agent-switch signals: a
+			// background agent task's usage can arrive while the tab is idle
+			// and must not move the current-agent marker to that agent.
+			if _, isUsage := msg.Inner.(*runtime.TokenUsageEvent); !isUsage {
+				if agentName := event.GetAgentName(); agentName != "" {
+					sessionState.SetCurrentAgentName(agentName)
+				}
 			}
 			m.applyPauseEvent(sessionState, msg.Inner)
 		}

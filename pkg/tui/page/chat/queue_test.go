@@ -107,6 +107,7 @@ func (queueTestRuntime) SetAgentThinkingLevel(context.Context, string, effort.Le
 func (queueTestRuntime) AvailableModels(context.Context) []runtime.ModelChoice { return nil }
 func (queueTestRuntime) SupportsModelSwitching() bool                          { return false }
 func (queueTestRuntime) OnToolsChanged(func(runtime.Event))                    {}
+func (queueTestRuntime) OnBackgroundEvent(func(runtime.Event))                 {}
 func (queueTestRuntime) QueueStatus() runtime.QueueStatus                      { return runtime.QueueStatus{} }
 func (queueTestRuntime) TogglePause(context.Context) (bool, error)             { return false, nil }
 func (queueTestRuntime) Close() error                                          { return nil }

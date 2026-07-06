@@ -169,6 +169,13 @@ type Runtime interface {
 	// can implement this as a no-op.
 	OnToolsChanged(handler func(Event))
 
+	// OnBackgroundEvent registers a handler invoked outside of any RunStream
+	// for events surfaced from detached background work (e.g. token usage
+	// from background agent tasks started via run_background_agent), which
+	// has no live event channel of its own. Runtimes that don't run local
+	// background work can implement this as a no-op.
+	OnBackgroundEvent(handler func(Event))
+
 	// QueueStatus returns the current depth and capacity of message queues
 	QueueStatus() QueueStatus
 
@@ -291,6 +298,13 @@ type LocalRuntime struct {
 
 	// onToolsChanged is called when an MCP toolset reports a tool list change.
 	onToolsChanged func(Event)
+
+	// onBackgroundEvent is called for events surfaced from detached
+	// background work (e.g. background agent tasks). Protected by
+	// backgroundEventMu because background tasks read it from their own
+	// goroutines.
+	backgroundEventMu sync.RWMutex
+	onBackgroundEvent func(Event)
 
 	bgAgents *agenttool.Handler
 
@@ -1435,6 +1449,28 @@ func (r *LocalRuntime) emitToolsChanged() {
 		return
 	}
 	r.onToolsChanged(ToolsetInfo(len(agentTools), false, r.currentAgentName()))
+}
+
+// OnBackgroundEvent registers a handler that receives events surfaced from
+// detached background work — today the TokenUsageEvents of background agent
+// tasks (run_background_agent), whose sub-sessions run on their own goroutine
+// with no live event channel. This lets the UI keep per-agent context
+// accounting for background agents.
+func (r *LocalRuntime) OnBackgroundEvent(handler func(Event)) {
+	r.backgroundEventMu.Lock()
+	defer r.backgroundEventMu.Unlock()
+	r.onBackgroundEvent = handler
+}
+
+// emitBackgroundEvent forwards an event from detached background work to the
+// registered handler, if any.
+func (r *LocalRuntime) emitBackgroundEvent(event Event) {
+	r.backgroundEventMu.RLock()
+	handler := r.onBackgroundEvent
+	r.backgroundEventMu.RUnlock()
+	if handler != nil {
+		handler(event)
+	}
 }
 
 // emitAgentAndTeamInfo sends the AgentInfo and TeamInfo events that drive the
