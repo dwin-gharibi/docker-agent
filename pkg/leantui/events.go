@@ -44,24 +44,24 @@ func (m *model) handleEvent(ctx context.Context, ev any) {
 		m.transcript.flushPending()
 		m.transcript.upsertTool(e.GetAgentName(), e.ToolCall, e.ToolDefinition, tuitypes.ToolStatusRunning)
 	case *runtime.ToolCallOutputEvent:
-		if tv := m.transcript.tool(e.ToolCallID); tv != nil && tv.message != nil {
-			tv.message.AppendToolOutput(e.Output)
-			if tv.message.ToolStatus == tuitypes.ToolStatusPending {
-				tv.message.ToolStatus = tuitypes.ToolStatusRunning
-				if tv.message.StartedAt == nil {
+		if tv := m.transcript.tool(e.ToolCallID); tv != nil && tv.Message() != nil {
+			tv.Message().AppendToolOutput(e.Output)
+			if tv.Message().ToolStatus == tuitypes.ToolStatusPending {
+				tv.Message().ToolStatus = tuitypes.ToolStatusRunning
+				if tv.Message().StartedAt == nil {
 					now := time.Now()
-					tv.message.StartedAt = &now
+					tv.Message().StartedAt = &now
 				}
 			}
 		}
 	case *runtime.ToolCallResponseEvent:
 		m.transcript.finishTool(e, m.sessionState)
 	case *runtime.ToolCallConfirmationEvent:
-		m.transcript.removeTool(toolViewID(e.ToolCall))
-		toolDef := ensureToolDefinition(e.ToolCall, e.ToolDefinition)
+		m.transcript.removeTool(ui.ToolViewID(e.ToolCall))
+		toolDef := ui.EnsureToolDefinition(e.ToolCall, e.ToolDefinition)
 		m.confirm = &confirmState{
 			tool:     toolDef.Name,
-			toolView: *newToolView(e.GetAgentName(), e.ToolCall, toolDef, tuitypes.ToolStatusConfirmation),
+			toolView: *ui.NewToolView(e.GetAgentName(), e.ToolCall, toolDef, tuitypes.ToolStatusConfirmation),
 		}
 	case *runtime.TokenUsageEvent:
 		m.setTokenUsage(e.SessionID, e.Usage)
@@ -87,7 +87,7 @@ func (m *model) handleEvent(ctx context.Context, ev any) {
 		m.addNotice("⚠ ", e.Message, ui.StWarning())
 	case *runtime.ShellOutputEvent:
 		output := e.Output
-		m.transcript.addBlock(func(w int) []string { return renderToolOutput(output, w) })
+		m.transcript.addBlock(func(w int) []string { return ui.RenderToolOutput(output, w) })
 	case *runtime.AgentSwitchingEvent:
 		if e.Switching && e.ToAgent != "" {
 			m.addNotice("→ ", "Switching to "+e.ToAgent, ui.StMuted())

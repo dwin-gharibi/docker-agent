@@ -36,12 +36,12 @@ func (m *model) buildLines() (lines []string, cursorLine, cursorCol int) {
 // confirmState holds a pending tool-approval prompt.
 type confirmState struct {
 	tool     string // raw tool name, used to scope "always allow"
-	toolView toolView
+	toolView ui.ToolView
 }
 
 func (c *confirmState) render(width int) []string {
 	lines := []string{ui.Truncate(ui.StWarning().Render("● Approve tool call"), width)}
-	lines = append(lines, renderTool(c.toolView, width)...)
+	lines = append(lines, ui.RenderTool(c.toolView, width)...)
 	lines = append(lines, ui.Truncate(ui.StMuted().Render("[y] yes   [a] always this tool   [s] whole session   [n] no"), width))
 	return lines
 }

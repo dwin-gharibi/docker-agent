@@ -1,4 +1,4 @@
-package leantui
+package ui
 
 import (
 	"fmt"
@@ -6,7 +6,6 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/docker/docker-agent/pkg/leantui/ui"
 	"github.com/docker/docker-agent/pkg/tools"
 	"github.com/docker/docker-agent/pkg/tui/animation"
 	toolcomponent "github.com/docker/docker-agent/pkg/tui/components/tool"
@@ -15,39 +14,55 @@ import (
 	tuitypes "github.com/docker/docker-agent/pkg/tui/types"
 )
 
-// toolView is the render state of a single tool call. It deliberately stores
+// ToolView is the render state of a single tool call. It deliberately stores
 // the same TUI message shape used by the full-screen TUI so the lean renderer
 // can delegate the visual representation to pkg/tui/components/tool.
-type toolView struct {
+type ToolView struct {
 	message   *tuitypes.Message
-	images    []ui.InlineImage
+	images    []InlineImage
 	lastWidth int
 	lastLines []string
 }
 
-const maxToolOutputLines = 12
+func (t *ToolView) Message() *tuitypes.Message {
+	if t == nil {
+		return nil
+	}
+	return t.message
+}
 
-func newToolView(agentName string, toolCall tools.ToolCall, toolDef tools.Tool, status tuitypes.ToolStatus) *toolView {
-	return &toolView{
-		message: tuitypes.ToolCallMessage(agentName, toolCall, ensureToolDefinition(toolCall, toolDef), status),
+func (t *ToolView) SetImages(images []InlineImage) {
+	if t != nil {
+		t.images = images
 	}
 }
 
-func ensureToolDefinition(toolCall tools.ToolCall, toolDef tools.Tool) tools.Tool {
+const MaxToolOutputLines = 12
+
+// NewToolView creates a tool call render model.
+func NewToolView(agentName string, toolCall tools.ToolCall, toolDef tools.Tool, status tuitypes.ToolStatus) *ToolView {
+	return &ToolView{
+		message: tuitypes.ToolCallMessage(agentName, toolCall, EnsureToolDefinition(toolCall, toolDef), status),
+	}
+}
+
+// EnsureToolDefinition fills a missing tool definition name from the call.
+func EnsureToolDefinition(toolCall tools.ToolCall, toolDef tools.Tool) tools.Tool {
 	if toolDef.Name == "" {
 		toolDef.Name = toolCall.Function.Name
 	}
 	return toolDef
 }
 
-// renderTool renders a tool call with the same renderer registry used by the
+// RenderTool renders a tool call with the same renderer registry used by the
 // full TUI. This keeps built-in tools and registered custom renderers visually
 // consistent between the normal and lean interfaces.
-func renderTool(t toolView, width int) []string {
-	return renderToolWithState(&t, width, 0, service.StaticSessionState{})
+func RenderTool(t ToolView, width int) []string {
+	return RenderToolWithState(&t, width, 0, service.StaticSessionState{})
 }
 
-func renderToolWithState(t *toolView, width, frame int, sessionState service.SessionStateReader) []string {
+// RenderToolWithState renders a tool call using session state.
+func RenderToolWithState(t *ToolView, width, frame int, sessionState service.SessionStateReader) []string {
 	if width < 1 {
 		width = 1
 	}
@@ -58,7 +73,7 @@ func renderToolWithState(t *toolView, width, frame int, sessionState service.Ses
 		sessionState = service.StaticSessionState{}
 	}
 
-	boxStyle := ui.StToolBox(width)
+	boxStyle := StToolBox(width)
 	innerWidth := max(width-boxStyle.GetHorizontalFrameSize(), 1)
 
 	view := toolcomponent.New(t.message, sessionState)
@@ -70,7 +85,7 @@ func renderToolWithState(t *toolView, width, frame int, sessionState service.Ses
 
 	lines := splitRenderedTool(renderToolBox(view.View(), width), width)
 	for _, img := range t.images {
-		lines = append(lines, ui.RenderInlineImage(img, width)...)
+		lines = append(lines, RenderInlineImage(img, width)...)
 	}
 
 	if t.shouldKeepLastPendingLines(width, lines) {
@@ -91,10 +106,10 @@ func renderToolBox(content string, width int) string {
 	if content == "" {
 		return ""
 	}
-	return styles.RenderComposite(ui.StToolBox(width), content)
+	return styles.RenderComposite(StToolBox(width), content)
 }
 
-func (t *toolView) shouldKeepLastPendingLines(width int, lines []string) bool {
+func (t *ToolView) shouldKeepLastPendingLines(width int, lines []string) bool {
 	if t.message.ToolStatus != tuitypes.ToolStatusPending || t.lastWidth != width || len(t.lastLines) == 0 {
 		return false
 	}
@@ -111,7 +126,7 @@ func cloneLines(lines []string) []string {
 func totalContentWidth(lines []string) int {
 	total := 0
 	for _, line := range lines {
-		total += ui.DisplayWidth(strings.TrimRight(ansi.Strip(line), " "))
+		total += DisplayWidth(strings.TrimRight(ansi.Strip(line), " "))
 	}
 	return total
 }
@@ -127,8 +142,8 @@ func splitRenderedTool(rendered string, width int) []string {
 
 	var out []string
 	for line := range strings.SplitSeq(rendered, "\n") {
-		if ui.DisplayWidth(line) > width {
-			out = append(out, ui.WrapANSI(line, width)...)
+		if DisplayWidth(line) > width {
+			out = append(out, WrapANSI(line, width)...)
 			continue
 		}
 		out = append(out, line)
@@ -136,18 +151,19 @@ func splitRenderedTool(rendered string, width int) []string {
 	return out
 }
 
-func renderToolOutput(output string, width int) []string {
+// RenderToolOutput renders plain streamed shell output.
+func RenderToolOutput(output string, width int) []string {
 	lines := strings.Split(strings.TrimRight(output, "\n"), "\n")
 
 	var out []string
-	if len(lines) > maxToolOutputLines {
-		hidden := len(lines) - maxToolOutputLines
-		out = append(out, "  "+ui.StMuted().Render(fmt.Sprintf("… (%d earlier lines)", hidden)))
-		lines = lines[len(lines)-maxToolOutputLines:]
+	if len(lines) > MaxToolOutputLines {
+		hidden := len(lines) - MaxToolOutputLines
+		out = append(out, "  "+StMuted().Render(fmt.Sprintf("… (%d earlier lines)", hidden)))
+		lines = lines[len(lines)-MaxToolOutputLines:]
 	}
 	for _, l := range lines {
-		for _, wl := range ui.WrapANSI(l, width-2) {
-			out = append(out, "  "+ui.StMuted().Render(wl))
+		for _, wl := range WrapANSI(l, width-2) {
+			out = append(out, "  "+StMuted().Render(wl))
 		}
 	}
 	return out

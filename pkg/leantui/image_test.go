@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/docker/docker-agent/pkg/leantui/ui"
 	"github.com/docker/docker-agent/pkg/tools"
 	tuitypes "github.com/docker/docker-agent/pkg/tui/types"
 )
@@ -44,17 +45,17 @@ func TestRenderToolIncludesInlineImage(t *testing.T) {
 	})
 	require.Len(t, images, 1)
 
-	tv := newToolView("root", tools.ToolCall{
+	tv := ui.NewToolView("root", tools.ToolCall{
 		ID: "call-1",
 		Function: tools.FunctionCall{
 			Name:      "image_tool",
 			Arguments: `{"file":"sample.png"}`,
 		},
 	}, tools.Tool{Name: "image_tool"}, tuitypes.ToolStatusCompleted)
-	tv.message.Content = "Read image file sample.png"
-	tv.images = images
+	tv.Message().Content = "Read image file sample.png"
+	tv.SetImages(images)
 
-	lines := renderTool(*tv, 80)
+	lines := ui.RenderTool(*tv, 80)
 	joined := strings.Join(lines, "\n")
 
 	assert.Contains(t, joined, "Read image file sample.png")

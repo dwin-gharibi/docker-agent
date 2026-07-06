@@ -64,11 +64,11 @@ func (b *block) lines(width int) []string {
 type transcript struct {
 	blocks  []*block
 	pending *pendingBlock
-	toolz   *toolTracker
+	toolz   *ui.ToolTracker
 }
 
 func newTranscript() *transcript {
-	return &transcript{toolz: newToolTracker()}
+	return &transcript{toolz: ui.NewToolTracker()}
 }
 
 // clearActive drops the live region (the streamed block and any in-flight tool
@@ -76,7 +76,7 @@ func newTranscript() *transcript {
 // new session.
 func (t *transcript) clearActive() {
 	t.pending = nil
-	t.toolz.reset()
+	t.toolz.Reset()
 }
 
 // addBlock appends a finalized, lazily-rendered block to the conversation.
@@ -113,20 +113,20 @@ func (t *transcript) flushPending() {
 }
 
 func (t *transcript) upsertTool(agentName string, toolCall tools.ToolCall, toolDef tools.Tool, status tuitypes.ToolStatus) {
-	t.toolz.upsert(agentName, toolCall, toolDef, status)
+	t.toolz.Upsert(agentName, toolCall, toolDef, status)
 }
 
-func (t *transcript) tool(id string) *toolView { return t.toolz.get(id) }
+func (t *transcript) tool(id string) *ui.ToolView { return t.toolz.Get(id) }
 
-func (t *transcript) removeTool(id string) { t.toolz.remove(id) }
+func (t *transcript) removeTool(id string) { t.toolz.Remove(id) }
 
 // finishTool commits a completed tool call as an immutable block.
 func (t *transcript) finishTool(e *runtime.ToolCallResponseEvent, sessionState service.SessionStateReader) {
-	view := t.toolz.finish(e)
+	view := t.toolz.Finish(e.ToolCallID, ui.ToolResult{Response: e.Response, Result: e.Result, AgentName: e.GetAgentName(), ToolDefinition: e.ToolDefinition, Images: inlineImagesFromToolResult(e.Result)})
 	if view == nil {
 		return
 	}
-	t.addBlock(func(w int) []string { return renderToolWithState(view, w, 0, sessionState) })
+	t.addBlock(func(w int) []string { return ui.RenderToolWithState(view, w, 0, sessionState) })
 }
 
 // lines renders everything that scrolls: finalized blocks, the in-progress
@@ -143,11 +143,11 @@ func (t *transcript) lines(width, spinnerFrame int, busy bool, sessionState serv
 		lines = append(lines, t.pendingLines(width)...)
 		lines = append(lines, "")
 	}
-	t.toolz.forEach(func(tv *toolView) {
-		lines = append(lines, renderToolWithState(tv, width, spinnerFrame, sessionState)...)
+	t.toolz.ForEach(func(tv *ui.ToolView) {
+		lines = append(lines, ui.RenderToolWithState(tv, width, spinnerFrame, sessionState)...)
 		lines = append(lines, "")
 	})
-	if busy && t.pending == nil && t.toolz.empty() {
+	if busy && t.pending == nil && t.toolz.Empty() {
 		lines = append(lines, spinnerLine(spinnerFrame), "")
 	}
 	for _, msg := range pendingUsers {

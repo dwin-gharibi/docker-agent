@@ -86,14 +86,14 @@ func TestToolConfirmationReplacesRunningTool(t *testing.T) {
 	t.Parallel()
 	m := bareModel(24)
 	tv := shellToolView(tuitypes.ToolStatusRunning)
-	m.transcript.upsertTool("root", tv.message.ToolCall, tv.message.ToolDefinition, tuitypes.ToolStatusRunning)
-	require.Len(t, m.transcript.toolz.order, 1)
+	m.transcript.upsertTool("root", tv.Message().ToolCall, tv.Message().ToolDefinition, tuitypes.ToolStatusRunning)
+	require.Equal(t, 1, m.transcript.toolz.Len())
 
-	event := runtime.ToolCallConfirmation(tv.message.ToolCall, tv.message.ToolDefinition, "root", nil)
+	event := runtime.ToolCallConfirmation(tv.Message().ToolCall, tv.Message().ToolDefinition, "root", nil)
 	m.handleEvent(t.Context(), event)
 
-	assert.Empty(t, m.transcript.toolz.order)
-	assert.Empty(t, m.transcript.toolz.byID)
+	assert.Zero(t, m.transcript.toolz.Len())
+	assert.Zero(t, m.transcript.toolz.ByIDLen())
 	require.NotNil(t, m.confirm)
 }
 
