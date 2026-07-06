@@ -92,7 +92,7 @@ func (m *model) handleInterrupt() {
 		m.queue = nil
 		m.pendingUsers = nil
 		m.ignoredUsers = nil
-		m.transcript.addBlock(func(int) []string { return []string{ui.StWarning().Render("⏹ Cancelled")} })
+		m.transcript.AddBlock(func(int) []string { return []string{ui.StWarning().Render("⏹ Cancelled")} })
 	case !m.editor.IsEmpty():
 		m.editor.Reset()
 		m.ac.Dismiss()
@@ -280,7 +280,7 @@ func (m *model) dispatchUserMessage(ctx context.Context, display, content string
 				m.addNotice("⚠ ", "Could not steer current response: "+err.Error(), ui.StWarning())
 				return
 			}
-			m.addPendingUser(display, content, pendingUserSteer)
+			m.addPendingUser(display, content, ui.PendingUserSteer)
 			return
 		}
 		m.enqueueFollowUp(display, content)
@@ -292,7 +292,7 @@ func (m *model) dispatchUserMessage(ctx context.Context, display, content string
 }
 
 func (m *model) enqueueFollowUp(display, content string) {
-	msg := pendingUserMessage{display: display, content: content, kind: pendingUserFollowUp}
+	msg := ui.PendingUserMessage{Display: display, Content: content, Kind: ui.PendingUserFollowUp}
 	m.queue = append(m.queue, msg)
 	m.pendingUsers = append(m.pendingUsers, msg)
 }
@@ -394,7 +394,7 @@ func (m *model) resetConversation() {
 		m.runCancel()
 		m.runCancel = nil
 	}
-	m.transcript.clearActive()
+	m.transcript.ClearActive()
 	m.queue = nil
 	m.pendingUsers = nil
 	m.ignoredUsers = nil
@@ -420,22 +420,22 @@ func (m *model) quit() {
 }
 
 func (m *model) addUserEcho(text string) {
-	m.transcript.addBlock(func(w int) []string { return renderUserLines(text, w) })
+	m.transcript.AddBlock(func(w int) []string { return ui.RenderUserLines(text, w) })
 }
 
-func (m *model) addPendingUser(display, content string, kind pendingUserKind) {
-	m.pendingUsers = append(m.pendingUsers, pendingUserMessage{display: display, content: content, kind: kind})
+func (m *model) addPendingUser(display, content string, kind ui.PendingUserKind) {
+	m.pendingUsers = append(m.pendingUsers, ui.PendingUserMessage{Display: display, Content: content, Kind: kind})
 }
 
-func (m *model) consumePendingUser(kind pendingUserKind, content string) (pendingUserMessage, bool) {
+func (m *model) consumePendingUser(kind ui.PendingUserKind, content string) (ui.PendingUserMessage, bool) {
 	for i, msg := range m.pendingUsers {
-		if msg.kind != kind || !samePendingUserContent(msg.content, content) {
+		if msg.Kind != kind || !samePendingUserContent(msg.Content, content) {
 			continue
 		}
 		m.pendingUsers = append(m.pendingUsers[:i], m.pendingUsers[i+1:]...)
 		return msg, true
 	}
-	return pendingUserMessage{}, false
+	return ui.PendingUserMessage{}, false
 }
 
 func samePendingUserContent(pending, emitted string) bool {
@@ -458,11 +458,11 @@ func (m *model) consumeIgnoredUserEcho(content string) bool {
 }
 
 func (m *model) addNotice(prefix, text string, style lipgloss.Style) {
-	m.transcript.addBlock(func(w int) []string { return renderNoticeLines(prefix, text, w, style) })
+	m.transcript.AddBlock(func(w int) []string { return ui.RenderNoticeLines(prefix, text, w, style) })
 }
 
 func (m *model) commitHelp() {
-	m.transcript.addBlock(func(int) []string {
+	m.transcript.AddBlock(func(int) []string {
 		return []string{
 			ui.StBold().Render("Commands"),
 			ui.StMuted().Render("  /new       start a new session"),

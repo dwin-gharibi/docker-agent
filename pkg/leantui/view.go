@@ -8,7 +8,7 @@ import "github.com/docker/docker-agent/pkg/leantui/ui"
 func (m *model) buildLines() (lines []string, cursorLine, cursorCol int) {
 	width := m.width
 
-	lines = m.transcript.lines(width, m.spinnerFrame, m.busy, m.sessionState, m.pendingUsers)
+	lines = m.transcript.Lines(width, m.spinnerFrame, m.busy, m.sessionState, m.pendingUsers)
 
 	lines = append(lines, m.ac.Render(width)...)
 

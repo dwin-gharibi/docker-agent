@@ -30,21 +30,21 @@ func (m *model) handleEvent(ctx context.Context, ev any) {
 		m.trackStreamStopped()
 		m.handleStreamStopped(ctx)
 	case *runtime.AgentChoiceReasoningEvent:
-		m.transcript.appendPending(blockReasoning, e.Content)
+		m.transcript.AppendReasoning(e.Content)
 	case *runtime.AgentChoiceEvent:
-		m.transcript.appendPending(blockAssistant, e.Content)
+		m.transcript.AppendAssistant(e.Content)
 	case *runtime.PartialToolCallEvent:
-		m.transcript.flushPending()
+		m.transcript.FlushPending()
 		toolDef := tools.Tool{Name: e.ToolCall.Function.Name}
 		if e.ToolDefinition != nil {
 			toolDef = *e.ToolDefinition
 		}
-		m.transcript.upsertTool(e.GetAgentName(), e.ToolCall, toolDef, tuitypes.ToolStatusPending)
+		m.transcript.UpsertTool(e.GetAgentName(), e.ToolCall, toolDef, tuitypes.ToolStatusPending)
 	case *runtime.ToolCallEvent:
-		m.transcript.flushPending()
-		m.transcript.upsertTool(e.GetAgentName(), e.ToolCall, e.ToolDefinition, tuitypes.ToolStatusRunning)
+		m.transcript.FlushPending()
+		m.transcript.UpsertTool(e.GetAgentName(), e.ToolCall, e.ToolDefinition, tuitypes.ToolStatusRunning)
 	case *runtime.ToolCallOutputEvent:
-		if tv := m.transcript.tool(e.ToolCallID); tv != nil && tv.Message() != nil {
+		if tv := m.transcript.Tool(e.ToolCallID); tv != nil && tv.Message() != nil {
 			tv.Message().AppendToolOutput(e.Output)
 			if tv.Message().ToolStatus == tuitypes.ToolStatusPending {
 				tv.Message().ToolStatus = tuitypes.ToolStatusRunning
@@ -55,9 +55,9 @@ func (m *model) handleEvent(ctx context.Context, ev any) {
 			}
 		}
 	case *runtime.ToolCallResponseEvent:
-		m.transcript.finishTool(e, m.sessionState)
+		m.transcript.FinishTool(e.ToolCallID, ui.ToolResult{Response: e.Response, Result: e.Result, AgentName: e.GetAgentName(), ToolDefinition: e.ToolDefinition, Images: inlineImagesFromToolResult(e.Result)}, m.sessionState)
 	case *runtime.ToolCallConfirmationEvent:
-		m.transcript.removeTool(ui.ToolViewID(e.ToolCall))
+		m.transcript.RemoveTool(ui.ToolViewID(e.ToolCall))
 		toolDef := ui.EnsureToolDefinition(e.ToolCall, e.ToolDefinition)
 		m.confirm = &confirmState{
 			tool:     toolDef.Name,
@@ -81,13 +81,13 @@ func (m *model) handleEvent(ctx context.Context, ev any) {
 	case *runtime.SessionCompactionEvent:
 		m.handleSessionCompaction(ctx, e)
 	case *runtime.ErrorEvent:
-		m.transcript.flushPending()
+		m.transcript.FlushPending()
 		m.addNotice("✗ ", e.Error, ui.StError())
 	case *runtime.WarningEvent:
 		m.addNotice("⚠ ", e.Message, ui.StWarning())
 	case *runtime.ShellOutputEvent:
 		output := e.Output
-		m.transcript.addBlock(func(w int) []string { return ui.RenderToolOutput(output, w) })
+		m.transcript.AddBlock(func(w int) []string { return ui.RenderToolOutput(output, w) })
 	case *runtime.AgentSwitchingEvent:
 		if e.Switching && e.ToAgent != "" {
 			m.addNotice("→ ", "Switching to "+e.ToAgent, ui.StMuted())
@@ -103,12 +103,12 @@ func (m *model) handleUserMessageEvent(e *runtime.UserMessageEvent) {
 	if m.consumeIgnoredUserEcho(e.Message) {
 		return
 	}
-	if pending, ok := m.consumePendingUser(pendingUserSteer, e.Message); ok {
-		m.transcript.flushPending()
-		m.addUserEcho(pending.display)
+	if pending, ok := m.consumePendingUser(ui.PendingUserSteer, e.Message); ok {
+		m.transcript.FlushPending()
+		m.addUserEcho(pending.Display)
 		return
 	}
-	m.transcript.flushPending()
+	m.transcript.FlushPending()
 	m.addUserEcho(e.Message)
 }
 
@@ -134,20 +134,20 @@ func (m *model) handleSessionCompaction(ctx context.Context, e *runtime.SessionC
 // finishBusy clears the busy state at the end of a run and starts the next
 // queued message, if any. It reports whether a queued run was started.
 func (m *model) finishBusy(ctx context.Context) bool {
-	m.transcript.flushPending()
+	m.transcript.FlushPending()
 	m.busy = false
 	m.runCancel = nil
 
 	if len(m.queue) > 0 {
 		next := m.queue[0]
-		m.queue[0] = pendingUserMessage{}
+		m.queue[0] = ui.PendingUserMessage{}
 		m.queue = m.queue[1:]
-		if pending, ok := m.consumePendingUser(pendingUserFollowUp, next.content); ok {
-			next.display = pending.display
+		if pending, ok := m.consumePendingUser(ui.PendingUserFollowUp, next.Content); ok {
+			next.Display = pending.Display
 		}
-		m.addUserEcho(next.display)
-		m.ignoreUserEcho(next.content)
-		m.startRun(ctx, next.content, nil)
+		m.addUserEcho(next.Display)
+		m.ignoreUserEcho(next.Content)
+		m.startRun(ctx, next.Content, nil)
 		return true
 	}
 	return false

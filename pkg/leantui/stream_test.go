@@ -29,7 +29,7 @@ func bareModel(height int) *model {
 		r:            ui.NewRenderer(w, width, height),
 		editor:       ui.NewEditor("type here"),
 		ac:           ui.NewAutocomplete(),
-		transcript:   newTranscript(),
+		transcript:   ui.NewTranscript(),
 		status:       ui.StatusModel{WorkingDir: "/tmp/project"},
 		sessionState: service.NewSessionState(nil),
 		usage:        ui.NewUsageTracker(),
@@ -42,9 +42,10 @@ func TestStreamingGrowthScrollsAndRendersMarkdown(t *testing.T) {
 	m.busy = true
 	m.render() // initial frame
 
-	m.transcript.pending = &pendingBlock{kind: blockAssistant}
+	m.transcript.AppendAssistant("")
+	m.transcript.AppendAssistant("init")
 	for i := range 40 {
-		m.transcript.pending.text.WriteString("Paragraph " + strconv.Itoa(i) + " with some streamed text.\n\n")
+		m.transcript.AppendAssistant("Paragraph " + strconv.Itoa(i) + " with some streamed text.\n\n")
 		lines, cl, cc := m.buildLines()
 		require.NotPanics(t, func() { m.r.Frame(lines, cl, cc) })
 	}
@@ -54,8 +55,8 @@ func TestStreamingGrowthScrollsAndRendersMarkdown(t *testing.T) {
 
 	// Finalizing the stream turns it into a cached block; the visible output is
 	// unchanged because it was already rendered as markdown live.
-	m.transcript.flushPending()
-	assert.Len(t, m.transcript.blocks, 1)
+	m.transcript.FlushPending()
+	assert.Equal(t, 1, m.transcript.BlockCount())
 	require.NotPanics(t, func() {
 		lines, cl, cc := m.buildLines()
 		m.r.Frame(lines, cl, cc)
@@ -78,7 +79,7 @@ func TestConversationLinesShowsSpinnerWhenBusy(t *testing.T) {
 	t.Parallel()
 	m := bareModel(24)
 	m.busy = true
-	lines := m.transcript.lines(80, m.spinnerFrame, m.busy, m.sessionState, nil)
+	lines := m.transcript.Lines(80, m.spinnerFrame, m.busy, m.sessionState, nil)
 	assert.Contains(t, strings.Join(lines, ""), "Working")
 }
 
@@ -86,14 +87,14 @@ func TestToolConfirmationReplacesRunningTool(t *testing.T) {
 	t.Parallel()
 	m := bareModel(24)
 	tv := shellToolView(tuitypes.ToolStatusRunning)
-	m.transcript.upsertTool("root", tv.Message().ToolCall, tv.Message().ToolDefinition, tuitypes.ToolStatusRunning)
-	require.Equal(t, 1, m.transcript.toolz.Len())
+	m.transcript.UpsertTool("root", tv.Message().ToolCall, tv.Message().ToolDefinition, tuitypes.ToolStatusRunning)
+	require.Equal(t, 1, m.transcript.ToolCount())
 
 	event := runtime.ToolCallConfirmation(tv.Message().ToolCall, tv.Message().ToolDefinition, "root", nil)
 	m.handleEvent(t.Context(), event)
 
-	assert.Zero(t, m.transcript.toolz.Len())
-	assert.Zero(t, m.transcript.toolz.ByIDLen())
+	assert.Zero(t, m.transcript.ToolCount())
+	assert.Zero(t, m.transcript.ToolByIDCount())
 	require.NotNil(t, m.confirm)
 }
 
