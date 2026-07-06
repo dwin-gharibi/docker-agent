@@ -133,7 +133,7 @@ func TestShiftTabCyclesThinkingLevel(t *testing.T) {
 
 	assert.Equal(t, 1, rt.cycleCalls)
 	assert.Equal(t, "high", m.status.Thinking)
-	assert.Zero(t, m.transcript.BlockCount())
+	assert.Zero(t, m.screen.Transcript.BlockCount())
 }
 
 func TestShiftTabReportsUnsupportedThinkingLevel(t *testing.T) {
@@ -146,7 +146,7 @@ func TestShiftTabReportsUnsupportedThinkingLevel(t *testing.T) {
 
 	assert.Equal(t, 1, rt.cycleCalls)
 	assert.Empty(t, m.status.Thinking)
-	assert.Equal(t, 1, m.transcript.BlockCount())
+	assert.Equal(t, 1, m.screen.Transcript.BlockCount())
 }
 
 func TestEffortCommandSetsThinkingLevel(t *testing.T) {
@@ -172,7 +172,7 @@ func TestEffortCommandRejectsUnknownLevel(t *testing.T) {
 
 	assert.Zero(t, rt.setCalls)
 	assert.Empty(t, m.status.Thinking)
-	assert.Equal(t, 1, m.transcript.BlockCount())
+	assert.Equal(t, 1, m.screen.Transcript.BlockCount())
 }
 
 func TestEditorSubmitWhileBusySteersAndRendersAtStreamEnd(t *testing.T) {
@@ -181,8 +181,8 @@ func TestEditorSubmitWhileBusySteersAndRendersAtStreamEnd(t *testing.T) {
 	m := bareModel(24)
 	m.app = app.New(t.Context(), rt, session.New())
 	m.busy = true
-	m.transcript.AppendAssistant("assistant is still streaming")
-	m.editor.SetText("turn left")
+	m.screen.Transcript.AppendAssistant("assistant is still streaming")
+	m.screen.Editor.SetText("turn left")
 
 	m.handleEnter(t.Context())
 
@@ -192,7 +192,7 @@ func TestEditorSubmitWhileBusySteersAndRendersAtStreamEnd(t *testing.T) {
 	assert.Empty(t, m.queue)
 	assert.Len(t, m.pendingUsers, 1)
 
-	joined := strings.Join(m.transcript.Lines(80, 0, true, m.sessionState, m.pendingUsers), "\n")
+	joined := strings.Join(m.screen.Transcript.Lines(80, 0, true, m.sessionState, m.pendingUsers), "\n")
 	assistantAt := strings.Index(joined, "assistant is still streaming")
 	steerAt := strings.Index(joined, "turn left")
 	assert.NotEqual(t, -1, assistantAt)
@@ -204,14 +204,14 @@ func TestSteeredUserEventConfirmsPendingAfterAssistant(t *testing.T) {
 	t.Parallel()
 	m := bareModel(24)
 	m.busy = true
-	m.transcript.AppendAssistant("assistant response")
+	m.screen.Transcript.AppendAssistant("assistant response")
 	m.addPendingUser("/change", "resolved steering prompt", ui.PendingUserSteer)
 
 	m.handleEvent(t.Context(), runtime.UserMessage("resolved steering prompt\n", "session", nil, 1))
 
 	assert.Empty(t, m.pendingUsers)
-	assert.Equal(t, 2, m.transcript.BlockCount())
-	joined := strings.Join(m.transcript.Lines(80, 0, true, m.sessionState, nil), "\n")
+	assert.Equal(t, 2, m.screen.Transcript.BlockCount())
+	joined := strings.Join(m.screen.Transcript.Lines(80, 0, true, m.sessionState, nil), "\n")
 	assistantAt := strings.Index(joined, "assistant response")
 	steerAt := strings.Index(joined, "/change")
 	assert.NotEqual(t, -1, assistantAt)

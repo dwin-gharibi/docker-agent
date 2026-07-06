@@ -144,22 +144,18 @@ type model struct {
 	width  int
 	height int
 
-	editor *ui.Editor
-	ac     *ui.Autocomplete
+	screen *ui.Screen
 
 	status       ui.StatusModel
 	sessionState *service.SessionState
 	usage        *ui.UsageTracker
 
-	transcript   *ui.Transcript
 	busy         bool
 	spinnerFrame int
 	runCancel    context.CancelFunc
 	queue        []ui.PendingUserMessage
 	pendingUsers []ui.PendingUserMessage
 	ignoredUsers []string
-
-	confirm *confirmState
 
 	quitting         bool
 	appName          string
@@ -188,9 +184,7 @@ func newModel(term *ui.Terminal, cfg Config) *model {
 		r:                ui.NewRenderer(term.Writer(), w, h),
 		width:            w,
 		height:           h,
-		editor:           ui.NewEditor("Type a message, / for commands"),
-		ac:               ui.NewAutocomplete(),
-		transcript:       ui.NewTranscript(),
+		screen:           ui.NewScreen(cfg.WorkingDir, gitbranch.Current(cfg.WorkingDir)),
 		status:           ui.StatusModel{WorkingDir: cfg.WorkingDir, Branch: gitbranch.Current(cfg.WorkingDir)},
 		sessionState:     sessionState,
 		usage:            ui.NewUsageTracker(),
@@ -208,13 +202,13 @@ func (m *model) render() {
 // renderFinal repaints the current state, then erases the input box and footer
 // so only the conversation remains once the program exits.
 func (m *model) renderFinal() {
-	m.transcript.FlushPending()
+	m.screen.Transcript.FlushPending()
 	m.render()
-	m.r.EraseBelow(len(m.transcript.Lines(m.width, m.spinnerFrame, m.busy, m.sessionState, m.pendingUsers)))
+	m.r.EraseBelow(len(m.screen.Transcript.Lines(m.width, m.spinnerFrame, m.busy, m.sessionState, m.pendingUsers)))
 }
 
 func (m *model) commitWelcome() {
-	m.transcript.AddBlock(func(int) []string {
+	m.screen.Transcript.AddBlock(func(int) []string {
 		lines := make([]string, 0, bannerTopPadding+len(bannerLines)+2)
 		for range bannerTopPadding {
 			lines = append(lines, "")

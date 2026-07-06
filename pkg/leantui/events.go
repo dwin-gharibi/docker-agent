@@ -30,21 +30,21 @@ func (m *model) handleEvent(ctx context.Context, ev any) {
 		m.trackStreamStopped()
 		m.handleStreamStopped(ctx)
 	case *runtime.AgentChoiceReasoningEvent:
-		m.transcript.AppendReasoning(e.Content)
+		m.screen.Transcript.AppendReasoning(e.Content)
 	case *runtime.AgentChoiceEvent:
-		m.transcript.AppendAssistant(e.Content)
+		m.screen.Transcript.AppendAssistant(e.Content)
 	case *runtime.PartialToolCallEvent:
-		m.transcript.FlushPending()
+		m.screen.Transcript.FlushPending()
 		toolDef := tools.Tool{Name: e.ToolCall.Function.Name}
 		if e.ToolDefinition != nil {
 			toolDef = *e.ToolDefinition
 		}
-		m.transcript.UpsertTool(e.GetAgentName(), e.ToolCall, toolDef, tuitypes.ToolStatusPending)
+		m.screen.Transcript.UpsertTool(e.GetAgentName(), e.ToolCall, toolDef, tuitypes.ToolStatusPending)
 	case *runtime.ToolCallEvent:
-		m.transcript.FlushPending()
-		m.transcript.UpsertTool(e.GetAgentName(), e.ToolCall, e.ToolDefinition, tuitypes.ToolStatusRunning)
+		m.screen.Transcript.FlushPending()
+		m.screen.Transcript.UpsertTool(e.GetAgentName(), e.ToolCall, e.ToolDefinition, tuitypes.ToolStatusRunning)
 	case *runtime.ToolCallOutputEvent:
-		if tv := m.transcript.Tool(e.ToolCallID); tv != nil && tv.Message() != nil {
+		if tv := m.screen.Transcript.Tool(e.ToolCallID); tv != nil && tv.Message() != nil {
 			tv.Message().AppendToolOutput(e.Output)
 			if tv.Message().ToolStatus == tuitypes.ToolStatusPending {
 				tv.Message().ToolStatus = tuitypes.ToolStatusRunning
@@ -55,13 +55,13 @@ func (m *model) handleEvent(ctx context.Context, ev any) {
 			}
 		}
 	case *runtime.ToolCallResponseEvent:
-		m.transcript.FinishTool(e.ToolCallID, ui.ToolResult{Response: e.Response, Result: e.Result, AgentName: e.GetAgentName(), ToolDefinition: e.ToolDefinition, Images: inlineImagesFromToolResult(e.Result)}, m.sessionState)
+		m.screen.Transcript.FinishTool(e.ToolCallID, ui.ToolResult{Response: e.Response, Result: e.Result, AgentName: e.GetAgentName(), ToolDefinition: e.ToolDefinition, Images: inlineImagesFromToolResult(e.Result)}, m.sessionState)
 	case *runtime.ToolCallConfirmationEvent:
-		m.transcript.RemoveTool(ui.ToolViewID(e.ToolCall))
+		m.screen.Transcript.RemoveTool(ui.ToolViewID(e.ToolCall))
 		toolDef := ui.EnsureToolDefinition(e.ToolCall, e.ToolDefinition)
-		m.confirm = &confirmState{
-			tool:     toolDef.Name,
-			toolView: *ui.NewToolView(e.GetAgentName(), e.ToolCall, toolDef, tuitypes.ToolStatusConfirmation),
+		m.screen.Confirm = &ui.ConfirmModel{
+			Tool: toolDef.Name,
+			View: *ui.NewToolView(e.GetAgentName(), e.ToolCall, toolDef, tuitypes.ToolStatusConfirmation),
 		}
 	case *runtime.TokenUsageEvent:
 		m.setTokenUsage(e.SessionID, e.Usage)
@@ -81,13 +81,13 @@ func (m *model) handleEvent(ctx context.Context, ev any) {
 	case *runtime.SessionCompactionEvent:
 		m.handleSessionCompaction(ctx, e)
 	case *runtime.ErrorEvent:
-		m.transcript.FlushPending()
+		m.screen.Transcript.FlushPending()
 		m.addNotice("✗ ", e.Error, ui.StError())
 	case *runtime.WarningEvent:
 		m.addNotice("⚠ ", e.Message, ui.StWarning())
 	case *runtime.ShellOutputEvent:
 		output := e.Output
-		m.transcript.AddBlock(func(w int) []string { return ui.RenderToolOutput(output, w) })
+		m.screen.Transcript.AddBlock(func(w int) []string { return ui.RenderToolOutput(output, w) })
 	case *runtime.AgentSwitchingEvent:
 		if e.Switching && e.ToAgent != "" {
 			m.addNotice("→ ", "Switching to "+e.ToAgent, ui.StMuted())
@@ -104,11 +104,11 @@ func (m *model) handleUserMessageEvent(e *runtime.UserMessageEvent) {
 		return
 	}
 	if pending, ok := m.consumePendingUser(ui.PendingUserSteer, e.Message); ok {
-		m.transcript.FlushPending()
+		m.screen.Transcript.FlushPending()
 		m.addUserEcho(pending.Display)
 		return
 	}
-	m.transcript.FlushPending()
+	m.screen.Transcript.FlushPending()
 	m.addUserEcho(e.Message)
 }
 
@@ -134,7 +134,7 @@ func (m *model) handleSessionCompaction(ctx context.Context, e *runtime.SessionC
 // finishBusy clears the busy state at the end of a run and starts the next
 // queued message, if any. It reports whether a queued run was started.
 func (m *model) finishBusy(ctx context.Context) bool {
-	m.transcript.FlushPending()
+	m.screen.Transcript.FlushPending()
 	m.busy = false
 	m.runCancel = nil
 

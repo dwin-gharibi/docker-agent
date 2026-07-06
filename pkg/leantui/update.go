@@ -16,7 +16,7 @@ import (
 )
 
 func (m *model) handleKey(ctx context.Context, k ui.Key) {
-	if m.confirm != nil {
+	if m.screen.Confirm != nil {
 		m.handleConfirmKey(k)
 		return
 	}
@@ -25,62 +25,62 @@ func (m *model) handleKey(ctx context.Context, k ui.Key) {
 	case ui.KeyCtrlC:
 		m.handleInterrupt()
 	case ui.KeyCtrlD:
-		if m.editor.IsEmpty() {
+		if m.screen.Editor.IsEmpty() {
 			m.quit()
 		} else {
-			m.editor.DeleteForward()
+			m.screen.Editor.DeleteForward()
 		}
 	case ui.KeyEnter:
 		m.handleEnter(ctx)
 	case ui.KeyAltEnter:
-		m.editor.InsertNewline()
+		m.screen.Editor.InsertNewline()
 	case ui.KeyTab:
 		m.handleTab()
 	case ui.KeyShiftTab:
 		m.handleCycleThinkingLevel(ctx)
 	case ui.KeyUp:
-		if m.ac.Active {
-			m.ac.MoveUp()
-		} else if !m.editor.Up(m.width) {
-			m.editor.HistoryPrev()
+		if m.screen.Autocomplete.Active {
+			m.screen.Autocomplete.MoveUp()
+		} else if !m.screen.Editor.Up(m.width) {
+			m.screen.Editor.HistoryPrev()
 		}
 	case ui.KeyDown:
-		if m.ac.Active {
-			m.ac.MoveDown()
-		} else if !m.editor.Down(m.width) {
-			m.editor.HistoryNext()
+		if m.screen.Autocomplete.Active {
+			m.screen.Autocomplete.MoveDown()
+		} else if !m.screen.Editor.Down(m.width) {
+			m.screen.Editor.HistoryNext()
 		}
 	case ui.KeyLeft:
-		m.editor.MoveLeft()
+		m.screen.Editor.MoveLeft()
 	case ui.KeyRight:
-		m.editor.MoveRight()
+		m.screen.Editor.MoveRight()
 	case ui.KeyWordLeft:
-		m.editor.MoveWordLeft()
+		m.screen.Editor.MoveWordLeft()
 	case ui.KeyWordRight:
-		m.editor.MoveWordRight()
+		m.screen.Editor.MoveWordRight()
 	case ui.KeyHome:
-		m.editor.MoveLineStart()
+		m.screen.Editor.MoveLineStart()
 	case ui.KeyEnd:
-		m.editor.MoveLineEnd()
+		m.screen.Editor.MoveLineEnd()
 	case ui.KeyBackspace:
-		m.editor.Backspace()
+		m.screen.Editor.Backspace()
 	case ui.KeyDelete:
-		m.editor.DeleteForward()
+		m.screen.Editor.DeleteForward()
 	case ui.KeyCtrlU:
-		m.editor.DeleteToLineStart()
+		m.screen.Editor.DeleteToLineStart()
 	case ui.KeyCtrlK:
-		m.editor.DeleteToLineEnd()
+		m.screen.Editor.DeleteToLineEnd()
 	case ui.KeyCtrlW:
-		m.editor.DeleteWordBack()
+		m.screen.Editor.DeleteWordBack()
 	case ui.KeyEsc:
-		m.ac.Dismiss()
+		m.screen.Autocomplete.Dismiss()
 	case ui.KeyCtrlL:
 		m.clearScreen()
 	case ui.KeyRune, ui.KeyPaste:
-		m.editor.Insert(k.Runes)
+		m.screen.Editor.Insert(k.Runes)
 	}
 
-	m.ac.Sync(m.editor.Text())
+	m.screen.Autocomplete.Sync(m.screen.Editor.Text())
 }
 
 func (m *model) handleInterrupt() {
@@ -92,33 +92,33 @@ func (m *model) handleInterrupt() {
 		m.queue = nil
 		m.pendingUsers = nil
 		m.ignoredUsers = nil
-		m.transcript.AddBlock(func(int) []string { return []string{ui.StWarning().Render("⏹ Cancelled")} })
-	case !m.editor.IsEmpty():
-		m.editor.Reset()
-		m.ac.Dismiss()
+		m.screen.Transcript.AddBlock(func(int) []string { return []string{ui.StWarning().Render("⏹ Cancelled")} })
+	case !m.screen.Editor.IsEmpty():
+		m.screen.Editor.Reset()
+		m.screen.Autocomplete.Dismiss()
 	default:
 		m.quit()
 	}
 }
 
 func (m *model) handleEnter(ctx context.Context) {
-	if m.ac.Active {
-		if cmd, ok := m.ac.Current(); ok {
-			m.ac.Dismiss()
+	if m.screen.Autocomplete.Active {
+		if cmd, ok := m.screen.Autocomplete.Current(); ok {
+			m.screen.Autocomplete.Dismiss()
 			m.submitEditor(ctx, "/"+cmd.Name)
 			return
 		}
 	}
-	m.submitEditor(ctx, m.editor.Text())
+	m.submitEditor(ctx, m.screen.Editor.Text())
 }
 
 func (m *model) handleTab() {
-	if !m.ac.Active {
+	if !m.screen.Autocomplete.Active {
 		return
 	}
-	if cmd, ok := m.ac.Current(); ok {
-		m.editor.SetText("/" + cmd.Name + " ")
-		m.ac.Sync(m.editor.Text())
+	if cmd, ok := m.screen.Autocomplete.Current(); ok {
+		m.screen.Editor.SetText("/" + cmd.Name + " ")
+		m.screen.Autocomplete.Sync(m.screen.Editor.Text())
 	}
 }
 
@@ -207,9 +207,9 @@ func (m *model) submit(ctx context.Context, text string, opts submitOptions) {
 		return
 	}
 	if opts.fromEditor {
-		m.editor.RememberHistory(trimmed)
-		m.editor.Reset()
-		m.ac.Dismiss()
+		m.screen.Editor.RememberHistory(trimmed)
+		m.screen.Editor.Reset()
+		m.screen.Autocomplete.Dismiss()
 	}
 
 	if strings.HasPrefix(trimmed, "/") && m.handleSlash(ctx, trimmed, opts.busyMode) {
@@ -361,7 +361,7 @@ func (m *model) refreshCommands(ctx context.Context) {
 	for _, sk := range m.app.CurrentAgentSkills() {
 		cmds = append(cmds, ui.Command{Name: sk.Name, Desc: sk.Description, Kind: ui.CmdAgent})
 	}
-	m.ac.SetCommands(cmds)
+	m.screen.Autocomplete.SetCommands(cmds)
 }
 
 func (m *model) handleConfirmKey(k ui.Key) {
@@ -376,7 +376,7 @@ func (m *model) handleConfirmKey(k ui.Key) {
 	case 'y', 'Y':
 		m.resolveConfirm(runtime.ResumeApprove())
 	case 'a', 'A':
-		m.resolveConfirm(runtime.ResumeApproveTool(m.confirm.tool))
+		m.resolveConfirm(runtime.ResumeApproveTool(m.screen.Confirm.Tool))
 	case 's', 'S':
 		m.resolveConfirm(runtime.ResumeApproveSession())
 	case 'n', 'N':
@@ -386,7 +386,7 @@ func (m *model) handleConfirmKey(k ui.Key) {
 
 func (m *model) resolveConfirm(req runtime.ResumeRequest) {
 	m.app.Resume(req)
-	m.confirm = nil
+	m.screen.Confirm = nil
 }
 
 func (m *model) resetConversation() {
@@ -394,12 +394,12 @@ func (m *model) resetConversation() {
 		m.runCancel()
 		m.runCancel = nil
 	}
-	m.transcript.ClearActive()
+	m.screen.Transcript.ClearActive()
 	m.queue = nil
 	m.pendingUsers = nil
 	m.ignoredUsers = nil
 	m.busy = false
-	m.confirm = nil
+	m.screen.Confirm = nil
 	m.usage.Reset()
 	m.status.ContextLength = 0
 	m.status.ContextLimit = 0
@@ -420,7 +420,7 @@ func (m *model) quit() {
 }
 
 func (m *model) addUserEcho(text string) {
-	m.transcript.AddBlock(func(w int) []string { return ui.RenderUserLines(text, w) })
+	m.screen.Transcript.AddBlock(func(w int) []string { return ui.RenderUserLines(text, w) })
 }
 
 func (m *model) addPendingUser(display, content string, kind ui.PendingUserKind) {
@@ -458,11 +458,11 @@ func (m *model) consumeIgnoredUserEcho(content string) bool {
 }
 
 func (m *model) addNotice(prefix, text string, style lipgloss.Style) {
-	m.transcript.AddBlock(func(w int) []string { return ui.RenderNoticeLines(prefix, text, w, style) })
+	m.screen.Transcript.AddBlock(func(w int) []string { return ui.RenderNoticeLines(prefix, text, w, style) })
 }
 
 func (m *model) commitHelp() {
-	m.transcript.AddBlock(func(int) []string {
+	m.screen.Transcript.AddBlock(func(int) []string {
 		return []string{
 			ui.StBold().Render("Commands"),
 			ui.StMuted().Render("  /new       start a new session"),

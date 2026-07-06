@@ -13,11 +13,11 @@ import (
 
 func TestCommitWelcomePadsBanner(t *testing.T) {
 	t.Parallel()
-	m := &model{transcript: ui.NewTranscript()}
+	m := &model{screen: ui.NewScreen("", "")}
 	m.commitWelcome()
 
-	require.Equal(t, 1, m.transcript.BlockCount())
-	lines := m.transcript.BlockLines(0, 80)
+	require.Equal(t, 1, m.screen.Transcript.BlockCount())
+	lines := m.screen.Transcript.BlockLines(0, 80)
 	require.GreaterOrEqual(t, len(lines), bannerTopPadding+len(bannerLines))
 
 	for i := range bannerTopPadding {

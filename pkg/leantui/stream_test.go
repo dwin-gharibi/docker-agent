@@ -27,9 +27,7 @@ func bareModel(height int) *model {
 		width:        width,
 		height:       height,
 		r:            ui.NewRenderer(w, width, height),
-		editor:       ui.NewEditor("type here"),
-		ac:           ui.NewAutocomplete(),
-		transcript:   ui.NewTranscript(),
+		screen:       ui.NewScreen("/tmp/project", ""),
 		status:       ui.StatusModel{WorkingDir: "/tmp/project"},
 		sessionState: service.NewSessionState(nil),
 		usage:        ui.NewUsageTracker(),
@@ -42,10 +40,10 @@ func TestStreamingGrowthScrollsAndRendersMarkdown(t *testing.T) {
 	m.busy = true
 	m.render() // initial frame
 
-	m.transcript.AppendAssistant("")
-	m.transcript.AppendAssistant("init")
+	m.screen.Transcript.AppendAssistant("")
+	m.screen.Transcript.AppendAssistant("init")
 	for i := range 40 {
-		m.transcript.AppendAssistant("Paragraph " + strconv.Itoa(i) + " with some streamed text.\n\n")
+		m.screen.Transcript.AppendAssistant("Paragraph " + strconv.Itoa(i) + " with some streamed text.\n\n")
 		lines, cl, cc := m.buildLines()
 		require.NotPanics(t, func() { m.r.Frame(lines, cl, cc) })
 	}
@@ -55,8 +53,8 @@ func TestStreamingGrowthScrollsAndRendersMarkdown(t *testing.T) {
 
 	// Finalizing the stream turns it into a cached block; the visible output is
 	// unchanged because it was already rendered as markdown live.
-	m.transcript.FlushPending()
-	assert.Equal(t, 1, m.transcript.BlockCount())
+	m.screen.Transcript.FlushPending()
+	assert.Equal(t, 1, m.screen.Transcript.BlockCount())
 	require.NotPanics(t, func() {
 		lines, cl, cc := m.buildLines()
 		m.r.Frame(lines, cl, cc)
@@ -66,7 +64,7 @@ func TestStreamingGrowthScrollsAndRendersMarkdown(t *testing.T) {
 func TestBuildLinesPlacesCursorOnInput(t *testing.T) {
 	t.Parallel()
 	m := bareModel(24)
-	m.editor.SetText("hello")
+	m.screen.Editor.SetText("hello")
 
 	lines, cursorLine, cursorCol := m.buildLines()
 	require.NotEmpty(t, lines)
@@ -79,7 +77,7 @@ func TestConversationLinesShowsSpinnerWhenBusy(t *testing.T) {
 	t.Parallel()
 	m := bareModel(24)
 	m.busy = true
-	lines := m.transcript.Lines(80, m.spinnerFrame, m.busy, m.sessionState, nil)
+	lines := m.screen.Transcript.Lines(80, m.spinnerFrame, m.busy, m.sessionState, nil)
 	assert.Contains(t, strings.Join(lines, ""), "Working")
 }
 
@@ -87,23 +85,23 @@ func TestToolConfirmationReplacesRunningTool(t *testing.T) {
 	t.Parallel()
 	m := bareModel(24)
 	tv := shellToolView(tuitypes.ToolStatusRunning)
-	m.transcript.UpsertTool("root", tv.Message().ToolCall, tv.Message().ToolDefinition, tuitypes.ToolStatusRunning)
-	require.Equal(t, 1, m.transcript.ToolCount())
+	m.screen.Transcript.UpsertTool("root", tv.Message().ToolCall, tv.Message().ToolDefinition, tuitypes.ToolStatusRunning)
+	require.Equal(t, 1, m.screen.Transcript.ToolCount())
 
 	event := runtime.ToolCallConfirmation(tv.Message().ToolCall, tv.Message().ToolDefinition, "root", nil)
 	m.handleEvent(t.Context(), event)
 
-	assert.Zero(t, m.transcript.ToolCount())
-	assert.Zero(t, m.transcript.ToolByIDCount())
-	require.NotNil(t, m.confirm)
+	assert.Zero(t, m.screen.Transcript.ToolCount())
+	assert.Zero(t, m.screen.Transcript.ToolByIDCount())
+	require.NotNil(t, m.screen.Confirm)
 }
 
 func TestBuildLinesConfirmCursorSitsOnOptions(t *testing.T) {
 	t.Parallel()
 	m := bareModel(24)
-	m.confirm = &confirmState{
-		tool:     "shell",
-		toolView: *shellToolView(tuitypes.ToolStatusConfirmation),
+	m.screen.Confirm = &ui.ConfirmModel{
+		Tool: "shell",
+		View: *shellToolView(tuitypes.ToolStatusConfirmation),
 	}
 
 	lines, cursorLine, cursorCol := m.buildLines()
