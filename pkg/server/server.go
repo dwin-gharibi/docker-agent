@@ -325,10 +325,18 @@ func (s *Server) getSessionStatus(c echo.Context) error {
 // (stored fields + live runtime state + last event sequence number) so a
 // client can rebuild its view and then tail /events?since=<last_event_seq>
 // without missing any transition.
+//
+// An unknown session yields a 404 whose body carries
+// [api.ErrCodeUnknownSession], so clients can tell "this server does not
+// have that session" (wait or recreate) from a route-less 404 produced by a
+// binary that predates this endpoint (upgrade/relaunch).
 func (s *Server) getSessionSnapshot(c echo.Context) error {
 	snapshot, err := s.sm.GetSessionSnapshot(c.Request().Context(), c.Param("id"))
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, fmt.Sprintf("session not found: %v", err))
+		return c.JSON(http.StatusNotFound, api.ErrorResponse{
+			Code:    api.ErrCodeUnknownSession,
+			Message: fmt.Sprintf("session not found: %v", err),
+		})
 	}
 	return c.JSON(http.StatusOK, snapshot)
 }

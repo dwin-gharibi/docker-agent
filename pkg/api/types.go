@@ -21,6 +21,22 @@ type Agent struct {
 	Multi       bool   `json:"multi"`
 }
 
+// ErrCodeUnknownSession is the [ErrorResponse.Code] for a request that names
+// a session the server does not know. Distinguishing it matters to clients
+// like the board: a 404 with this code means "the server is current but the
+// session does not exist (yet)" — keep waiting or recreate the session —
+// while a 404 without it means the route itself is missing (an older binary
+// that predates the endpoint).
+const ErrCodeUnknownSession = "unknown_session"
+
+// ErrorResponse is the body of an API error that clients may need to react
+// to programmatically. Message is human-readable; Code, when set, is a
+// stable machine-readable classifier (e.g. [ErrCodeUnknownSession]).
+type ErrorResponse struct {
+	Code    string `json:"code,omitempty"`
+	Message string `json:"message"`
+}
+
 // CreateAgentRequest represents a request to create an agent
 type CreateAgentRequest struct {
 	Prompt string `json:"prompt"`
