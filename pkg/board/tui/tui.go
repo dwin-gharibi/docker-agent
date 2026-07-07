@@ -84,10 +84,20 @@ type (
 		project board.Project
 		prompt  string
 	}
-	// submitProjectMsg adds a project from the projects dialog.
-	submitProjectMsg struct{ project board.Project }
+	// submitProjectMsg adds a project from the projects dialog, or updates
+	// the one named oldName when set.
+	submitProjectMsg struct {
+		project board.Project
+		oldName string
+	}
 	// deleteProjectMsg removes a project from the projects dialog.
 	deleteProjectMsg struct{ name string }
+	// moveProjectMsg reorders a project from the projects dialog; delta is
+	// the number of positions to move (negative moves it up).
+	moveProjectMsg struct {
+		name  string
+		delta int
+	}
 	// submitPromptMsg saves a column prompt from the prompt editor.
 	submitPromptMsg struct {
 		colID  string
@@ -394,7 +404,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case submitProjectMsg:
-		if err := m.app.AddProject(msg.project); err != nil {
+		var err error
+		action := "added to"
+		if msg.oldName == "" {
+			err = m.app.AddProject(msg.project)
+		} else {
+			err = m.app.UpdateProject(msg.oldName, msg.project)
+			action = "updated in"
+		}
+		if err != nil {
 			cmd := m.setFlash(err.Error(), true)
 			return m, cmd
 		}
@@ -402,7 +420,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if d, ok := m.dialog.(*projectsDialog); ok {
 			d.setProjects(m.projects)
 		}
-		cmd := m.setFlash("Project added to the global config", false)
+		cmd := m.setFlash("Project "+action+" the global config", false)
 		return m, cmd
 
 	case deleteProjectMsg:
@@ -413,6 +431,18 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.reload()
 		if d, ok := m.dialog.(*projectsDialog); ok {
 			d.setProjects(m.projects)
+		}
+		return m, nil
+
+	case moveProjectMsg:
+		if err := m.app.MoveProject(msg.name, msg.delta); err != nil {
+			cmd := m.setFlash(err.Error(), true)
+			return m, cmd
+		}
+		m.reload()
+		if d, ok := m.dialog.(*projectsDialog); ok {
+			d.setProjects(m.projects)
+			d.selectProject(msg.name) // the cursor follows the moved project
 		}
 		return m, nil
 

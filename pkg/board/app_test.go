@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/docker/docker-agent/pkg/paths"
+	"github.com/docker/docker-agent/pkg/userconfig"
 )
 
 func TestNormalizeProjectPath(t *testing.T) {
@@ -31,4 +32,77 @@ func TestNormalizeProjectPath(t *testing.T) {
 	abs, err = normalizeProjectPath("repo")
 	require.NoError(t, err)
 	assert.True(t, filepath.IsAbs(abs))
+}
+
+func TestUpdateProject(t *testing.T) {
+	paths.SetConfigDir(t.TempDir())
+	t.Cleanup(func() { paths.SetConfigDir("") })
+
+	repo := newLocalRepo(t)
+	repo2 := newLocalRepo(t)
+
+	cfg, err := userconfig.Load()
+	require.NoError(t, err)
+	app := &App{ctx: t.Context(), config: cfg, columns: DefaultColumns}
+
+	require.NoError(t, app.AddProject(Project{Name: "one", Path: repo}))
+	require.NoError(t, app.AddProject(Project{Name: "two", Path: repo2}))
+
+	// Rename, repoint, and set the agent in one update; order is preserved.
+	require.NoError(t, app.UpdateProject("one", Project{Name: "renamed", Path: repo2, Agent: "coder"}))
+	projects := app.Projects()
+	require.Len(t, projects, 2)
+	assert.Equal(t, Project{Name: "renamed", Path: repo2, Agent: "coder"}, projects[0])
+
+	// Unknown project, duplicate name, and AddProject-style validation.
+	require.Error(t, app.UpdateProject("one", Project{Name: "x", Path: repo}))
+	require.Error(t, app.UpdateProject("renamed", Project{Name: "two", Path: repo}))
+	require.Error(t, app.UpdateProject("renamed", Project{Name: "", Path: repo}))
+	require.Error(t, app.UpdateProject("renamed", Project{Name: "renamed", Path: ""}))
+	require.Error(t, app.UpdateProject("renamed", Project{Name: "renamed", Path: t.TempDir()})) // not a git repo
+
+	// Keeping the name while changing other fields is not a duplicate.
+	require.NoError(t, app.UpdateProject("two", Project{Name: "two", Path: repo}))
+
+	// The update is persisted to the config file.
+	reloaded, err := userconfig.Load()
+	require.NoError(t, err)
+	require.Len(t, reloaded.Board.Projects, 2)
+	assert.Equal(t, "renamed", reloaded.Board.Projects[0].Name)
+	assert.Equal(t, "coder", reloaded.Board.Projects[0].Agent)
+}
+
+func TestMoveProject(t *testing.T) {
+	paths.SetConfigDir(t.TempDir())
+	t.Cleanup(func() { paths.SetConfigDir("") })
+
+	cfg, err := userconfig.Load()
+	require.NoError(t, err)
+	cfg.Board = &userconfig.Board{Projects: []userconfig.BoardProject{
+		{Name: "a", Path: "/a"}, {Name: "b", Path: "/b"}, {Name: "c", Path: "/c"},
+	}}
+	app := &App{ctx: t.Context(), config: cfg, columns: DefaultColumns}
+
+	names := func() []string {
+		var out []string
+		for _, p := range app.Projects() {
+			out = append(out, p.Name)
+		}
+		return out
+	}
+
+	require.NoError(t, app.MoveProject("c", -1))
+	assert.Equal(t, []string{"a", "c", "b"}, names())
+
+	// Moves past either end clamp to a no-op.
+	require.NoError(t, app.MoveProject("a", -1))
+	require.NoError(t, app.MoveProject("b", 5))
+	assert.Equal(t, []string{"a", "c", "b"}, names())
+
+	require.Error(t, app.MoveProject("nope", 1))
+
+	// The new order is persisted to the config file.
+	reloaded, err := userconfig.Load()
+	require.NoError(t, err)
+	assert.Equal(t, "c", reloaded.Board.Projects[1].Name)
 }

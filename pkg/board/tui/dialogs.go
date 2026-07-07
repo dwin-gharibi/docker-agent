@@ -2,6 +2,7 @@ package tui
 
 import (
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -244,12 +245,14 @@ type projectsMode int
 const (
 	projectsList projectsMode = iota
 	projectsPicking
-	projectsAdding
+	projectsEditing
+	projectsConfirming
 )
 
 // projectsDialog lists and edits the projects stored in the user's global
 // config file. Adding a project starts with a directory picker, then a
-// pre-filled form.
+// pre-filled form; editing opens the same form pre-filled from the
+// selected project. Removal asks for confirmation first.
 type projectsDialog struct {
 	projects []board.Project
 	idx      int
@@ -258,18 +261,33 @@ type projectsDialog struct {
 	picker *dirPicker
 	inputs []textinput.Model // name, path, agent
 	focus  int
+	// editing is the original name of the project being edited; empty when
+	// the form adds a new project.
+	editing string
+	// deleting is the name of the project awaiting delete confirmation.
+	deleting    string
+	confirmKeys tuidialog.ConfirmKeyMap
 }
 
 func newProjectsDialog(projects []board.Project) *projectsDialog {
-	return &projectsDialog{projects: projects}
+	return &projectsDialog{projects: projects, confirmKeys: tuidialog.DefaultConfirmKeyMap()}
 }
 
-// setProjects refreshes the list after an add or delete, leaving the list
-// view visible and keeping the cursor position (clamped).
+// setProjects refreshes the list after an add, edit or delete, leaving the
+// list view visible and keeping the cursor position (clamped).
 func (d *projectsDialog) setProjects(projects []board.Project) {
 	d.projects = projects
 	d.idx = min(max(d.idx, 0), max(len(projects)-1, 0))
 	d.mode = projectsList
+	d.editing = ""
+	d.deleting = ""
+}
+
+// selectProject moves the cursor to the named project, if present.
+func (d *projectsDialog) selectProject(name string) {
+	if i := slices.IndexFunc(d.projects, func(p board.Project) bool { return p.Name == name }); i >= 0 {
+		d.idx = i
+	}
 }
 
 var projectFields = []struct{ label, placeholder string }{
@@ -278,9 +296,12 @@ var projectFields = []struct{ label, placeholder string }{
 	{"Agent", "default (or any agent ref)"},
 }
 
-// startAdding opens the form, pre-filled from the picked directory.
-func (d *projectsDialog) startAdding(name, path string) tea.Cmd {
-	d.mode = projectsAdding
+// startForm opens the add/edit form. editing is the original name of the
+// project being edited, or empty when adding; name/path/agent pre-fill the
+// fields.
+func (d *projectsDialog) startForm(editing, name, path, agent string) tea.Cmd {
+	d.mode = projectsEditing
+	d.editing = editing
 	d.focus = 0
 	d.inputs = make([]textinput.Model, len(projectFields))
 	for i, f := range projectFields {
@@ -292,6 +313,7 @@ func (d *projectsDialog) startAdding(name, path string) tea.Cmd {
 	}
 	d.inputs[0].SetValue(name)
 	d.inputs[1].SetValue(path)
+	d.inputs[2].SetValue(agent)
 	d.inputs[0].Focus()
 	return textinput.Blink
 }
@@ -306,8 +328,10 @@ func (d *projectsDialog) Update(msg tea.Msg) (dialog, tea.Cmd) {
 	switch d.mode {
 	case projectsPicking:
 		return d.updatePicking(press)
-	case projectsAdding:
-		return d.updateAdding(press)
+	case projectsEditing:
+		return d.updateEditing(press)
+	case projectsConfirming:
+		return d.updateConfirming(press)
 	}
 
 	switch press.String() {
@@ -321,33 +345,81 @@ func (d *projectsDialog) Update(msg tea.Msg) (dialog, tea.Cmd) {
 		d.mode = projectsPicking
 		d.picker = newDirPicker(pickerStartDir(""))
 		return d, textinput.Blink
+	case "e", "enter":
+		if len(d.projects) > 0 {
+			p := d.projects[d.idx]
+			cmd := d.startForm(p.Name, p.Name, p.Path, p.Agent)
+			return d, cmd
+		}
+	case "shift+up", "K":
+		cmd := d.moveProject(-1)
+		return d, cmd
+	case "shift+down", "J":
+		cmd := d.moveProject(1)
+		return d, cmd
 	case "x", "d", "backspace", "delete":
 		if len(d.projects) > 0 {
-			name := d.projects[d.idx].Name
-			return d, func() tea.Msg { return deleteProjectMsg{name: name} }
+			d.mode = projectsConfirming
+			d.deleting = d.projects[d.idx].Name
 		}
 	}
 	return d, nil
 }
 
+// updateConfirming handles the delete confirmation prompt.
+func (d *projectsDialog) updateConfirming(press tea.KeyPressMsg) (dialog, tea.Cmd) {
+	switch {
+	case key.Matches(press, d.confirmKeys.Yes), press.String() == "enter":
+		name := d.deleting
+		d.mode = projectsList
+		d.deleting = ""
+		return d, func() tea.Msg { return deleteProjectMsg{name: name} }
+	case key.Matches(press, d.confirmKeys.No), press.String() == "esc", press.String() == "q":
+		d.mode = projectsList
+		d.deleting = ""
+	}
+	return d, nil
+}
+
+// moveProject asks the model to reorder the selected project by delta
+// positions; the model persists the order and moves the cursor along.
+func (d *projectsDialog) moveProject(delta int) tea.Cmd {
+	if len(d.projects) == 0 {
+		return nil
+	}
+	name := d.projects[d.idx].Name
+	return func() tea.Msg { return moveProjectMsg{name: name, delta: delta} }
+}
+
 // updatePicking drives the directory picker; a picked directory pre-fills
-// the add form.
+// the add form. When the picker was opened from an edit in progress
+// (ctrl+o), only the path field is replaced.
 func (d *projectsDialog) updatePicking(press tea.KeyPressMsg) (dialog, tea.Cmd) {
 	chosen, done, cmd := d.picker.Update(press)
 	switch {
 	case chosen != "":
-		cmd := d.startAdding(filepath.Base(chosen), chosen)
+		if d.editing != "" {
+			d.mode = projectsEditing
+			d.inputs[1].SetValue(chosen)
+			return d, nil
+		}
+		cmd := d.startForm("", filepath.Base(chosen), chosen, "")
 		return d, cmd
 	case done:
-		d.mode = projectsList
+		if d.editing != "" {
+			d.mode = projectsEditing
+		} else {
+			d.mode = projectsList
+		}
 	}
 	return d, cmd
 }
 
-func (d *projectsDialog) updateAdding(press tea.KeyPressMsg) (dialog, tea.Cmd) {
+func (d *projectsDialog) updateEditing(press tea.KeyPressMsg) (dialog, tea.Cmd) {
 	switch press.String() {
 	case "esc":
 		d.mode = projectsList
+		d.editing = ""
 		return d, nil
 	case "ctrl+o":
 		// Re-open the browser, starting from the path typed so far.
@@ -366,7 +438,8 @@ func (d *projectsDialog) updateAdding(press tea.KeyPressMsg) (dialog, tea.Cmd) {
 			Path:  strings.TrimSpace(d.inputs[1].Value()),
 			Agent: strings.TrimSpace(d.inputs[2].Value()),
 		}
-		return d, func() tea.Msg { return submitProjectMsg{project: project} }
+		oldName := d.editing
+		return d, func() tea.Msg { return submitProjectMsg{project: project, oldName: oldName} }
 	}
 	var cmd tea.Cmd
 	d.inputs[d.focus], cmd = d.inputs[d.focus].Update(press)
@@ -388,8 +461,15 @@ func (d *projectsDialog) View(width, _ int) string {
 			"",
 			helpLine(w, "↑↓", "select", "enter", "open/pick", "backspace", "up", "esc", "back"),
 		)
-	case projectsAdding:
-		return d.viewAdding(w)
+	case projectsEditing:
+		return d.viewForm(w)
+	case projectsConfirming:
+		return renderDialog("Remove project?", w,
+			styles.BaseStyle.Render(toolcommon.TruncateText(sanitize(d.deleting), w)),
+			styles.MutedStyle.Render("Removes it from the config; existing cards are unaffected."),
+			"",
+			helpLine(w, d.confirmKeys.Yes.Help().Key, "remove", d.confirmKeys.No.Help().Key+"/esc", "cancel"),
+		)
 	}
 
 	var rows []string
@@ -414,11 +494,11 @@ func (d *projectsDialog) View(width, _ int) string {
 	return renderDialog("Projects", w,
 		lipgloss.JoinVertical(lipgloss.Left, rows...),
 		"",
-		helpLine(w, "a", "add", "x", "remove", "↑↓", "select", "esc", "close"),
+		helpLine(w, "a", "add", "e", "edit", "x", "remove", "shift+↑↓", "reorder", "↑↓", "select", "esc", "close"),
 	)
 }
 
-func (d *projectsDialog) viewAdding(w int) string {
+func (d *projectsDialog) viewForm(w int) string {
 	rows := make([]string, 0, len(projectFields)*2)
 	for i, f := range projectFields {
 		label := styles.SecondaryStyle.Render(f.label)
@@ -427,7 +507,11 @@ func (d *projectsDialog) viewAdding(w int) string {
 		}
 		rows = append(rows, label, d.inputs[i].View())
 	}
-	return renderDialog("Add project", w,
+	title := "Add project"
+	if d.editing != "" {
+		title = "Edit project"
+	}
+	return renderDialog(title, w,
 		lipgloss.JoinVertical(lipgloss.Left, rows...),
 		"",
 		helpLine(w, "enter", "save", "tab", "next field", "ctrl+o", "browse", "esc", "back"),

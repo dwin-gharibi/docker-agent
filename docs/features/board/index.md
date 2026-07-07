@@ -49,7 +49,7 @@ Requirements: `tmux` and `git` must be installed.
 | `o`           | Open the card's worktree in `$BOARD_EDITOR` (`code`) |
 | `[` / `]`     | Move the card back / forward                        |
 | `x`           | Delete the card, its session, worktree, and branch  |
-| `p`           | Manage projects                                     |
+| `p`           | Manage projects (add, edit, reorder, remove)        |
 | `e`           | Edit the selected column's prompt                   |
 | `←↓↑→` `hjkl` | Navigate                                            |
 | mouse         | Click selects, double-click attaches, wheel scrolls |
