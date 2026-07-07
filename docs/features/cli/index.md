@@ -199,6 +199,16 @@ $ docker agent models --provider openai
 $ docker agent models --format json | jq
 ```
 
+### `docker agent setup`
+
+Set up a model interactively. Two paths: pick a cloud provider, paste its API key, and choose where to store it (macOS Keychain, `pass`, or the docker agent env file `~/.config/cagent/.env`), or check Docker Model Runner and pull a local model (no API key needed). Ends with the exact command to start chatting. Secret values are never printed.
+
+The wizard is also offered automatically when an interactive run finds no usable model (decline-able; set `DOCKER_AGENT_NO_SETUP=1` to suppress the offer).
+
+```bash
+$ docker agent setup
+```
+
 ### `docker agent doctor`
 
 Diagnose the model and credential setup. Reports which model providers have credentials and where each credential comes from (shell environment, env file, pass, keychain, …), whether Docker Model Runner is reachable and which models are pulled, and which model the `auto` selection would pick. Secret values are never printed. Exits with a non-zero status when an issue would prevent an agent from running, which makes it usable in scripts and CI.

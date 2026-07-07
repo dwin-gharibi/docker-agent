@@ -128,6 +128,7 @@ func (e *AutoModelFallbackError) Error() string {
 		}
 	}
 	b.WriteString("No model is currently available.\n\nTo fix this, you can:\n")
+	b.WriteString("  - Run `docker agent setup` to configure a provider API key or a local model interactively\n")
 	b.WriteString("  - Pull a Docker Model Runner model, e.g. `docker model pull ai/qwen3`\n")
 	b.WriteString("  - Install Docker Model Runner: https://docs.docker.com/ai/model-runner/get-started/\n")
 	b.WriteString("  - Configure an API key for a cloud provider:\n")

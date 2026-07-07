@@ -1007,6 +1007,7 @@ func TestAutoModelFallbackError(t *testing.T) {
 		err := &AutoModelFallbackError{}
 		msg := err.Error()
 		assert.Contains(t, msg, "No model is currently available")
+		assert.Contains(t, msg, "docker agent setup")
 		assert.Contains(t, msg, "docker model pull")
 		assert.Contains(t, msg, "ANTHROPIC_API_KEY")
 		assert.NotContains(t, msg, "Could not initialize")

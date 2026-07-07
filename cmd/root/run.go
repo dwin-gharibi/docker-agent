@@ -308,7 +308,10 @@ func (f *runExecFlags) runRunCommand(cmd *cobra.Command, args []string) (command
 
 	out := cli.NewPrinter(cmd.OutOrStdout())
 
-	return f.runOrExec(ctx, out, args, useTUI)
+	// When an interactive run cannot find any usable model, offer the setup
+	// wizard instead of leaving the user alone with the error.
+	err := f.runOrExec(ctx, out, args, useTUI)
+	return f.offerSetupOnNoModel(ctx, cmd, out, args, useTUI, err)
 }
 
 func (f *runExecFlags) runOrExec(ctx context.Context, out *cli.Printer, args []string, useTUI bool) error {

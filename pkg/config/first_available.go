@@ -183,9 +183,16 @@ func (e *firstAvailableMissingEnvError) Error() string {
 	}
 	msg.WriteString("\n")
 	msg.WriteString(environment.SecretSourcesHelp(example))
+	msg.WriteString("\nOr run `docker agent setup` to configure a provider or local model interactively.\n")
 
 	return msg.String()
 }
+
+// MissingModelCredentials reports that the missing variables are model
+// credentials: first_available candidates are models by definition. It lets
+// callers (e.g. the CLI's setup offer) classify this error without exporting
+// the type.
+func (e *firstAvailableMissingEnvError) MissingModelCredentials() bool { return true }
 
 // resolveCandidate turns a candidate reference into a ModelConfig. The
 // reference is first looked up as a named model; otherwise it is parsed as an

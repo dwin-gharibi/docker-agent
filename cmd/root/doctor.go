@@ -254,7 +254,7 @@ func (f *doctorFlags) buildReport(ctx context.Context, agentRef string) (*doctor
 		case dmrDown:
 			autoStatus.Usable = false
 			report.Issues = append(report.Issues, fmt.Sprintf(
-				"no usable model: no provider credential was found and Docker Model Runner is %s; set an API key for one of the providers above (%s) or install Docker Model Runner (%s)",
+				"no usable model: no provider credential was found and Docker Model Runner is %s; run `docker agent setup`, or set an API key for one of the providers above (%s) or install Docker Model Runner (%s)",
 				describeDMRStatus(report.DMR.Status), environment.SecretsDocsURL, dmrDocsURL))
 		case !slices.Contains(dmrModels, auto.Model):
 			autoStatus.Note = fmt.Sprintf("not pulled yet; run `docker model pull %s` or let the first run pull it", auto.Model)

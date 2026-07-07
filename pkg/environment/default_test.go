@@ -1,6 +1,8 @@
 package environment
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 
@@ -41,4 +43,47 @@ func TestNewDefaultProvider_UsesDefaultSources(t *testing.T) {
 	value, found := provider.Get(t.Context(), "SOME_DOCKER_AGENT_TEST_ONLY_VAR")
 	require.True(t, found)
 	assert.Equal(t, "value", value)
+}
+
+func defaultSourceNames() []string {
+	sources := DefaultSources()
+	names := make([]string, 0, len(sources))
+	for _, source := range sources {
+		names = append(names, source.Name)
+	}
+	return names
+}
+
+func TestDefaultSources_WithoutConfigEnvFile(t *testing.T) {
+	withTempConfigDir(t)
+
+	assert.NotContains(t, defaultSourceNames(), "config-env-file")
+}
+
+func TestDefaultSources_ReadsConfigEnvFile(t *testing.T) {
+	dir := withTempConfigDir(t)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".env"), []byte("MY_TEST_KEY=from-config-env\n"), 0o600))
+
+	sources := DefaultSources()
+
+	names := defaultSourceNames()
+	configIdx := slices.Index(names, "config-env-file")
+	require.GreaterOrEqual(t, configIdx, 0)
+
+	// The file sits below explicit sources (OS env, run secrets) and above
+	// the OS-level secret managers in lookup precedence.
+	assert.Greater(t, configIdx, slices.Index(names, "run-secrets"))
+	assert.Less(t, configIdx, slices.Index(names, "docker-desktop"))
+
+	value, found := sources[configIdx].Provider.Get(t.Context(), "MY_TEST_KEY")
+	require.True(t, found)
+	assert.Equal(t, "from-config-env", value)
+}
+
+func TestDefaultSources_SkipsMalformedConfigEnvFile(t *testing.T) {
+	dir := withTempConfigDir(t)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".env"), []byte("not a key value line\n"), 0o600))
+
+	// A stray edit must not lock every command out of the default chain.
+	assert.NotContains(t, defaultSourceNames(), "config-env-file")
 }

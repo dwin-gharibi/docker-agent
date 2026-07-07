@@ -37,6 +37,7 @@ func (e *RequiredEnvError) Error() string {
 
 	if e.MissingModelCredentials {
 		msg.WriteString("\nNo API key? Run a local model instead: docker agent run --model dmr/ai/qwen3 ...\n(the model is pulled on first use; `docker model ls` shows models already pulled)\n")
+		msg.WriteString("Or run `docker agent setup` to configure a provider or local model interactively.\n")
 	}
 
 	return msg.String()

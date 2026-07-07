@@ -46,4 +46,5 @@ func TestRequiredEnvError_SuggestsLocalModelForModelCredentials(t *testing.T) {
 	assert.Contains(t, msg, "--model dmr/ai/qwen3")
 	assert.Contains(t, msg, "pulled on first use")
 	assert.Contains(t, msg, "docker model ls")
+	assert.Contains(t, msg, "docker agent setup")
 }
