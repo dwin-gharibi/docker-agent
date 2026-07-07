@@ -11,6 +11,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 	"go.opentelemetry.io/otel"
@@ -169,7 +170,7 @@ func addRunOrExecFlags(cmd *cobra.Command, flags *runExecFlags) {
 	cmd.PersistentFlags().StringVar(&flags.appName, "app-name", "", "Application name shown in the TUI in place of \"docker agent\"")
 	cmd.PersistentFlags().StringSliceVar(&flags.disabledCommands, "disable-commands", nil, "Comma-separated list of slash commands to hide and disable in the TUI (e.g. /cost,/eval,/model)")
 	cmd.PersistentFlags().BoolVar(&flags.sidebar, "sidebar", true, "Show the sidebar in the TUI (set --sidebar=false to hide it)")
-	cmd.PersistentFlags().StringVar(&flags.theme, "theme", "", "Preselect a TUI theme by name (overrides the theme from user config; ignored outside the interactive TUI)")
+	cmd.PersistentFlags().StringVar(&flags.theme, "theme", "", "Preselect a TUI theme by name, or \"auto\" to match the terminal's light/dark background (overrides the theme from user config; ignored outside the interactive TUI)")
 	_ = cmd.RegisterFlagCompletionFunc("theme", completeTheme)
 	cmd.PersistentFlags().BoolVar(&flags.sandbox, "sandbox", false, "Run the agent inside a Docker sandbox (requires Docker Desktop with sandbox support)")
 	cmd.PersistentFlags().StringVar(&flags.sandboxTemplate, "template", "docker/sandbox-templates:docker-agent", "Template image for the sandbox (passed to docker sandbox create -t)")
@@ -1129,10 +1130,15 @@ func stopToolSets(ctx context.Context, t toolStopper) {
 
 // validateTheme reports whether ref names a loadable theme. It is used to
 // fail fast on an explicit --theme value, listing the available themes so the
-// user can correct a typo.
+// user can correct a typo. The "auto" sentinel is accepted as-is: it resolves
+// to a concrete theme at apply time.
 func validateTheme(ref string) error {
+	if ref == styles.AutoThemeRef {
+		return nil
+	}
 	if _, err := styles.LoadTheme(ref); err != nil {
 		if refs, listErr := styles.ListThemeRefs(); listErr == nil && len(refs) > 0 {
+			refs = append([]string{styles.AutoThemeRef}, refs...)
 			return fmt.Errorf("unknown theme %q; available themes: %s", ref, strings.Join(refs, ", "))
 		}
 		return fmt.Errorf("unknown theme %q: %w", ref, err)
@@ -1141,7 +1147,10 @@ func validateTheme(ref string) error {
 }
 
 // applyTheme applies the theme, resolving it from the --theme flag, then the
-// user config, then the built-in default.
+// user config, then the built-in default. The "auto" sentinel resolves to the
+// configured light/dark theme pair based on the terminal background, queried
+// synchronously (OSC 11) before the TUI starts so the first frame already has
+// the right polarity.
 func applyTheme(themeOverride string) {
 	// Resolve theme from --theme flag > user config > built-in default
 	themeRef := styles.DefaultThemeRef
@@ -1152,6 +1161,14 @@ func applyTheme(themeOverride string) {
 		themeRef = themeOverride
 	}
 
+	if themeRef == styles.AutoThemeRef {
+		styles.SetAutoThemeEnabled(true)
+		styles.SetTerminalDark(detectDarkTerminalBackground())
+		themeRef = styles.ResolveThemeRef(themeRef)
+	} else {
+		styles.SetAutoThemeEnabled(false)
+	}
+
 	theme, err := styles.LoadTheme(themeRef)
 	if err != nil {
 		slog.Warn("Failed to load theme, using default", "theme", themeRef, "error", err)
@@ -1160,4 +1177,23 @@ func applyTheme(themeOverride string) {
 
 	styles.ApplyTheme(theme)
 	slog.Debug("Applied theme", "theme_ref", themeRef, "theme_name", theme.Name)
+}
+
+// detectDarkTerminalBackground reports whether the terminal background is
+// dark, falling back to dark when it cannot tell (non-TTY, pipes, CI, or a
+// terminal that never answers). The query is TTY-gated so non-interactive
+// runs emit no escape sequences at all; lipgloss bounds the wait internally
+// and terminates early on the DA1 fallback answer that virtually every
+// terminal sends.
+func detectDarkTerminalBackground() bool {
+	return terminalHasDarkBackground(os.Stdin, os.Stdout)
+}
+
+// terminalHasDarkBackground implements detectDarkTerminalBackground against
+// explicit files so tests can drive the OSC 11 round-trip with a pty pair.
+func terminalHasDarkBackground(in, out *os.File) bool {
+	if !isatty.IsTerminal(in.Fd()) || !isatty.IsTerminal(out.Fd()) {
+		return true
+	}
+	return lipgloss.HasDarkBackground(in, out)
 }

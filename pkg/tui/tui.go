@@ -17,6 +17,8 @@ import (
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	uv "github.com/charmbracelet/ultraviolet"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/docker/docker-agent/pkg/app"
 	"github.com/docker/docker-agent/pkg/audio/transcribe"
@@ -172,6 +174,11 @@ type appModel struct {
 	// keep flowing at startup even before any focus event arrives — some
 	// terminals never send FocusMsg.
 	tickPaused bool
+
+	// lightDarkModeSet is true while DEC mode 2031 (terminal color-scheme
+	// reports) is enabled. Set when the auto theme turns the mode on, so the
+	// quit path knows to reset it and leave no stray reports in the shell.
+	lightDarkModeSet bool
 
 	// pendingRestores maps runtime tab IDs (supervisor routing keys) to
 	// persisted session-store IDs. When a tab with a pending restore is first
@@ -604,7 +611,30 @@ func (m *appModel) contextShutdownCmd() tea.Cmd {
 
 // Init initializes the model.
 func (m *appModel) Init() tea.Cmd {
-	return tea.Batch(m.init(), m.tourStartupCmd())
+	return tea.Batch(m.init(), m.tourStartupCmd(), m.autoThemeInitCmd())
+}
+
+// autoThemeInitCmd enables DEC mode 2031 (terminal color-scheme reports) so
+// terminals that support it push light/dark changes live while the auto
+// theme is active. Terminals without the mode ignore the sequence. When the
+// auto theme is off nothing is emitted, keeping default runs byte-identical.
+func (m *appModel) autoThemeInitCmd() tea.Cmd {
+	if !styles.AutoThemeEnabled() {
+		return nil
+	}
+	m.lightDarkModeSet = true
+	return tea.Raw(ansi.SetModeLightDark)
+}
+
+// quitCmd returns tea.Quit, first resetting DEC mode 2031 when the auto
+// theme enabled it, so the terminal stops sending color-scheme reports
+// after exit.
+func (m *appModel) quitCmd() tea.Cmd {
+	if !m.lightDarkModeSet {
+		return tea.Quit
+	}
+	m.lightDarkModeSet = false
+	return tea.Sequence(tea.Raw(ansi.ResetModeLightDark), tea.Quit)
 }
 
 // tourStartupCmd applies the configured startup tour mode: start the tour
@@ -830,6 +860,12 @@ func (m *appModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, animation.StartTick())
 			}
 		}
+		if styles.AutoThemeEnabled() {
+			// Terminals without mode 2031 can still flip their appearance
+			// while we're in the background; re-query on focus so the auto
+			// theme catches up.
+			cmds = append(cmds, tea.RequestBackgroundColor)
+		}
 		if m.dockerDesktop && m.program != nil {
 			// Docker Desktop: the terminal may have lost all mode state (alt
 			// screen, mouse tracking, keyboard enhancements, background
@@ -842,6 +878,17 @@ func (m *appModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			})
 		}
 		return m, tea.Batch(cmds...)
+
+	case tea.BackgroundColorMsg:
+		return m.handleColorSchemeChange(msg.IsDark())
+
+	// DEC mode 2031 color-scheme reports. bubbletea passes these ultraviolet
+	// events through untyped, so they are matched here directly.
+	case uv.DarkColorSchemeEvent:
+		return m.handleColorSchemeChange(true)
+
+	case uv.LightColorSchemeEvent:
+		return m.handleColorSchemeChange(false)
 
 	case tea.KeyboardEnhancementsMsg:
 		m.keyboardEnhancements = &msg
@@ -887,7 +934,8 @@ func (m *appModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case dialog.ExitConfirmedMsg:
 		m.cleanupAll()
-		return m, tea.Quit
+		quit := m.quitCmd()
+		return m, quit
 
 	case dialog.RuntimeResumeMsg:
 		m.application.Resume(msg.Request)
@@ -973,11 +1021,13 @@ func (m *appModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleCloseTab(m.supervisor.ActiveID())
 		}
 		m.cleanupAll()
-		return m, tea.Quit
+		quit := m.quitCmd()
+		return m, quit
 
 	case messages.ExitAfterFirstResponseMsg:
 		m.cleanupAll()
-		return m, tea.Quit
+		quit := m.quitCmd()
+		return m, quit
 
 	// --- SendMsg from editor ---
 

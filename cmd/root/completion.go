@@ -102,6 +102,7 @@ func completeTheme(_ *cobra.Command, _ []string, toComplete string) ([]string, c
 	if err != nil {
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	}
+	refs = append([]string{styles.AutoThemeRef}, refs...)
 
 	var candidates []string
 	for _, ref := range refs {

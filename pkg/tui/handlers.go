@@ -14,6 +14,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/atotto/clipboard"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/docker/docker-agent/pkg/app"
 	"github.com/docker/docker-agent/pkg/browser"
@@ -669,8 +670,17 @@ func (m *appModel) handleOpenThemePicker() (tea.Model, tea.Cmd) {
 	}
 	currentTheme := styles.CurrentTheme()
 	currentRef := currentTheme.Ref
+	autoEnabled := styles.AutoThemeEnabled()
 
-	var choices []dialog.ThemeChoice
+	// The auto entry resolves to the configured light/dark pair at apply
+	// time. While it is active, the resolved concrete theme is not marked
+	// current so only one entry carries the badge.
+	choices := []dialog.ThemeChoice{{
+		Ref:       styles.AutoThemeRef,
+		Name:      styles.AutoThemeDisplayName,
+		IsCurrent: autoEnabled,
+		IsBuiltin: true,
+	}}
 	for _, ref := range themeRefs {
 		theme, loadErr := styles.LoadTheme(ref)
 		if loadErr != nil {
@@ -683,7 +693,7 @@ func (m *appModel) handleOpenThemePicker() (tea.Model, tea.Cmd) {
 		choices = append(choices, dialog.ThemeChoice{
 			Ref:       ref,
 			Name:      name,
-			IsCurrent: ref == currentRef,
+			IsCurrent: !autoEnabled && ref == currentRef,
 			IsDefault: ref == styles.DefaultThemeRef,
 			IsBuiltin: styles.IsBuiltinTheme(ref),
 		})
@@ -694,26 +704,47 @@ func (m *appModel) handleOpenThemePicker() (tea.Model, tea.Cmd) {
 }
 
 func (m *appModel) handleChangeTheme(themeRef string) (tea.Model, tea.Cmd) {
-	if styles.GetPersistedThemeRef() == themeRef {
+	selectingAuto := themeRef == styles.AutoThemeRef
+	if styles.GetPersistedThemeRef() == themeRef && styles.AutoThemeEnabled() == selectingAuto {
 		return m, nil
 	}
-	theme, err := styles.LoadTheme(themeRef)
+	theme, err := styles.LoadTheme(styles.ResolveThemeRef(themeRef))
 	if err != nil {
 		return m, notification.ErrorCmd(fmt.Sprintf("Failed to load theme: %v", err))
 	}
+	wasAuto := styles.AutoThemeEnabled()
+	styles.SetAutoThemeEnabled(selectingAuto)
 	styles.ApplyTheme(theme)
 	m.invalidateCachesForThemeChange()
 
 	if err := styles.SaveThemeToUserConfig(themeRef); err != nil {
 		slog.Warn("Failed to save theme to user config", "theme", themeRef, "error", err)
 	}
-	return m, tea.Sequence(
-		notification.SuccessCmd("Theme changed to "+theme.Name),
+
+	displayName := theme.Name
+	if selectingAuto {
+		displayName = styles.AutoThemeDisplayName
+	}
+	cmds := []tea.Cmd{
+		notification.SuccessCmd("Theme changed to " + displayName),
 		core.CmdHandler(messages.ThemeChangedMsg{}),
-	)
+	}
+	// Keep terminal color-scheme reporting (DEC mode 2031) in sync with the
+	// auto selection: enable it and re-query the polarity when auto is picked
+	// mid-session, reset it when a concrete theme replaces auto.
+	switch {
+	case selectingAuto && !m.lightDarkModeSet:
+		m.lightDarkModeSet = true
+		cmds = append(cmds, tea.Raw(ansi.SetModeLightDark), tea.RequestBackgroundColor)
+	case !selectingAuto && wasAuto && m.lightDarkModeSet:
+		m.lightDarkModeSet = false
+		cmds = append(cmds, tea.Raw(ansi.ResetModeLightDark))
+	}
+	return m, tea.Sequence(cmds...)
 }
 
 func (m *appModel) handleThemePreview(themeRef string) (tea.Model, tea.Cmd) {
+	themeRef = styles.ResolveThemeRef(themeRef)
 	if current := styles.CurrentTheme(); current != nil && current.Ref == themeRef {
 		return m, nil
 	}
@@ -757,6 +788,28 @@ func (m *appModel) handleThemeFileChanged(themeRef string) (tea.Model, tea.Cmd) 
 		notification.SuccessCmd("Theme hot-reloaded"),
 		core.CmdHandler(messages.ThemeChangedMsg{}),
 	)
+}
+
+// handleColorSchemeChange reacts to a terminal light/dark report (a DEC mode
+// 2031 event or an OSC 11 response). The polarity is always recorded so a
+// later switch to the auto theme starts from the freshest value; the theme
+// itself only changes while the auto theme is active.
+func (m *appModel) handleColorSchemeChange(dark bool) (tea.Model, tea.Cmd) {
+	styles.SetTerminalDark(dark)
+	if !styles.AutoThemeEnabled() {
+		return m, nil
+	}
+	resolved := styles.ResolveThemeRef(styles.AutoThemeRef)
+	if current := styles.CurrentTheme(); current != nil && current.Ref == resolved {
+		return m, nil
+	}
+	theme, err := styles.LoadTheme(resolved)
+	if err != nil {
+		slog.Warn("Failed to load auto theme for terminal background change", "theme", resolved, "error", err)
+		return m, nil
+	}
+	styles.ApplyTheme(theme)
+	return m, core.CmdHandler(messages.ThemeChangedMsg{})
 }
 
 // --- Miscellaneous ---

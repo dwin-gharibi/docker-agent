@@ -330,7 +330,20 @@ Customize the TUI appearance with built-in or custom themes:
 
 ### Built-in Themes
 
-`default`, `catppuccin-latte`, `catppuccin-mocha`, `dracula`, `gruvbox-dark`, `gruvbox-light`, `nord`, `one-dark`, `solarized-dark`, `tokyo-night`
+`default`, `default-light`, `catppuccin-latte`, `catppuccin-mocha`, `dracula`, `gruvbox-dark`, `gruvbox-light`, `nord`, `one-dark`, `solarized-dark`, `tokyo-night`
+
+### Auto Theme (match the terminal)
+
+The special theme `auto` follows the terminal's light/dark background instead of naming a fixed theme. Select **Auto (match terminal)** in the `/theme` picker, pass `--theme auto`, or set it in your user config:
+
+```yaml
+settings:
+  theme: auto
+  theme_dark: default # optional, theme used on dark backgrounds (default: default)
+  theme_light: default-light # optional, theme used on light backgrounds (default: default-light)
+```
+
+At startup the terminal background is queried (OSC 11) to pick the dark or light theme of the pair; non-interactive runs (pipes, CI) fall back to the dark theme. In terminals that report appearance changes (DEC mode 2031 — Ghostty, kitty, contour, …), flipping the OS or terminal appearance while docker-agent is running switches the theme live. Terminals without that mode re-sync when the window regains focus.
 
 ### Custom Themes
 
@@ -383,7 +396,7 @@ settings:
   theme: my-theme # References ~/.cagent/themes/my-theme.yaml
 ```
 
-**At launch:** Pass `--theme <name>` to `docker agent run` to preselect a theme for that session. This overrides `settings.theme` in your config but is not saved. Invalid theme names print an error at startup listing the available options. Has no effect in `--exec` mode.
+**At launch:** Pass `--theme <name>` to `docker agent run` to preselect a theme for that session. This overrides `settings.theme` in your config but is not saved. Invalid theme names print an error at startup listing the available options. Has no effect in `--exec` mode. `--theme auto` enables the [auto theme](#auto-theme-match-the-terminal) for the session.
 
 **At runtime:** Use the `/theme` command to open the theme picker and select from available themes. Your selection is saved globally in `~/.config/cagent/config.yaml` under `settings.theme` and persists across sessions.
 

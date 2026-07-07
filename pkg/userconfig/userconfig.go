@@ -52,7 +52,15 @@ type Settings struct {
 	SplitDiffView *bool `yaml:"split_diff_view,omitempty"`
 	// Theme is the default theme reference (e.g., "dark", "light")
 	// Theme files are loaded from ~/.cagent/themes/<theme>.yaml
+	// The special value "auto" follows the terminal's light/dark background,
+	// resolving to ThemeDark or ThemeLight.
 	Theme string `yaml:"theme,omitempty"`
+	// ThemeDark is the theme applied when Theme is "auto" and the terminal
+	// background is dark. Defaults to "default".
+	ThemeDark string `yaml:"theme_dark,omitempty"`
+	// ThemeLight is the theme applied when Theme is "auto" and the terminal
+	// background is light. Defaults to "default-light".
+	ThemeLight string `yaml:"theme_light,omitempty"`
 	// YOLO enables auto-approve mode for all tool calls globally
 	YOLO bool `yaml:"YOLO,omitempty"`
 	// Lean makes the simplified TUI with minimal chrome the default UI.

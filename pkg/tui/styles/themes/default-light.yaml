@@ -1,0 +1,100 @@
+version: 1
+name: "Default Light"
+colors:
+  # Text colors
+  text_bright: "#0F1420"
+  text_primary: "#33374C"
+  text_secondary: "#5A607D"
+  text_muted: "#5A607D"
+  text_faint: "#A6ABBF"
+
+  # Accent colors
+  accent: "#2E59D9"
+  accent_muted: "#5A6AA8"
+
+  # Background colors
+  background: "#FAFAFA"
+  background_alt: "#EAECF2"
+
+  # Border colors
+  border_secondary: "#8A91B4"
+
+  # Status colors
+  success: "#4F6B33"
+  error: "#B02A3C"
+  warning: "#8C6D1F"
+  info: "#0F7490"
+  highlight: "#3F7A28"
+
+  # Brand colors
+  brand: "#1D63ED"
+  brand_bg: "#D9E4FB"
+
+  # Error colors
+  error_strong: "#A83220"
+  error_dark: "#F6D9D5"
+
+  # Spinner colors
+  spinner_dim: "#7C90DC"
+  spinner_bright: "#4A66C4"
+  spinner_brightest: "#1F3FAE"
+
+  # Diff colors
+  diff_add_bg: "#D8EAD3"
+  diff_remove_bg: "#F5DBDB"
+
+  # UI element colors
+  line_number: "#9A9EB6"
+  separator: "#C9CCDA"
+  selected: "#C7D4F2"
+  selected_fg: "#FFFFFF"
+  suggestion_ghost: "#767D99"
+  tab_bg: "#F1F2F6"
+  tab_active_bg: "#DFE3EE"
+  tab_active_fg: "#0F1420"
+  tab_inactive_fg: "#61677F"
+  tab_border: "#2E59D9"
+
+  placeholder: "#5A607D"
+
+  # Badge colors
+  badge_accent: "#7B3FBF"
+  badge_info: "#0F7490"
+  badge_success: "#4F6B33"
+
+  # Agent colors (hue values 0-360 for dynamic palette generation)
+  agent_hues: [220, 280, 170, 30, 330, 140, 200, 260, 50, 0, 185, 20, 235, 295, 155, 340]
+
+chroma:
+  # Syntax highlighting colors (GitHub-light-inspired)
+  error_fg: "#B31D28"
+  error_bg: "#F6D9D5"
+  success: "#1A7F37"
+  comment: "#7C8393"
+  comment_preproc: "#B35A00"
+  keyword: "#0550AE"
+  keyword_reserved: "#A626A4"
+  keyword_namespace: "#CF222E"
+  keyword_type: "#6F42C1"
+  operator: "#B3305C"
+  punctuation: "#3B4152"
+  name_builtin: "#953800"
+  name_tag: "#116329"
+  name_attribute: "#0550AE"
+  name_decorator: "#B08800"
+  literal_number: "#0A7B83"
+  literal_string: "#0A3069"
+  literal_string_escape: "#116329"
+  generic_deleted: "#CF222E"
+  generic_subheading: "#6E7781"
+  background: "#EFF1F5"
+
+markdown:
+  heading: "#2E59D9"
+  link: "#1D63ED"
+  strong: "#1A1F33"
+  code: "#33374C"
+  code_bg: "#EAECF2"
+  blockquote: "#5A607D"
+  list: "#33374C"
+  hr: "#8A91B4"

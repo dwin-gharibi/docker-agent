@@ -372,6 +372,11 @@ func (r *themeRegistry) ListThemeRefs() ([]string, error) {
 	refs := []string{DefaultThemeRef}
 	builtinSet[DefaultThemeRef] = true
 
+	// Reserve the auto sentinel: a user theme named "auto" must not shadow
+	// it, so such a theme lists under the "user:" prefix instead. The
+	// sentinel itself is not listed; pickers add their own entry for it.
+	builtinSet[AutoThemeRef] = true
+
 	// Add built-in themes from embedded files (default.yaml will be skipped since already added)
 	builtinRefs, err := r.listBuiltinThemeRefs()
 	if err != nil {

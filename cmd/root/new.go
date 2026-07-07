@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/spf13/cobra"
 	"go.opentelemetry.io/otel"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/docker/docker-agent/pkg/telemetry"
 	"github.com/docker/docker-agent/pkg/tui"
 	tuiinput "github.com/docker/docker-agent/pkg/tui/input"
+	"github.com/docker/docker-agent/pkg/tui/styles"
 )
 
 type newFlags struct {
@@ -87,6 +89,10 @@ func (f *newFlags) runNewCommand(cmd *cobra.Command, args []string) (commandErr 
 
 	sess := session.New(sessOpts...)
 
+	// The agent builder shares the run TUI, so honour the user's configured
+	// theme (including "auto") the same way `docker-agent run` does.
+	applyTheme("")
+
 	return runTUI(ctx, rt, sess, nil, nil, nil, appOpts...)
 }
 
@@ -138,5 +144,18 @@ func runTUIWrapped(ctx context.Context, rt runtime.Runtime, sess *session.Sessio
 	}
 
 	_, err := p.Run()
+	resetLightDarkReports()
 	return err
+}
+
+// resetLightDarkReports clears DEC mode 2031 after the TUI program exits
+// while the auto theme is active, covering exits that bypass the model's own
+// quit path (context cancellation, forced shutdown). A duplicate reset is
+// harmless and invisible, and nothing is written when the auto theme was
+// never enabled.
+func resetLightDarkReports() {
+	if !styles.AutoThemeEnabled() {
+		return
+	}
+	_, _ = os.Stdout.WriteString(ansi.ResetModeLightDark)
 }
