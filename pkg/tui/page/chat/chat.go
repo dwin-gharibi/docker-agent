@@ -40,11 +40,11 @@ const (
 type sidebarLayoutMode int
 
 const (
-	// sidebarVertical: wide window, sidebar on right side
+	// sidebarVertical: wide window, sidebar beside the chat (left or right)
 	sidebarVertical sidebarLayoutMode = iota
 	// sidebarCollapsed: wide window but user collapsed sidebar, shown at top with toggle
 	sidebarCollapsed
-	// sidebarCollapsedNarrow: narrow window, shown at top without toggle
+	// sidebarCollapsedNarrow: narrow window or forced band position, shown without toggle
 	sidebarCollapsedNarrow
 )
 
@@ -52,13 +52,16 @@ const (
 // Computing this once per update avoids repeating calculations across View, SetSize, and input handlers.
 type sidebarLayout struct {
 	mode          sidebarLayoutMode
-	innerWidth    int // window width minus app padding
-	chatWidth     int // width available for chat/messages
-	sidebarWidth  int // actual sidebar width (varies by mode)
-	sidebarStartX int // X coordinate where sidebar content starts (relative to innerWidth)
-	handleX       int // X coordinate of resize handle column (only valid in vertical mode)
-	chatHeight    int // height available for chat area
-	sidebarHeight int // height of sidebar
+	sidebarOnLeft bool // vertical mode: sidebar sits left of the chat
+	bandAtBottom  bool // collapsed modes: band sits below the chat instead of above
+	innerWidth    int  // window width minus app padding
+	chatWidth     int  // width available for chat/messages
+	chatStartX    int  // X coordinate where the chat area starts (relative to innerWidth)
+	sidebarWidth  int  // actual sidebar width (varies by mode)
+	sidebarStartX int  // X coordinate where sidebar content starts (relative to innerWidth)
+	handleX       int  // X coordinate of resize handle column (only valid in vertical mode)
+	chatHeight    int  // height available for chat area
+	sidebarHeight int  // height of sidebar
 }
 
 // isOnHandle returns true if adjustedX (already adjusted for app padding) is on the resize handle.
@@ -71,7 +74,37 @@ func (l sidebarLayout) isInSidebar(adjustedX int) bool {
 	if l.mode != sidebarVertical {
 		return false
 	}
+	if l.sidebarOnLeft {
+		return adjustedX < l.handleX
+	}
 	return adjustedX >= l.sidebarStartX
+}
+
+// bandY returns the Y coordinate where the collapsed band starts.
+func (l sidebarLayout) bandY() int {
+	if l.bandAtBottom {
+		return l.chatHeight
+	}
+	return 0
+}
+
+// isInBand returns true if y falls within the collapsed sidebar band.
+func (l sidebarLayout) isInBand(y int) bool {
+	if l.mode == sidebarVertical {
+		return false
+	}
+	return y >= l.bandY() && y < l.bandY()+l.sidebarHeight
+}
+
+// bandContentY converts a screen Y coordinate to a Y coordinate relative to
+// the band content. A bottom band renders its divider on the first line, so
+// the content starts one line lower.
+func (l sidebarLayout) bandContentY(y int) int {
+	contentY := y - l.bandY()
+	if l.bandAtBottom {
+		contentY--
+	}
+	return contentY
 }
 
 // showToggle returns true if a toggle glyph should be shown.
@@ -114,6 +147,9 @@ type Page interface {
 	GetSidebarSettings() SidebarSettings
 	// SetSidebarSettings applies sidebar display settings
 	SetSidebarSettings(settings SidebarSettings)
+	// SetLayoutSettings applies layout customization (sidebar position and
+	// section visibility) and relayouts the page.
+	SetLayoutSettings(settings msgtypes.LayoutSettings) tea.Cmd
 }
 
 // queuedMessage represents a message waiting to be sent to the agent
@@ -136,9 +172,10 @@ type chatPage struct {
 	sessionState *service.SessionState
 
 	// State
-	working     bool
-	leanMode    bool
-	hideSidebar bool
+	working        bool
+	leanMode       bool
+	hideSidebar    bool
+	layoutSettings msgtypes.LayoutSettings
 
 	msgCancel       context.CancelFunc
 	streamCancelled bool
@@ -195,27 +232,38 @@ func (p *chatPage) computeSidebarLayout() sidebarLayout {
 		}
 	}
 
+	position := p.layoutSettings.SidebarPosition
+	sideBySide := position == msgtypes.SidebarLeft || position == "" || position == msgtypes.SidebarRight
+
 	var mode sidebarLayoutMode
 	switch {
-	case p.width >= minWindowWidth && !p.sidebar.IsCollapsed():
+	case sideBySide && p.width >= minWindowWidth && !p.sidebar.IsCollapsed():
 		mode = sidebarVertical
-	case p.width >= minWindowWidth:
+	case sideBySide && p.width >= minWindowWidth:
 		mode = sidebarCollapsed
 	default:
 		mode = sidebarCollapsedNarrow
 	}
 
 	l := sidebarLayout{
-		mode:       mode,
-		innerWidth: innerWidth,
+		mode:          mode,
+		innerWidth:    innerWidth,
+		sidebarOnLeft: position == msgtypes.SidebarLeft,
+		bandAtBottom:  position == msgtypes.SidebarBottom,
 	}
 
 	switch mode {
 	case sidebarVertical:
 		l.sidebarWidth = p.sidebar.ClampWidth(p.sidebar.GetPreferredWidth(), innerWidth)
 		l.chatWidth = max(1, innerWidth-l.sidebarWidth)
-		l.handleX = l.chatWidth
-		l.sidebarStartX = l.chatWidth + toggleColumnWidth
+		if l.sidebarOnLeft {
+			l.sidebarStartX = 0
+			l.handleX = l.sidebarWidth - toggleColumnWidth
+			l.chatStartX = l.sidebarWidth
+		} else {
+			l.handleX = l.chatWidth
+			l.sidebarStartX = l.chatWidth + toggleColumnWidth
+		}
 		l.chatHeight = max(1, p.height)
 		l.sidebarHeight = l.chatHeight
 
@@ -307,6 +355,25 @@ func WithHideSidebar() PageOption {
 func WithCommandParser(p *commands.Parser) PageOption {
 	return func(cp *chatPage) {
 		cp.commandParser = p
+	}
+}
+
+// WithLayoutSettings applies initial layout customization (sidebar position
+// and section visibility).
+func WithLayoutSettings(settings msgtypes.LayoutSettings) PageOption {
+	return func(p *chatPage) {
+		p.layoutSettings = settings
+		p.sidebar.SetSectionVisibility(sectionVisibility(settings))
+	}
+}
+
+// sectionVisibility maps layout settings to the sidebar's visibility config.
+func sectionVisibility(settings msgtypes.LayoutSettings) sidebar.SectionVisibility {
+	return sidebar.SectionVisibility{
+		HideUsage:  settings.HideUsage,
+		HideAgents: settings.HideAgents,
+		HideTools:  settings.HideTools,
+		HideTodos:  settings.HideTodos,
 	}
 }
 
@@ -468,7 +535,8 @@ func (p *chatPage) pendingSpinnerContext() (sender, label string) {
 	return child, p.agentStack[n-2] + " → " + child
 }
 
-// renderCollapsedSidebar renders the sidebar in collapsed mode (at top of screen).
+// renderCollapsedSidebar renders the sidebar in collapsed/band mode.
+// A top band carries its divider on the last line; a bottom band on the first.
 func (p *chatPage) renderCollapsedSidebar(sl sidebarLayout) string {
 	// Guard against unset/invalid layout (can happen before WindowSizeMsg is received).
 	width := max(0, sl.innerWidth)
@@ -488,11 +556,16 @@ func (p *chatPage) renderCollapsedSidebar(sl sidebarLayout) string {
 		sidebarLines[0] = padded + toggleGlyph
 	}
 
-	// Replace the last line with a subtle divider
 	divider := styles.FadingStyle.Render(strings.Repeat("─", width))
-	if len(sidebarLines) >= height {
+	switch {
+	case sl.bandAtBottom:
+		sidebarLines = append([]string{divider}, sidebarLines...)
+		if len(sidebarLines) > height {
+			sidebarLines = sidebarLines[:height]
+		}
+	case len(sidebarLines) >= height:
 		sidebarLines[height-1] = divider
-	} else {
+	default:
 		sidebarLines = append(sidebarLines, divider)
 	}
 
@@ -528,7 +601,11 @@ func (p *chatPage) View() string {
 			Align(lipgloss.Left, lipgloss.Top).
 			Render(p.sidebar.View())
 
-		bodyContent = lipgloss.JoinHorizontal(lipgloss.Left, chatView, toggleCol, sidebarView)
+		if sl.sidebarOnLeft {
+			bodyContent = lipgloss.JoinHorizontal(lipgloss.Left, sidebarView, toggleCol, chatView)
+		} else {
+			bodyContent = lipgloss.JoinHorizontal(lipgloss.Left, chatView, toggleCol, sidebarView)
+		}
 
 	case sidebarCollapsed, sidebarCollapsedNarrow:
 		switch {
@@ -549,7 +626,11 @@ func (p *chatPage) View() string {
 				Height(sl.chatHeight).
 				Width(sl.innerWidth).
 				Render(messagesView)
-			bodyContent = lipgloss.JoinVertical(lipgloss.Top, sidebarRendered, chatView)
+			if sl.bandAtBottom {
+				bodyContent = lipgloss.JoinVertical(lipgloss.Top, chatView, sidebarRendered)
+			} else {
+				bodyContent = lipgloss.JoinVertical(lipgloss.Top, sidebarRendered, chatView)
+			}
 		}
 	}
 
@@ -561,23 +642,23 @@ func (p *chatPage) View() string {
 }
 
 // renderSidebarHandle renders the sidebar toggle/resize handle.
-// When collapsed: shows just « at top.
-// When expanded: shows » at top, rest is empty space (draggable for resize).
+// The glyph points toward the edge the sidebar collapses to and flips when
+// the sidebar sits on the left.
 func (p *chatPage) renderSidebarHandle(height int) string {
 	lines := make([]string, height)
 
+	expandGlyph, collapseGlyph := "«", "»"
+	if p.layoutSettings.SidebarPosition == msgtypes.SidebarLeft {
+		expandGlyph, collapseGlyph = "»", "«"
+	}
+
+	glyph := collapseGlyph
 	if p.sidebar.IsCollapsed() {
-		// Collapsed: just the toggle glyph, no vertical line
-		lines[0] = styles.MutedStyle.Render("«")
-		for i := 1; i < height; i++ {
-			lines[i] = " "
-		}
-	} else {
-		// Expanded: just the toggle at top, rest is empty space (still draggable)
-		lines[0] = styles.MutedStyle.Render("»")
-		for i := 1; i < height; i++ {
-			lines[i] = " "
-		}
+		glyph = expandGlyph
+	}
+	lines[0] = styles.MutedStyle.Render(glyph)
+	for i := 1; i < height; i++ {
+		lines[i] = " "
 	}
 
 	return strings.Join(lines, "\n")
@@ -595,17 +676,23 @@ func (p *chatPage) SetSize(width, height int) tea.Cmd {
 	switch sl.mode {
 	case sidebarVertical:
 		p.sidebar.SetMode(sidebar.ModeVertical)
+		p.sidebar.SetMirroredPadding(sl.sidebarOnLeft)
 		cmds = append(cmds,
 			p.sidebar.SetSize(sl.sidebarWidth-toggleColumnWidth, sl.chatHeight),
 			p.sidebar.SetPosition(styles.AppPadding+sl.sidebarStartX, 0),
-			p.messages.SetPosition(styles.AppPadding, 0),
+			p.messages.SetPosition(styles.AppPadding+sl.chatStartX, 0),
 		)
 	case sidebarCollapsed, sidebarCollapsedNarrow:
 		p.sidebar.SetMode(sidebar.ModeCollapsed)
+		p.sidebar.SetMirroredPadding(false)
+		messagesY := sl.sidebarHeight
+		if sl.bandAtBottom {
+			messagesY = 0
+		}
 		cmds = append(cmds,
 			p.sidebar.SetSize(sl.sidebarWidth, sl.sidebarHeight),
-			p.sidebar.SetPosition(styles.AppPadding, 0),
-			p.messages.SetPosition(styles.AppPadding, sl.sidebarHeight),
+			p.sidebar.SetPosition(styles.AppPadding, sl.bandY()),
+			p.messages.SetPosition(styles.AppPadding, messagesY),
 		)
 	}
 
@@ -1012,6 +1099,16 @@ func (p *chatPage) SetSidebarSettings(settings SidebarSettings) {
 	p.sidebar.SetPreferredWidth(settings.PreferredWidth)
 }
 
+// SetLayoutSettings applies layout customization and relayouts the page.
+func (p *chatPage) SetLayoutSettings(settings msgtypes.LayoutSettings) tea.Cmd {
+	p.layoutSettings = settings
+	p.sidebar.SetSectionVisibility(sectionVisibility(settings))
+	if p.width <= 0 || p.height <= 0 {
+		return nil
+	}
+	return p.SetSize(p.width, p.height)
+}
+
 // handleSidebarClickType checks what was clicked in the sidebar area.
 // Returns the click type and, for ClickAgent, the agent name.
 func (p *chatPage) handleSidebarClickType(x, y int) (sidebar.ClickResult, string) {
@@ -1020,7 +1117,7 @@ func (p *chatPage) handleSidebarClickType(x, y int) (sidebar.ClickResult, string
 
 	switch sl.mode {
 	case sidebarCollapsedNarrow, sidebarCollapsed:
-		return p.sidebar.HandleClickType(adjustedX, y)
+		return p.sidebar.HandleClickType(adjustedX, sl.bandContentY(y))
 	case sidebarVertical:
 		if sl.isInSidebar(adjustedX) {
 			return p.sidebar.HandleClickType(adjustedX-sl.sidebarStartX, y)

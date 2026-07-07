@@ -171,6 +171,43 @@ func TestConfig_SaveAndLoad(t *testing.T) {
 	assert.Equal(t, config.Aliases["myagent"].Path, loaded.Aliases["myagent"].Path)
 }
 
+func TestSettings_LayoutRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "config.yaml")
+
+	config := &Config{
+		Settings: &Settings{
+			Layout: &LayoutSettings{
+				SidebarPosition: "left",
+				HideUsage:       true,
+				HideTodos:       true,
+			},
+		},
+	}
+
+	require.NoError(t, config.saveTo(configFile))
+
+	loaded, err := loadFrom(configFile, "")
+	require.NoError(t, err)
+
+	layout := loaded.GetSettings().GetLayout()
+	assert.Equal(t, "left", layout.SidebarPosition)
+	assert.True(t, layout.HideUsage)
+	assert.False(t, layout.HideAgents)
+	assert.False(t, layout.HideTools)
+	assert.True(t, layout.HideTodos)
+}
+
+func TestSettings_GetLayoutDefaults(t *testing.T) {
+	t.Parallel()
+
+	var nilSettings *Settings
+	assert.Equal(t, LayoutSettings{}, nilSettings.GetLayout())
+	assert.Equal(t, LayoutSettings{}, (&Settings{}).GetLayout())
+}
+
 func TestConfig_MigrateFromLegacy(t *testing.T) {
 	t.Parallel()
 

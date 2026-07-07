@@ -239,6 +239,10 @@ type appModel struct {
 	// hideSidebar hides the sidebar and disables the ctrl+b toggle.
 	hideSidebar bool
 
+	// layoutSettings is the active TUI layout customization (sidebar position
+	// and section visibility). Shared by every tab and managed via /custom.
+	layoutSettings messages.LayoutSettings
+
 	// buildCommandCategories is a function that returns the list of command categories.
 	buildCommandCategories func(context.Context, tea.Model) []commands.Category
 
@@ -412,8 +416,8 @@ func New(ctx context.Context, spawner SessionSpawner, initialApp *app.App, initi
 	sv := supervisor.New(spawner)
 
 	// Initialize tab bar with configurable title length from user settings
-	tabTitleMaxLen := userconfig.Get().GetTabTitleMaxLength()
-	tb := tabbar.New(tabTitleMaxLen)
+	userSettings := userconfig.Get()
+	tb := tabbar.New(userSettings.GetTabTitleMaxLength())
 
 	// Initialize tab store
 	var ts *tuistate.Store
@@ -458,6 +462,7 @@ func New(ctx context.Context, spawner SessionSpawner, initialApp *app.App, initi
 		workingSpinner:                spinner.New(spinner.ModeSpinnerOnly, styles.SpinnerDotsHighlightStyle),
 		focusedPanel:                  PanelEditor,
 		editorLines:                   3,
+		layoutSettings:                layoutSettingsFromConfig(userSettings.GetLayout()),
 		keyboardEnhancementsSupported: termfeatures.SupportsModifiedEnter(os.Getenv),
 		dockerDesktop:                 os.Getenv("TERM_PROGRAM") == "docker_desktop",
 		appName:                       "docker agent",
@@ -584,6 +589,7 @@ func (m *appModel) commandCategories() []commands.Category {
 func (m *appModel) chatPageOpts() []chat.PageOption {
 	opts := []chat.PageOption{
 		chat.WithCommandParser(commands.NewParser(m.commandCategories()...)),
+		chat.WithLayoutSettings(m.layoutSettings),
 	}
 
 	if m.leanMode {
@@ -759,7 +765,7 @@ func (m *appModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.(type) {
 		case messages.SpawnSessionMsg, messages.SwitchTabMsg,
 			messages.CloseTabMsg, messages.ReorderTabMsg,
-			messages.ToggleSidebarMsg:
+			messages.ToggleSidebarMsg, messages.OpenCustomizeDialogMsg:
 			return m, nil
 		}
 	}
@@ -1227,6 +1233,20 @@ func (m *appModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case messages.ThemeFileChangedMsg:
 		return m.handleThemeFileChanged(msg.ThemeRef)
+
+	// --- Layout customization ---
+
+	case messages.OpenCustomizeDialogMsg:
+		return m.handleOpenCustomizeDialog()
+
+	case messages.PreviewLayoutMsg:
+		return m.applyLayoutSettings(msg.Layout, false)
+
+	case messages.ApplyLayoutMsg:
+		return m.applyLayoutSettings(msg.Layout, true)
+
+	case messages.CancelLayoutPreviewMsg:
+		return m.applyLayoutSettings(msg.Original, false)
 
 	// --- Speech-to-text ---
 

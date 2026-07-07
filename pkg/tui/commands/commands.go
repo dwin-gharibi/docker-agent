@@ -386,6 +386,17 @@ func builtInSessionCommands() []Item {
 func builtInSettingsCommands() []Item {
 	return []Item{
 		{
+			ID:           "settings.customize",
+			Label:        "Customize Layout",
+			SlashCommand: "/custom",
+			Description:  "Customize the layout: sidebar position and visible sections",
+			Category:     "Settings",
+			Immediate:    true,
+			Execute: func(string) tea.Cmd {
+				return core.CmdHandler(messages.OpenCustomizeDialogMsg{})
+			},
+		},
+		{
 			ID:           "settings.split-diff",
 			Label:        "Split Diff",
 			SlashCommand: "/split-diff",

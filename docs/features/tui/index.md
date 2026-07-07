@@ -319,6 +319,26 @@ Invalid entries are ignored with a warning (visible with `--debug`) so a bad con
 
 Press <kbd>Ctrl</kbd>+<kbd>R</kbd> to enter incremental history search mode. Start typing to filter through your previous inputs. Press <kbd>Enter</kbd> to select a match, or <kbd>Escape</kbd> to cancel.
 
+## Layout Customization
+
+Run `/custom` to open the layout dialog. It shows a live schematic preview of the resulting layout and applies every change immediately to the UI behind the dialog:
+
+- **Sidebar position**: `Right` (default), `Left`, `Top`, or `Bottom`. Left/right keep the full vertical sidebar next to the chat; top/bottom render it as a compact horizontal band above or below the chat (session title, working directory, usage, plus a one-line summary of the current agent, tools, and todos).
+- **Sidebar sections**: toggle the visibility of the **Token usage**, **Agents**, **Tools**, and **Todos** sections. The session block (title and working directory) is always shown.
+
+Press <kbd>Enter</kbd> to apply and persist, or <kbd>Escape</kbd> to cancel and restore the previous layout. The settings are saved globally in `~/.config/cagent/config.yaml`:
+
+```yaml
+# ~/.config/cagent/config.yaml
+settings:
+  layout:
+    sidebar_position: left # right (default), left, top, bottom
+    hide_usage: true
+    hide_agents: false
+    hide_tools: false
+    hide_todos: false
+```
+
 ## Theming
 
 Customize the TUI appearance with built-in or custom themes:

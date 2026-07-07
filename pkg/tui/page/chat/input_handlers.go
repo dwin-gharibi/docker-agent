@@ -291,6 +291,10 @@ func (p *chatPage) wheelTarget(x, _ int) wheelTarget {
 func (p *chatPage) handleSidebarResize(x int) tea.Cmd {
 	innerWidth := p.width - appPaddingHorizontal
 	delta := p.sidebarDragStartX - x
+	// A left-side sidebar grows when the handle is dragged right.
+	if p.layoutSettings.SidebarPosition == msgtypes.SidebarLeft {
+		delta = -delta
+	}
 	newWidth := p.sidebarDragStartWidth + delta
 
 	// Auto-collapse if dragged below minimum

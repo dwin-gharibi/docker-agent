@@ -40,6 +40,15 @@ const (
 	ModeCollapsed
 )
 
+// SectionVisibility controls which optional sidebar sections are rendered.
+// The zero value shows everything.
+type SectionVisibility struct {
+	HideUsage  bool
+	HideAgents bool
+	HideTools  bool
+	HideTodos  bool
+}
+
 // Model represents a sidebar component
 type Model interface {
 	layout.Model
@@ -49,6 +58,9 @@ type Model interface {
 	SetTokenUsage(event *runtime.TokenUsageEvent)
 	SetTodos(result *tools.ToolCallResult) error
 	SetMode(mode Mode)
+	// SetMirroredPadding swaps the horizontal edge padding so the sidebar hugs
+	// the terminal edge when rendered on the left of the chat.
+	SetMirroredPadding(mirrored bool)
 	SetAgentInfo(agentName, model, description string) tea.Cmd
 	SetTeamInfo(availableAgents []runtime.AgentDetails)
 	SetAgentSwitching(switching bool)
@@ -56,6 +68,8 @@ type Model interface {
 	SetSkillsInfo(availableSkills int)
 	SetSessionStarred(starred bool)
 	SetQueuedMessages(messages ...string)
+	// SetSectionVisibility controls which optional sidebar sections are rendered.
+	SetSectionVisibility(v SectionVisibility)
 	GetSize() (width, height int)
 	LoadFromSession(sess *session.Session)
 	// ResetStreamTracking clears the active-stream stack so a new top-level run
@@ -148,7 +162,8 @@ type model struct {
 	preferredWidth     int      // user's preferred width (persisted across collapse/expand)
 	editingTitle       bool     // true when inline title editing is active
 	titleInput         textinput.Model
-	lastTitleClickTime time.Time // for double-click detection on title
+	lastTitleClickTime time.Time         // for double-click detection on title
+	sectionVisibility  SectionVisibility // which optional sections are rendered
 
 	ctx func() context.Context
 
@@ -341,6 +356,15 @@ func (m *model) SetSessionStarred(starred bool) {
 // SetQueuedMessages sets the list of queued message previews to display
 func (m *model) SetQueuedMessages(queuedMessages ...string) {
 	m.queuedMessages = queuedMessages
+	m.invalidateCache()
+}
+
+// SetSectionVisibility controls which optional sidebar sections are rendered.
+func (m *model) SetSectionVisibility(v SectionVisibility) {
+	if m.sectionVisibility == v {
+		return
+	}
+	m.sectionVisibility = v
 	m.invalidateCache()
 }
 
@@ -625,6 +649,15 @@ func (m *model) workingDirWithBranch() string {
 	return result
 }
 
+// workingDirLine renders the working directory with the sidebar's accent
+// block, shared by the vertical Session tab and the collapsed band.
+func (m *model) workingDirLine() string {
+	if m.workingDirectory == "" {
+		return ""
+	}
+	return styles.TabAccentStyle.Render("█") + styles.TabPrimaryStyle.Render(" "+m.workingDirWithBranch())
+}
+
 // Update handles messages and updates the component state.
 func (m *model) Update(msg tea.Msg) (layout.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -877,9 +910,12 @@ func (m *model) computeCollapsedViewModel(contentWidth int) CollapsedViewModel {
 	vm := CollapsedViewModel{
 		TitleWithStar:    titleWithStar,
 		WorkingIndicator: m.workingIndicatorCollapsed(),
-		WorkingDir:       m.workingDirWithBranch(),
-		UsageSummary:     m.tokenUsageSummary(),
+		WorkingDir:       m.workingDirLine(),
+		InfoLine:         m.collapsedInfoLine(),
 		ContentWidth:     contentWidth,
+	}
+	if !m.sectionVisibility.HideUsage {
+		vm.UsageSummary = m.tokenUsageSummary()
 	}
 
 	titleWidth := lipgloss.Width(vm.TitleWithStar)
@@ -903,6 +939,95 @@ func (m *model) computeCollapsedViewModel(contentWidth int) CollapsedViewModel {
 func (m *model) CollapsedHeight(outerWidth int) int {
 	contentWidth := max(outerWidth-m.layoutCfg.PaddingLeft-m.layoutCfg.PaddingRight, 1)
 	return m.computeCollapsedViewModel(contentWidth).LineCount()
+}
+
+// collapsedInfoLine returns a one-line summary of the agents, tools, and
+// todos sections for the collapsed band, honoring section visibility.
+func (m *model) collapsedInfoLine() string {
+	var parts []string
+	appendPart := func(part string) {
+		if part != "" {
+			parts = append(parts, part)
+		}
+	}
+
+	if !m.sectionVisibility.HideAgents {
+		appendPart(m.agentSummaryCollapsed())
+	}
+	if !m.sectionVisibility.HideTools {
+		appendPart(m.toolsSummaryCollapsed())
+	}
+	if !m.sectionVisibility.HideTodos {
+		appendPart(m.todosSummaryCollapsed())
+	}
+
+	return strings.Join(parts, styles.MutedStyle.Render(" · "))
+}
+
+// agentSummaryCollapsed renders the current agent (in its accent color) with
+// its model and the number of other agents in the team.
+func (m *model) agentSummaryCollapsed() string {
+	name := m.sessionState.CurrentAgentName()
+	if name == "" {
+		return ""
+	}
+
+	summary := styles.AgentAccentStyleFor(name).Render("▶ " + name)
+	if m.agentModel != "" {
+		summary += styles.MutedStyle.Render(" " + m.agentModel)
+	}
+	if n := len(m.availableAgents); n > 1 {
+		summary += styles.MutedStyle.Render(fmt.Sprintf(" +%d", n-1))
+	}
+	return summary
+}
+
+// toolsSummaryCollapsed renders the tools/skills counts with the sidebar's
+// accent block, or the loading spinner while the toolset is starting.
+func (m *model) toolsSummaryCollapsed() string {
+	if m.toolsLoading {
+		return m.spinner.View() + styles.TabPrimaryStyle.Render(" loading tools…")
+	}
+
+	var parts []string
+	if m.availableTools > 0 {
+		label := "tools"
+		if m.availableTools == 1 {
+			label = "tool"
+		}
+		parts = append(parts, fmt.Sprintf("%d %s", m.availableTools, label))
+	}
+	if m.availableSkills > 0 {
+		label := "skills"
+		if m.availableSkills == 1 {
+			label = "skill"
+		}
+		parts = append(parts, fmt.Sprintf("%d %s", m.availableSkills, label))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return styles.TabAccentStyle.Render("█") + styles.TabPrimaryStyle.Render(" "+strings.Join(parts, ", "))
+}
+
+// todosSummaryCollapsed renders the completed/total todo counts with the
+// same status icons as the vertical TO-DO tab.
+func (m *model) todosSummaryCollapsed() string {
+	completed, total := m.todoComp.Counts()
+	if total == 0 {
+		return ""
+	}
+
+	var icon string
+	switch completed {
+	case total:
+		icon = styles.CompletedStyle.Render("✓")
+	case 0:
+		icon = styles.ToBeDoneStyle.Render("◯")
+	default:
+		icon = styles.InProgressStyle.Render("◔")
+	}
+	return icon + styles.TabPrimaryStyle.Render(fmt.Sprintf(" %d/%d todos", completed, total))
 }
 
 func (m *model) collapsedView() string {
@@ -978,18 +1103,28 @@ func (m *model) renderSections(contentWidth int) []string {
 	}
 
 	appendSection(m.sessionInfo(contentWidth))
-	appendSection(m.tokenUsage(contentWidth))
+	if !m.sectionVisibility.HideUsage {
+		appendSection(m.tokenUsage(contentWidth))
+	}
 	appendSection(m.queueSection(contentWidth))
 
 	// Track where agent entries start so we can detect clicks on agent names
 	agentSectionStart := len(lines)
-	appendSection(m.agentInfo(contentWidth))
+	if m.sectionVisibility.HideAgents {
+		m.agentLineOwners = nil
+	} else {
+		appendSection(m.agentInfo(contentWidth))
+	}
 	m.buildAgentClickZones(agentSectionStart)
 
-	appendSection(m.toolsetInfo(contentWidth))
+	if !m.sectionVisibility.HideTools {
+		appendSection(m.toolsetInfo(contentWidth))
+	}
 
-	m.todoComp.SetSize(contentWidth)
-	appendSection(strings.TrimSuffix(m.todoComp.Render(), "\n"))
+	if !m.sectionVisibility.HideTodos {
+		m.todoComp.SetSize(contentWidth)
+		appendSection(strings.TrimSuffix(m.todoComp.Render(), "\n"))
+	}
 
 	return lines
 }
@@ -1105,6 +1240,13 @@ func (m *model) computeUsageStats() usageStats {
 }
 
 func (m *model) tokenUsage(contentWidth int) string {
+	return m.renderTab("Token Usage", m.tokenUsageLine(), contentWidth)
+}
+
+// tokenUsageLine renders the usage line shared by the vertical Token Usage
+// tab and the collapsed band: token glyph, count, context %, cost, and the
+// sub-session count, all with the same styling.
+func (m *model) tokenUsageLine() string {
 	s := m.computeUsageStats()
 
 	line := styles.MutedStyle.Render(styles.TokenGlyph+" ") + toolcommon.FormatTokenCount(s.tokens)
@@ -1116,31 +1258,16 @@ func (m *model) tokenUsage(contentWidth int) string {
 		line += " " + styles.MutedStyle.Render(fmt.Sprintf("(%d sub-sessions)", s.sessionCount-1))
 	}
 
-	return m.renderTab("Token Usage", line, contentWidth)
+	return line
 }
 
-// tokenUsageSummary returns a single-line summary for horizontal layout.
+// tokenUsageSummary returns the usage line for the collapsed band, empty
+// until any usage has been recorded.
 func (m *model) tokenUsageSummary() string {
 	if len(m.sessionUsage) == 0 {
 		return ""
 	}
-
-	s := m.computeUsageStats()
-
-	parts := []string{"Tokens: " + toolcommon.FormatTokenCount(s.tokens)}
-	if s.sessionCount > 1 {
-		if s.contextPct != "" {
-			parts = append(parts, "Context: "+s.contextPct)
-		}
-		parts = append(parts, "Cost: "+toolcommon.FormatCostUSD(s.totalCost), fmt.Sprintf("%d sub-sessions", s.sessionCount-1))
-	} else {
-		parts = append(parts, "Cost: "+toolcommon.FormatCostUSD(s.totalCost))
-		if s.contextPct != "" {
-			parts = append(parts, "Context: "+s.contextPct)
-		}
-	}
-
-	return strings.Join(parts, " | ")
+	return m.tokenUsageLine()
 }
 
 func (m *model) sessionInfo(contentWidth int) string {
@@ -1164,7 +1291,7 @@ func (m *model) sessionInfo(contentWidth int) string {
 	}
 
 	if m.workingDirectory != "" {
-		lines = append(lines, styles.TabAccentStyle.Render("█")+styles.TabPrimaryStyle.Render(" "+m.workingDirWithBranch()))
+		lines = append(lines, m.workingDirLine())
 	}
 
 	return m.renderTab("Session", strings.Join(lines, "\n"), contentWidth)
@@ -1548,6 +1675,23 @@ func (m *model) GetSize() (width, height int) {
 
 func (m *model) SetMode(mode Mode) {
 	m.mode = mode
+	m.invalidateCache()
+}
+
+// SetMirroredPadding swaps the horizontal edge padding so the content hugs
+// the terminal edge when the sidebar is rendered on the left of the chat,
+// with the breathing room moved to the chat side.
+func (m *model) SetMirroredPadding(mirrored bool) {
+	cfg := DefaultLayoutConfig()
+	if mirrored {
+		cfg.PaddingLeft, cfg.PaddingRight = cfg.PaddingRight, cfg.PaddingLeft
+	}
+	if m.layoutCfg == cfg {
+		return
+	}
+	m.layoutCfg = cfg
+	m.updateScrollviewPosition()
+	m.updateTitleInputWidth()
 	m.invalidateCache()
 }
 

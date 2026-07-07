@@ -91,6 +91,33 @@ type Settings struct {
 	// "ctrl+q", "f2"). Unknown actions, malformed keys, and conflicts are
 	// ignored with a logged warning so a bad entry never breaks the TUI.
 	Keybindings []Keybinding `yaml:"keybindings,omitempty"`
+	// Layout customizes the TUI chat layout (sidebar position and which
+	// sidebar sections are visible). Managed via the /custom command.
+	Layout *LayoutSettings `yaml:"layout,omitempty"`
+}
+
+// LayoutSettings customizes the TUI chat layout. The zero value is the
+// default layout: sidebar on the right with every section visible.
+type LayoutSettings struct {
+	// SidebarPosition places the session info sidebar: "right" (default),
+	// "left", "top", or "bottom".
+	SidebarPosition string `yaml:"sidebar_position,omitempty"`
+	// HideUsage hides the token usage section in the sidebar.
+	HideUsage bool `yaml:"hide_usage,omitempty"`
+	// HideAgents hides the agents section in the sidebar.
+	HideAgents bool `yaml:"hide_agents,omitempty"`
+	// HideTools hides the tools section in the sidebar.
+	HideTools bool `yaml:"hide_tools,omitempty"`
+	// HideTodos hides the todo list section in the sidebar.
+	HideTodos bool `yaml:"hide_todos,omitempty"`
+}
+
+// GetLayout returns the layout settings, falling back to defaults when unset.
+func (s *Settings) GetLayout() LayoutSettings {
+	if s == nil || s.Layout == nil {
+		return LayoutSettings{}
+	}
+	return *s.Layout
 }
 
 // Keybinding maps a single TUI action to the key combinations that trigger it.

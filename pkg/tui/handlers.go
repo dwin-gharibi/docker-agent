@@ -793,6 +793,85 @@ func (m *appModel) handleThemeFileChanged(themeRef string) (tea.Model, tea.Cmd) 
 	)
 }
 
+// --- Layout customization ---
+
+// handleOpenCustomizeDialog opens the /custom layout dialog.
+func (m *appModel) handleOpenCustomizeDialog() (tea.Model, tea.Cmd) {
+	if m.hideSidebar {
+		return m, notification.InfoCmd("Sidebar is disabled; there is no layout to customize")
+	}
+	return m, core.CmdHandler(dialog.OpenDialogMsg{
+		Model: dialog.NewCustomizeDialog(m.layoutSettings),
+	})
+}
+
+// applyLayoutSettings applies the given layout to every chat page (all tabs
+// share the same layout) and optionally persists it to the user config.
+func (m *appModel) applyLayoutSettings(settings messages.LayoutSettings, persist bool) (tea.Model, tea.Cmd) {
+	settings.SidebarPosition = messages.ParseSidebarPosition(string(settings.SidebarPosition))
+	m.layoutSettings = settings
+
+	var cmds []tea.Cmd
+	for _, page := range m.chatPages {
+		if cmd := page.SetLayoutSettings(settings); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+	cmds = append(cmds, m.resizeAll())
+
+	if persist {
+		if err := saveLayoutToUserConfig(settings); err != nil {
+			slog.Warn("Failed to save layout to user config", "error", err)
+			cmds = append(cmds, notification.WarningCmd("Layout applied but could not be saved"))
+		} else {
+			cmds = append(cmds, notification.SuccessCmd("Layout updated"))
+		}
+	}
+
+	return m, tea.Batch(cmds...)
+}
+
+// layoutSettingsFromConfig converts persisted layout settings to their runtime form.
+func layoutSettingsFromConfig(l userconfig.LayoutSettings) messages.LayoutSettings {
+	return messages.LayoutSettings{
+		SidebarPosition: messages.ParseSidebarPosition(l.SidebarPosition),
+		HideUsage:       l.HideUsage,
+		HideAgents:      l.HideAgents,
+		HideTools:       l.HideTools,
+		HideTodos:       l.HideTodos,
+	}
+}
+
+// saveLayoutToUserConfig persists layout settings to the user config file.
+// Default settings clear the layout entry to keep the config file minimal.
+func saveLayoutToUserConfig(s messages.LayoutSettings) error {
+	cfg, err := userconfig.Load()
+	if err != nil {
+		return err
+	}
+	if cfg.Settings == nil {
+		cfg.Settings = &userconfig.Settings{}
+	}
+
+	if s == (messages.LayoutSettings{SidebarPosition: messages.SidebarRight}) {
+		cfg.Settings.Layout = nil
+		return cfg.Save()
+	}
+
+	position := string(s.SidebarPosition)
+	if s.SidebarPosition == messages.SidebarRight {
+		position = ""
+	}
+	cfg.Settings.Layout = &userconfig.LayoutSettings{
+		SidebarPosition: position,
+		HideUsage:       s.HideUsage,
+		HideAgents:      s.HideAgents,
+		HideTools:       s.HideTools,
+		HideTodos:       s.HideTodos,
+	}
+	return cfg.Save()
+}
+
 // handleColorSchemeChange reacts to a terminal light/dark report (a DEC mode
 // 2031 event or an OSC 11 response). The polarity is always recorded so a
 // later switch to the auto theme starts from the freshest value; the theme
