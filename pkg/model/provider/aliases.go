@@ -5,6 +5,8 @@ import (
 	"maps"
 	"slices"
 	"strings"
+
+	"github.com/docker/docker-agent/pkg/chatgpt"
 )
 
 // Alias defines the configuration for a provider alias.
@@ -143,6 +145,16 @@ var Aliases = map[string]Alias{
 		APIType:     "openai",
 		BaseURL:     "https://api.githubcopilot.com",
 		TokenEnvVar: "GITHUB_TOKEN",
+	},
+	// The chatgpt provider uses a ChatGPT subscription (Plus/Pro/Business)
+	// instead of an API key: `docker agent auth login chatgpt` stores an
+	// OAuth login that the "chatgpt-login" environment source exposes as the
+	// virtual CHATGPT_OAUTH_TOKEN variable. The Codex backend only serves
+	// the Responses API; the OpenAI client pins it for this provider.
+	"chatgpt": {
+		APIType:     "openai",
+		BaseURL:     chatgpt.BaseURL,
+		TokenEnvVar: chatgpt.TokenEnvVar,
 	},
 	"opencode-go": {
 		APIType:     "openai",

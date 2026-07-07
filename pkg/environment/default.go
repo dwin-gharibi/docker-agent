@@ -54,6 +54,11 @@ func DefaultSources() []Source {
 		sources = append(sources, Source{Name: "config-env-file", Provider: provider})
 	}
 
+	// The ChatGPT account login (created by `docker agent auth login chatgpt`)
+	// serves the virtual CHATGPT_OAUTH_TOKEN variable. It sits after the
+	// explicit sources so a user-supplied value always wins.
+	sources = append(sources, Source{Name: "chatgpt-login", Provider: NewChatGPTLoginProvider()})
+
 	// Add credential helper provider if configured
 	if cfg, err := userconfig.Load(); err == nil && cfg.CredentialHelper != nil && cfg.CredentialHelper.Command != "" {
 		sources = append(sources, Source{

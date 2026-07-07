@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
+	"github.com/docker/docker-agent/pkg/chatgpt"
 	"github.com/docker/docker-agent/pkg/cli"
 	"github.com/docker/docker-agent/pkg/config"
 	"github.com/docker/docker-agent/pkg/environment"
@@ -52,10 +53,11 @@ type setupWizard struct {
 	in  *bufio.Reader
 	out io.Writer
 
-	readSecret func(prompt string) (string, error)
-	stores     []environment.SecretStore
-	dmrLister  config.DMRModelLister
-	pullModel  func(ctx context.Context, model string) error
+	readSecret   func(prompt string) (string, error)
+	stores       []environment.SecretStore
+	dmrLister    config.DMRModelLister
+	pullModel    func(ctx context.Context, model string) error
+	chatgptLogin func(ctx context.Context, out io.Writer) (*chatgpt.LoginResult, error)
 }
 
 func newSetupCmd() *cobra.Command {
@@ -116,9 +118,10 @@ func newTerminalSetupWizard(in io.Reader, out io.Writer) *setupWizard {
 			}
 			return string(value), nil
 		},
-		stores:    environment.SecretStores(),
-		dmrLister: dmr.ListModels,
-		pullModel: dmr.Pull,
+		stores:       environment.SecretStores(),
+		dmrLister:    dmr.ListModels,
+		pullModel:    dmr.Pull,
+		chatgptLogin: chatgpt.Login,
 	}
 }
 
@@ -158,7 +161,11 @@ func (w *setupWizard) setupCloudProvider(ctx context.Context) (*setupResult, err
 	fmt.Fprintln(w.out)
 	fmt.Fprintln(w.out, "Pick a provider:")
 	for i, p := range providers {
-		fmt.Fprintf(w.out, "  %2d. %-15s (%s)\n", i+1, p.Provider, p.EnvVars[0])
+		credential := p.EnvVars[0]
+		if p.Provider == chatgpt.ProviderName {
+			credential = "ChatGPT account sign-in, no API key"
+		}
+		fmt.Fprintf(w.out, "  %2d. %-15s (%s)\n", i+1, p.Provider, credential)
 	}
 
 	choice, err := w.promptChoice(ctx, len(providers), 1)
@@ -167,6 +174,22 @@ func (w *setupWizard) setupCloudProvider(ctx context.Context) (*setupResult, err
 	}
 	selected := providers[choice-1]
 	envVar := selected.EnvVars[0]
+
+	// The chatgpt provider signs in with a browser flow instead of a pasted
+	// API key; the credential is stored by the login itself.
+	if selected.Provider == chatgpt.ProviderName {
+		fmt.Fprintln(w.out)
+		result, err := w.chatgptLogin(ctx, w.out)
+		if err != nil {
+			return nil, err
+		}
+		if result.Email != "" {
+			fmt.Fprintf(w.out, "Signed in as %s.\n", result.Email)
+		} else {
+			fmt.Fprintln(w.out, "Signed in with your ChatGPT account.")
+		}
+		return &setupResult{Model: selected.Provider + "/" + config.DefaultModels[selected.Provider]}, nil
+	}
 
 	key, err := w.promptSecret(ctx, fmt.Sprintf("\nPaste your %s API key (%s, input hidden): ", selected.Provider, envVar))
 	if err != nil {

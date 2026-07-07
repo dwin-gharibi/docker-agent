@@ -36,6 +36,7 @@ docker-agent also includes built-in aliases for these providers:
 
 | Provider       | Alias            | API Key / Env Variable              |
 | -------------- | ---------------- | ----------------------------------- |
+| ChatGPT (OpenAI account) | [`chatgpt`](../chatgpt/index.md) | None (sign in: `docker agent auth login chatgpt`) |
 | OpenCode Zen   | `opencode-zen`   | `OPENCODE_API_KEY`                  |
 | OpenCode Go    | `opencode-go`    | `OPENCODE_API_KEY`                  |
 | Mistral        | `mistral`        | `MISTRAL_API_KEY`                   |
