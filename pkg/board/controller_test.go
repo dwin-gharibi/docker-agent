@@ -2,6 +2,9 @@ package board
 
 import (
 	"context"
+	"errors"
+	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,6 +17,7 @@ type fakeSessions struct{}
 func (fakeSessions) NewSession(_, _, _, _, _, _, _, _ string) error { return nil }
 func (fakeSessions) KillSession(string) error                       { return nil }
 func (fakeSessions) Alive(string) (bool, error)                     { return true, nil }
+func (fakeSessions) Exists(string) (bool, error)                    { return true, nil }
 
 // fakeClient replays a scripted event stream, then blocks like a live
 // connection until the watcher is cancelled.
@@ -213,8 +217,9 @@ func (r *recordingSessions) NewSession(_, _, _, _, _, _, _, _ string) error {
 	r.newSessions++
 	return nil
 }
-func (r *recordingSessions) KillSession(string) error   { return nil }
-func (r *recordingSessions) Alive(string) (bool, error) { return r.alive, nil }
+func (r *recordingSessions) KillSession(string) error    { return nil }
+func (r *recordingSessions) Alive(string) (bool, error)  { return r.alive, nil }
+func (r *recordingSessions) Exists(string) (bool, error) { return r.alive, nil }
 
 func TestRelaunchAbortsForDeletedCard(t *testing.T) {
 	t.Parallel()
@@ -256,4 +261,228 @@ func TestControllerStopWaits(t *testing.T) {
 	// Stopping twice (or a never-watched card) is safe.
 	c.Stop("c1")
 	c.Stop("unknown")
+}
+
+// downClient simulates an agent whose control plane never comes up.
+type downClient struct{}
+
+func (downClient) Snapshot(context.Context) (snapshot, error) {
+	return snapshot{}, errors.New("connection refused")
+}
+
+func (downClient) StreamEvents(context.Context, uint64, func(event) bool) error {
+	return errors.New("connection refused")
+}
+
+func (downClient) Followup(context.Context, string, string) error {
+	return errors.New("connection refused")
+}
+
+// crashingSessions simulates an agent that dies at startup: the session is
+// never alive, and creating a new one optionally fails too.
+type crashingSessions struct {
+	newErr      error
+	newSessions atomic.Int32
+}
+
+func (s *crashingSessions) NewSession(_, _, _, _, _, _, _, _ string) error {
+	s.newSessions.Add(1)
+	return s.newErr
+}
+func (s *crashingSessions) KillSession(string) error    { return nil }
+func (s *crashingSessions) Alive(string) (bool, error)  { return false, nil }
+func (s *crashingSessions) Exists(string) (bool, error) { return false, nil }
+
+// watchCrashingCard spins up a watcher for a card whose agent never answers
+// and whose tmux pane is dead, simulating a startup crash.
+func watchCrashingCard(t *testing.T, sessions *crashingSessions) *Store {
+	t.Helper()
+	store := testStore(t)
+	require.NoError(t, store.InsertCard(&Card{ID: "c1", Column: "dev", Status: StatusStarting, Session: "s", Worktree: t.TempDir()}))
+
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+
+	c := newController(ctx, store, sessions, func() {})
+	c.clientFor = func(_, _ string) sessionClient { return downClient{} }
+	card, err := store.GetCard("c1")
+	require.NoError(t, err)
+	c.Start(card)
+	t.Cleanup(func() { c.Stop("c1") })
+	return store
+}
+
+func TestControllerStartupCrashLoopGoesRed(t *testing.T) {
+	t.Parallel()
+
+	// The agent dies before its control plane ever answers, relaunch after
+	// relaunch: the watcher must surface the failure instead of silently
+	// relaunching forever with the card stuck "starting".
+	sessions := &crashingSessions{}
+	store := watchCrashingCard(t, sessions)
+	waitForStatus(t, store, StatusError)
+	// Relaunches stop at the cap, preserving the dead pane's error output.
+	assert.Equal(t, int32(maxLaunchFailures-1), sessions.newSessions.Load())
+}
+
+func TestControllerFailedRelaunchGoesRed(t *testing.T) {
+	t.Parallel()
+
+	// The session cannot even be recreated (e.g. tmux new-session fails):
+	// the card must go red, not stay "starting" forever.
+	sessions := &crashingSessions{newErr: errors.New("tmux: bad working directory")}
+	store := watchCrashingCard(t, sessions)
+	waitForStatus(t, store, StatusError)
+}
+
+// flakyClient fails its first snapshots, then behaves like a healthy agent
+// replaying the given events.
+type flakyClient struct {
+	failures atomic.Int32
+	healthy  fakeClient
+}
+
+func (f *flakyClient) Snapshot(ctx context.Context) (snapshot, error) {
+	if f.failures.Add(-1) >= 0 {
+		return snapshot{}, errors.New("connection refused")
+	}
+	return f.healthy.Snapshot(ctx)
+}
+
+func (f *flakyClient) StreamEvents(ctx context.Context, since uint64, onEvent func(event) bool) error {
+	return f.healthy.StreamEvents(ctx, since, onEvent)
+}
+
+func (f *flakyClient) Followup(ctx context.Context, key, msg string) error {
+	return f.healthy.Followup(ctx, key, msg)
+}
+
+func TestControllerCrashCapToleratesTransientFailures(t *testing.T) {
+	t.Parallel()
+
+	// The agent dies fewer times than the cap before its control plane
+	// answers: the card must recover, not go red.
+	store := testStore(t)
+	require.NoError(t, store.InsertCard(&Card{ID: "c1", Column: "dev", Status: StatusStarting, Session: "s", Worktree: t.TempDir()}))
+
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+
+	client := &flakyClient{healthy: fakeClient{events: []event{
+		{Type: eventUserMessage},
+		{Type: eventStreamStarted},
+		{Type: eventStreamStopped, Reason: reasonNormal},
+	}}}
+	client.failures.Store(int32(maxLaunchFailures - 1))
+
+	sessions := &crashingSessions{}
+	c := newController(ctx, store, sessions, func() {})
+	c.clientFor = func(_, _ string) sessionClient { return client }
+	card, err := store.GetCard("c1")
+	require.NoError(t, err)
+	c.Start(card)
+	t.Cleanup(func() { c.Stop("c1") })
+
+	waitForStatus(t, store, StatusWaiting)
+	// The successful snapshot reset the count: a later death gets fresh
+	// relaunch attempts instead of tripping the cap immediately.
+	assert.Equal(t, 1, c.launchFailed("c1"), "count should have been reset by the successful snapshot")
+}
+
+func TestControllerExitedResumeFailureGoesRed(t *testing.T) {
+	t.Parallel()
+
+	// The agent reports session_exited and the resume cannot recreate the
+	// session: the failure must be surfaced.
+	store := testStore(t)
+	require.NoError(t, store.InsertCard(&Card{ID: "c1", Column: "dev", Status: StatusStarting, Session: "s", Worktree: t.TempDir()}))
+
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+
+	sessions := &crashingSessions{newErr: errors.New("tmux: server exited")}
+	c := newController(ctx, store, sessions, func() {})
+	c.clientFor = func(_, _ string) sessionClient {
+		return &fakeClient{events: []event{{Type: eventSessionExited}}}
+	}
+	card, err := store.GetCard("c1")
+	require.NoError(t, err)
+	c.Start(card)
+	t.Cleanup(func() { c.Stop("c1") })
+
+	waitForStatus(t, store, StatusError)
+}
+
+func TestRelaunchWithPromptResetsCrashCap(t *testing.T) {
+	t.Parallel()
+
+	store := testStore(t)
+	require.NoError(t, store.InsertCard(&Card{ID: "c1", Session: "s", Worktree: t.TempDir()}))
+
+	c := newController(t.Context(), store, &crashingSessions{}, func() {})
+	for range maxLaunchFailures {
+		c.launchFailed("c1")
+	}
+	card, err := store.GetCard("c1")
+	require.NoError(t, err)
+
+	// A user-initiated (prompt-bearing) relaunch grants fresh attempts…
+	require.NoError(t, c.relaunch(card, "try again"))
+	assert.Equal(t, 1, c.launchFailed("c1"), "cap should have been reset")
+
+	// …but a background resume does not, or the cap could never trip.
+	require.NoError(t, c.relaunch(card, ""))
+	assert.Equal(t, 2, c.launchFailed("c1"))
+}
+
+// argSessions records the arguments of the last NewSession call.
+type argSessions struct {
+	workDir, worktreeName, worktreeBase string
+}
+
+func (s *argSessions) NewSession(_, workDir, _, _, _, worktreeName, worktreeBase, _ string) error {
+	s.workDir, s.worktreeName, s.worktreeBase = workDir, worktreeName, worktreeBase
+	return nil
+}
+func (s *argSessions) KillSession(string) error    { return nil }
+func (s *argSessions) Alive(string) (bool, error)  { return false, nil }
+func (s *argSessions) Exists(string) (bool, error) { return false, nil }
+
+func TestRelaunchRecreatesMissingWorktree(t *testing.T) {
+	t.Parallel()
+
+	// The first launch died before docker-agent created the worktree:
+	// relaunching from the (missing) worktree directory would fail, so the
+	// relaunch goes back to the repository and recreates the worktree.
+	store := testStore(t)
+	repo := t.TempDir()
+	wt := filepath.Join(t.TempDir(), "board-abc")
+	require.NoError(t, store.InsertCard(&Card{ID: "c1", Session: "s", RepoPath: repo, Worktree: wt}))
+
+	sessions := &argSessions{}
+	c := newController(t.Context(), store, sessions, func() {})
+	card, err := store.GetCard("c1")
+	require.NoError(t, err)
+
+	require.NoError(t, c.relaunch(card, ""))
+	assert.Equal(t, repo, sessions.workDir)
+	assert.Equal(t, "board-abc", sessions.worktreeName)
+	assert.NotEmpty(t, sessions.worktreeBase)
+}
+
+func TestRelaunchResumesFromExistingWorktree(t *testing.T) {
+	t.Parallel()
+
+	store := testStore(t)
+	wt := t.TempDir()
+	require.NoError(t, store.InsertCard(&Card{ID: "c1", Session: "s", RepoPath: t.TempDir(), Worktree: wt}))
+
+	sessions := &argSessions{}
+	c := newController(t.Context(), store, sessions, func() {})
+	card, err := store.GetCard("c1")
+	require.NoError(t, err)
+
+	require.NoError(t, c.relaunch(card, ""))
+	assert.Equal(t, wt, sessions.workDir)
+	assert.Empty(t, sessions.worktreeName)
 }
