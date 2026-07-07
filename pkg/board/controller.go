@@ -242,6 +242,10 @@ func (c *controller) watch(ctx context.Context, cardID string) {
 				} else {
 					c.resume(card)
 				}
+			} else if card.Status.StartingUp() {
+				// The agent is up but has not answered yet: report how far
+				// its startup got, so a stuck launch shows where it stopped.
+				c.setStatus(cardID, startupPhase(card))
 			}
 			if sleep(ctx, delay) {
 				return
@@ -255,14 +259,15 @@ func (c *controller) watch(ctx context.Context, cardID string) {
 		}
 
 		// The control plane answers: the agent has started. If the card is
-		// still marked starting, default to waiting; the event replay below
-		// promptly corrects it if a turn is already underway. Checking the
-		// loop-top read is safe: this watcher is the only status writer.
+		// still in a startup phase, default to waiting; the event replay
+		// below promptly corrects it if a turn is already underway. Checking
+		// the loop-top read is safe: besides this watcher, the only other
+		// status writer (relaunch) writes StatusStarting, a startup phase.
 		// Exception: a launch that carried an initial prompt is about to run
 		// its first turn, so the card stays "starting" until stream_started
 		// flips it to running — flashing "ready" before the first turn would
 		// misreport when the card is really done.
-		if card.Status == StatusStarting && !c.turnExpected(cardID) {
+		if card.Status.StartingUp() && !c.turnExpected(cardID) {
 			c.setStatus(cardID, StatusWaiting)
 		}
 
@@ -383,6 +388,21 @@ func (c *controller) watch(ctx context.Context, cardID string) {
 			return
 		}
 	}
+}
+
+// startupPhase derives how far a launching agent got from the milestones it
+// materializes on disk: the worktree first, then the control-plane socket.
+// relaunch removes the stale socket before starting, so within one launch
+// the phase only moves forward (a watcher racing a concurrent relaunch may
+// report a phase one poll stale, which the next poll corrects).
+func startupPhase(card *Card) CardStatus {
+	if _, err := os.Stat(socketPath(card.AgentSession)); err == nil {
+		return StatusAttaching
+	}
+	if _, err := os.Stat(card.Worktree); err == nil {
+		return StatusLoading
+	}
+	return StatusStarting
 }
 
 // resume relaunches the card's session in the background recovery paths

@@ -393,8 +393,8 @@ func splitTitle(title string, width int) (string, string) {
 func (m *model) renderStatus(status board.CardStatus, width int) string {
 	spinner := spinnerFrames[m.frame%len(spinnerFrames)]
 	switch status {
-	case board.StatusStarting:
-		return styles.WarningStyle.Render(toolcommon.TruncateText(spinner+" starting", width))
+	case board.StatusStarting, board.StatusLoading, board.StatusAttaching:
+		return styles.WarningStyle.Render(toolcommon.TruncateText(spinner+" "+string(status), width))
 	case board.StatusRunning:
 		return styles.InfoStyle.Render(toolcommon.TruncateText(spinner+" running", width))
 	case board.StatusPaused:

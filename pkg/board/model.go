@@ -50,12 +50,24 @@ func ColumnsFromConfig(cols []userconfig.BoardColumn) []Column {
 type CardStatus string
 
 const (
-	// StatusStarting marks a card whose agent is launching but has not yet
-	// answered on its control plane. The watcher replaces it with a real
-	// status as soon as the agent emits events.
+	// StatusStarting, StatusLoading, and StatusAttaching are the startup
+	// phases, in launch order. The agent has not answered on its control
+	// plane yet; the watcher refines the phase from the milestones the
+	// agent materializes on disk, so a stuck launch shows how far it got,
+	// and replaces it with a real status as soon as the agent emits events.
+	//
+	// StatusStarting: the tmux session is created and the agent process is
+	// booting; it has not created the card's worktree yet.
 	StatusStarting CardStatus = "starting"
-	StatusRunning  CardStatus = "running"
-	StatusWaiting  CardStatus = "waiting"
+	// StatusLoading: the worktree exists, so the agent is loading its
+	// configuration, models, and tools.
+	StatusLoading CardStatus = "loading"
+	// StatusAttaching: the control-plane socket is bound; the board is
+	// waiting for the agent to answer its first snapshot.
+	StatusAttaching CardStatus = "attaching"
+
+	StatusRunning CardStatus = "running"
+	StatusWaiting CardStatus = "waiting"
 	// StatusPaused marks a card whose turn is blocked on /pause. It lasts
 	// until the runtime emits events again (resume) or the turn ends.
 	StatusPaused CardStatus = "paused"
@@ -64,10 +76,16 @@ const (
 	StatusError CardStatus = "error"
 )
 
+// StartingUp reports whether the card is in a startup phase: its agent was
+// launched but its control plane has not answered yet.
+func (s CardStatus) StartingUp() bool {
+	return s == StatusStarting || s == StatusLoading || s == StatusAttaching
+}
+
 // Busy reports whether the card's agent cannot accept a prompt right now: it
 // is either still starting or in the middle of a turn.
 func (s CardStatus) Busy() bool {
-	return s == StatusStarting || s == StatusRunning
+	return s.StartingUp() || s == StatusRunning
 }
 
 // Card is one task on the board.
