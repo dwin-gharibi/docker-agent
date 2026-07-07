@@ -81,7 +81,7 @@ USER root
 RUN <<EOF
 set -euxo pipefail
 apt-get update
-apt-get install -yy --no-install-recommends vim
+apt-get install -yy --no-install-recommends vim tmux
 apt-get clean
 rm -rf /var/lib/apt/lists/*
 EOF
