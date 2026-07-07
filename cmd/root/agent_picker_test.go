@@ -758,6 +758,68 @@ func TestAgentPickerBoardButtonClick(t *testing.T) {
 	assert.False(t, m.leanMode, "board click must not toggle lean mode")
 }
 
+func TestAgentPickerBoardKeyIgnoredInDetails(t *testing.T) {
+	t.Parallel()
+
+	m := newAgentPickerModel([]agentChoice{{ref: "default", yaml: "a: b\n"}, {ref: "coder"}})
+	m.width = 120
+	m.height = 40
+	m.openDetails()
+
+	// While the YAML dialog is open, b belongs to the viewport (page up) and
+	// must not start the board.
+	_, _ = m.Update(tea.KeyPressMsg{Code: 'b', Text: "b"})
+	assert.False(t, m.startBoard, "b in the details dialog must not start the board")
+	assert.True(t, m.showDetails, "the dialog must stay open")
+}
+
+func TestAgentPickerBoardButtonWindowed(t *testing.T) {
+	t.Parallel()
+
+	// A windowed list with a scrolled offset exercises the cardRows-based row
+	// math the button's hit zone shares with the checkbox.
+	choices := make([]agentChoice, 10)
+	for i := range choices {
+		choices[i] = agentChoice{ref: "agent-" + strconv.Itoa(i)}
+	}
+	m := newAgentPickerModel(choices)
+	m.width = 120
+	m.height = 30 // fits 2 cards
+	for range 5 {
+		m.moveDown()
+	}
+	require.Positive(t, m.offset, "list must be scrolled")
+
+	screen := ansi.Strip(lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, m.render()))
+	var x, y int
+	found := false
+	for row, line := range strings.Split(screen, "\n") {
+		if prefix, _, ok := strings.Cut(line, "[ Open Board ]"); ok {
+			x, y, found = lipgloss.Width(prefix), row, true
+			break
+		}
+	}
+	require.True(t, found, "board button not found on screen")
+	assert.True(t, m.boardButtonAt(x, y), "hit zone must match the rendered button while windowed")
+}
+
+func TestAgentPickerPanelSizeMatchesRenderNarrow(t *testing.T) {
+	t.Parallel()
+
+	// On narrow terminals the header lines are truncated so nothing wraps;
+	// panelSize must still match the render exactly or hit-testing drifts.
+	for _, width := range []int{40, 60, 80, 100} {
+		m := newAgentPickerModel([]agentChoice{{ref: "default"}, {ref: "coder"}})
+		m.width = width
+		m.height = 40
+		gotW, gotH := m.panelSize()
+		wantW, wantH := lipgloss.Size(m.render())
+		assert.Equal(t, wantW, gotW, "panel width mismatch at width %d", width)
+		assert.Equal(t, wantH, gotH, "panel height mismatch at width %d", width)
+		assert.LessOrEqual(t, wantW, width, "panel must fit the terminal at width %d", width)
+	}
+}
+
 // firstCardPoint scans the grid for a coordinate that maps to card index want.
 func firstCardPoint(t *testing.T, m *agentPickerModel, want int) (int, int) {
 	t.Helper()

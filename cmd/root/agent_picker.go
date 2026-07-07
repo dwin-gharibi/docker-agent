@@ -138,11 +138,11 @@ func loadAgentChoices(ctx context.Context, refs []string, env environment.Provid
 // selectAgentRef shows a full-screen picker and returns the chosen agent ref
 // along with whether the user wants lean mode. It returns
 // errAgentPickerStartBoard when the user picks the "Open Board" button
-// instead of an agent. The "Lean Mode" checkbox is
-// seeded with initialLean (the effective lean state from flags/user config)
-// so what the user sees always matches what will run; the returned value is
-// authoritative. When only a single ref is supplied there is nothing to
-// choose, so it is returned directly without showing any UI.
+// instead of an agent. The "Lean Mode" checkbox is seeded with initialLean
+// (the effective lean state from flags/user config) so what the user sees
+// always matches what will run; the returned value is authoritative. When
+// only a single ref is supplied there is nothing to choose, so it is
+// returned directly without showing any UI (the board button included).
 func selectAgentRef(ctx context.Context, refs []string, env environment.Provider, initialLean bool) (ref string, lean bool, err error) {
 	if len(refs) == 0 {
 		return "", false, errors.New("no agent refs to choose from")
@@ -587,7 +587,7 @@ const (
 
 	// agentPickerPanelOverhead is the number of panel rows that are not
 	// cards: border (2) + padding (2) + title (1) + blank (1) + subtitle (1)
-	// + blank (1) + blank (1) + lean checkbox (1) + blank (1) + help (1).
+	// + blank (1) + blank (1) + checkbox/board row (1) + blank (1) + help (1).
 	// Shared by panelSize and visibleCount so the windowing math can't drift
 	// from the rendered chrome.
 	agentPickerPanelOverhead = 12
@@ -648,16 +648,22 @@ func (m *agentPickerModel) cardAt(x, y int) (int, bool) {
 	return i, true
 }
 
-// leanCheckboxAt reports whether terminal coordinates land on the "Lean
-// Mode" checkbox row. It mirrors the layout produced by render: the checkbox
-// sits one blank row below the last card, at the cards' left offset.
-func (m *agentPickerModel) leanCheckboxAt(x, y int) bool {
-	originX, originY := m.panelOrigin()
+// bottomRowY returns the screen row holding the lean checkbox and board
+// button: one blank row below the last visible card. Shared by both hit
+// zones so they can't drift apart.
+func (m *agentPickerModel) bottomRowY() int {
+	_, originY := m.panelOrigin()
+	return originY + agentPickerCardsTop + m.cardRows() + 1
+}
 
-	checkboxY := originY + agentPickerCardsTop + m.cardRows() + 1
-	if y != checkboxY {
+// leanCheckboxAt reports whether terminal coordinates land on the "Lean
+// Mode" checkbox. It mirrors the layout produced by render: the checkbox
+// sits on the bottom row, at the cards' left offset.
+func (m *agentPickerModel) leanCheckboxAt(x, y int) bool {
+	if y != m.bottomRowY() {
 		return false
 	}
+	originX, _ := m.panelOrigin()
 	relX := x - originX - agentPickerCardsLeft
 	return relX >= 0 && relX < lipgloss.Width(m.leanCheckbox())
 }
@@ -684,14 +690,13 @@ func (m *agentPickerModel) boardButton() string {
 
 // boardButtonAt reports whether terminal coordinates land on the "Open
 // Board" button. It mirrors the layout produced by render: the button sits
-// on the lean checkbox row, one gap to its right.
+// on the bottom row, one gap to the right of the lean checkbox.
 func (m *agentPickerModel) boardButtonAt(x, y int) bool {
-	originX, originY := m.panelOrigin()
-
-	if y != originY+agentPickerCardsTop+m.cardRows()+1 {
+	if y != m.bottomRowY() {
 		return false
 	}
-	relX := x - originX - agentPickerCardsLeft - lipgloss.Width(m.leanCheckbox()) - len(agentPickerBoardGap)
+	originX, _ := m.panelOrigin()
+	relX := x - originX - agentPickerCardsLeft - lipgloss.Width(m.leanCheckbox()) - lipgloss.Width(agentPickerBoardGap)
 	return relX >= 0 && relX < lipgloss.Width(m.boardButton())
 }
 
@@ -705,6 +710,7 @@ func (m *agentPickerModel) panelSize() (w, h int) {
 		m.cardWidth(),
 		lipgloss.Width(title),
 		lipgloss.Width(subtitle),
+		lipgloss.Width(m.leanCheckbox())+lipgloss.Width(agentPickerBoardGap)+lipgloss.Width(m.boardButton()),
 		lipgloss.Width(help),
 	)
 	// Horizontal chrome: border (1) + padding (4) on each side.
@@ -726,18 +732,25 @@ func (m *agentPickerModel) headerText() (title, subtitle, help string) {
 		subtitleText = fmt.Sprintf("Pick an agent (%*d–%*d of %d, scroll with ↑↓), or double-click a card.",
 			d, m.offset+1, d, m.offset+n, len(m.choices))
 	}
+	helpText := strings.Join([]string{
+		"↑↓ move",
+		"double-click select",
+		agentPickerKeys.Choose.Help().Key + " " + agentPickerKeys.Choose.Help().Desc,
+		agentPickerKeys.Details.Help().Key + " " + agentPickerKeys.Details.Help().Desc,
+		agentPickerKeys.Lean.Help().Key + " " + agentPickerKeys.Lean.Help().Desc,
+		agentPickerKeys.Board.Help().Key + " " + agentPickerKeys.Board.Help().Desc,
+		agentPickerKeys.Quit.Help().Key + " " + agentPickerKeys.Quit.Help().Desc,
+	}, "   ")
+	// Truncate header lines to the panel's content width so they can't
+	// terminal-wrap on narrow terminals: a wrapped line would shift every row
+	// below it and break the row-based mouse hit-testing.
+	if m.width > 0 {
+		maxWidth := max(m.width-2*(1+4), agentPickerMinCardWidth)
+		subtitleText = toolcommon.TruncateText(subtitleText, maxWidth)
+		helpText = toolcommon.TruncateText(helpText, maxWidth)
+	}
 	subtitle = styles.MutedStyle.Render(subtitleText)
-	help = styles.MutedStyle.Render(
-		strings.Join([]string{
-			"↑↓ move",
-			"double-click select",
-			agentPickerKeys.Choose.Help().Key + " " + agentPickerKeys.Choose.Help().Desc,
-			agentPickerKeys.Details.Help().Key + " " + agentPickerKeys.Details.Help().Desc,
-			agentPickerKeys.Lean.Help().Key + " " + agentPickerKeys.Lean.Help().Desc,
-			agentPickerKeys.Board.Help().Key + " " + agentPickerKeys.Board.Help().Desc,
-			agentPickerKeys.Quit.Help().Key + " " + agentPickerKeys.Quit.Help().Desc,
-		}, "   "),
-	)
+	help = styles.MutedStyle.Render(helpText)
 	return title, subtitle, help
 }
 

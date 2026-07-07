@@ -259,6 +259,8 @@ func (f *runExecFlags) runRunCommand(cmd *cobra.Command, args []string) (command
 				return nil
 			}
 			if errors.Is(err, errAgentPickerStartBoard) {
+				// Intentionally tracked in addition to the "run" event above:
+				// the user asked for a run but ended up on the board.
 				telemetry.TrackCommand(ctx, "board", nil)
 				return boardtui.Run(ctx)
 			}
