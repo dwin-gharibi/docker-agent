@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/docker/docker-agent/pkg/paths"
 )
 
 func TestShQuote(t *testing.T) {
@@ -20,9 +22,17 @@ func TestAgentCommand(t *testing.T) {
 
 	// First run: creates the worktree from the base.
 	cmd := agentCommand("coder", "sess1", "/tmp/a.sock", "board-abc", "origin/main", "do the thing")
-	assert.Contains(t, cmd, " run 'coder' --yolo --session 'sess1' --listen 'unix:///tmp/a.sock'")
+	assert.Contains(t, cmd, " run 'coder' --yolo ")
+	assert.Contains(t, cmd, " --session 'sess1' --listen 'unix:///tmp/a.sock'")
 	assert.Contains(t, cmd, "--worktree='board-abc' --worktree-base 'origin/main'")
 	assert.True(t, strings.HasSuffix(cmd, " 'do the thing'"))
+
+	// The board's config and data dirs are forwarded so the agent resolves
+	// the same aliases and creates its worktree where the board watches,
+	// even when the board runs with directory overrides (e.g. in a sandbox
+	// whose $HOME differs from the mounted host directories).
+	assert.Contains(t, cmd, " --config-dir "+shQuote(paths.GetConfigDir())+" ")
+	assert.Contains(t, cmd, " --data-dir "+shQuote(paths.GetDataDir())+" ")
 
 	// Resume: no worktree flags, no prompt.
 	cmd = agentCommand("coder", "sess1", "/tmp/a.sock", "", "", "")

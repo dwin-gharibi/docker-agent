@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/docker/docker-agent/pkg/paths"
 )
 
 // tmuxSessions manages the tmux sessions the board runs its agents in.
@@ -171,6 +173,15 @@ func applyServerDefaults(ctx context.Context) {
 // owns sessionID and passes it via --session: the first run creates that
 // session, later runs resume it.
 //
+// --config-dir and --data-dir forward the board's own directories so the
+// agent resolves the same aliases and creates its worktree and session under
+// the data dir the board watches. Directory overrides are process-local
+// flags, not inherited env, so without forwarding an agent spawned in an
+// environment whose $HOME differs from the board's directories (e.g. a
+// docker sandbox with the host dirs bind-mounted) would silently use its
+// own empty config and a data dir the board never looks at. On a host with
+// no overrides this forwards the defaults — a no-op.
+//
 // --listen exposes the run's control plane on listenSocket (a unix socket
 // the board owns), so the board can observe and drive the session over HTTP
 // instead of scraping the terminal.
@@ -188,8 +199,9 @@ func agentCommand(agent, sessionID, listenSocket, worktreeName, worktreeBase, pr
 	if err != nil {
 		bin = "docker-agent"
 	}
-	cmd := fmt.Sprintf("%s run %s --yolo --session %s --listen %s",
-		shQuote(bin), shQuote(agent), shQuote(sessionID), shQuote("unix://"+listenSocket))
+	cmd := fmt.Sprintf("%s run %s --yolo --config-dir %s --data-dir %s --session %s --listen %s",
+		shQuote(bin), shQuote(agent), shQuote(paths.GetConfigDir()), shQuote(paths.GetDataDir()),
+		shQuote(sessionID), shQuote("unix://"+listenSocket))
 	if worktreeName != "" {
 		cmd += fmt.Sprintf(" --worktree=%s --worktree-base %s", shQuote(worktreeName), shQuote(worktreeBase))
 	}
