@@ -13,6 +13,7 @@ import (
 
 	"github.com/docker/docker-agent/pkg/config"
 	"github.com/docker/docker-agent/pkg/config/latest"
+	"github.com/docker/docker-agent/pkg/paths"
 	"github.com/docker/docker-agent/pkg/server"
 	"github.com/docker/docker-agent/pkg/userconfig"
 )
@@ -42,6 +43,18 @@ func addRuntimeConfigFlags(cmd *cobra.Command, runConfig *config.RuntimeConfig) 
 			"itself (PKCE + DCR + token exchange) and expects clients to return `{code, state}` "+
 			"via ResumeElicitation. When empty, the client is expected to perform the OAuth "+
 			"flow and return an access token (legacy behavior).")
+}
+
+// sessionDBPath resolves the session database path from the --session-db
+// flag. The default is resolved lazily, at command run time, because the
+// data dir must reflect a --data-dir override applied by the root
+// PersistentPreRunE; a default baked in at flag registration would always
+// point at ~/.cagent regardless of --data-dir.
+func sessionDBPath(flagValue string) string {
+	if flagValue != "" {
+		return flagValue
+	}
+	return filepath.Join(paths.GetDataDir(), "session.db")
 }
 
 func setupWorkingDirectory(workingDir string) error {

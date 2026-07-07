@@ -31,7 +31,7 @@ $ docker agent run [config] [message...] [flags]
 | `--yolo`                                | Auto-approve all tool calls                                                                                                               |
 | `--model <ref>`                         | Override model(s). Use `provider/model` for all agents, or `agent=provider/model` for specific agents. Comma-separate multiple overrides. |
 | `--session <id>`                        | Resume a previous session. Supports relative refs (`-1` = last, `-2` = second to last). An explicit ID that does not exist yet is created with that ID, so a supervisor can own the session ID upfront and reuse it across runs. |
-| `-s, --session-db <path>`               | Path to the SQLite session database (default: `~/.cagent/session.db`)                                                                     |
+| `-s, --session-db <path>`               | Path to the SQLite session database (default: `<data-dir>/session.db`, so `~/.cagent/session.db` unless `--data-dir` is set)              |
 | `--session-read-only`                   | Open the TUI in read-only mode: conversation history is displayed but no new messages can be sent to the LLM. Cannot be used with `--exec`. |
 | `--prompt-file <path>`                  | Include file contents as additional system context (repeatable)                                                                           |
 | `--attach <path>`                       | Attach an image file to the initial message                                                                                               |
@@ -305,6 +305,7 @@ $ docker agent serve a2a <config> [flags]
 | ---------------------- | ------------------ | ------------------------------------------------------------------------------------------ |
 | `-a, --agent <name>`   | (team default)     | Name of the agent to run. Defaults to the team's first agent if not specified.             |
 | `-l, --listen <addr>`  | `127.0.0.1:8082`   | Address to listen on.                                                                       |
+| `-s, --session-db <path>` | `<data-dir>/session.db` | Path to the SQLite session database.                                                 |
 
 All [runtime configuration flags](#runtime-configuration-flags) are also accepted.
 
@@ -325,7 +326,7 @@ $ docker agent serve acp <config> [flags]
 
 | Flag                      | Default                     | Description                                       |
 | ------------------------- | --------------------------- | ------------------------------------------------- |
-| `-s, --session-db <path>` | `~/.cagent/session.db`      | Path to the SQLite session database.              |
+| `-s, --session-db <path>` | `<data-dir>/session.db`     | Path to the SQLite session database.              |
 
 All [runtime configuration flags](#runtime-configuration-flags) are also accepted.
 
@@ -569,7 +570,7 @@ These flags are available on every `docker agent` command:
 | `-o, --otel`              | Enable OpenTelemetry observability: traces, metrics, and logs. Requires `OTEL_EXPORTER_OTLP_ENDPOINT` to export to a collector. |
 | `--cache-dir <path>`      | Override the cache directory (default: `~/Library/Caches/cagent` on macOS)             |
 | `--config-dir <path>`     | Override the config directory (default: `~/.config/cagent`). Also reads `DOCKER_AGENT_CONFIG_DIR` (legacy `CAGENT_CONFIG_DIR`) env var. |
-| `--data-dir <path>`       | Override the data directory (default: `~/.cagent`)                                     |
+| `--data-dir <path>`       | Override the data directory (default: `~/.cagent`; holds `session.db`, worktrees, plans, …)            |
 | `--help`                  | Show help for any command                                                              |
 
 ### OpenTelemetry environment variables
