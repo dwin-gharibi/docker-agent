@@ -71,3 +71,30 @@ func defaultUnixShell() string {
 	}
 	return "/bin/sh"
 }
+
+// InteractiveShellCmd returns a command that launches the user's preferred
+// interactive shell, printing exitMsg first. The command is owned by the
+// caller (typically tea.ExecProcess), not by a request-scoped context, so
+// exec.Command is intentional.
+func InteractiveShellCmd(exitMsg string) *exec.Cmd {
+	if runtime.GOOS != "windows" {
+		shell := DetectUnixShell()
+		return execCmd(shell, "-i", "-c", `echo -e "\n`+exitMsg+`"; exec `+shell)
+	}
+
+	psArgs := []string{"-NoLogo", "-NoExit", "-Command", `Write-Host ""; Write-Host "` + exitMsg + `"`}
+	if path, err := exec.LookPath("pwsh.exe"); err == nil {
+		return execCmd(path, psArgs...)
+	}
+	if path, err := exec.LookPath("powershell.exe"); err == nil {
+		return execCmd(path, psArgs...)
+	}
+	// Use absolute path to cmd.exe to prevent PATH hijacking (CWE-426).
+	return execCmd(WindowsCmdExe(), "/K", "echo. & echo "+exitMsg)
+}
+
+// execCmd is a thin wrapper around exec.Command used for interactive
+// processes whose lifecycle is owned by the caller (not a context).
+func execCmd(name string, args ...string) *exec.Cmd {
+	return exec.Command(name, args...) //nolint:noctx // owned by the caller (tea.ExecProcess)
+}

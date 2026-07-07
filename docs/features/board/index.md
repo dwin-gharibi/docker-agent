@@ -47,6 +47,7 @@ Requirements: `tmux` and `git` must be installed.
 | `enter`       | Attach to the card's agent (`ctrl+q` detaches)      |
 | `d`           | View the card's worktree diff                       |
 | `o`           | Open the card's worktree in `$DOCKER_AGENT_BOARD_EDITOR` (`code`) |
+| `s`           | Open an interactive shell in the card's worktree    |
 | `[` / `]`     | Move the card back / forward                        |
 | `x`           | Delete the card, its session, worktree, and branch  |
 | `p`           | Manage projects (add, edit, reorder, remove)        |

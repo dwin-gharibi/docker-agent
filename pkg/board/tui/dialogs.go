@@ -702,6 +702,7 @@ func (d *helpDialog) View(width, _ int) string {
 		{keys.Attach.Help().Key, keys.Attach.Help().Desc},
 		{keys.Diff.Help().Key, "view the card's worktree diff"},
 		{keys.Editor.Help().Key, keys.Editor.Help().Desc + " ($DOCKER_AGENT_BOARD_EDITOR, default code)"},
+		{keys.Shell.Help().Key, keys.Shell.Help().Desc},
 		{"[ / ]", "move card (forward sends the column's prompt)"},
 		{keys.Delete.Help().Key, "delete card, its session and worktree"},
 		{keys.Projects.Help().Key, keys.Projects.Help().Desc},

@@ -13,6 +13,7 @@ import (
 	"github.com/atotto/clipboard"
 
 	"github.com/docker/docker-agent/pkg/board"
+	"github.com/docker/docker-agent/pkg/shellpath"
 	"github.com/docker/docker-agent/pkg/tui/core"
 	"github.com/docker/docker-agent/pkg/tui/styles"
 )
@@ -138,6 +139,7 @@ type keyMap struct {
 	Projects key.Binding
 	Prompt   key.Binding
 	Editor   key.Binding
+	Shell    key.Binding
 	Help     key.Binding
 	Quit     key.Binding
 }
@@ -158,6 +160,7 @@ var keys = keyMap{
 	Projects: key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "manage projects")),
 	Prompt:   key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit column prompt")),
 	Editor:   key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "open worktree in editor")),
+	Shell:    key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "open shell in worktree")),
 	Help:     key.NewBinding(key.WithKeys("?", "f1", "ctrl+h"), key.WithHelp("?", "help")),
 	Quit:     key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
 }
@@ -572,11 +575,31 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 
+	case key.Matches(msg, keys.Shell):
+		if card := m.selectedCard(); card != nil {
+			cmd := m.openShell(card)
+			return m, cmd
+		}
+
 	case key.Matches(msg, keys.Help):
 		cmd := m.openDialog(newHelpDialog())
 		return m, cmd
 	}
 	return m, nil
+}
+
+// openShell launches an interactive shell in the card's worktree, like the
+// main TUI's /shell command. tea.ExecProcess suspends the board and wires the
+// terminal to the shell until it exits.
+func (m *model) openShell(card *board.Card) tea.Cmd {
+	cmd := shellpath.InteractiveShellCmd("Type 'exit' to return to the board")
+	cmd.Dir = card.Worktree
+	return tea.ExecProcess(cmd, func(err error) tea.Msg {
+		if err != nil {
+			return flashMsg{text: "shell: " + err.Error(), isErr: true}
+		}
+		return nil
+	})
 }
 
 // openNewCard opens the new-card dialog, or the projects dialog first when
