@@ -36,6 +36,19 @@ type rootFlags struct {
 	dataDir     string
 }
 
+const (
+	envConfigDir       = "DOCKER_AGENT_CONFIG_DIR"
+	cagentEnvConfigDir = "CAGENT_CONFIG_DIR"
+)
+
+// resolveConfigDir picks the config directory override with flag > env >
+// default precedence. The env fallbacks let external tools point docker-agent
+// at a non-default config dir (e.g. to locate hooks.d) without controlling
+// its argv.
+func resolveConfigDir(flagValue string) string {
+	return cmp.Or(flagValue, os.Getenv(envConfigDir), os.Getenv(cagentEnvConfigDir))
+}
+
 func NewRootCmd() *cobra.Command {
 	var flags rootFlags
 
@@ -54,7 +67,7 @@ New to docker agent? Take the hands-on tour: docker agent getting-started`,
 			if dir := flags.cacheDir; dir != "" {
 				paths.SetCacheDir(dir)
 			}
-			if dir := flags.configDir; dir != "" {
+			if dir := resolveConfigDir(flags.configDir); dir != "" {
 				paths.SetConfigDir(dir)
 			}
 			if dir := flags.dataDir; dir != "" {

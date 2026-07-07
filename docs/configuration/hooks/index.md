@@ -142,9 +142,30 @@ Global hooks use the same schema as agent-level hooks and are additive. If an ev
 
 1. Agent-config hooks from the agent YAML
 2. Global hooks from `settings.hooks`
-3. CLI hooks from `--hook-*` flags
+3. Hook drop-ins from `<config-dir>/hooks.d/` (lexicographic file order)
+4. CLI hooks from `--hook-*` flags
 
 Global hooks cannot be suppressed by an individual agent. Use them for user-wide audit logging, personal guardrails, notifications, and setup/cleanup behavior that should apply everywhere.
+
+### Hook drop-in files (`hooks.d`)
+
+External tools that integrate with docker-agent (terminal emulators, IDEs, audit or observability sidecars) shouldn't have to rewrite your `config.yaml` to install a hook. Instead, docker-agent also loads every `*.yaml` / `*.yml` file from the `hooks.d` directory next to your user config (default: `~/.config/cagent/hooks.d/`). Each file is a standalone hooks block with the same schema as the content of `settings.hooks`:
+
+```yaml
+# ~/.config/cagent/hooks.d/50-mytool.yaml
+session_start:
+  - type: command
+    command: mytool notify --event session-start
+stop:
+  - type: command
+    command: mytool notify --event stop
+```
+
+- Files are loaded in lexicographic order and merged additively after `settings.hooks` (use numeric prefixes like `10-`, `50-` to control ordering).
+- A malformed file is skipped with a logged warning; a broken drop-in never breaks a run.
+- Installing an integration means writing one self-contained file; uninstalling means deleting it. No shared-file edits, no conflicts between tools.
+
+The config directory can be relocated with the `--config-dir` flag or the `DOCKER_AGENT_CONFIG_DIR` (legacy `CAGENT_CONFIG_DIR`) environment variable, which external tools can use to locate `hooks.d` under non-default config dirs.
 
 ## Built-in Hooks
 
@@ -911,4 +932,4 @@ $ docker agent run agentcatalog/coder \
 > [!NOTE]
 > **Merging behavior**
 >
-> Agent-config, global, and CLI hooks are additive. For each event, hooks run in this order: agent-config hooks first, then global hooks from `settings.hooks`, then CLI hooks. No source replaces another, and individual agents cannot opt out of global hooks.
+> Agent-config, global, drop-in, and CLI hooks are additive. For each event, hooks run in this order: agent-config hooks first, then global hooks from `settings.hooks`, then [hook drop-ins](#hook-drop-in-files-hooksd) from `hooks.d/`, then CLI hooks. No source replaces another, and individual agents cannot opt out of global hooks.
