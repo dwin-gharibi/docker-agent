@@ -154,6 +154,13 @@ type appModel struct {
 	// perform a full terminal release/restore cycle on focus events.
 	program *tea.Program
 
+	// themeWatcher hot-reloads the active custom theme: it watches the
+	// current theme's backing file and reports edits as ThemeFileChangedMsg.
+	// Created in SetProgram (the callback needs the program to inject
+	// messages into the event loop) and re-targeted after every theme
+	// change via watchCurrentTheme.
+	themeWatcher themeFileWatcher
+
 	// dockerDesktop is true when running inside Docker Desktop's terminal
 	// (TERM_PROGRAM=docker_desktop). Focus reporting and the terminal
 	// release/restore cycle on tab switch are only enabled in this
@@ -241,6 +248,13 @@ type appModel struct {
 	// disabledCommands holds slash commands to hide and disable.
 	// Normalized to start with "/".
 	disabledCommands map[string]bool
+}
+
+// themeFileWatcher is the subset of *styles.ThemeWatcher the model drives.
+// It is an interface so tests can record Watch/Stop calls.
+type themeFileWatcher interface {
+	Watch(themeRef string) error
+	Stop()
 }
 
 // Transcriber is the speech-to-text interface used by the TUI. It is an
@@ -500,9 +514,35 @@ func (m *appModel) Resolve(v any) any {
 }
 
 // SetProgram sets the tea.Program for the supervisor to send routed messages.
+// It also starts the theme file watcher, whose callback needs the program to
+// inject hot-reload messages into the event loop.
 func (m *appModel) SetProgram(p *tea.Program) {
 	m.program = p
 	m.supervisor.SetProgram(p)
+
+	if m.themeWatcher != nil {
+		m.themeWatcher.Stop()
+	}
+	m.themeWatcher = styles.NewThemeWatcher(func(themeRef string) {
+		p.Send(messages.ThemeFileChangedMsg{ThemeRef: themeRef})
+	})
+	m.watchCurrentTheme()
+}
+
+// watchCurrentTheme points the theme watcher at the currently applied theme
+// so edits to its backing file hot-reload it. The watcher no-ops for themes
+// without a user theme file (e.g. built-ins).
+func (m *appModel) watchCurrentTheme() {
+	if m.themeWatcher == nil {
+		return
+	}
+	theme := styles.CurrentTheme()
+	if theme.Ref == "" {
+		return
+	}
+	if err := m.themeWatcher.Watch(theme.Ref); err != nil {
+		slog.Warn("Failed to watch theme file", "theme", theme.Ref, "error", err)
+	}
 }
 
 // reapplyKeyboardEnhancements forwards the cached keyboard enhancements message
@@ -2766,6 +2806,9 @@ func (m *appModel) shutdownTimeoutOrDefault() time.Duration {
 // exit) and the context watcher (external cancellation).
 func (m *appModel) cleanupManagedResources() {
 	m.cleanupOnce.Do(func() {
+		if m.themeWatcher != nil {
+			m.themeWatcher.Stop()
+		}
 		if m.tuiStore != nil {
 			_ = m.tuiStore.Close()
 		}

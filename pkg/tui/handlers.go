@@ -771,6 +771,9 @@ func (m *appModel) invalidateCachesForThemeChange() {
 
 func (m *appModel) applyThemeChanged() (tea.Model, tea.Cmd) {
 	m.invalidateCachesForThemeChange()
+	// Re-target the file watcher: theme changes (picker selection, preview,
+	// hot reload) can move the active theme to a different backing file.
+	m.watchCurrentTheme()
 	return m, tea.Batch(
 		m.updateDialogCmd(messages.ThemeChangedMsg{}),
 		m.updateChatCmd(messages.ThemeChangedMsg{}),
