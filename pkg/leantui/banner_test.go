@@ -32,3 +32,21 @@ func TestCommitWelcomePadsBanner(t *testing.T) {
 	helpLine := ansi.Strip(lines[len(lines)-1])
 	assert.True(t, strings.HasPrefix(helpLine, leftPad))
 }
+
+func TestCommitWelcomeUsesConfiguredBanner(t *testing.T) {
+	t.Parallel()
+	custom := []string{"custom banner line one", "custom banner line two"}
+	m := &model{screen: ui.NewScreen("", "", ""), banner: custom}
+	m.commitWelcome()
+
+	require.Equal(t, 1, m.screen.Transcript.BlockCount())
+	lines := m.screen.Transcript.BlockLines(0, 80)
+	require.GreaterOrEqual(t, len(lines), bannerTopPadding+len(custom))
+
+	leftPad := strings.Repeat(" ", bannerLeftPadding)
+	for i, want := range custom {
+		assert.Equal(t, leftPad+want, ansi.Strip(lines[bannerTopPadding+i]))
+	}
+	// The configured banner replaces the built-in art, it does not append to it.
+	assert.NotEqual(t, leftPad+bannerLines[0], ansi.Strip(lines[bannerTopPadding]))
+}
