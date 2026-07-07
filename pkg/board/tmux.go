@@ -251,7 +251,7 @@ func setSessionHeader(ctx context.Context, name, title, project, worktree string
 	wt := shQuote(worktree)
 	diffCmd := "git -C " + wt + " diff --color=always \"$(git -C " + wt + " merge-base HEAD " +
 		shQuote(upstreamBase(ctx, worktree)) + " || echo HEAD)\" | less -R"
-	editorCmd := "${DOCKER_AGENT_BOARD_EDITOR:-code} " + wt
+	editorCmd := "${DOCKER_AGENT_BOARD_EDITOR:-${BOARD_EDITOR:-code}} " + wt
 
 	right := "#[range=user|diff] diff #[norange]·#[range=user|editor] editor #[norange]·" +
 		"#[range=right] #[bold]ctrl+q#[nobold] board #[norange]"

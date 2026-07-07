@@ -356,7 +356,8 @@ func (a *App) OpenEditor(cardID string) error {
 	if err != nil {
 		return err
 	}
-	editor := cmp.Or(os.Getenv("DOCKER_AGENT_BOARD_EDITOR"), "code")
+	// BOARD_EDITOR is the legacy name, kept as a fallback for one release.
+	editor := cmp.Or(os.Getenv("DOCKER_AGENT_BOARD_EDITOR"), os.Getenv("BOARD_EDITOR"), "code")
 	cmd := exec.CommandContext(a.ctx, editor, card.Worktree)
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("open editor (%s): %w", editor, err)
