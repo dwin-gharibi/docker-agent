@@ -349,14 +349,14 @@ func (a *App) Diff(cardID string) (string, error) {
 }
 
 // OpenEditor opens the card's worktree in the user's GUI editor: the
-// command named by $BOARD_EDITOR, defaulting to VS Code's `code`. The
+// command named by $DOCKER_AGENT_BOARD_EDITOR, defaulting to VS Code's `code`. The
 // editor is started detached and reaped in the background.
 func (a *App) OpenEditor(cardID string) error {
 	card, err := a.store.GetCard(cardID)
 	if err != nil {
 		return err
 	}
-	editor := cmp.Or(os.Getenv("BOARD_EDITOR"), "code")
+	editor := cmp.Or(os.Getenv("DOCKER_AGENT_BOARD_EDITOR"), "code")
 	cmd := exec.CommandContext(a.ctx, editor, card.Worktree)
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("open editor (%s): %w", editor, err)

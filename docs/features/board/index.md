@@ -46,7 +46,7 @@ Requirements: `tmux` and `git` must be installed.
 | `n`           | Create a card (project + prompt)                    |
 | `enter`       | Attach to the card's agent (`ctrl+q` detaches)      |
 | `d`           | View the card's worktree diff                       |
-| `o`           | Open the card's worktree in `$BOARD_EDITOR` (`code`) |
+| `o`           | Open the card's worktree in `$DOCKER_AGENT_BOARD_EDITOR` (`code`) |
 | `[` / `]`     | Move the card back / forward                        |
 | `x`           | Delete the card, its session, worktree, and branch  |
 | `p`           | Manage projects                                     |
