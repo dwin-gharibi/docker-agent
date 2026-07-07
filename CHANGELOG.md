@@ -3,6 +3,36 @@
 All notable changes to this project will be documented in this file.
 
 
+## [v1.101.0] - 2026-07-07
+
+This release adds a setup wizard for first-time model configuration, an opt-in auto theme that follows the terminal's light/dark background, and several usability and bug fixes.
+
+## What's New
+- Adds an `Open Board` button (and `b` keybinding) to the agent picker, allowing users to launch the Kanban board directly without first running an agent
+- Adds a `docker agent setup` wizard, offered when no usable model is configured, guiding users through setting up a cloud API key or pulling a local model
+- Adds secret stores and a default config environment file source for environment configuration
+- Adds an opt-in `auto` theme that follows the terminal's light/dark background at startup and live (via `settings.theme: auto`, `--theme auto`, or the `/theme` menu)
+- Exports `Pull` for pre-confirmed model pulls in the Docker Model Runner integration
+
+## Bug Fixes
+- Fixes the agent picker's board button hit-zone math and improves layout on narrow terminals
+- Fixes `--session-db` default so it correctly resolves relative to `--data-dir`, making sessions stored under a custom data directory visible
+- Fixes the theme file watcher that was lost in the tab-view rewrite, restoring live hot-reload of `~/.cagent/themes/*.yaml` while the TUI is running
+
+## Technical Changes
+- Adds a "Set Up a Model" getting-started tutorial covering both API key and local model setup paths
+- Adds session DB wiring tests and documentation follow-ups for the setup wizard
+### Pull Requests
+
+- [#3497](https://github.com/docker/docker-agent/pull/3497) - docs: update CHANGELOG.md for v1.100.0
+- [#3498](https://github.com/docker/docker-agent/pull/3498) - feat(picker): add Open Board button to the agent picker
+- [#3499](https://github.com/docker/docker-agent/pull/3499) - feat(cli): add docker agent setup wizard, offered when no model is usable (phase 3 of #3442)
+- [#3502](https://github.com/docker/docker-agent/pull/3502) - docs(getting-started): add Set Up a Model tutorial for API key and local paths
+- [#3503](https://github.com/docker/docker-agent/pull/3503) - fix(cli): resolve session DB default against the data dir
+- [#3504](https://github.com/docker/docker-agent/pull/3504) - feat(tui): opt-in "auto" theme that follows the terminal light/dark background
+- [#3505](https://github.com/docker/docker-agent/pull/3505) - fix(tui): rewire theme watcher lost in tab-view rewrite
+
+
 ## [v1.100.0] - 2026-07-07
 
 This release adds new diagnostic and configuration capabilities, hardens the board communication protocol, and improves error messaging for missing models and credentials.
@@ -4504,3 +4534,5 @@ This release improves the terminal user interface with better error handling and
 [v1.99.0]: https://github.com/docker/docker-agent/releases/tag/v1.99.0
 
 [v1.100.0]: https://github.com/docker/docker-agent/releases/tag/v1.100.0
+
+[v1.101.0]: https://github.com/docker/docker-agent/releases/tag/v1.101.0
