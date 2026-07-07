@@ -51,15 +51,28 @@ func OpenStore(path string) (*Store, error) {
 	if err := json.Unmarshal(data, &s.cards); err != nil {
 		return nil, fmt.Errorf("parse board state %s: %w", path, err)
 	}
+	for _, c := range s.cards {
+		c.RepoPath = expandHome(c.RepoPath)
+		c.Worktree = expandHome(c.Worktree)
+	}
 	return s, nil
 }
 
-// save persists the cards. Callers must hold s.mu.
+// save persists the cards. Callers must hold s.mu. Paths under the current
+// home are written ~-contracted so the state file stays valid across
+// environments whose home differs (host vs. docker sandbox).
 func (s *Store) save() error {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o750); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(s.cards, "", "  ")
+	cards := make([]*Card, len(s.cards))
+	for i, c := range s.cards {
+		clone := *c
+		clone.RepoPath = contractHome(clone.RepoPath)
+		clone.Worktree = contractHome(clone.Worktree)
+		cards[i] = &clone
+	}
+	data, err := json.MarshalIndent(cards, "", "  ")
 	if err != nil {
 		return err
 	}

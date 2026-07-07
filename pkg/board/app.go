@@ -12,7 +12,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/docker/docker-agent/pkg/paths"
 	"github.com/docker/docker-agent/pkg/userconfig"
 )
 
@@ -146,7 +145,7 @@ func (a *App) Projects() []Project {
 	}
 	projects := make([]Project, 0, len(a.config.Board.Projects))
 	for _, p := range a.config.Board.Projects {
-		projects = append(projects, Project{Name: p.Name, Path: p.Path, Agent: p.Agent})
+		projects = append(projects, Project{Name: p.Name, Path: expandHome(p.Path), Agent: p.Agent})
 	}
 	return projects
 }
@@ -178,8 +177,10 @@ func (a *App) AddProject(p Project) error {
 		}
 	}
 	a.config.Board.Projects = append(a.config.Board.Projects, userconfig.BoardProject{
-		Name:  p.Name,
-		Path:  p.Path,
+		Name: p.Name,
+		// Stored ~-contracted so the shared config works across
+		// environments whose home differs (host vs. docker sandbox).
+		Path:  contractHome(p.Path),
 		Agent: p.Agent,
 	})
 	return a.saveConfigLocked()
@@ -193,10 +194,7 @@ func normalizeProjectPath(path string) (string, error) {
 	if path == "" {
 		return "", errors.New("project path is required")
 	}
-	if path == "~" || strings.HasPrefix(path, "~/") {
-		path = filepath.Join(paths.GetHomeDir(), strings.TrimPrefix(path[1:], "/"))
-	}
-	abs, err := filepath.Abs(path)
+	abs, err := filepath.Abs(expandHome(path))
 	if err != nil {
 		return "", fmt.Errorf("resolve project path: %w", err)
 	}
@@ -235,6 +233,13 @@ func (a *App) CreateCard(project Project, prompt string) (card *Card, err error)
 	agent := project.Agent
 	if agent == "" {
 		agent = DefaultAgent
+	}
+
+	// Checked before launch because tmux silently falls back to $HOME when
+	// its start directory is missing, which would surface as a confusing
+	// worktree error from the agent instead of this one.
+	if !isGitRepo(a.ctx, project.Path) {
+		return nil, fmt.Errorf("project path %s is not a git repository in this environment; re-add the project here", project.Path)
 	}
 
 	worktreeName := newWorktreeName()
