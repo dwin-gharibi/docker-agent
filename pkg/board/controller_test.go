@@ -17,6 +17,7 @@ type fakeSessions struct{}
 func (fakeSessions) NewSession(_, _, _, _, _, _, _, _ string) error { return nil }
 func (fakeSessions) KillSession(string) error                       { return nil }
 func (fakeSessions) Alive(string) (bool, error)                     { return true, nil }
+func (fakeSessions) Exists(string) (bool, error)                    { return true, nil }
 
 // fakeClient replays a scripted event stream, then blocks like a live
 // connection until the watcher is cancelled.
@@ -216,8 +217,9 @@ func (r *recordingSessions) NewSession(_, _, _, _, _, _, _, _ string) error {
 	r.newSessions++
 	return nil
 }
-func (r *recordingSessions) KillSession(string) error   { return nil }
-func (r *recordingSessions) Alive(string) (bool, error) { return r.alive, nil }
+func (r *recordingSessions) KillSession(string) error    { return nil }
+func (r *recordingSessions) Alive(string) (bool, error)  { return r.alive, nil }
+func (r *recordingSessions) Exists(string) (bool, error) { return r.alive, nil }
 
 func TestRelaunchAbortsForDeletedCard(t *testing.T) {
 	t.Parallel()
@@ -287,8 +289,9 @@ func (s *crashingSessions) NewSession(_, _, _, _, _, _, _, _ string) error {
 	s.newSessions.Add(1)
 	return s.newErr
 }
-func (s *crashingSessions) KillSession(string) error   { return nil }
-func (s *crashingSessions) Alive(string) (bool, error) { return false, nil }
+func (s *crashingSessions) KillSession(string) error    { return nil }
+func (s *crashingSessions) Alive(string) (bool, error)  { return false, nil }
+func (s *crashingSessions) Exists(string) (bool, error) { return false, nil }
 
 // watchCrashingCard spins up a watcher for a card whose agent never answers
 // and whose tmux pane is dead, simulating a startup crash.
@@ -332,6 +335,106 @@ func TestControllerFailedRelaunchGoesRed(t *testing.T) {
 	waitForStatus(t, store, StatusError)
 }
 
+// flakyClient fails its first snapshots, then behaves like a healthy agent
+// replaying the given events.
+type flakyClient struct {
+	failures atomic.Int32
+	healthy  fakeClient
+}
+
+func (f *flakyClient) Snapshot(ctx context.Context) (snapshot, error) {
+	if f.failures.Add(-1) >= 0 {
+		return snapshot{}, errors.New("connection refused")
+	}
+	return f.healthy.Snapshot(ctx)
+}
+
+func (f *flakyClient) StreamEvents(ctx context.Context, since uint64, onEvent func(event) bool) error {
+	return f.healthy.StreamEvents(ctx, since, onEvent)
+}
+
+func (f *flakyClient) Followup(ctx context.Context, key, msg string) error {
+	return f.healthy.Followup(ctx, key, msg)
+}
+
+func TestControllerCrashCapToleratesTransientFailures(t *testing.T) {
+	t.Parallel()
+
+	// The agent dies fewer times than the cap before its control plane
+	// answers: the card must recover, not go red.
+	store := testStore(t)
+	require.NoError(t, store.InsertCard(&Card{ID: "c1", Column: "dev", Status: StatusStarting, Session: "s", Worktree: t.TempDir()}))
+
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+
+	client := &flakyClient{healthy: fakeClient{events: []event{
+		{Type: eventUserMessage},
+		{Type: eventStreamStarted},
+		{Type: eventStreamStopped, Reason: reasonNormal},
+	}}}
+	client.failures.Store(int32(maxLaunchFailures - 1))
+
+	sessions := &crashingSessions{}
+	c := newController(ctx, store, sessions, func() {})
+	c.clientFor = func(_, _ string) sessionClient { return client }
+	card, err := store.GetCard("c1")
+	require.NoError(t, err)
+	c.Start(card)
+	t.Cleanup(func() { c.Stop("c1") })
+
+	waitForStatus(t, store, StatusWaiting)
+	// The successful snapshot reset the count: a later death gets fresh
+	// relaunch attempts instead of tripping the cap immediately.
+	assert.Equal(t, 1, c.launchFailed("c1"), "count should have been reset by the successful snapshot")
+}
+
+func TestControllerExitedResumeFailureGoesRed(t *testing.T) {
+	t.Parallel()
+
+	// The agent reports session_exited and the resume cannot recreate the
+	// session: the failure must be surfaced.
+	store := testStore(t)
+	require.NoError(t, store.InsertCard(&Card{ID: "c1", Column: "dev", Status: StatusStarting, Session: "s", Worktree: t.TempDir()}))
+
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+
+	sessions := &crashingSessions{newErr: errors.New("tmux: server exited")}
+	c := newController(ctx, store, sessions, func() {})
+	c.clientFor = func(_, _ string) sessionClient {
+		return &fakeClient{events: []event{{Type: eventSessionExited}}}
+	}
+	card, err := store.GetCard("c1")
+	require.NoError(t, err)
+	c.Start(card)
+	t.Cleanup(func() { c.Stop("c1") })
+
+	waitForStatus(t, store, StatusError)
+}
+
+func TestRelaunchWithPromptResetsCrashCap(t *testing.T) {
+	t.Parallel()
+
+	store := testStore(t)
+	require.NoError(t, store.InsertCard(&Card{ID: "c1", Session: "s", Worktree: t.TempDir()}))
+
+	c := newController(t.Context(), store, &crashingSessions{}, func() {})
+	for range maxLaunchFailures {
+		c.launchFailed("c1")
+	}
+	card, err := store.GetCard("c1")
+	require.NoError(t, err)
+
+	// A user-initiated (prompt-bearing) relaunch grants fresh attempts…
+	require.NoError(t, c.relaunch(card, "try again"))
+	assert.Equal(t, 1, c.launchFailed("c1"), "cap should have been reset")
+
+	// …but a background resume does not, or the cap could never trip.
+	require.NoError(t, c.relaunch(card, ""))
+	assert.Equal(t, 2, c.launchFailed("c1"))
+}
+
 // argSessions records the arguments of the last NewSession call.
 type argSessions struct {
 	workDir, worktreeName, worktreeBase string
@@ -341,8 +444,9 @@ func (s *argSessions) NewSession(_, workDir, _, _, _, worktreeName, worktreeBase
 	s.workDir, s.worktreeName, s.worktreeBase = workDir, worktreeName, worktreeBase
 	return nil
 }
-func (s *argSessions) KillSession(string) error   { return nil }
-func (s *argSessions) Alive(string) (bool, error) { return false, nil }
+func (s *argSessions) KillSession(string) error    { return nil }
+func (s *argSessions) Alive(string) (bool, error)  { return false, nil }
+func (s *argSessions) Exists(string) (bool, error) { return false, nil }
 
 func TestRelaunchRecreatesMissingWorktree(t *testing.T) {
 	t.Parallel()

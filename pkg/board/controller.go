@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sync"
@@ -21,6 +22,11 @@ type sessionClient interface {
 const (
 	// retryDelay paces reconnect and relaunch attempts.
 	retryDelay = 500 * time.Millisecond
+	// cappedRetryDelay paces the watcher of a card whose agent keeps
+	// crashing at startup (see maxLaunchFailures): the card is red and only
+	// a user action revives it, so polling every retryDelay would waste a
+	// tmux fork per tick for nothing.
+	cappedRetryDelay = 5 * time.Second
 	// snapshotTimeout bounds a single snapshot request so a wedged server
 	// cannot block a watcher forever.
 	snapshotTimeout = 10 * time.Second
@@ -29,11 +35,13 @@ const (
 	// readyProbeTimeout bounds the control-plane probe behind "attach" so
 	// the user gets quick feedback instead of hanging.
 	readyProbeTimeout = 2 * time.Second
-	// maxLaunchFailures is how many times in a row the watcher relaunches an
-	// agent that dies before its control plane ever answers. Past it, the
+	// maxLaunchFailures is how many consecutive agent deaths — before the
+	// control plane ever answers — the watcher tolerates. At the cap the
 	// agent is crashing deterministically (bad config, missing key…):
 	// relaunching again would only kill the dead pane holding the error
 	// output, so the watcher goes red and leaves the pane for inspection.
+	// A successful snapshot or a user-initiated (prompt-bearing) relaunch
+	// resets the count.
 	maxLaunchFailures = 3
 )
 
@@ -57,6 +65,11 @@ type controller struct {
 	// a first turn is imminent, so the watcher keeps them "starting" until
 	// the event stream reports it instead of flashing "ready" first.
 	expectTurn map[string]bool
+	// launchFailures counts, per card, consecutive agent deaths before the
+	// control plane ever answered. It lives on the controller — not in the
+	// watcher loop — so a user-initiated relaunch can reset it and give the
+	// agent a fresh set of attempts after the cap tripped.
+	launchFailures map[string]int
 
 	// relaunchMu serializes session relaunches. A watcher's background
 	// resume and a prompt-bearing relaunch (SendPrompt) can otherwise race:
@@ -72,13 +85,14 @@ type watcher struct {
 
 func newController(ctx context.Context, store *Store, sessions sessionManager, onChanged func()) *controller {
 	return &controller{
-		ctx:        ctx,
-		store:      store,
-		sessions:   sessions,
-		onChanged:  onChanged,
-		clientFor:  func(socket, session string) sessionClient { return newClient(socket, session) },
-		watchers:   make(map[string]*watcher),
-		expectTurn: make(map[string]bool),
+		ctx:            ctx,
+		store:          store,
+		sessions:       sessions,
+		onChanged:      onChanged,
+		clientFor:      func(socket, session string) sessionClient { return newClient(socket, session) },
+		watchers:       make(map[string]*watcher),
+		expectTurn:     make(map[string]bool),
+		launchFailures: make(map[string]int),
 	}
 }
 
@@ -128,6 +142,21 @@ func (c *controller) turnExpected(cardID string) bool {
 	return c.expectTurn[cardID]
 }
 
+// launchFailed records one more agent death before the control plane ever
+// answered, and returns the updated consecutive count.
+func (c *controller) launchFailed(cardID string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.launchFailures[cardID]++
+	return c.launchFailures[cardID]
+}
+
+func (c *controller) resetLaunchFailures(cardID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.launchFailures, cardID)
+}
+
 // Stop cancels the card's watcher and waits for it to exit. Waiting matters:
 // it guarantees the watcher cannot relaunch the session after the caller
 // goes on to tear it down (kill the tmux session, remove the worktree),
@@ -137,6 +166,7 @@ func (c *controller) Stop(cardID string) {
 	w, ok := c.watchers[cardID]
 	delete(c.watchers, cardID)
 	delete(c.expectTurn, cardID)
+	delete(c.launchFailures, cardID)
 	c.mu.Unlock()
 	if ok {
 		w.cancel()
@@ -148,10 +178,6 @@ func (c *controller) Stop(cardID string) {
 // then tail events; on a drop, reconnect; if the agent is gone, relaunch and
 // resume.
 func (c *controller) watch(ctx context.Context, cardID string) {
-	// launchFailures counts consecutive attempts where the agent died
-	// without its control plane ever answering. Reset by a successful
-	// snapshot.
-	launchFailures := 0
 	for ctx.Err() == nil {
 		card, err := c.store.GetCard(cardID)
 		if errors.Is(err, ErrCardNotFound) {
@@ -175,23 +201,21 @@ func (c *controller) watch(ctx context.Context, cardID string) {
 			// answering is crashing at startup: surface the failure instead
 			// of silently relaunching forever, and stop killing the dead
 			// pane so the user can attach and read the agent's last output.
+			delay := retryDelay
 			if alive, aerr := c.sessions.Alive(card.Session); aerr == nil && !alive {
-				launchFailures++
-				if launchFailures >= maxLaunchFailures {
+				if c.launchFailed(cardID) >= maxLaunchFailures {
 					c.setStatus(cardID, StatusError)
-				} else if rerr := c.relaunch(card, ""); rerr != nil && !errors.Is(rerr, ErrCardNotFound) {
-					// The session cannot even be recreated (tmux failure,
-					// missing worktree…): show the card as failed rather
-					// than leaving it "starting" forever.
-					c.setStatus(cardID, StatusError)
+					delay = cappedRetryDelay
+				} else {
+					c.resume(card)
 				}
 			}
-			if sleep(ctx, retryDelay) {
+			if sleep(ctx, delay) {
 				return
 			}
 			continue
 		}
-		launchFailures = 0
+		c.resetLaunchFailures(cardID)
 
 		if snap.Title != "" {
 			c.setTitle(cardID, snap.Title)
@@ -320,13 +344,21 @@ func (c *controller) watch(ctx context.Context, cardID string) {
 
 		if exited && ctx.Err() == nil {
 			// The agent process ended; resume it so the card stays usable.
-			if rerr := c.relaunch(card, ""); rerr != nil && !errors.Is(rerr, ErrCardNotFound) {
-				c.setStatus(cardID, StatusError)
-			}
+			c.resume(card)
 		}
 		if sleep(ctx, retryDelay) {
 			return
 		}
+	}
+}
+
+// resume relaunches the card's session in the background recovery paths
+// (dead pane, session_exited). A session that cannot even be recreated
+// (tmux failure, missing worktree…) is surfaced as an errored card rather
+// than left "starting" forever; a deleted card is not stamped.
+func (c *controller) resume(card *Card) {
+	if err := c.relaunch(card, ""); err != nil && !errors.Is(err, ErrCardNotFound) {
+		c.setStatus(card.ID, StatusError)
 	}
 }
 
@@ -415,9 +447,11 @@ func (c *controller) relaunch(card *Card, prompt string) error {
 	_ = os.Remove(socket)
 	// docker agent creates the worktree on the first launch; if that launch
 	// died before it did, resuming from the worktree directory would fail.
-	// Launch from the repository again so --worktree (re)creates it.
+	// Launch from the repository again so --worktree (re)creates it. Only a
+	// confirmed absence takes the fallback: recreating an existing worktree
+	// fails, so a transient stat error must not reroute the launch.
 	workDir, worktreeName, worktreeBase := card.Worktree, "", ""
-	if _, statErr := os.Stat(card.Worktree); statErr != nil {
+	if _, statErr := os.Stat(card.Worktree); card.Worktree != "" && errors.Is(statErr, fs.ErrNotExist) {
 		workDir = card.RepoPath
 		worktreeName = filepath.Base(card.Worktree)
 		worktreeBase = upstreamBase(c.ctx, card.RepoPath)
@@ -430,6 +464,11 @@ func (c *controller) relaunch(card *Card, prompt string) error {
 		// The agent is launching again: show it as starting until its
 		// control plane answers and the event stream drives the status.
 		c.setExpectTurn(card.ID, prompt != "")
+		if prompt != "" {
+			// A user asked for this relaunch: give the agent a fresh set of
+			// startup attempts even if the crash-loop cap tripped before.
+			c.resetLaunchFailures(card.ID)
+		}
 		c.setStatus(card.ID, StatusStarting)
 	}
 	return err

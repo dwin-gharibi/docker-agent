@@ -33,6 +33,10 @@ type sessionManager interface {
 	// slow to start from a session whose agent has died and must be
 	// relaunched.
 	Alive(name string) (bool, error)
+	// Exists reports whether the session exists at all, dead pane included.
+	// It tells a session holding a dead agent's output (attachable) from one
+	// that is gone entirely.
+	Exists(name string) (bool, error)
 }
 
 // tmuxSocketDir creates and validates, once per process, the per-user
@@ -315,6 +319,17 @@ func (t tmuxSessions) Alive(name string) (bool, error) {
 	}
 	first, _, _ := strings.Cut(strings.TrimSpace(out), "\n")
 	return first == "0", nil
+}
+
+// Exists reports whether the session exists, dead pane included.
+func (t tmuxSessions) Exists(name string) (bool, error) {
+	if _, err := tmuxRun(t.ctx, "has-session", "-t", "="+name); err != nil {
+		if isNoSuchSession(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 // isNoSuchSession matches tmux's errors for a missing session or a server

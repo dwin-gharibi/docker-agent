@@ -34,7 +34,10 @@ Requirements: `tmux` and `git` must be installed.
   detaches and returns to the board.
 - **Everything is recoverable.** Quitting the board leaves agents running in
   tmux; restarting it reattaches to them. If an agent process dies, the board
-  relaunches it and resumes the same conversation and worktree.
+  relaunches it and resumes the same conversation and worktree. An agent that
+  keeps crashing at startup turns its card red instead of relaunching
+  forever: attach to it (`enter`) to read the error output, then move the
+  card forward to relaunch it, or delete it.
 
 ## Key bindings
 
