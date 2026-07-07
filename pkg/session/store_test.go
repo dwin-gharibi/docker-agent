@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -387,9 +388,16 @@ func TestStoreAgentNameJSON(t *testing.T) {
 func TestNewSQLiteSessionStore_DirectoryNotWritable(t *testing.T) {
 	t.Parallel()
 
+	if runtime.GOOS == "windows" {
+		t.Skip("Skipping test on Windows: os.Mkdir ignores Unix permission bits")
+	}
+
 	readOnlyDir := filepath.Join(t.TempDir(), "readonly")
 	err := os.Mkdir(readOnlyDir, 0o555)
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		os.Chmod(readOnlyDir, 0o777)
+	})
 
 	_, err = NewSQLiteSessionStore(t.Context(), filepath.Join(readOnlyDir, "session.db"))
 	require.Error(t, err)

@@ -888,7 +888,7 @@ func WithSendUserMessage(sendUserMessage bool) Opt {
 
 func WithPermissions(perms *PermissionsConfig) Opt {
 	return func(s *Session) {
-		s.Permissions = perms
+		s.Permissions = clonePermissionsConfig(perms)
 	}
 }
 
@@ -1031,6 +1031,29 @@ func (s *Session) OwnCost() float64 {
 		cost += item.Cost
 	}
 	return cost
+}
+
+// IsToolsApproved returns a consistent snapshot of the ToolsApproved flag.
+// This is safe to call concurrently with session mutations.
+func (s *Session) IsToolsApproved() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.ToolsApproved
+}
+
+// ClonePermissions returns a deep copy of the session's PermissionsConfig.
+// This is safe to call concurrently with session mutations.
+func (s *Session) ClonePermissions() *PermissionsConfig {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return clonePermissionsConfig(s.Permissions)
+}
+
+// SetPermissions safely updates the session's PermissionsConfig.
+func (s *Session) SetPermissions(perms *PermissionsConfig) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Permissions = perms
 }
 
 // now returns the session's current time, falling back to time.Now for

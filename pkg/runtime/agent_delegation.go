@@ -186,9 +186,7 @@ func newSubSession(parent *session.Session, cfg SubSessionConfig, childAgent *ag
 	if cfg.PinAgent {
 		opts = append(opts, session.WithAgentName(cfg.AgentName))
 	}
-	if cfg.Permissions != nil {
-		opts = append(opts, session.WithPermissions(cfg.Permissions))
-	}
+	opts = append(opts, session.WithPermissions(cfg.Permissions))
 	// Merge parent's excluded tools with config's excluded tools so that
 	// nested sub-sessions (e.g. skill → transfer_task → child) inherit
 	// exclusions from all ancestors and don't re-introduce filtered tools.
@@ -324,11 +322,12 @@ func (r *LocalRuntime) runForwarding(ctx context.Context, parent *session.Sessio
 		return nil, subSessionErr
 	}
 
-	// Only propagate ToolsApproved on success. A failed sub-session must not
-	// silently escalate the parent's tool-approval gate: the user approved
+	// Only propagate ToolsApproved and Permissions on success. A failed sub-session
+	// must not silently escalate the parent's tool-approval gate: the user approved
 	// tools within a sub-session scope that ended in error, and that approval
 	// should not carry over to the parent's remaining turns.
 	parent.ToolsApproved = s.ToolsApproved
+	parent.SetPermissions(s.ClonePermissions())
 	span.SetStatus(codes.Ok, "sub-session completed")
 	return tools.ResultSuccess(s.GetLastAssistantMessageContent()), nil
 }
@@ -491,8 +490,8 @@ func (r *LocalRuntime) RunAgent(ctx context.Context, params agenttool.RunParams)
 		ExpectedOutput: params.ExpectedOutput,
 		AgentName:      params.AgentName,
 		Title:          "Background agent task",
-		ToolsApproved:  params.ParentSession.ToolsApproved,
-		Permissions:    params.ParentSession.Permissions,
+		ToolsApproved:  params.ParentSession.IsToolsApproved(),
+		Permissions:    params.ParentSession.ClonePermissions(),
 		NonInteractive: true,
 		PinAgent:       true,
 	}, params.OnContent)

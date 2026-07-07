@@ -1,6 +1,8 @@
 package runtime
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -9,6 +11,9 @@ import (
 
 	"github.com/docker/docker-agent/pkg/agent"
 	"github.com/docker/docker-agent/pkg/session"
+	"github.com/docker/docker-agent/pkg/team"
+	agenttool "github.com/docker/docker-agent/pkg/tools/builtin/agent"
+	"github.com/docker/docker-agent/pkg/tools"
 )
 
 func TestBuildTaskSystemMessage(t *testing.T) {
@@ -29,9 +34,11 @@ func TestBuildTaskSystemMessage(t *testing.T) {
 	})
 
 	t.Run("with attached files", func(t *testing.T) {
-		msg := buildTaskSystemMessage("do the thing", "", []string{"/abs/foo.go", "/abs/bar.go"})
+		fooPath := filepath.Join(os.TempDir(), "foo.go")
+		barPath := filepath.Join(os.TempDir(), "bar.go")
+		msg := buildTaskSystemMessage("do the thing", "", []string{fooPath, barPath})
 		assert.Contains(t, msg, "<task>\ndo the thing\n</task>")
-		assert.Contains(t, msg, "<attached_files>\n- /abs/foo.go\n- /abs/bar.go\n</attached_files>")
+		assert.Contains(t, msg, "<attached_files>\n- "+fooPath+"\n- "+barPath+"\n</attached_files>")
 	})
 }
 
@@ -219,9 +226,11 @@ func TestSubSessionInheritsAttachedFiles(t *testing.T) {
 	t.Parallel()
 
 	parent := session.New(session.WithUserMessage("hello"))
-	parent.AddAttachedFile("/abs/foo.go")
-	parent.AddAttachedFile("/abs/bar.go")
-	parent.AddAttachedFile("/abs/foo.go") // duplicate, should be ignored
+	fooPath := filepath.Join(os.TempDir(), "foo.go")
+	barPath := filepath.Join(os.TempDir(), "bar.go")
+	parent.AddAttachedFile(fooPath)
+	parent.AddAttachedFile(barPath)
+	parent.AddAttachedFile(fooPath) // duplicate, should be ignored
 
 	childAgent := agent.New("worker", "")
 	cfg := SubSessionConfig{
@@ -233,7 +242,7 @@ func TestSubSessionInheritsAttachedFiles(t *testing.T) {
 	s := newSubSession(parent, cfg, childAgent)
 
 	// Child session inherits parent's attached files (deduplicated, ordered).
-	assert.Equal(t, []string{"/abs/foo.go", "/abs/bar.go"}, s.AttachedFilesSnapshot())
+	assert.Equal(t, []string{fooPath, barPath}, s.AttachedFilesSnapshot())
 
 	// The system message lists them so the sub-agent sees them up-front.
 	sysMsg := s.GetMessages(childAgent)
@@ -243,7 +252,7 @@ func TestSubSessionInheritsAttachedFiles(t *testing.T) {
 		joined.WriteString(m.Content)
 		joined.WriteString("\n")
 	}
-	assert.Contains(t, joined.String(), "<attached_files>\n- /abs/foo.go\n- /abs/bar.go\n</attached_files>")
+	assert.Contains(t, joined.String(), "<attached_files>\n- "+fooPath+"\n- "+barPath+"\n</attached_files>")
 }
 
 func TestSubSessionWithoutAttachedFilesOmitsBlock(t *testing.T) {
@@ -266,3 +275,226 @@ func TestSubSessionWithoutAttachedFilesOmitsBlock(t *testing.T) {
 		assert.NotContains(t, m.Content, "<attached_files>")
 	}
 }
+
+func TestNewSubSession_PermissionsIsolation(t *testing.T) {
+	t.Parallel()
+
+	parent := session.New(session.WithUserMessage("hello"))
+	childAgent := agent.New("worker", "")
+
+	t.Run("cloned from config", func(t *testing.T) {
+		perms := &session.PermissionsConfig{
+			Allow: []string{"read_file"},
+		}
+
+		cfg := SubSessionConfig{
+			Task:        "isolated work",
+			AgentName:   "worker",
+			Title:       "Task",
+			Permissions: perms,
+		}
+
+		s := newSubSession(parent, cfg, childAgent)
+
+		require.NotNil(t, s.Permissions)
+		assert.Equal(t, []string{"read_file"}, s.Permissions.Allow)
+
+		// Mutate the original permissions config
+		perms.Allow = append(perms.Allow, "write_file")
+
+		// The sub-session's permissions should remain isolated
+		assert.Equal(t, []string{"read_file"}, s.Permissions.Allow)
+	})
+
+	t.Run("nil permissions", func(t *testing.T) {
+		cfg := SubSessionConfig{
+			Task:      "work without permissions",
+			AgentName: "worker",
+			Title:     "Task",
+			// Permissions is nil — the nil guard removal must not panic
+		}
+
+		s := newSubSession(parent, cfg, childAgent)
+		assert.Nil(t, s.Permissions)
+	})
+}
+
+func TestSession_ClonePermissions(t *testing.T) {
+	t.Parallel()
+
+	t.Run("returns deep copy", func(t *testing.T) {
+		perms := &session.PermissionsConfig{
+			Allow: []string{"read_file"},
+			Deny:  []string{"write_file"},
+		}
+		s := session.New(session.WithPermissions(perms))
+
+		cloned := s.ClonePermissions()
+		require.NotNil(t, cloned)
+		assert.Equal(t, perms.Allow, cloned.Allow)
+		assert.Equal(t, perms.Deny, cloned.Deny)
+
+		// Mutating the clone should not affect the session
+		cloned.Allow = append(cloned.Allow, "exec_command")
+		original := s.ClonePermissions()
+		assert.Equal(t, []string{"read_file"}, original.Allow)
+	})
+
+	t.Run("returns nil when unset", func(t *testing.T) {
+		s := session.New()
+		assert.Nil(t, s.ClonePermissions())
+	})
+}
+
+func TestSession_SetPermissions(t *testing.T) {
+	t.Parallel()
+
+	s := session.New()
+	assert.Nil(t, s.ClonePermissions())
+
+	perms := &session.PermissionsConfig{
+		Allow: []string{"read_file"},
+	}
+	s.SetPermissions(perms)
+
+	got := s.ClonePermissions()
+	require.NotNil(t, got)
+	assert.Equal(t, []string{"read_file"}, got.Allow)
+}
+
+// TestRunAgent_InheritsParentPermissions verifies that RunAgent correctly
+// inherits the parent session's ToolsApproved flag and Permissions via
+// the thread-safe accessors, and that the child session is isolated from
+// later mutations of the parent.
+func TestRunAgent_InheritsParentPermissions(t *testing.T) {
+	t.Parallel()
+
+	workerStream := newStreamBuilder().AddContent("done").AddStopWithUsage(10, 5).Build()
+	parentProv := &mockProvider{id: "test/mock-model", stream: &mockStream{}}
+	workerProv := &mockProvider{id: "test/mock-model", stream: workerStream}
+
+	worker := agent.New("worker", "Worker agent", agent.WithModel(workerProv))
+	root := agent.New("root", "Root agent", agent.WithModel(parentProv))
+	agent.WithSubAgents(worker)(root)
+
+	tm := team.New(team.WithAgents(root, worker))
+	rt, err := NewLocalRuntime(t.Context(), tm,
+		WithSessionCompaction(false),
+		WithModelStore(mockModelStore{}),
+	)
+	require.NoError(t, err)
+
+	parentPerms := &session.PermissionsConfig{
+		Allow: []string{"read_file", "list_dir"},
+		Deny:  []string{"shell:cmd=rm*"},
+	}
+	parentSession := session.New(
+		session.WithUserMessage("Test"),
+		session.WithToolsApproved(true),
+		session.WithPermissions(parentPerms),
+	)
+
+	result := rt.RunAgent(t.Context(), agenttool.RunParams{
+		AgentName:     "worker",
+		Task:          "do something",
+		ParentSession: parentSession,
+	})
+	require.Empty(t, result.ErrMsg, "RunAgent should succeed")
+
+	// The parent session must have a sub-session recorded.
+	var childSession *session.Session
+	for _, item := range parentSession.Messages {
+		if item.SubSession != nil {
+			childSession = item.SubSession
+			break
+		}
+	}
+	require.NotNil(t, childSession, "parent must have a sub-session")
+
+	// The child must have inherited ToolsApproved.
+	assert.True(t, childSession.ToolsApproved,
+		"child session must inherit ToolsApproved from parent")
+
+	// The child must have inherited permissions.
+	require.NotNil(t, childSession.Permissions)
+	assert.Equal(t, []string{"read_file", "list_dir"}, childSession.Permissions.Allow)
+	assert.Equal(t, []string{"shell:cmd=rm*"}, childSession.Permissions.Deny)
+
+	// Mutating the child's permissions must NOT affect the parent (isolation).
+	childSession.Permissions.Allow = append(childSession.Permissions.Allow, "write_file")
+	parentClone := parentSession.ClonePermissions()
+	assert.Equal(t, []string{"read_file", "list_dir"}, parentClone.Allow,
+		"parent permissions must be isolated from child mutations")
+}
+
+// TestTransferTask_PropagatesPermissions verifies that handleTaskTransfer
+// passes the parent session's Permissions to the child sub-session, and
+// that the child's permissions are isolated from the parent's.
+func TestTransferTask_PropagatesPermissions(t *testing.T) {
+	t.Parallel()
+
+	childStream := newStreamBuilder().AddContent("transferred").AddStopWithUsage(10, 5).Build()
+	prov := &mockProvider{id: "test/mock-model", stream: childStream}
+
+	librarian := agent.New("librarian", "Library agent", agent.WithModel(prov))
+	root := agent.New("root", "Root agent", agent.WithModel(prov))
+	agent.WithSubAgents(librarian)(root)
+
+	tm := team.New(team.WithAgents(root, librarian))
+	rt, err := NewLocalRuntime(t.Context(), tm,
+		WithSessionCompaction(false),
+		WithModelStore(mockModelStore{}),
+	)
+	require.NoError(t, err)
+
+	parentPerms := &session.PermissionsConfig{
+		Allow: []string{"safe_tool"},
+		Deny:  []string{"dangerous_tool"},
+	}
+	sess := session.New(
+		session.WithUserMessage("Test"),
+		session.WithToolsApproved(true),
+		session.WithPermissions(parentPerms),
+	)
+	evts := make(chan Event, 128)
+
+	toolCall := tools.ToolCall{
+		ID:   "call_1",
+		Type: "function",
+		Function: tools.FunctionCall{
+			Name:      "transfer_task",
+			Arguments: `{"agent":"librarian","task":"find a book","expected_output":"book title"}`,
+		},
+	}
+
+	result, err := rt.handleTaskTransfer(t.Context(), sess, toolCall, NewChannelSink(evts))
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.False(t, result.IsError, "transfer to valid sub-agent should succeed")
+
+	// Find the sub-session that was created.
+	var childSession *session.Session
+	for _, item := range sess.Messages {
+		if item.SubSession != nil {
+			childSession = item.SubSession
+			break
+		}
+	}
+	require.NotNil(t, childSession, "parent must have a sub-session after transfer_task")
+
+	// The child must have inherited the parent's permissions.
+	require.NotNil(t, childSession.Permissions)
+	assert.Equal(t, []string{"safe_tool"}, childSession.Permissions.Allow)
+	assert.Equal(t, []string{"dangerous_tool"}, childSession.Permissions.Deny)
+
+	// The child must have inherited ToolsApproved.
+	assert.True(t, childSession.ToolsApproved,
+		"child session must inherit ToolsApproved from parent")
+
+	// Mutating the child's permissions must NOT affect the parent (isolation).
+	childSession.Permissions.Allow = append(childSession.Permissions.Allow, "exploit")
+	parentClone := sess.ClonePermissions()
+	assert.Equal(t, []string{"safe_tool"}, parentClone.Allow,
+		"parent permissions must remain isolated from child mutations after transfer_task")
+}
+

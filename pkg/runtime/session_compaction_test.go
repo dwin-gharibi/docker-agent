@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"os"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -107,6 +108,10 @@ func TestSessionGetMessages_SummaryWithoutFirstKeptEntry(t *testing.T) {
 // to the session, and no model call.
 func TestDoCompactBeforeHookDeniesSkipsCompaction(t *testing.T) {
 	t.Parallel()
+
+	if runtime.GOOS == "windows" {
+		t.Skip("Skipping test on Windows: relies on Unix shell semantics")
+	}
 
 	denyingHooks := &latest.HooksConfig{
 		BeforeCompaction: []latest.HookDefinition{
@@ -231,6 +236,10 @@ func TestDoCompactBeforeHookSuppliesSummary(t *testing.T) {
 // express "compacted from X to Y").
 func TestDoCompactAfterHookFires(t *testing.T) {
 	t.Parallel()
+
+	if runtime.GOOS == "windows" {
+		t.Skip("Skipping test on Windows: relies on Unix shell semantics and jq")
+	}
 
 	dir := t.TempDir()
 	logFile := dir + "/after.log"
