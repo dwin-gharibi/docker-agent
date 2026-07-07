@@ -706,6 +706,58 @@ func TestAgentPickerLeanCheckboxClickToggle(t *testing.T) {
 	assert.False(t, ok, "checkbox row must not resolve to a card")
 }
 
+func TestAgentPickerBoardKey(t *testing.T) {
+	t.Parallel()
+
+	m := newAgentPickerModel([]agentChoice{{ref: "default"}, {ref: "coder"}})
+	m.width = 120
+	m.height = 40
+
+	assert.Contains(t, ansi.Strip(m.render()), "[ Open Board ]", "board button must be rendered")
+
+	_, cmd := m.Update(tea.KeyPressMsg{Code: 'b', Text: "b"})
+	require.NotNil(t, cmd, "pressing b must quit the picker")
+	assert.True(t, m.startBoard)
+}
+
+func TestAgentPickerBoardButtonClick(t *testing.T) {
+	t.Parallel()
+
+	m := newAgentPickerModel([]agentChoice{{ref: "default"}, {ref: "coder"}})
+	m.width = 120
+	m.height = 40
+
+	// Locate the button on the rendered screen and click it; convert the
+	// byte-offset prefix to display columns (border runes are multi-byte).
+	screen := ansi.Strip(lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, m.render()))
+	var x, y int
+	found := false
+	for row, line := range strings.Split(screen, "\n") {
+		if prefix, _, ok := strings.Cut(line, "[ Open Board ]"); ok {
+			x, y, found = lipgloss.Width(prefix), row, true
+			break
+		}
+	}
+	require.True(t, found, "board button not found on screen")
+	assert.True(t, m.boardButtonAt(x, y), "hit zone must match the rendered button")
+
+	// Hit-zone boundaries: both edges inside; one cell beyond each edge and
+	// the adjacent rows outside. The cell left of the button belongs to the
+	// gap after the lean checkbox, so it must hit neither.
+	buttonWidth := len("[ Open Board ]")
+	assert.True(t, m.boardButtonAt(x+buttonWidth-1, y), "right edge must be inside")
+	assert.False(t, m.boardButtonAt(x-1, y), "left of the button must miss")
+	assert.False(t, m.leanCheckboxAt(x-1, y), "gap must not hit the checkbox either")
+	assert.False(t, m.boardButtonAt(x+buttonWidth, y), "right of the button must miss")
+	assert.False(t, m.boardButtonAt(x, y-1), "row above must miss")
+	assert.False(t, m.boardButtonAt(x, y+1), "row below must miss")
+
+	_, cmd := m.Update(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+	require.NotNil(t, cmd, "clicking the button must quit the picker")
+	assert.True(t, m.startBoard)
+	assert.False(t, m.leanMode, "board click must not toggle lean mode")
+}
+
 // firstCardPoint scans the grid for a coordinate that maps to card index want.
 func firstCardPoint(t *testing.T, m *agentPickerModel, want int) (int, int) {
 	t.Helper()

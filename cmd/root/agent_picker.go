@@ -82,6 +82,10 @@ func isConfigFileName(name string) bool {
 // (Esc / Ctrl-C) without choosing an agent.
 var errAgentPickerCancelled = errors.New("agent selection cancelled")
 
+// errAgentPickerStartBoard is returned when the user chooses to open the
+// Kanban board (`docker agent board`) instead of picking an agent.
+var errAgentPickerStartBoard = errors.New("agent picker: start board")
+
 // agentChoice is a single entry in the agent picker.
 type agentChoice struct {
 	ref         string   // agent reference as passed on the command line
@@ -132,7 +136,9 @@ func loadAgentChoices(ctx context.Context, refs []string, env environment.Provid
 }
 
 // selectAgentRef shows a full-screen picker and returns the chosen agent ref
-// along with whether the user wants lean mode. The "Lean Mode" checkbox is
+// along with whether the user wants lean mode. It returns
+// errAgentPickerStartBoard when the user picks the "Open Board" button
+// instead of an agent. The "Lean Mode" checkbox is
 // seeded with initialLean (the effective lean state from flags/user config)
 // so what the user sees always matches what will run; the returned value is
 // authoritative. When only a single ref is supplied there is nothing to
@@ -159,6 +165,9 @@ func selectAgentRef(ctx context.Context, refs []string, env environment.Provider
 	if !ok || result.cancelled {
 		return "", false, errAgentPickerCancelled
 	}
+	if result.startBoard {
+		return "", false, errAgentPickerStartBoard
+	}
 	return result.choices[result.cursor].ref, result.leanMode, nil
 }
 
@@ -169,6 +178,7 @@ type agentPickerKeyMap struct {
 	Choose  key.Binding
 	Details key.Binding
 	Lean    key.Binding
+	Board   key.Binding
 	Quit    key.Binding
 }
 
@@ -193,6 +203,10 @@ var agentPickerKeys = agentPickerKeyMap{
 		key.WithKeys("l"),
 		key.WithHelp("l", "toggle lean mode"),
 	),
+	Board: key.NewBinding(
+		key.WithKeys("b"),
+		key.WithHelp("b", "open board"),
+	),
 	Quit: key.NewBinding(
 		key.WithKeys("esc", "ctrl+c", "q"),
 		key.WithHelp("esc", "cancel"),
@@ -211,6 +225,10 @@ type agentPickerModel struct {
 	// agent runs in the lean TUI instead of the full one. Seeded by the
 	// caller with the effective lean state (off by default).
 	leanMode bool
+
+	// startBoard is set when the user picks the "Open Board" button: the
+	// caller starts `docker agent board` instead of running an agent.
+	startBoard bool
 
 	// offset is the index of the first visible card. The card list is
 	// windowed so a large ~/.agents directory can't grow the panel beyond
@@ -328,6 +346,9 @@ func (m *agentPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, agentPickerKeys.Lean):
 			m.leanMode = !m.leanMode
 			return m, nil
+		case key.Matches(msg, agentPickerKeys.Board):
+			m.startBoard = true
+			return m, tea.Quit
 		case key.Matches(msg, agentPickerKeys.Choose):
 			return m, tea.Quit
 		}
@@ -363,6 +384,10 @@ func (m *agentPickerModel) handleMouseClick(msg tea.MouseClickMsg) (tea.Model, t
 		m.leanMode = !m.leanMode
 		m.resetClickTracking()
 		return m, nil
+	}
+	if m.boardButtonAt(msg.X, msg.Y) {
+		m.startBoard = true
+		return m, tea.Quit
 	}
 	i, ok := m.cardAt(msg.X, msg.Y)
 	if !ok {
@@ -646,6 +671,30 @@ func (m *agentPickerModel) leanCheckbox() string {
 	return box + " " + styles.SecondaryStyle.Render("Lean Mode")
 }
 
+// agentPickerBoardGap separates the lean checkbox from the board button on
+// the shared bottom row. Shared by render and boardButtonAt so the hit zone
+// can't drift from the rendered layout.
+const agentPickerBoardGap = "   "
+
+// boardButton renders the "Open Board" button. Choosing it starts
+// `docker agent board` instead of running an agent.
+func (m *agentPickerModel) boardButton() string {
+	return styles.SecondaryStyle.Render("[ Open Board ]")
+}
+
+// boardButtonAt reports whether terminal coordinates land on the "Open
+// Board" button. It mirrors the layout produced by render: the button sits
+// on the lean checkbox row, one gap to its right.
+func (m *agentPickerModel) boardButtonAt(x, y int) bool {
+	originX, originY := m.panelOrigin()
+
+	if y != originY+agentPickerCardsTop+m.cardRows()+1 {
+		return false
+	}
+	relX := x - originX - agentPickerCardsLeft - lipgloss.Width(m.leanCheckbox()) - len(agentPickerBoardGap)
+	return relX >= 0 && relX < lipgloss.Width(m.boardButton())
+}
+
 // panelSize returns the outer dimensions of the rendered picker panel without
 // rendering every card. cardAt relies on it to place hit zones, and it is
 // called on every mouse-motion event, so it must stay cheap: cards all share
@@ -685,6 +734,7 @@ func (m *agentPickerModel) headerText() (title, subtitle, help string) {
 			agentPickerKeys.Choose.Help().Key + " " + agentPickerKeys.Choose.Help().Desc,
 			agentPickerKeys.Details.Help().Key + " " + agentPickerKeys.Details.Help().Desc,
 			agentPickerKeys.Lean.Help().Key + " " + agentPickerKeys.Lean.Help().Desc,
+			agentPickerKeys.Board.Help().Key + " " + agentPickerKeys.Board.Help().Desc,
 			agentPickerKeys.Quit.Help().Key + " " + agentPickerKeys.Quit.Help().Desc,
 		}, "   "),
 	)
@@ -713,7 +763,7 @@ func (m *agentPickerModel) render() string {
 		"",
 		list,
 		"",
-		m.leanCheckbox(),
+		m.leanCheckbox()+agentPickerBoardGap+m.boardButton(),
 		"",
 		help,
 	)
