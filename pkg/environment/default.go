@@ -1,6 +1,9 @@
 package environment
 
 import (
+	"log/slog"
+	"os"
+
 	"github.com/docker/docker-agent/pkg/paths"
 	"github.com/docker/docker-agent/pkg/userconfig"
 )
@@ -14,9 +17,9 @@ type Source struct {
 }
 
 // DefaultSources returns the ordered, labeled secret sources that make up the
-// default provider chain: OS env, run secrets, credential helper (if
-// configured), Docker Desktop, pass, and keychain. Lookup precedence is the
-// slice order.
+// default provider chain: OS env, run secrets, the docker agent env file
+// (<config dir>/.env, when present), credential helper (if configured),
+// Docker Desktop, pass, and keychain. Lookup precedence is the slice order.
 //
 // When running inside a Docker sandbox (detected via SANDBOX_VM_ID), a
 // [SandboxTokenProvider] is prepended so that DOCKER_TOKEN is read from the
@@ -41,6 +44,16 @@ func DefaultSources() []Source {
 		Source{Name: "run-secrets", Provider: NewRunSecretsProvider()},
 	)
 
+	// The docker agent env file (written by `docker agent setup`) resolves
+	// without any flag. A missing file is the common case and simply skipped;
+	// a malformed one is reported but never blocks the chain, unlike an
+	// explicit --env-from-file, so a stray edit cannot lock every command out.
+	if provider, err := newConfigEnvFileProvider(); err != nil {
+		slog.Warn("Ignoring unreadable docker agent env file", "path", ConfigEnvFilePath(), "error", err)
+	} else if provider != nil {
+		sources = append(sources, Source{Name: "config-env-file", Provider: provider})
+	}
+
 	// Add credential helper provider if configured
 	if cfg, err := userconfig.Load(); err == nil && cfg.CredentialHelper != nil && cfg.CredentialHelper.Command != "" {
 		sources = append(sources, Source{
@@ -63,6 +76,20 @@ func DefaultSources() []Source {
 	}
 
 	return sources
+}
+
+// newConfigEnvFileProvider builds the provider for the docker agent env file.
+// It returns (nil, nil) when the file does not exist and an error when the
+// file exists but cannot be read or parsed.
+func newConfigEnvFileProvider() (Provider, error) {
+	path := ConfigEnvFilePath()
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return NewEnvFilesProvider([]string{path})
 }
 
 // NewDefaultProvider creates a provider chain from [DefaultSources].
