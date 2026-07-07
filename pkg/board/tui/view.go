@@ -418,7 +418,7 @@ func (m *model) renderFooter() string {
 	// Same look as the main TUI's status bar: highlighted keys with secondary
 	// descriptions on the left, muted context on the right.
 	hints := []string{
-		"n", "new", "⏎", "attach", "d", "diff", "o", "editor", "[ ]", "move",
+		"n", "new", "⏎", "attach", "d", "diff", "o", "editor", "s", "shell", "[ ]", "move",
 		"x", "delete", "p", "projects", "e", "prompt", "?", "help", "q", "quit",
 	}
 	parts := make([]string, 0, len(hints)/2)

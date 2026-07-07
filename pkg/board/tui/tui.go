@@ -4,6 +4,7 @@ package tui
 import (
 	"context"
 	"image/color"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -592,6 +593,11 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // main TUI's /shell command. tea.ExecProcess suspends the board and wires the
 // terminal to the shell until it exits.
 func (m *model) openShell(card *board.Card) tea.Cmd {
+	// The worktree is created by the agent launch; a card that is still
+	// starting (or a stale state-file entry) has nothing to open yet.
+	if _, err := os.Stat(card.Worktree); card.Worktree == "" || err != nil {
+		return m.setFlash("Worktree not available yet — the agent may still be starting", true)
+	}
 	cmd := shellpath.InteractiveShellCmd("Type 'exit' to return to the board")
 	cmd.Dir = card.Worktree
 	return tea.ExecProcess(cmd, func(err error) tea.Msg {

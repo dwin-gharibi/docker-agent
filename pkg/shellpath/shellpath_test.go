@@ -3,6 +3,7 @@ package shellpath
 import (
 	"path/filepath"
 	"runtime"
+	"slices"
 	"testing"
 )
 
@@ -99,5 +100,24 @@ func TestDetectWindowsShell_FallbackUsesAbsolutePath(t *testing.T) {
 	}
 	if len(args) != 1 || args[0] != "/C" {
 		t.Errorf("DetectWindowsShell() args = %v, want [/C]", args)
+	}
+}
+
+func TestInteractiveShellCmd_Unix(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix-only test")
+	}
+
+	t.Setenv("SHELL", "/bin/zsh")
+	// A hostile message must stay an env value, never argv or shell syntax.
+	msg := `pwned"; rm -rf $(HOME) &`
+	cmd := InteractiveShellCmd(msg)
+
+	want := []string{"/bin/zsh", "-i", "-c", `printf '\n%s\n' "$DOCKER_AGENT_SHELL_EXIT_MSG"; exec /bin/zsh`}
+	if !slices.Equal(cmd.Args, want) {
+		t.Errorf("InteractiveShellCmd() args = %q, want %q", cmd.Args, want)
+	}
+	if !slices.Contains(cmd.Env, "DOCKER_AGENT_SHELL_EXIT_MSG="+msg) {
+		t.Errorf("InteractiveShellCmd() env is missing DOCKER_AGENT_SHELL_EXIT_MSG=%q", msg)
 	}
 }
