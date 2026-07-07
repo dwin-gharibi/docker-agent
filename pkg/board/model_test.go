@@ -57,10 +57,24 @@ func TestCardStatusBusy(t *testing.T) {
 	t.Parallel()
 
 	assert.True(t, StatusStarting.Busy())
+	assert.True(t, StatusLoading.Busy())
+	assert.True(t, StatusAttaching.Busy())
 	assert.True(t, StatusRunning.Busy())
 	assert.False(t, StatusWaiting.Busy())
 	assert.False(t, StatusPaused.Busy())
 	assert.False(t, StatusError.Busy())
+}
+
+func TestCardStatusStartingUp(t *testing.T) {
+	t.Parallel()
+
+	assert.True(t, StatusStarting.StartingUp())
+	assert.True(t, StatusLoading.StartingUp())
+	assert.True(t, StatusAttaching.StartingUp())
+	assert.False(t, StatusRunning.StartingUp())
+	assert.False(t, StatusWaiting.StartingUp())
+	assert.False(t, StatusPaused.StartingUp())
+	assert.False(t, StatusError.StartingUp())
 }
 
 func TestNewWorktreeName(t *testing.T) {

@@ -3,6 +3,7 @@ package board
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
@@ -509,4 +510,82 @@ func TestTeardownForgetsControllerState(t *testing.T) {
 	c.Teardown(card)
 	require.NoError(t, c.LaunchError("c1"))
 	assert.Equal(t, 1, c.launchFailed("c1"), "failure count should have been dropped")
+}
+
+func TestStartupPhase(t *testing.T) {
+	t.Parallel()
+
+	// The socket dir is per-user and process-global: use a unique session
+	// id so parallel tests cannot collide.
+	session := "phase-" + newID()
+	card := &Card{AgentSession: session, Worktree: filepath.Join(t.TempDir(), "wt")}
+
+	// Nothing on disk yet: the agent process is still booting.
+	assert.Equal(t, StatusStarting, startupPhase(card))
+
+	// The worktree appeared: the agent is loading models and tools.
+	require.NoError(t, os.MkdirAll(card.Worktree, 0o755))
+	assert.Equal(t, StatusLoading, startupPhase(card))
+
+	// The control-plane socket is bound: the board is attaching.
+	socket := socketPath(session)
+	require.NoError(t, os.WriteFile(socket, nil, 0o600))
+	t.Cleanup(func() { _ = os.Remove(socket) })
+	assert.Equal(t, StatusAttaching, startupPhase(card))
+}
+
+// TestControllerStartupPhaseProgression proves the watcher surfaces the
+// startup milestones of a live agent whose control plane has not answered
+// yet, so a stuck launch shows how far it got.
+func TestControllerStartupPhaseProgression(t *testing.T) {
+	t.Parallel()
+
+	session := "progress-" + newID()
+	store := testStore(t)
+	wt := filepath.Join(t.TempDir(), "wt")
+	require.NoError(t, store.InsertCard(&Card{ID: "c1", Column: "dev", Status: StatusStarting, Session: "s", AgentSession: session, Worktree: wt}))
+
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+
+	// The pane is alive but the control plane never answers.
+	c := newController(ctx, store, fakeSessions{}, func() {})
+	c.clientFor = func(_, _ string) sessionClient { return downClient{} }
+	card, err := store.GetCard("c1")
+	require.NoError(t, err)
+	c.Start(card)
+	t.Cleanup(func() { c.Stop("c1") })
+
+	require.NoError(t, os.MkdirAll(wt, 0o755))
+	waitForStatus(t, store, StatusLoading)
+
+	socket := socketPath(session)
+	require.NoError(t, os.WriteFile(socket, nil, 0o600))
+	t.Cleanup(func() { _ = os.Remove(socket) })
+	waitForStatus(t, store, StatusAttaching)
+}
+
+// TestControllerNoDowngradeToStartupPhase proves a card mid-turn is not
+// demoted to a startup phase when its control plane is transiently
+// unreachable while the pane is still alive.
+func TestControllerNoDowngradeToStartupPhase(t *testing.T) {
+	t.Parallel()
+
+	store := testStore(t)
+	require.NoError(t, store.InsertCard(&Card{ID: "c1", Column: "dev", Status: StatusRunning, Session: "s", Worktree: t.TempDir()}))
+
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+
+	c := newController(ctx, store, fakeSessions{}, func() {})
+	c.clientFor = func(_, _ string) sessionClient { return downClient{} }
+	card, err := store.GetCard("c1")
+	require.NoError(t, err)
+	c.Start(card)
+	t.Cleanup(func() { c.Stop("c1") })
+
+	assert.Never(t, func() bool {
+		card, err := store.GetCard("c1")
+		return err == nil && card.Status != StatusRunning
+	}, 300*time.Millisecond, 10*time.Millisecond)
 }
