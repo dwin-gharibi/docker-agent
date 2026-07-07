@@ -18,6 +18,7 @@ import (
 
 	"github.com/docker/docker-agent/pkg/agent"
 	"github.com/docker/docker-agent/pkg/app"
+	boardtui "github.com/docker/docker-agent/pkg/board/tui"
 	"github.com/docker/docker-agent/pkg/cli"
 	"github.com/docker/docker-agent/pkg/config"
 	latestcfg "github.com/docker/docker-agent/pkg/config/latest"
@@ -256,6 +257,12 @@ func (f *runExecFlags) runRunCommand(cmd *cobra.Command, args []string) (command
 			if errors.Is(err, errAgentPickerCancelled) {
 				cli.NewPrinter(cmd.OutOrStdout()).Println("Agent selection cancelled.")
 				return nil
+			}
+			if errors.Is(err, errAgentPickerStartBoard) {
+				// Intentionally tracked in addition to the "run" event above:
+				// the user asked for a run but ended up on the board.
+				telemetry.TrackCommand(ctx, "board", nil)
+				return boardtui.Run(ctx)
 			}
 			return err
 		}
