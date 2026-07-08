@@ -391,8 +391,8 @@ func splitTitle(title string, width int) (string, string) {
 	return toolcommon.TruncateText(line1, width), ""
 }
 
-// statusColor matches the web board's card tinting: starting=blue,
-// running=orange, paused=white, error=red, waiting=green.
+// statusColor matches the web board's card tinting: starting/loading/
+// attaching=blue, running=orange, paused=white, error=red, waiting=green.
 func statusColor(status board.CardStatus) color.Color {
 	switch status {
 	case board.StatusStarting, board.StatusLoading, board.StatusAttaching:
