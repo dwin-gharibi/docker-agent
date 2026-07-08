@@ -7,6 +7,7 @@ import (
 
 	pathx "github.com/docker/docker-agent/pkg/path"
 	"github.com/docker/docker-agent/pkg/tui/components/toolcommon"
+	"github.com/docker/docker-agent/pkg/tui/styles"
 )
 
 // StatusModel is the snapshot of run state shown in the footer.
@@ -23,6 +24,12 @@ type StatusModel struct {
 	Tokens        int64 // input + output tokens used so far
 	Cost          float64
 	CostKnown     bool
+
+	// CompactionThreshold is the auto-compaction trigger fraction for the
+	// active agent (0 when unknown); the context bar colors against it.
+	CompactionThreshold float64
+	// Compacting is true while a session compaction runs.
+	Compacting bool
 }
 
 // RenderStatus builds the two-line footer:
@@ -62,22 +69,28 @@ func RenderStatus(d StatusModel, width int) []string {
 func RenderContext(d StatusModel) string {
 	Cost := renderCostSuffix(d)
 	if d.ContextLimit <= 0 {
+		if d.Compacting {
+			return StWarning().Render("compacting…") + Cost
+		}
 		if d.Tokens > 0 {
 			return StMuted().Render(FormatTokens(d.Tokens)+" tokens") + Cost
 		}
-		return RenderBar(0) + StMuted().Render(" 0% · 0/0") + Cost
+		return RenderBar(0, 0) + StMuted().Render(" 0% · 0/0") + Cost
 	}
 
 	pct := float64(d.ContextLength) / float64(d.ContextLimit)
 	if pct > 1 {
 		pct = 1
 	}
-	bar := RenderBar(pct)
-	label := fmt.Sprintf(" %d%% · %s/%s",
-		int(pct*100+0.5),
+	bar := RenderBar(pct, d.CompactionThreshold)
+	tokens := fmt.Sprintf(" · %s/%s",
 		FormatTokens(d.ContextLength),
 		FormatTokens(d.ContextLimit),
 	)
+	if d.Compacting {
+		return bar + StWarning().Render(" compacting…") + StMuted().Render(tokens) + Cost
+	}
+	label := fmt.Sprintf(" %d%%", int(pct*100+0.5)) + tokens
 	return bar + StMuted().Render(label) + Cost
 }
 
@@ -91,14 +104,15 @@ func renderCostSuffix(d StatusModel) string {
 // ContextBarWidth is the cell width of the context-usage gauge.
 const ContextBarWidth = 10
 
-// RenderBar renders the context usage gauge.
-func RenderBar(pct float64) string {
+// RenderBar renders the context usage gauge, escalating its color as usage
+// approaches the auto-compaction threshold (0 uses the package default).
+func RenderBar(pct, threshold float64) string {
 	filled := min(int(pct*float64(ContextBarWidth)+0.5), ContextBarWidth)
 	style := StSuccess()
-	switch {
-	case pct >= 0.85:
+	switch styles.ContextGaugeLevelFor(pct, threshold) {
+	case styles.ContextGaugeCritical:
 		style = StError()
-	case pct >= 0.6:
+	case styles.ContextGaugeWarning:
 		style = StWarning()
 	}
 	return style.Render(strings.Repeat("█", filled)) + StMuted().Render(strings.Repeat("░", ContextBarWidth-filled))

@@ -23,10 +23,11 @@ func (m *model) setTokenUsage(sessionID string, usage *runtime.Usage) {
 	}
 
 	snapshot := ui.UsageSnapshot{
-		ContextLength: usage.ContextLength,
-		ContextLimit:  usage.ContextLimit,
-		Tokens:        usage.InputTokens + usage.OutputTokens,
-		Cost:          usage.Cost,
+		ContextLength:       usage.ContextLength,
+		ContextLimit:        usage.ContextLimit,
+		Tokens:              usage.InputTokens + usage.OutputTokens,
+		Cost:                usage.Cost,
+		CompactionThreshold: usage.CompactionThreshold,
 	}
 	if sessionID == "" {
 		// Once session-scoped usage exists, it is authoritative for the chat
@@ -60,6 +61,7 @@ func (m *model) applyUsageSnapshot() {
 func (m *model) applyStatusUsage(usage ui.UsageSnapshot, cost float64, costKnown bool) {
 	m.status.ContextLength = usage.ContextLength
 	m.status.ContextLimit = usage.ContextLimit
+	m.status.CompactionThreshold = usage.CompactionThreshold
 	m.status.Tokens = usage.Tokens
 	m.status.Cost = cost
 	m.status.CostKnown = costKnown

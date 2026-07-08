@@ -810,7 +810,7 @@ func (r *LocalRuntime) runTurn(
 
 	msgUsage := r.recordAssistantMessage(sess, a, res, agentTools, modelID.String(), msgCost, events)
 
-	usage := SessionUsage(sess, contextLimit)
+	usage := SessionUsage(sess, contextLimit, a.CompactionThreshold())
 	usage.LastMessage = msgUsage
 	events.Emit(NewTokenUsageEvent(sess.ID, a.Name(), usage))
 

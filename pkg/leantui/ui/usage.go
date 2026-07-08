@@ -3,10 +3,11 @@ package ui
 // UsageSnapshot is the per-session token and cost usage summarized in the
 // status footer.
 type UsageSnapshot struct {
-	ContextLength int64
-	ContextLimit  int64
-	Tokens        int64
-	Cost          float64
+	ContextLength       int64
+	ContextLimit        int64
+	Tokens              int64
+	Cost                float64
+	CompactionThreshold float64
 }
 
 // UsageTracker aggregates per-session token usage so the footer can show the

@@ -35,10 +35,11 @@ func TestComposeLineTruncatesLeft(t *testing.T) {
 
 func TestRenderBarWidth(t *testing.T) {
 	t.Parallel()
-	assert.Equal(t, ContextBarWidth, DisplayWidth(RenderBar(0.5)))
-	assert.Equal(t, ContextBarWidth, DisplayWidth(RenderBar(0)))
-	assert.Equal(t, ContextBarWidth, DisplayWidth(RenderBar(1)))
-	assert.Equal(t, ContextBarWidth, DisplayWidth(RenderBar(1.5))) // clamped
+	assert.Equal(t, ContextBarWidth, DisplayWidth(RenderBar(0.5, 0)))
+	assert.Equal(t, ContextBarWidth, DisplayWidth(RenderBar(0, 0)))
+	assert.Equal(t, ContextBarWidth, DisplayWidth(RenderBar(1, 0)))
+	assert.Equal(t, ContextBarWidth, DisplayWidth(RenderBar(1.5, 0))) // clamped
+	assert.Equal(t, ContextBarWidth, DisplayWidth(RenderBar(0.8, 0.5)))
 }
 
 func TestRenderContextShowsZerosBeforeUsage(t *testing.T) {
@@ -46,6 +47,27 @@ func TestRenderContextShowsZerosBeforeUsage(t *testing.T) {
 	out := RenderContext(StatusModel{})
 	assert.NotContains(t, out, "context")
 	assert.Contains(t, out, "0% · 0/0")
+}
+
+func TestRenderContextCompacting(t *testing.T) {
+	t.Parallel()
+	d := StatusModel{ContextLength: 9_000, ContextLimit: 10_000, Compacting: true}
+
+	out := RenderContext(d)
+	assert.Contains(t, out, "compacting…")
+	assert.NotContains(t, out, "90%", "the percentage yields to the compacting indicator")
+	assert.Contains(t, out, "9.0k/10.0k", "token counts stay visible while compacting")
+
+	d.Compacting = false
+	out = RenderContext(d)
+	assert.Contains(t, out, "90%")
+	assert.NotContains(t, out, "compacting…")
+}
+
+func TestRenderContextCompactingWithoutLimit(t *testing.T) {
+	t.Parallel()
+	out := RenderContext(StatusModel{Compacting: true})
+	assert.Contains(t, out, "compacting…")
 }
 
 func TestRenderStatusFitsWidth(t *testing.T) {

@@ -96,3 +96,34 @@ func TestEmptySessionUsageDoesNotOverrideSessionScopedUsage(t *testing.T) {
 	assert.Equal(t, int64(3_000), m.status.Tokens)
 	assert.InDelta(t, 0.10, m.status.Cost, 0.0001)
 }
+
+// TestSessionCompactionDrivesGaugeState verifies the status line adopts the
+// usage event's compaction threshold and flips to "compacting…" for the
+// started→completed window of a SessionCompactionEvent.
+func TestSessionCompactionDrivesGaugeState(t *testing.T) {
+	t.Parallel()
+	m := bareModel(24)
+
+	m.handleEvent(t.Context(), runtime.StreamStarted("root-session", "root"))
+	m.handleEvent(t.Context(), runtime.NewTokenUsageEvent("root-session", "root", &runtime.Usage{
+		InputTokens:         6_000,
+		OutputTokens:        3_000,
+		ContextLength:       9_000,
+		ContextLimit:        10_000,
+		CompactionThreshold: 0.95,
+	}))
+	assert.InDelta(t, 0.95, m.status.CompactionThreshold, 0.0001)
+	assert.Contains(t, ui.RenderContext(m.status), "90%")
+
+	m.handleEvent(t.Context(), runtime.SessionCompaction("root-session", "started", "root"))
+	assert.True(t, m.status.Compacting)
+	out := ui.RenderContext(m.status)
+	assert.Contains(t, out, "compacting…")
+	assert.NotContains(t, out, "90%")
+
+	m.handleEvent(t.Context(), runtime.SessionCompactionCompleted("root-session", runtime.CompactionOutcomeApplied, "root"))
+	assert.False(t, m.status.Compacting)
+	out = ui.RenderContext(m.status)
+	assert.NotContains(t, out, "compacting…")
+	assert.Contains(t, out, "90%")
+}

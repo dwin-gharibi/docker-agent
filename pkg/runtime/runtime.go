@@ -1552,7 +1552,7 @@ func (r *LocalRuntime) EmitStartupInfo(ctx context.Context, sess *session.Sessio
 	// their costs.
 	if sess != nil && (sess.InputTokens > 0 || sess.OutputTokens > 0) {
 		contextLimit := r.contextLimitForAgentModel(ctx, a, modelID)
-		usage := SessionUsage(sess, contextLimit)
+		usage := SessionUsage(sess, contextLimit, a.CompactionThreshold())
 		usage.Cost = sess.TotalCost()
 
 		// Reconstruct LastMessage from the parent session's last assistant
@@ -1947,7 +1947,7 @@ func (r *LocalRuntime) compactWithReason(ctx context.Context, sess *session.Sess
 	// cost increases by the summary generation cost.
 	modelID := r.getEffectiveModelID(ctx, a)
 	contextLimit := r.effectiveContextLimit(ctx, a, r.resolveContextLimit(ctx, a.Model(ctx), modelID))
-	events.Emit(NewTokenUsageEvent(sess.ID, a.Name(), SessionUsage(sess, contextLimit)))
+	events.Emit(NewTokenUsageEvent(sess.ID, a.Name(), SessionUsage(sess, contextLimit, a.CompactionThreshold())))
 }
 
 // preCompactSourceFor maps the canonical compaction reason
