@@ -412,9 +412,10 @@ func (m *model) renderStatus(status board.CardStatus, width int) string {
 
 func (m *model) renderFooter() string {
 	if m.dragging {
-		if m.dragCol >= 0 && m.dragCol != m.selCol {
+		if m.dragCol >= 0 && m.dragCol < len(m.columns) && m.dragCol != m.selCol {
+			const hint = " Release to move the card to "
 			name := strings.TrimSpace(m.columns[m.dragCol].Emoji + " " + m.columns[m.dragCol].Name)
-			return styles.SuccessStyle.Render(" Release to move the card to " + toolcommon.TruncateText(sanitize(name), max(m.width-31, 1)))
+			return styles.SuccessStyle.Render(hint + toolcommon.TruncateText(sanitize(name), max(m.width-len(hint)-1, 1)))
 		}
 		return styles.MutedStyle.Render(" Drop the card on another column to move it")
 	}

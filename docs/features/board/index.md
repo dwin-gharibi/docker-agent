@@ -49,11 +49,12 @@ Requirements: `tmux` and `git` must be installed.
 | `o`           | Open the card's worktree in `$DOCKER_AGENT_BOARD_EDITOR` (`code`) |
 | `s`           | Open an interactive shell in the card's worktree    |
 | `[` / `]`     | Move the card back / forward                        |
+| `1`-`9`       | Move the card to column N                           |
 | `x`           | Delete the card, its session, worktree, and branch  |
 | `p`           | Manage projects (add, edit, reorder, remove)        |
 | `e`           | Edit the selected column's prompt                   |
 | `←↓↑→` `hjkl` | Navigate                                            |
-| mouse         | Click selects, double-click attaches, wheel scrolls |
+| mouse         | Click selects, double-click attaches, drag moves, wheel scrolls |
 | `?`           | Help                                                |
 | `q`           | Quit (agents keep running)                          |
 

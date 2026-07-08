@@ -158,6 +158,68 @@ func TestDragBackToOriginIsANoop(t *testing.T) {
 	assert.False(t, m.dragging)
 }
 
+func TestDragJitterWithinCardStaysAClick(t *testing.T) {
+	t.Parallel()
+
+	m := dragTestModel()
+	_, _ = m.handleClick(tea.MouseClickMsg{X: 5, Y: 5, Button: tea.MouseLeft})
+
+	// Motion within the pressed card does not start a drag…
+	m.handleMotion(tea.MouseMotionMsg{X: 6, Y: 6, Button: tea.MouseLeft})
+	assert.False(t, m.dragging)
+
+	// …so the release is a plain click and double-click stays armed.
+	_, cmd := m.handleRelease(tea.MouseReleaseMsg{X: 6, Y: 6, Button: tea.MouseLeft})
+	assert.Nil(t, cmd)
+	assert.Equal(t, "a", m.lastClickCard)
+}
+
+func TestNonLeftReleaseDoesNotDrop(t *testing.T) {
+	t.Parallel()
+
+	m := dragTestModel()
+	_, _ = m.handleClick(tea.MouseClickMsg{X: 5, Y: 5, Button: tea.MouseLeft})
+	m.handleMotion(tea.MouseMotionMsg{X: 65, Y: 5, Button: tea.MouseLeft})
+
+	// A stray non-left release mid-drag neither drops nor cancels.
+	_, cmd := m.handleRelease(tea.MouseReleaseMsg{X: 65, Y: 5, Button: tea.MouseRight})
+	assert.Nil(t, cmd)
+	assert.True(t, m.dragging)
+}
+
+func TestDragCancelledByDialogAndKeys(t *testing.T) {
+	t.Parallel()
+
+	// A dialog opening mid-drag captures the release: the drag must not
+	// survive, or the next click would silently move a card.
+	m := dragTestModel()
+	_, _ = m.handleClick(tea.MouseClickMsg{X: 5, Y: 5, Button: tea.MouseLeft})
+	m.handleMotion(tea.MouseMotionMsg{X: 65, Y: 5, Button: tea.MouseLeft})
+	_ = m.openDialog(newHelpDialog())
+	assert.False(t, m.dragging)
+	assert.Empty(t, m.dragCardID)
+
+	// A key press cancels a drag too (esc cancels).
+	m = dragTestModel()
+	_, _ = m.handleClick(tea.MouseClickMsg{X: 5, Y: 5, Button: tea.MouseLeft})
+	m.handleMotion(tea.MouseMotionMsg{X: 65, Y: 5, Button: tea.MouseLeft})
+	_, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape})
+	assert.False(t, m.dragging)
+}
+
+func TestMoveCardResolvesByID(t *testing.T) {
+	t.Parallel()
+
+	m := dragTestModel()
+
+	// Moving a card to the column it already occupies is a no-op, wherever
+	// the selection points (the drop path resolves the card by ID).
+	assert.Nil(t, m.moveCard("c", 1), "card c already sits in column done")
+	assert.NotNil(t, m.moveCard("c", 0))
+	assert.Nil(t, m.moveCard("a", -1))
+	assert.Nil(t, m.moveCard("a", 2))
+}
+
 func TestReleaseWithoutMotionIsAClick(t *testing.T) {
 	t.Parallel()
 
