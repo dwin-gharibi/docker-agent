@@ -68,7 +68,9 @@ func newSetupCmd() *cobra.Command {
 
 Two paths:
   - Cloud provider: pick a provider, paste its API key, and choose where to
-    store it (OS keychain, pass, or the docker agent env file).
+    store it (OS keychain, pass, or the docker agent env file). Picking
+    chatgpt signs in with your ChatGPT account in the browser instead of
+    asking for an API key.
   - Local model: check Docker Model Runner and pull a model. No API key needed.
 
 Ends with the exact command to start chatting. Secret values are stored where

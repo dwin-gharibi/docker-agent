@@ -211,7 +211,7 @@ func TestAccessToken_RefreshRejectedSuggestsSigningInAgain(t *testing.T) {
 	})
 
 	_, err := AccessToken(t.Context())
-	require.ErrorContains(t, err, "docker agent auth login chatgpt")
+	require.ErrorContains(t, err, "docker agent setup")
 }
 
 func TestAccessToken_ExpiredWithoutRefreshToken(t *testing.T) {

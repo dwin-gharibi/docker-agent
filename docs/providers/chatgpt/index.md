@@ -28,11 +28,12 @@ family over the OpenAI Responses API.
 ## Sign In
 
 ```bash
-docker agent auth login chatgpt
+docker agent setup
 ```
 
-This opens your browser on the ChatGPT sign-in page and stores the resulting
-OAuth credential in the docker-agent config directory
+Pick **chatgpt** in the provider list: instead of asking for an API key, the
+wizard opens your browser on the ChatGPT sign-in page and stores the
+resulting OAuth credential in the docker-agent config directory
 (`~/.config/cagent/chatgpt-auth.json`, owner-only permissions). The access
 token is refreshed automatically; you only need to sign in again if the
 refresh token is revoked.
@@ -40,9 +41,8 @@ refresh token is revoked.
 Related commands:
 
 ```bash
-docker agent auth status          # show the stored sign-in (account, plan, expiry)
-docker agent auth logout chatgpt  # remove the stored sign-in
-docker agent doctor               # the chatgpt row shows the credential state
+docker agent doctor                        # the chatgpt row shows the credential state
+rm ~/.config/cagent/chatgpt-auth.json      # sign out (remove the stored sign-in)
 ```
 
 ## Configuration
@@ -84,7 +84,7 @@ typically:
 
 ## How It Works
 
-- **Auth:** `docker agent auth login chatgpt` runs an OAuth 2.0
+- **Auth:** the `docker agent setup` sign-in runs an OAuth 2.0
   authorization-code + PKCE flow against `auth.openai.com`. The stored login
   is exposed to credential checks (doctor, `first_available`, auto model
   selection) as the virtual `CHATGPT_OAUTH_TOKEN` variable.

@@ -18,7 +18,7 @@ export OPENAI_API_KEY="sk-..."
 > [!TIP]
 > No API key? A ChatGPT Plus/Pro/Business subscription can be used instead
 > through the [`chatgpt` provider](../chatgpt/index.md): sign in once with
-> `docker agent auth login chatgpt`.
+> `docker agent setup` (pick chatgpt).
 
 ## Configuration
 

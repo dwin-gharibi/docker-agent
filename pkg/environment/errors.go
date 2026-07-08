@@ -43,7 +43,7 @@ func (e *RequiredEnvError) Error() string {
 	msg.WriteString(SecretSourcesHelp(example))
 
 	if slices.Contains(e.Missing, chatgpt.TokenEnvVar) {
-		fmt.Fprintf(&msg, "\n%s is normally supplied by signing in with your ChatGPT account: docker agent auth login chatgpt\n", chatgpt.TokenEnvVar)
+		fmt.Fprintf(&msg, "\n%s is normally supplied by signing in with your ChatGPT account: docker agent setup\n", chatgpt.TokenEnvVar)
 	}
 
 	if e.MissingModelCredentials {

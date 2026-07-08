@@ -147,7 +147,7 @@ var Aliases = map[string]Alias{
 		TokenEnvVar: "GITHUB_TOKEN",
 	},
 	// The chatgpt provider uses a ChatGPT subscription (Plus/Pro/Business)
-	// instead of an API key: `docker agent auth login chatgpt` stores an
+	// instead of an API key: the `docker agent setup` sign-in stores an
 	// OAuth login that the "chatgpt-login" environment source exposes as the
 	// virtual CHATGPT_OAUTH_TOKEN variable. The Codex backend only serves
 	// the Responses API; the OpenAI client pins it for this provider.

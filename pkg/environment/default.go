@@ -54,7 +54,7 @@ func DefaultSources() []Source {
 		sources = append(sources, Source{Name: "config-env-file", Provider: provider})
 	}
 
-	// The ChatGPT account login (created by `docker agent auth login chatgpt`)
+	// The ChatGPT account login (created by the `docker agent setup` sign-in)
 	// serves the virtual CHATGPT_OAUTH_TOKEN variable. It sits after the
 	// explicit sources so a user-supplied value always wins.
 	sources = append(sources, Source{Name: "chatgpt-login", Provider: NewChatGPTLoginProvider()})

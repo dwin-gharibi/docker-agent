@@ -368,11 +368,11 @@ func (f *doctorFlags) listDMRModels(ctx context.Context) ([]string, error) {
 }
 
 // providerCredentialHint phrases the remediation for a missing provider
-// credential: account-based providers point at their sign-in command, the
-// rest at their API-key env var.
+// credential: account-based providers point at the setup wizard's sign-in,
+// the rest at their API-key env var.
 func providerCredentialHint(provider, envVar string) string {
 	if provider == chatgpt.ProviderName {
-		return "sign in with `docker agent auth login chatgpt` or set " + envVar
+		return "sign in with `docker agent setup` (pick chatgpt) or set " + envVar
 	}
 	return "set " + envVar
 }

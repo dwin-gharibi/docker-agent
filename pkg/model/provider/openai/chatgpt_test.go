@@ -229,7 +229,7 @@ func TestChatGPTNotSignedInFailsFastWithGuidance(t *testing.T) {
 
 	_, err := NewClient(t.Context(), cfg, environment.NewNoEnvProvider())
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "docker agent auth login chatgpt")
+	assert.Contains(t, err.Error(), "docker agent setup")
 	assert.Contains(t, err.Error(), chatgpt.TokenEnvVar)
 }
 

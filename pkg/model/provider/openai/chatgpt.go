@@ -52,7 +52,7 @@ func chatgptTokenSource(env environment.Provider, tokenKey string) func(context.
 		}
 		token, err := chatgpt.AccessToken(ctx)
 		if err != nil {
-			return "", fmt.Errorf("chatgpt provider: %w; sign in with `docker agent auth login chatgpt` or set %s", err, tokenKey)
+			return "", fmt.Errorf("chatgpt provider: %w; sign in with `docker agent setup` or set %s", err, tokenKey)
 		}
 		return token, nil
 	}

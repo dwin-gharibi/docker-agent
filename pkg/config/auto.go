@@ -48,11 +48,11 @@ type providerConfig struct {
 var cloudProviders = []providerConfig{
 	{"anthropic", []string{"ANTHROPIC_API_KEY"}, "ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY"},
 	{"openai", []string{"OPENAI_API_KEY"}, "OPENAI_API_KEY", "OPENAI_API_KEY"},
-	// The chatgpt credential is the OAuth login stored by `docker agent auth
-	// login chatgpt`, surfaced as a virtual env var by the "chatgpt-login"
+	// The chatgpt credential is the OAuth login stored by the `docker agent
+	// setup` sign-in, surfaced as a virtual env var by the "chatgpt-login"
 	// source. It is ordered after openai so adding a ChatGPT sign-in never
 	// changes auto-selection for users that already export OPENAI_API_KEY.
-	{"chatgpt", []string{chatgpt.TokenEnvVar}, "sign in with your ChatGPT account: `docker agent auth login chatgpt`", ""},
+	{"chatgpt", []string{chatgpt.TokenEnvVar}, "sign in with your ChatGPT account: `docker agent setup`", ""},
 	{"google", []string{
 		"GOOGLE_API_KEY",
 		"GEMINI_API_KEY",

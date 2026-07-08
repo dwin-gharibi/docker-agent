@@ -117,7 +117,7 @@ func TestDoctorCommand_ChatGPTDefaultModelWithoutLoginSuggestsSignIn(t *testing.
 
 	require.Error(t, err, "a default model without credentials is an issue")
 	assert.Regexp(t, `chatgpt\s+not set\s+CHATGPT_OAUTH_TOKEN`, output)
-	assert.Contains(t, output, "sign in with `docker agent auth login chatgpt` or set CHATGPT_OAUTH_TOKEN")
+	assert.Contains(t, output, "sign in with `docker agent setup` (pick chatgpt) or set CHATGPT_OAUTH_TOKEN")
 }
 
 func TestDoctorCommand_EmptyValueIsNotACredential(t *testing.T) {
