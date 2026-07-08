@@ -402,6 +402,17 @@ On Linux, replace `osascript` with `notify-send`:
 command: notify-send "docker-agent" "Agent needs your input"
 ```
 
+Hooks inherit docker-agent's environment, so this works as-is from a desktop terminal. In detached contexts (SSH, tmux started outside your desktop session, containers), `notify-send` needs the session's `DISPLAY` and `DBUS_SESSION_BUS_ADDRESS` to reach the notification daemon, and fails silently without them. Pass them with the per-hook `env` option:
+
+```yaml
+on_user_input:
+  - type: command
+    command: notify-send "docker-agent" "Agent needs your input"
+    env:
+      DISPLAY: ":0"
+      DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/1000/bus"
+```
+
 To also get alerted on errors and warnings, hook the `notification` event and read the message from the JSON payload on stdin:
 
 ```yaml
@@ -415,9 +426,9 @@ settings:
           osascript -e "display notification \"$MESSAGE\" with title \"docker-agent\""
 ```
 
-If a sound is enough, set `settings: { sound: true }` instead — docker-agent plays a notification sound when a task that ran longer than `sound_threshold` seconds (default 10) succeeds or fails.
+If a sound is enough, set `settings: { sound: true }` instead — docker-agent plays a failure sound when a task errors, and a success sound when a task that ran longer than `sound_threshold` seconds (default 10) completes.
 
-See the [Hooks documentation](../../configuration/hooks/index.md) for the full list of events and their payloads.
+See the [Hooks documentation](../../configuration/hooks/index.md) for the full list of events, their payloads, and per-hook options (`env`, `working_dir`, `timeout`).
 
 ### GitHub PR Reviewer Example
 
