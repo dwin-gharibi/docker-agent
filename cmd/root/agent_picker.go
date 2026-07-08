@@ -22,6 +22,7 @@ import (
 	"github.com/docker/docker-agent/pkg/path"
 	"github.com/docker/docker-agent/pkg/tui/components/scrollbar"
 	"github.com/docker/docker-agent/pkg/tui/components/toolcommon"
+	"github.com/docker/docker-agent/pkg/tui/dialog"
 	"github.com/docker/docker-agent/pkg/tui/styles"
 )
 
@@ -705,23 +706,30 @@ func (m *agentPickerModel) boardButtonAt(x, y int) bool {
 // called on every mouse-motion event, so it must stay cheap: cards all share
 // cardWidth, so only the (variable-width) header lines need measuring.
 func (m *agentPickerModel) panelSize() (w, h int) {
-	title, subtitle, help := m.headerText()
-	contentWidth := max(
-		m.cardWidth(),
-		lipgloss.Width(title),
-		lipgloss.Width(subtitle),
-		lipgloss.Width(m.leanCheckbox())+lipgloss.Width(agentPickerBoardGap)+lipgloss.Width(m.boardButton()),
-		lipgloss.Width(help),
-	)
+	title, subtitle, helpPairs := m.headerText()
 	// Horizontal chrome: border (1) + padding (4) on each side.
-	w = contentWidth + 2*(1+4)
+	w = m.contentWidth(title, subtitle, helpPairs) + 2*(1+4)
 	h = m.cardRows() + agentPickerPanelOverhead
 	return w, h
 }
 
-// headerText returns the (styled) title, subtitle, and help lines shared by
-// render and panelSize so their layout math can't drift apart.
-func (m *agentPickerModel) headerText() (title, subtitle, help string) {
+// contentWidth returns the width of the panel's content column: the widest
+// of the cards, header lines, bottom row, and status bar. Shared by render
+// and panelSize so the layout math can't drift apart.
+func (m *agentPickerModel) contentWidth(title, subtitle string, helpPairs []string) int {
+	return max(
+		m.cardWidth(),
+		lipgloss.Width(title),
+		lipgloss.Width(subtitle),
+		lipgloss.Width(m.leanCheckbox())+lipgloss.Width(agentPickerBoardGap)+lipgloss.Width(m.boardButton()),
+		dialog.HelpKeysWidth(helpPairs...),
+	)
+}
+
+// headerText returns the (styled) title and subtitle lines plus the status
+// bar's [key, description] pairs, shared by render and panelSize so their
+// layout math can't drift apart.
+func (m *agentPickerModel) headerText() (title, subtitle string, helpPairs []string) {
 	title = styles.HighlightWhiteStyle.Render("Choose an agent to run")
 	subtitleText := "Pick the agent you want to start a session with, or double-click a card."
 	if n := m.visibleCount(); n < len(m.choices) {
@@ -732,30 +740,34 @@ func (m *agentPickerModel) headerText() (title, subtitle, help string) {
 		subtitleText = fmt.Sprintf("Pick an agent (%*d–%*d of %d, scroll with ↑↓), or double-click a card.",
 			d, m.offset+1, d, m.offset+n, len(m.choices))
 	}
-	helpText := strings.Join([]string{
-		"↑↓ move",
-		"double-click select",
-		agentPickerKeys.Choose.Help().Key + " " + agentPickerKeys.Choose.Help().Desc,
-		agentPickerKeys.Details.Help().Key + " " + agentPickerKeys.Details.Help().Desc,
-		agentPickerKeys.Lean.Help().Key + " " + agentPickerKeys.Lean.Help().Desc,
-		agentPickerKeys.Board.Help().Key + " " + agentPickerKeys.Board.Help().Desc,
-		agentPickerKeys.Quit.Help().Key + " " + agentPickerKeys.Quit.Help().Desc,
-	}, "   ")
-	// Truncate header lines to the panel's content width so they can't
+	helpPairs = []string{
+		"↑↓", "move",
+		"double-click", "select",
+		agentPickerKeys.Choose.Help().Key, agentPickerKeys.Choose.Help().Desc,
+		agentPickerKeys.Details.Help().Key, agentPickerKeys.Details.Help().Desc,
+		agentPickerKeys.Lean.Help().Key, agentPickerKeys.Lean.Help().Desc,
+		agentPickerKeys.Board.Help().Key, agentPickerKeys.Board.Help().Desc,
+		agentPickerKeys.Quit.Help().Key, agentPickerKeys.Quit.Help().Desc,
+	}
+	// Keep header lines within the panel's content width so they can't
 	// terminal-wrap on narrow terminals: a wrapped line would shift every row
-	// below it and break the row-based mouse hit-testing.
+	// below it and break the row-based mouse hit-testing. The subtitle is
+	// truncated; the status bar drops trailing bindings instead so styled key
+	// runs are never cut mid-sequence.
 	if m.width > 0 {
 		maxWidth := max(m.width-2*(1+4), agentPickerMinCardWidth)
 		subtitleText = toolcommon.TruncateText(subtitleText, maxWidth)
-		helpText = toolcommon.TruncateText(helpText, maxWidth)
+		for len(helpPairs) > 2 && dialog.HelpKeysWidth(helpPairs...) > maxWidth {
+			helpPairs = helpPairs[:len(helpPairs)-2]
+		}
 	}
 	subtitle = styles.MutedStyle.Render(subtitleText)
-	help = styles.MutedStyle.Render(helpText)
-	return title, subtitle, help
+	return title, subtitle, helpPairs
 }
 
 func (m *agentPickerModel) render() string {
-	title, subtitle, help := m.headerText()
+	title, subtitle, helpPairs := m.headerText()
+	help := dialog.RenderHelpKeys(m.contentWidth(title, subtitle, helpPairs), helpPairs...)
 
 	cardWidth := m.cardWidth()
 	n := m.visibleCount()
@@ -812,13 +824,7 @@ func (m *agentPickerModel) renderDetails() string {
 		bar,
 	)
 
-	help := styles.MutedStyle.
-		Width(contentWidth).
-		Render(strings.Join([]string{
-			"↑↓ scroll",
-			percentLabel(m.details.ScrollPercent()),
-			"esc/? close",
-		}, "   "))
+	help := dialog.RenderHelpKeys(contentWidth, "↑↓", "scroll", "esc/?", "close")
 
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,
@@ -829,12 +835,6 @@ func (m *agentPickerModel) renderDetails() string {
 	)
 
 	return styles.DialogStyle.Render(content)
-}
-
-// percentLabel formats a scroll fraction (0..1) as a percentage string.
-func percentLabel(frac float64) string {
-	pct := min(max(int(frac*100), 0), 100)
-	return strconv.Itoa(pct) + "%"
 }
 
 // isLocalConfigRef reports whether ref points at a local agent config file

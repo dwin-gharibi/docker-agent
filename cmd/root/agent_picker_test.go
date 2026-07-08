@@ -235,16 +235,6 @@ func trimTrailingPerLine(s string) string {
 	return strings.Join(lines, "\n")
 }
 
-func TestPercentLabel(t *testing.T) {
-	t.Parallel()
-
-	assert.Equal(t, "0%", percentLabel(0))
-	assert.Equal(t, "50%", percentLabel(0.5))
-	assert.Equal(t, "100%", percentLabel(1))
-	assert.Equal(t, "0%", percentLabel(-0.5))
-	assert.Equal(t, "100%", percentLabel(2))
-}
-
 func TestAgentPickerDetailsFixedSize(t *testing.T) {
 	t.Parallel()
 
