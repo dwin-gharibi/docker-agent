@@ -202,7 +202,7 @@ var agentPickerKeys = agentPickerKeyMap{
 	),
 	Lean: key.NewBinding(
 		key.WithKeys("l"),
-		key.WithHelp("l", "toggle lean mode"),
+		key.WithHelp("l", "lean mode"),
 	),
 	Board: key.NewBinding(
 		key.WithKeys("b"),
@@ -741,7 +741,6 @@ func (m *agentPickerModel) headerText() (title, subtitle string, helpPairs []str
 	}
 	helpPairs = []string{
 		"↑↓", "move",
-		"double-click", "select",
 		agentPickerKeys.Choose.Help().Key, agentPickerKeys.Choose.Help().Desc,
 		agentPickerKeys.Details.Help().Key, agentPickerKeys.Details.Help().Desc,
 		agentPickerKeys.Lean.Help().Key, agentPickerKeys.Lean.Help().Desc,
@@ -775,7 +774,14 @@ func fitHelpPairs(pairs []string, maxWidth int) []string {
 
 func (m *agentPickerModel) render() string {
 	title, subtitle, helpPairs := m.headerText()
-	help := dialog.RenderHelpKeys(m.contentWidth(title, subtitle, helpPairs), helpPairs...)
+	contentWidth := m.contentWidth(title, subtitle, helpPairs)
+	// Center the header and status-bar lines within the content column; the
+	// centering can't wrap (contentWidth ≥ each line's width) so the
+	// row-based hit-testing is unaffected.
+	center := styles.BaseStyle.Width(contentWidth).Align(lipgloss.Center)
+	title = center.Render(title)
+	subtitle = center.Render(subtitle)
+	help := dialog.RenderHelpKeys(contentWidth, helpPairs...)
 
 	cardWidth := m.cardWidth()
 	n := m.visibleCount()
