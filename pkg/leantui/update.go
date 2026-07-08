@@ -403,6 +403,8 @@ func (m *model) resetConversation() {
 	m.usage.Reset()
 	m.status.ContextLength = 0
 	m.status.ContextLimit = 0
+	m.status.CompactionThreshold = 0
+	m.status.Compacting = false
 	m.status.Tokens = 0
 	m.status.Cost = 0
 	m.status.CostKnown = false

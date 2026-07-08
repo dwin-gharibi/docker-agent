@@ -10,6 +10,8 @@ import (
 	"charm.land/glamour/v2/ansi"
 	"charm.land/lipgloss/v2"
 	"github.com/alecthomas/chroma/v2"
+
+	"github.com/docker/docker-agent/pkg/compaction"
 )
 
 const (
@@ -123,6 +125,43 @@ const (
 	GaugeFilled = "▰"
 	GaugeEmpty  = "▱"
 )
+
+// ContextGaugeLevel classifies context-window fill relative to the agent's
+// auto-compaction threshold, so context gauges can escalate their color
+// (normal → warning → critical) before compaction kicks in.
+type ContextGaugeLevel int
+
+const (
+	ContextGaugeNormal ContextGaugeLevel = iota
+	ContextGaugeWarning
+	ContextGaugeCritical
+)
+
+// The gauge escalates at fixed fractions of the compaction threshold rather
+// than absolute percentages, so the visual runway stays proportional when a
+// custom compaction_threshold is configured.
+const (
+	contextGaugeWarningRatio  = 0.75
+	contextGaugeCriticalRatio = 0.95
+)
+
+// ContextGaugeLevelFor returns the warning level for a context window filled
+// to the given fraction, measured against the agent's compaction threshold.
+// Thresholds outside (0, 1] fall back to [compaction.DefaultThreshold],
+// mirroring compaction.ShouldCompact.
+func ContextGaugeLevelFor(fill, threshold float64) ContextGaugeLevel {
+	if threshold <= 0 || threshold > 1 {
+		threshold = compaction.DefaultThreshold
+	}
+	switch {
+	case fill >= threshold*contextGaugeCriticalRatio:
+		return ContextGaugeCritical
+	case fill >= threshold*contextGaugeWarningRatio:
+		return ContextGaugeWarning
+	default:
+		return ContextGaugeNormal
+	}
+}
 
 var (
 	NoStyle   = lipgloss.NewStyle()

@@ -126,7 +126,9 @@ func (m *model) handleSessionCompaction(ctx context.Context, e *runtime.SessionC
 	switch e.Status {
 	case "started":
 		m.busy = true
+		m.status.Compacting = true
 	case "completed":
+		m.status.Compacting = false
 		m.finishBusy(ctx)
 	}
 }

@@ -369,7 +369,7 @@ func (r *LocalRuntime) recordHarnessAssistantMessage(sess *session.Session, a *a
 		Model:        modelID,
 		FinishReason: chat.FinishReasonStop,
 	}
-	usageEvent := SessionUsage(sess, 0)
+	usageEvent := SessionUsage(sess, 0, a.CompactionThreshold())
 	usageEvent.LastMessage = msgUsage
 	events.Emit(NewTokenUsageEvent(sess.ID, a.Name(), usageEvent))
 }
