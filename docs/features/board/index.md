@@ -25,6 +25,11 @@ Requirements: `tmux` and `git` must be installed.
   a dedicated tmux session, working in a fresh git worktree branched from the
   project's upstream default branch. The card's title, running/idle status,
   and failures are mirrored live from the agent's control plane.
+- **Startup phases.** While an agent is coming up its card moves through three
+  intermediate statuses before reaching **running**: `starting` (tmux session
+  created, process booting, no worktree yet) → `loading` (worktree present;
+  agent loading config, models, and tools) → `attaching` (control-plane socket
+  bound; board waiting for the first snapshot).
 - **Columns are a pipeline.** The default pipeline is
   Dev → Review → Push → Done. Moving a card forward (`]`)
   sends the destination column's prompt to the card's agent; moving it back
