@@ -20,6 +20,16 @@ func (d *Driver) Click(x, y int) *Driver {
 	return d
 }
 
+// Drag presses the left button at (fromX, fromY), moves through a midpoint,
+// and releases at (toX, toY).
+func (d *Driver) Drag(fromX, fromY, toX, toY int) *Driver {
+	d.sendSync(tea.MouseClickMsg{X: fromX, Y: fromY, Button: tea.MouseLeft})
+	d.sendSync(tea.MouseMotionMsg{X: (fromX + toX) / 2, Y: (fromY + toY) / 2, Button: tea.MouseLeft})
+	d.sendSync(tea.MouseMotionMsg{X: toX, Y: toY, Button: tea.MouseLeft})
+	d.sendSync(tea.MouseReleaseMsg{X: toX, Y: toY, Button: tea.MouseLeft})
+	return d
+}
+
 // FindText returns the coordinates of the first occurrence of text in the
 // latest captured frame. The x coordinate is display width, not byte offset,
 // so it works for wide Unicode before the matched text.

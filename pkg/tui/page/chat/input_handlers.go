@@ -217,6 +217,15 @@ func (p *chatPage) handleMouseMotion(msg tea.MouseMotionMsg) (layout.Model, tea.
 		return p, tea.Batch(cmds...)
 	}
 
+	// During a text-selection drag, keep feeding motion to the messages
+	// component even when the cursor drifts over the sidebar, so the
+	// selection keeps extending until the button is released.
+	if p.messages.IsSelecting() {
+		model, cmd := p.messages.Update(msg)
+		p.messages = model.(messages.Model)
+		return p, cmd
+	}
+
 	cmd := p.routeMouseEvent(msg, msg.Y)
 	return p, cmd
 }

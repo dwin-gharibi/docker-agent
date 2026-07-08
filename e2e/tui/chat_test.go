@@ -55,6 +55,26 @@ func TestChat_CopyAssistantMessageToClipboard(t *testing.T) {
 	d.MoveMouseToText("2 + 2 equals 4.").
 		WaitFor(tuitest.Contains(types.AssistantMessageCopyLabel)).
 		ClickText(types.AssistantMessageCopyLabel).
+		WaitForClipboard("2 + 2 equals 4.").
+		// The clicked label transiently reads "copied" instead of "⎘ copy".
+		WaitFor(tuitest.Not(tuitest.Contains(types.AssistantMessageCopyLabel))).
+		WaitFor(tuitest.Contains(types.CopiedFeedbackLabel))
+}
+
+// TestChat_DragSelectionCopiesAcrossRegions guards the mouse routing that
+// keeps a text-selection drag alive outside the chat content region: the
+// drag starts on the response text and releases near the bottom of the
+// screen (over the editor/status area). The release must still finalize the
+// selection and copy it.
+func TestChat_DragSelectionCopiesAcrossRegions(t *testing.T) {
+	d := newTUI(t, "testdata/basic.yaml", 120, 40, tui.WithHideSidebar())
+
+	d.Type("What's 2+2?").
+		Enter().
+		WaitFor(tuitest.Contains("2 + 2 equals 4."))
+
+	x, y := d.MustFindText("2 + 2 equals 4.")
+	d.Drag(x, y, x+30, 37).
 		WaitForClipboard("2 + 2 equals 4.")
 }
 

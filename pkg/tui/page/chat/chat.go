@@ -135,6 +135,8 @@ type Page interface {
 	IsWorking() bool
 	// IsInlineEditing returns true if a past user message is being edited inline
 	IsInlineEditing() bool
+	// IsSelecting returns true while a text-selection drag is active in the messages panel
+	IsSelecting() bool
 	// QueueLength returns the number of queued messages
 	QueueLength() int
 	// FocusMessages gives focus to the messages panel for keyboard scrolling
@@ -1165,6 +1167,12 @@ func (p *chatPage) IsWorking() bool {
 // IsInlineEditing returns true if a past user message is being edited inline.
 func (p *chatPage) IsInlineEditing() bool {
 	return p.messages.IsInlineEditing()
+}
+
+// IsSelecting returns true while a text-selection drag is active in the
+// messages panel.
+func (p *chatPage) IsSelecting() bool {
+	return p.messages.IsSelecting()
 }
 
 // QueueLength returns the number of queued messages

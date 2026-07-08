@@ -82,6 +82,9 @@ type Model interface {
 	// IsScrollbarDragging returns true when the scrollbar thumb is being dragged.
 	IsScrollbarDragging() bool
 
+	// IsSelecting returns true while a text-selection drag is in progress.
+	IsSelecting() bool
+
 	// IsMouseOnScrollbar returns true when the given screen coordinates are on the scrollbar.
 	IsMouseOnScrollbar(x, y int) bool
 
@@ -158,6 +161,10 @@ type model struct {
 
 	// Hover state for showing copy button on assistant messages
 	hoveredMessageIndex int // Index of message under mouse (-1 = none)
+
+	// Transient "copied" confirmation over the last clicked copy label
+	copiedFlash    *copiedFlash
+	copiedFlashSeq int
 
 	// Hovered URL for underline-on-hover effect (nil = no URL hovered)
 	hoveredURL *hoveredURL
@@ -241,6 +248,10 @@ func (m *model) Update(msg tea.Msg) (layout.Model, tea.Cmd) {
 	case DebouncedCopyMsg:
 		cmd := m.handleDebouncedCopy(msg)
 		return m, cmd
+
+	case copiedFlashExpiredMsg:
+		m.handleCopiedFlashExpired(msg)
+		return m, nil
 
 	case scrollToBottomMsg:
 		if !m.userHasScrolled {
@@ -345,12 +356,15 @@ func (m *model) handleMouseClick(msg tea.MouseClickMsg) (layout.Model, tea.Cmd) 
 		}
 
 		if content, ok := m.codeBlockAt(msgIdx, localLine, col); ok {
-			return m, copyTextToClipboard(content)
+			return m, tea.Batch(copyTextToClipboard(content), m.flashCopiedLabel(msgIdx, localLine, true))
 		}
 
 		if m.isCopyLabelClick(msgIdx, localLine, col) {
 			cmd := m.copyMessageToClipboard(msgIdx)
-			return m, cmd
+			if cmd == nil {
+				return m, nil
+			}
+			return m, tea.Batch(cmd, m.flashCopiedLabel(msgIdx, localLine, false))
 		}
 
 		if m.isRetryLabelClick(msgIdx, localLine, col) {
@@ -365,15 +379,32 @@ func (m *model) handleMouseClick(msg tea.MouseClickMsg) (layout.Model, tea.Cmd) 
 	clickCount := m.selection.detectClickType(line, col)
 
 	switch clickCount {
-	case 3: // Triple-click: select line
-		m.selectLineAt(line)
-		m.selection.pendingCopyID++ // Cancel any pending double-click copy
-		cmd := m.copySelectionToClipboard()
-		return m, cmd
-	case 2: // Double-click: select word with debounced copy
-		m.selectWordAt(line, col)
-		cmd := m.scheduleDebouncedCopy()
-		return m, cmd
+	case 3: // Triple-click: select line, drag extends it, copy on release/debounce
+		if m.selectLineAt(line) {
+			m.selection.mouseButtonDown = true
+			m.selection.mouseY = msg.Y
+			m.selection.anchorTo()
+			cmd := m.scheduleDebouncedCopy()
+			return m, cmd
+		}
+		// Blank line: fall back to a plain drag selection.
+		m.selection.start(line, col)
+		m.selection.mouseY = msg.Y
+		return m, nil
+	case 2: // Double-click: select word, drag extends it, copy on release/debounce
+		if m.selectWordAt(line, col) {
+			// Keep tracking the button so a double-click drag extends the
+			// selection word-anchored instead of being ignored.
+			m.selection.mouseButtonDown = true
+			m.selection.mouseY = msg.Y
+			m.selection.anchorTo()
+			cmd := m.scheduleDebouncedCopy()
+			return m, cmd
+		}
+		// Blank line: fall back to a plain drag selection.
+		m.selection.start(line, col)
+		m.selection.mouseY = msg.Y
+		return m, nil
 	default: // Single click: start drag selection
 		m.selection.start(line, col)
 		m.selection.mouseY = msg.Y
@@ -416,6 +447,11 @@ func (m *model) handleMouseMotion(msg tea.MouseMotionMsg) (layout.Model, tea.Cmd
 
 	if m.selection.mouseButtonDown && m.selection.active {
 		line, col := m.mouseToLineCol(msg.X, msg.Y)
+		// Any real movement turns a multi-click into a drag: the copy now
+		// belongs to the release handler, not the debounced word copy.
+		if line != m.selection.lastClickLine || col != m.selection.lastClickCol {
+			m.selection.pendingCopyID++
+		}
 		m.selection.update(line, col)
 		m.selection.mouseY = msg.Y
 		cmd := m.autoScroll()
@@ -456,10 +492,16 @@ func (m *model) handleMouseRelease(msg tea.MouseReleaseMsg) (layout.Model, tea.C
 	if msg.Button == tea.MouseLeft && m.selection.mouseButtonDown {
 		if m.selection.active {
 			line, col := m.mouseToLineCol(msg.X, msg.Y)
-			m.selection.update(line, col)
 
-			// If the mouse didn't move, this was a plain click — open URL if any
-			if line == m.selection.startLine && col == m.selection.startCol {
+			// If the mouse didn't move since the press, this wasn't a drag.
+			if line == m.selection.lastClickLine && col == m.selection.lastClickCol {
+				if m.selection.hasRange() {
+					// Word/line selection from a multi-click: keep it, the
+					// debounced copy fires.
+					m.selection.end()
+					return m, nil
+				}
+				// Plain click — open URL if any
 				m.selection.clear()
 				if url := m.urlAt(line, col); url != "" {
 					return m, core.CmdHandler(messages.OpenURLMsg{URL: url})
@@ -467,7 +509,12 @@ func (m *model) handleMouseRelease(msg tea.MouseReleaseMsg) (layout.Model, tea.C
 				return m, nil
 			}
 
+			m.selection.update(line, col)
 			m.selection.end()
+			m.selection.pendingCopyID++ // The drag copy supersedes any pending word copy
+			// A completed drag is not part of a multi-click sequence: the next
+			// press must start a fresh selection, not a word/line selection.
+			m.selection.resetClickTracking()
 			cmd := m.copySelectionToClipboard()
 			return m, cmd
 		}
@@ -613,6 +660,7 @@ func (m *model) View() string {
 	}
 
 	visibleLines = m.applyURLUnderline(visibleLines, startLine)
+	visibleLines = m.applyCopiedFlash(visibleLines, startLine)
 
 	// Sync scroll state and delegate rendering to scrollview which guarantees
 	// fixed-width padding, pinned scrollbar, and exact height. Selection and
@@ -1979,6 +2027,13 @@ func (m *model) isMouseOnScrollbar(x, y int) bool {
 
 func (m *model) IsScrollbarDragging() bool {
 	return m.scrollview.IsDragging()
+}
+
+// IsSelecting returns true while a text-selection drag is in progress. The
+// app-level mouse routing uses it to keep delivering motion and release
+// events to this component even when the cursor leaves the chat region.
+func (m *model) IsSelecting() bool {
+	return m.selection.mouseButtonDown && m.selection.active
 }
 
 func (m *model) IsMouseOnScrollbar(x, y int) bool {

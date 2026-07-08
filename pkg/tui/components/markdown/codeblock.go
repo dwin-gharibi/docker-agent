@@ -1,11 +1,11 @@
 package markdown
 
-// CodeBlockCopyIcon is the unicode glyph rendered at the top-right corner of
-// every fenced code block. Clicking on it copies the block's raw content to
-// the clipboard. It matches the glyph used for the message-level copy
-// affordance so the visual language stays consistent; the two are
-// disambiguated by line index, not by glyph.
-const CodeBlockCopyIcon = "\u2398"
+// CodeBlockCopyIcon is the label rendered at the top-right corner of every
+// fenced code block. Clicking on it copies the block's raw content to the
+// clipboard. It matches the message-level copy affordance so the visual
+// language stays consistent; the two are disambiguated by line index, not by
+// label text.
+const CodeBlockCopyIcon = "\u2398 copy"
 
 // CodeBlock describes a fenced code block emitted by the renderer.
 //

@@ -2442,6 +2442,14 @@ func (m *appModel) handleMouseMotion(msg tea.MouseMotionMsg) (tea.Model, tea.Cmd
 		return model, batchWith(cmd)
 	}
 
+	// A text-selection drag must keep receiving motion wherever the cursor
+	// goes (editor, tab bar, status bar), otherwise the selection freezes
+	// and the release-copy pair is lost.
+	if m.chatPage.IsSelecting() {
+		model, cmd := m.forwardChat(msg)
+		return model, batchWith(cmd)
+	}
+
 	// Update hover state for resize handle
 	region := m.hitTestRegion(msg.Y)
 	m.isHoveringHandle = region == regionResizeHandle
@@ -2479,6 +2487,12 @@ func (m *appModel) handleMouseRelease(msg tea.MouseReleaseMsg) (tea.Model, tea.C
 
 	if m.dialogMgr.Open() {
 		return m.forwardDialog(msg)
+	}
+
+	// Finish a text-selection drag in the chat no matter where the button
+	// was released; this is what triggers the selection copy.
+	if m.chatPage.IsSelecting() {
+		return m.forwardChat(msg)
 	}
 
 	region := m.hitTestRegion(msg.Y)

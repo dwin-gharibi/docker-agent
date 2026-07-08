@@ -1,6 +1,7 @@
 package messages
 
 import (
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -10,7 +11,9 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/mattn/go-runewidth"
 
+	"github.com/docker/docker-agent/pkg/tui/components/markdown"
 	"github.com/docker/docker-agent/pkg/tui/components/notification"
+	"github.com/docker/docker-agent/pkg/tui/types"
 )
 
 var (
@@ -118,6 +121,32 @@ func runeIndexToDisplayWidth(s string, runeIdx int) int {
 	return width
 }
 
+// uiAffordanceLines lists the purely decorative click affordances (copy,
+// edit, retry labels, collapse indicator) that can appear on their own line
+// in rendered messages. Built as a slice because some labels share the same
+// text (message-level and code-block copy), which a switch would reject as
+// duplicate cases.
+var uiAffordanceLines = []string{
+	types.AssistantMessageCopyLabel,
+	markdown.CodeBlockCopyIcon,
+	types.UserMessageEditLabel,
+	types.ErrorRetryLabel,
+	"[-] collapse",
+}
+
+// isUIAffordanceLine reports whether a selected line, once trimmed, is one of
+// the purely decorative click affordances. Those lines are UI chrome, not
+// message content, so they are dropped from clipboard copies.
+func isUIAffordanceLine(trimmed string) bool {
+	if trimmed == "" {
+		return false
+	}
+	if slices.Contains(uiAffordanceLines, trimmed) {
+		return true
+	}
+	return strings.HasPrefix(trimmed, "[+] expand ") && strings.HasSuffix(trimmed, " more lines")
+}
+
 // extractSelectedText extracts the currently selected text from rendered content
 func (m *model) extractSelectedText() string {
 	if !m.selection.active {
@@ -135,7 +164,7 @@ func (m *model) extractSelectedText() string {
 		endLine = len(lines) - 1
 	}
 
-	var result strings.Builder
+	var selected []string
 	for i := startLine; i <= endLine && i < len(lines); i++ {
 		originalLine := lines[i]
 		// Strip ANSI codes first to get the displayed text with borders
@@ -160,45 +189,97 @@ func (m *model) extractSelectedText() string {
 		}
 
 		// Find the closest rune index for the start and end columns
-		startRuneIdx := findClosestRuneIndex(visualToRune, startCol, len(runes))
-		endRuneIdx := findClosestRuneIndex(visualToRune, endCol, len(runes))
+		lineWidth := visualCol
+		startRuneIdx := findClosestRuneIndex(visualToRune, startCol, len(runes), lineWidth)
+		endRuneIdx := findClosestRuneIndex(visualToRune, endCol, len(runes), lineWidth)
 
 		var lineText string
 		switch i {
 		case startLine:
 			if startLine == endLine {
 				if startRuneIdx < len(runes) && startRuneIdx < endRuneIdx {
-					lineText = strings.TrimSpace(string(runes[startRuneIdx:endRuneIdx]))
+					lineText = string(runes[startRuneIdx:endRuneIdx])
 				}
 				break
 			}
 			// First line: from startCol to end
 			if startRuneIdx < len(runes) {
-				lineText = strings.TrimSpace(string(runes[startRuneIdx:]))
+				lineText = string(runes[startRuneIdx:])
 			}
 		case endLine:
 			// Last line: from start to endCol
-			lineText = strings.TrimSpace(string(runes[:endRuneIdx]))
+			lineText = string(runes[:endRuneIdx])
 		default:
 			// Middle lines: entire line
-			lineText = strings.TrimSpace(line)
+			lineText = line
 		}
 
-		if lineText != "" {
-			result.WriteString(lineText)
+		// Keep leading whitespace (indentation) but drop the width padding
+		// that rendered lines carry on the right.
+		lineText = strings.TrimRight(lineText, " \t")
+		if isUIAffordanceLine(strings.TrimSpace(lineText)) {
+			continue
 		}
-		result.WriteString("\n")
+		selected = append(selected, lineText)
 	}
 
-	return result.String()
+	return cleanSelectedLines(selected)
+}
+
+// cleanSelectedLines normalizes extracted selection lines for the clipboard:
+// blank lines at both ends are dropped (message padding, separators) and the
+// common leading whitespace shared by all non-blank lines is removed, so text
+// loses the message envelope's padding but keeps its relative indentation
+// (essential when copying code).
+func cleanSelectedLines(lines []string) string {
+	start, end := 0, len(lines)
+	for start < end && lines[start] == "" {
+		start++
+	}
+	for end > start && lines[end-1] == "" {
+		end--
+	}
+	lines = lines[start:end]
+	if len(lines) == 0 {
+		return ""
+	}
+
+	indent := -1
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		n := len(line) - len(strings.TrimLeft(line, " "))
+		if indent < 0 || n < indent {
+			indent = n
+		}
+	}
+	if indent <= 0 {
+		return strings.Join(lines, "\n")
+	}
+
+	out := make([]string, len(lines))
+	for i, line := range lines {
+		if line != "" {
+			out[i] = line[indent:]
+		}
+	}
+	return strings.Join(out, "\n")
 }
 
 // findClosestRuneIndex finds the rune index for a given visual column,
-// or the closest next rune if the exact column doesn't exist
-func findClosestRuneIndex(visualToRune map[int]int, visualCol, maxRunes int) int {
+// or the closest next rune if the exact column doesn't exist.
+// Columns at or beyond the end of the line map to one past the last rune, so
+// a selection dragged past the end of an unpadded line still includes its
+// last character (slicing treats the end index as exclusive).
+func findClosestRuneIndex(visualToRune map[int]int, visualCol, maxRunes, lineWidth int) int {
 	// Try exact match first
 	if runeIdx, ok := visualToRune[visualCol]; ok {
 		return runeIdx
+	}
+
+	if visualCol >= lineWidth {
+		return maxRunes
 	}
 
 	// Find the next available rune index after the visual column
@@ -225,7 +306,7 @@ func (m *model) copySelectionToClipboard() tea.Cmd {
 		return nil
 	}
 
-	selectedText := strings.TrimSpace(m.extractSelectedText())
+	selectedText := m.extractSelectedText()
 	if selectedText == "" {
 		return nil
 	}

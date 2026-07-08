@@ -26,8 +26,12 @@ const (
 
 const (
 	UserMessageEditLabel      = "✎"
-	AssistantMessageCopyLabel = "⎘"
+	AssistantMessageCopyLabel = "⎘ copy"
 	ErrorRetryLabel           = "↻ retry"
+	// CopiedFeedbackLabel transiently replaces a clicked copy label. It must
+	// keep the exact display width of the copy labels so the swap never
+	// shifts the layout of the line it happens on.
+	CopiedFeedbackLabel = "copied"
 )
 
 const (
