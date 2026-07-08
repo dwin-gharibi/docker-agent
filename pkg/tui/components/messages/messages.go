@@ -356,7 +356,7 @@ func (m *model) handleMouseClick(msg tea.MouseClickMsg) (layout.Model, tea.Cmd) 
 		}
 
 		if content, ok := m.codeBlockAt(msgIdx, localLine, col); ok {
-			return m, tea.Batch(copyTextToClipboard(content), m.flashCopiedLabel(msgIdx, localLine, true))
+			return m, tea.Batch(copyTextToClipboardSilent(content), m.flashCopiedLabel(msgIdx, localLine, true))
 		}
 
 		if m.isCopyLabelClick(msgIdx, localLine, col) {
@@ -2001,6 +2001,7 @@ func (m *model) isRetryLabelClick(msgIdx, localLine, col int) bool {
 }
 
 // copyMessageToClipboard copies the content of a specific message to clipboard.
+// Silent: the caller flashes an inline "copied" confirmation on the clicked label.
 func (m *model) copyMessageToClipboard(msgIdx int) tea.Cmd {
 	if msgIdx < 0 || msgIdx >= len(m.messages) {
 		return nil
@@ -2009,7 +2010,7 @@ func (m *model) copyMessageToClipboard(msgIdx int) tea.Cmd {
 	if content == "" {
 		return nil
 	}
-	return copyTextToClipboard(content)
+	return copyTextToClipboardSilent(content)
 }
 
 func (m *model) mouseToLineCol(x, y int) (line, col int) {
