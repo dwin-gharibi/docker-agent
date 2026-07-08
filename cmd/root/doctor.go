@@ -30,15 +30,31 @@ const (
 	dmrStatusUnreachable  = "unreachable"
 )
 
+const (
+	userConfigStatusOK      = "ok"
+	userConfigStatusInvalid = "invalid"
+)
+
 // doctorReport is the machine-readable form of the diagnosis. Secret values
 // are never included, only where each one was found.
 type doctorReport struct {
+	UserConfig    doctorUserConfigStatus `json:"user_config"`
 	Providers     []doctorProviderStatus `json:"providers"`
 	DMR           doctorDMRStatus        `json:"dmr"`
 	ModelsGateway string                 `json:"models_gateway,omitempty"`
 	AutoModel     doctorAutoModel        `json:"auto_model"`
 	AgentFile     *doctorAgentFileStatus `json:"agent_file,omitempty"`
 	Issues        []string               `json:"issues,omitempty"`
+}
+
+// doctorUserConfigStatus reports whether the user-level config file can be
+// loaded: an unreadable file is silently ignored at run time (settings and
+// aliases fall back to defaults), which is exactly the kind of surprise the
+// doctor exists to surface.
+type doctorUserConfigStatus struct {
+	Path   string `json:"path"`
+	Status string `json:"status"`
+	Error  string `json:"error,omitempty"`
 }
 
 type doctorProviderStatus struct {
@@ -130,6 +146,7 @@ Exits with a non-zero status when an issue would prevent an agent from running.`
 	loadUserConfig := flags.loadUserConfig
 	if loadUserConfig == nil {
 		loadUserConfig = userconfig.Load
+		flags.loadUserConfig = loadUserConfig
 	}
 	addGatewayFlags(cmd, &flags.runConfig, loadUserConfig)
 
@@ -188,6 +205,15 @@ func (f *doctorFlags) buildReport(ctx context.Context, agentRef string) (*doctor
 	env := environment.NewMultiProvider(providers...)
 
 	report := &doctorReport{ModelsGateway: f.runConfig.ModelsGateway}
+
+	report.UserConfig = doctorUserConfigStatus{Path: userconfig.Path(), Status: userConfigStatusOK}
+	if _, err := f.loadUserConfig(); err != nil {
+		report.UserConfig.Status = userConfigStatusInvalid
+		report.UserConfig.Error = err.Error()
+		report.Issues = append(report.Issues, fmt.Sprintf(
+			"the user config file %s cannot be parsed and is ignored (settings and aliases are unavailable): %v",
+			report.UserConfig.Path, err))
+	}
 
 	credFound := map[string]bool{}
 	primaryEnvVar := map[string]string{}
@@ -398,7 +424,14 @@ func describeDMRStatus(status string) string {
 }
 
 func printDoctorReport(w io.Writer, report *doctorReport) {
-	fmt.Fprintln(w, "Model provider credentials")
+	fmt.Fprintln(w, "User configuration")
+	if report.UserConfig.Status == userConfigStatusOK {
+		fmt.Fprintf(w, "  %s: ok\n", report.UserConfig.Path)
+	} else {
+		fmt.Fprintf(w, "  %s: %s\n", report.UserConfig.Path, report.UserConfig.Error)
+	}
+
+	fmt.Fprintln(w, "\nModel provider credentials")
 	tw := tabwriter.NewWriter(w, 0, 2, 3, ' ', 0)
 	fmt.Fprintln(tw, "  PROVIDER\tSTATUS\tCREDENTIAL\tSOURCE")
 	for _, p := range report.Providers {

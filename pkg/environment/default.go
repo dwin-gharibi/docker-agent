@@ -59,8 +59,11 @@ func DefaultSources() []Source {
 	// explicit sources so a user-supplied value always wins.
 	sources = append(sources, Source{Name: "chatgpt-login", Provider: NewChatGPTLoginProvider()})
 
-	// Add credential helper provider if configured
-	if cfg, err := userconfig.Load(); err == nil && cfg.CredentialHelper != nil && cfg.CredentialHelper.Command != "" {
+	// Add credential helper provider if configured. A broken user config is
+	// only logged: the rest of the source chain must keep working.
+	if cfg, err := userconfig.Load(); err != nil {
+		slog.Warn("Ignoring unreadable user config for credential helper", "path", userconfig.Path(), "error", err)
+	} else if cfg.CredentialHelper != nil && cfg.CredentialHelper.Command != "" {
 		sources = append(sources, Source{
 			Name:     "credential-helper",
 			Provider: NewCredentialHelperProvider(cfg.CredentialHelper.Command, cfg.CredentialHelper.Args...),

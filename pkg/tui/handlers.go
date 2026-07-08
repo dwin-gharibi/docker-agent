@@ -430,16 +430,14 @@ func (m *appModel) handleToggleSplitDiff() (tea.Model, tea.Cmd) {
 // config without blocking the UI. Errors are logged but otherwise ignored
 // because losing the persistence is non-fatal.
 func persistSplitDiffView(enabled bool) {
-	cfg, err := userconfig.Load()
+	err := userconfig.Update(func(cfg *userconfig.Config) error {
+		if cfg.Settings == nil {
+			cfg.Settings = &userconfig.Settings{}
+		}
+		cfg.Settings.SplitDiffView = &enabled
+		return nil
+	})
 	if err != nil {
-		slog.Warn("Failed to load userconfig for split diff toggle", "error", err)
-		return
-	}
-	if cfg.Settings == nil {
-		cfg.Settings = &userconfig.Settings{}
-	}
-	cfg.Settings.SplitDiffView = &enabled
-	if err := cfg.Save(); err != nil {
 		slog.Warn("Failed to persist split diff setting to userconfig", "error", err)
 	}
 }
@@ -843,31 +841,29 @@ func layoutSettingsFromConfig(l userconfig.LayoutSettings) messages.LayoutSettin
 // saveLayoutToUserConfig persists layout settings to the user config file.
 // Default settings clear the layout entry to keep the config file minimal.
 func saveLayoutToUserConfig(s messages.LayoutSettings) error {
-	cfg, err := userconfig.Load()
-	if err != nil {
-		return err
-	}
-	if cfg.Settings == nil {
-		cfg.Settings = &userconfig.Settings{}
-	}
+	return userconfig.Update(func(cfg *userconfig.Config) error {
+		if cfg.Settings == nil {
+			cfg.Settings = &userconfig.Settings{}
+		}
 
-	if s == (messages.LayoutSettings{SidebarPosition: messages.SidebarRight}) {
-		cfg.Settings.Layout = nil
-		return cfg.Save()
-	}
+		if s == (messages.LayoutSettings{SidebarPosition: messages.SidebarRight}) {
+			cfg.Settings.Layout = nil
+			return nil
+		}
 
-	position := string(s.SidebarPosition)
-	if s.SidebarPosition == messages.SidebarRight {
-		position = ""
-	}
-	cfg.Settings.Layout = &userconfig.LayoutSettings{
-		SidebarPosition: position,
-		HideUsage:       s.HideUsage,
-		HideAgents:      s.HideAgents,
-		HideTools:       s.HideTools,
-		HideTodos:       s.HideTodos,
-	}
-	return cfg.Save()
+		position := string(s.SidebarPosition)
+		if s.SidebarPosition == messages.SidebarRight {
+			position = ""
+		}
+		cfg.Settings.Layout = &userconfig.LayoutSettings{
+			SidebarPosition: position,
+			HideUsage:       s.HideUsage,
+			HideAgents:      s.HideAgents,
+			HideTools:       s.HideTools,
+			HideTodos:       s.HideTodos,
+		}
+		return nil
+	})
 }
 
 // handleColorSchemeChange reacts to a terminal light/dark report (a DEC mode

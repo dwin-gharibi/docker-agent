@@ -488,23 +488,20 @@ func UserThemeExists(ref string) bool {
 // SaveThemeToUserConfig persists the theme reference to the user config file.
 // If themeRef equals DefaultThemeRef, the setting is cleared (empty string).
 func SaveThemeToUserConfig(themeRef string) error {
-	cfg, err := userconfig.Load()
+	err := userconfig.Update(func(cfg *userconfig.Config) error {
+		if cfg.Settings == nil {
+			cfg.Settings = &userconfig.Settings{}
+		}
+
+		// Clear the setting if using the default theme
+		if themeRef == DefaultThemeRef {
+			cfg.Settings.Theme = ""
+		} else {
+			cfg.Settings.Theme = themeRef
+		}
+		return nil
+	})
 	if err != nil {
-		return fmt.Errorf("loading user config: %w", err)
-	}
-
-	if cfg.Settings == nil {
-		cfg.Settings = &userconfig.Settings{}
-	}
-
-	// Clear the setting if using the default theme
-	if themeRef == DefaultThemeRef {
-		cfg.Settings.Theme = ""
-	} else {
-		cfg.Settings.Theme = themeRef
-	}
-
-	if err := cfg.Save(); err != nil {
 		return fmt.Errorf("saving user config: %w", err)
 	}
 

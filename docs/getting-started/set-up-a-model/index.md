@@ -74,6 +74,9 @@ $ docker agent doctor
 ```
 
 ```text
+User configuration
+  ~/.config/cagent/config.yaml: ok
+
 Model provider credentials
   PROVIDER    STATUS    CREDENTIAL          SOURCE
   anthropic   found     ANTHROPIC_API_KEY   environment
@@ -142,6 +145,9 @@ $ docker agent doctor
 ```
 
 ```text
+User configuration
+  ~/.config/cagent/config.yaml: ok
+
 Model provider credentials
   PROVIDER    STATUS    CREDENTIAL          SOURCE
   anthropic   not set   ANTHROPIC_API_KEY   -

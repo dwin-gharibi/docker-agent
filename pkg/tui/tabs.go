@@ -65,7 +65,7 @@ func (m *appModel) restoreTabs(
 
 	var savedTabs []tuistate.TabEntry
 	var savedActiveID string
-	if *userconfig.Get().RestoreTabs {
+	if userconfig.Get().GetRestoreTabs() {
 		savedTabs, savedActiveID, _ = ts.GetTabs(ctx)
 	}
 

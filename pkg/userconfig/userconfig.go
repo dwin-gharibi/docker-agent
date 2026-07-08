@@ -94,6 +94,9 @@ type Settings struct {
 	// Layout customizes the TUI chat layout (sidebar position and which
 	// sidebar sections are visible). Managed via the /custom command.
 	Layout *LayoutSettings `yaml:"layout,omitempty"`
+	// Extra preserves settings keys this version does not know about (e.g.
+	// written by a newer docker-agent) across a load/save round trip.
+	Extra map[string]any `yaml:",inline"`
 }
 
 // LayoutSettings customizes the TUI chat layout. The zero value is the
@@ -176,14 +179,30 @@ func (s *Settings) GetSplitDiffView() bool {
 	return *s.SplitDiffView
 }
 
+// GetRestoreTabs returns whether previously open tabs are restored on
+// launch, defaulting to false.
+func (s *Settings) GetRestoreTabs() bool {
+	if s == nil || s.RestoreTabs == nil {
+		return false
+	}
+	return *s.RestoreTabs
+}
+
 // SnapshotsEnabled returns whether global snapshot auto-injection is enabled.
 func (s *Settings) SnapshotsEnabled() bool {
 	return s != nil && s.Snapshot != nil && *s.Snapshot
 }
 
-// GlobalHooks returns the user-level hooks config, if configured.
+// GlobalHooks returns the user-level hooks config, if configured. Invalid
+// hooks are skipped with a warning, mirroring hook drop-ins: a bad entry
+// must never reach the runtime, but the section is kept as loaded so a
+// later save does not destroy the user's data.
 func (s *Settings) GlobalHooks() *latest.HooksConfig {
-	if s == nil {
+	if s == nil || s.Hooks == nil {
+		return nil
+	}
+	if err := s.Hooks.Validate(); err != nil {
+		slog.Warn("Ignoring invalid global hooks from user config", "path", Path(), "error", err)
 		return nil
 	}
 	return s.Hooks
@@ -259,6 +278,13 @@ type Config struct {
 	// is a hostname with an optional ":port" suffix; commas and
 	// whitespace are rejected at write time.
 	SandboxAllowlist []string `yaml:"sandbox_allowlist,omitempty"`
+	// Extra preserves top-level keys this version does not know about (e.g.
+	// written by a newer docker-agent) across a load/save round trip.
+	Extra map[string]any `yaml:",inline"`
+
+	// comments preserves the YAML comments read from the config file so
+	// hand-written notes survive a load/save round trip.
+	comments yaml.CommentMap
 }
 
 // Path returns the path to the config file
@@ -296,7 +322,7 @@ func loadFrom(configPath, legacyPath string) (*Config, error) {
 
 // readConfig reads and parses the config file, returning an empty config if file doesn't exist.
 func readConfig(configPath string) (*Config, error) {
-	config := &Config{Aliases: make(map[string]*Alias)}
+	config := &Config{Aliases: make(map[string]*Alias), comments: yaml.CommentMap{}}
 
 	data, err := os.ReadFile(configPath)
 	if err != nil {
@@ -306,12 +332,17 @@ func readConfig(configPath string) (*Config, error) {
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
 
-	if err := yaml.Unmarshal(data, config); err != nil {
+	if err := yaml.UnmarshalWithOptions(data, config, yaml.CommentToMap(config.comments)); err != nil {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
 
 	if config.Aliases == nil {
 		config.Aliases = make(map[string]*Alias)
+	}
+
+	if config.Version != "" && config.Version != CurrentVersion {
+		slog.Warn("User config file has an unexpected version; treating it as "+CurrentVersion,
+			"path", configPath, "version", config.Version)
 	}
 
 	return config, nil
@@ -359,7 +390,12 @@ func (c *Config) migrateFromLegacy(legacyPath string) bool {
 	return true
 }
 
-// Save saves the configuration to the config file
+// Save saves the configuration to the config file.
+//
+// Save alone does not guard against concurrent writers: another process
+// saving between this config's load and this call would be overwritten.
+// Callers doing a load-mutate-save cycle should prefer [Update], which
+// serializes the whole cycle behind a file lock.
 func (c *Config) Save() error {
 	return c.saveTo(Path())
 }
@@ -369,10 +405,15 @@ func (c *Config) saveTo(path string) error {
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
+	// The mutex keeps the marshaled snapshot consistent when another
+	// goroutine mutates the config (e.g. SetAlias) during the save.
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	// Ensure version is always set to current version when saving
 	c.Version = CurrentVersion
 
-	data, err := yaml.Marshal(c)
+	data, err := c.marshal()
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
@@ -380,6 +421,45 @@ func (c *Config) saveTo(path string) error {
 	// The config may contain a credential helper command, so restrict it
 	// to the user.
 	return atomicfile.Write(path, bytes.NewReader(data), 0o600)
+}
+
+// marshal serializes the config, re-attaching the comments captured at load
+// time. A comment whose node no longer exists could fail the marshal, so a
+// comment-related failure falls back to plain serialization: losing comments
+// beats failing the save.
+func (c *Config) marshal() ([]byte, error) {
+	if len(c.comments) > 0 {
+		data, err := yaml.MarshalWithOptions(c, yaml.WithComment(c.comments))
+		if err == nil {
+			return data, nil
+		}
+		slog.Warn("Failed to preserve config comments; saving without them", "error", err)
+	}
+	return yaml.Marshal(c)
+}
+
+// Update atomically applies mutate to the freshest on-disk configuration and
+// saves the result. An advisory file lock serializes the whole
+// load-mutate-save cycle against other docker-agent processes, so concurrent
+// writers cannot overwrite each other's changes. Returning an error from
+// mutate aborts the update and leaves the file untouched. When the lock
+// cannot be acquired the update proceeds unlocked (best effort) rather than
+// failing the save.
+func Update(mutate func(*Config) error) error {
+	if release, err := acquireFileLock(Path() + ".lock"); err == nil {
+		defer release()
+	} else {
+		slog.Warn("Proceeding without config file lock", "error", err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		return err
+	}
+	if err := mutate(cfg); err != nil {
+		return err
+	}
+	return cfg.Save()
 }
 
 // GetAlias retrieves the alias configuration for a given name.
@@ -455,6 +535,9 @@ func (c *Config) DeleteAlias(name string) bool {
 
 // GetSettings returns the global settings with defaults applied.
 func (c *Config) GetSettings() *Settings {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	if c.Settings == nil {
 		return &Settings{RestoreTabs: new(false)}
 	}
@@ -465,11 +548,14 @@ func (c *Config) GetSettings() *Settings {
 }
 
 // Get returns the global user settings from the config file.
-// Returns an empty Settings if the config file doesn't exist or has no settings.
+// Returns default settings if the config file doesn't exist, has no
+// settings, or cannot be read: a broken config must never take the caller
+// down, but it is logged so the ignored settings are not a silent mystery.
 func Get() *Settings {
 	cfg, err := Load()
 	if err != nil {
-		return &Settings{}
+		slog.Warn("Failed to load user config; using default settings", "path", Path(), "error", err)
+		return (&Config{}).GetSettings()
 	}
 	return cfg.GetSettings()
 }

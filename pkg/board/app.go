@@ -116,7 +116,11 @@ func (a *App) SetColumnPrompt(colID, prompt string) error {
 }
 
 // saveConfigLocked persists the projects and columns to the global config
-// file. Callers must hold a.mu.
+// file. Callers must hold a.mu. The board section is written from the
+// board's in-memory view (authoritative for projects and columns) onto the
+// freshest on-disk config, so changes other processes made to unrelated
+// sections while the board was open are never overwritten; a.config is then
+// swapped to that fresh copy.
 func (a *App) saveConfigLocked() error {
 	board := &userconfig.Board{}
 	if a.config.Board != nil {
@@ -132,8 +136,11 @@ func (a *App) saveConfigLocked() error {
 			board.Columns = append(board.Columns, userconfig.BoardColumn{ID: c.ID, Name: c.Name, Emoji: c.Emoji, Prompt: c.Prompt})
 		}
 	}
-	a.config.Board = board
-	return a.config.Save()
+	return userconfig.Update(func(cfg *userconfig.Config) error {
+		cfg.Board = board
+		a.config = cfg
+		return nil
+	})
 }
 
 // Projects returns the configured projects.

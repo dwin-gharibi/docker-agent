@@ -183,6 +183,22 @@ func TestDoctorCommand_DMRPrefersLocalModel(t *testing.T) {
 	assert.Contains(t, output, "No issues found.")
 }
 
+func TestDoctorCommand_InvalidUserConfig(t *testing.T) {
+	t.Parallel()
+
+	output, err := executeDoctor(t, nil,
+		withDoctorTestEnv(map[string]string{"ANTHROPIC_API_KEY": "sk-secret"}, []string{"ai/qwen3:latest"}, nil),
+		func(f *doctorFlags) {
+			f.loadUserConfig = func() (*userconfig.Config, error) {
+				return nil, errors.New("failed to parse config file")
+			}
+		})
+
+	require.Error(t, err)
+	assert.Contains(t, output, "User configuration")
+	assert.Contains(t, output, "cannot be parsed")
+}
+
 func TestDoctorCommand_DefaultModelWithoutCredential(t *testing.T) {
 	t.Parallel()
 

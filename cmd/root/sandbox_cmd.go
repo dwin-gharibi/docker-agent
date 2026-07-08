@@ -1,6 +1,7 @@
 package root
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -10,6 +11,10 @@ import (
 	"github.com/docker/docker-agent/pkg/telemetry"
 	"github.com/docker/docker-agent/pkg/userconfig"
 )
+
+// errSandboxHostAbsent aborts a deny update before the save so removing an
+// already-absent host never rewrites the config file.
+var errSandboxHostAbsent = errors.New("host not on the allowlist")
 
 // newSandboxCmd assembles the `docker agent sandbox` subcommand
 // group. The group is intentionally narrow today: it only manages
@@ -80,17 +85,13 @@ func runSandboxAllowCommand(cmd *cobra.Command, args []string) (commandErr error
 
 	out := cli.NewPrinter(cmd.OutOrStdout())
 
-	cfg, err := userconfig.Load()
-	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
-	}
-
-	added, err := cfg.AddSandboxHosts(args...)
-	if err != nil {
+	var added []string
+	if err := userconfig.Update(func(cfg *userconfig.Config) error {
+		var err error
+		added, err = cfg.AddSandboxHosts(args...)
 		return err
-	}
-	if err := cfg.Save(); err != nil {
-		return fmt.Errorf("failed to save config: %w", err)
+	}); err != nil {
+		return err
 	}
 
 	if len(added) == 0 {
@@ -116,19 +117,19 @@ func runSandboxDenyCommand(cmd *cobra.Command, args []string) (commandErr error)
 	out := cli.NewPrinter(cmd.OutOrStdout())
 	host := strings.TrimSpace(args[0])
 
-	cfg, err := userconfig.Load()
-	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
-	}
-
-	if !cfg.RemoveSandboxHost(host) {
-		// Idempotent: removing an already-absent host is a no-op so
-		// scripts can `sandbox deny <host>` without first checking.
-		out.Printf("Host %q is not on the persistent sandbox allowlist.\n", host)
+	if err := userconfig.Update(func(cfg *userconfig.Config) error {
+		if !cfg.RemoveSandboxHost(host) {
+			return errSandboxHostAbsent
+		}
 		return nil
-	}
-	if err := cfg.Save(); err != nil {
-		return fmt.Errorf("failed to save config: %w", err)
+	}); err != nil {
+		if errors.Is(err, errSandboxHostAbsent) {
+			// Idempotent: removing an already-absent host is a no-op so
+			// scripts can `sandbox deny <host>` without first checking.
+			out.Printf("Host %q is not on the persistent sandbox allowlist.\n", host)
+			return nil
+		}
+		return err
 	}
 	out.Printf("Removed %s from the persistent sandbox allowlist.\n", host)
 	return nil
