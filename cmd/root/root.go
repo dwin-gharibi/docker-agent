@@ -59,8 +59,7 @@ func NewRootCmd() *cobra.Command {
 
 New to docker agent? Take the hands-on tour: docker agent getting-started`,
 		Example: `  docker-agent run
-  docker-agent run ./agent.yaml
-  docker-agent run agentcatalog/pirate`,
+  docker-agent run ./agent.yaml`,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			// Apply directory overrides before anything else so that
 			// logging, telemetry, and config loading honour them.
