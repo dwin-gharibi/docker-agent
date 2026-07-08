@@ -1,10 +1,12 @@
 package styles
 
 import (
+	"image/color"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"charm.land/lipgloss/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -157,5 +159,35 @@ func TestDefaultLightThemeContrast(t *testing.T) {
 		require.True(t, ok, "%s: invalid colors %q on %q", check.name, check.fg, check.bg)
 		assert.GreaterOrEqual(t, ratio, check.minRatio,
 			"%s: contrast of %s on %s is %.2f, want >= %.2f", check.name, check.fg, check.bg, ratio, check.minRatio)
+	}
+}
+
+// TestEmphasisStylesReadableOnLightTheme guards against emphasized text drawn
+// directly on the app background (key hints such as "Esc to interrupt",
+// palette categories, the active resize handle) using the selection
+// foreground. That color is near-white in light themes, which made the text
+// invisible; these styles must stay readable after applying the light theme.
+func TestEmphasisStylesReadableOnLightTheme(t *testing.T) { //nolint:paralleltest // ApplyTheme mutates package-wide style variables.
+	original := CurrentTheme()
+	t.Cleanup(func() { ApplyTheme(original) })
+
+	theme, err := LoadTheme(DefaultLightThemeRef)
+	require.NoError(t, err)
+	ApplyTheme(theme)
+
+	checks := []struct {
+		name  string
+		style lipgloss.Style
+		bg    color.Color
+	}{
+		{"HighlightWhiteStyle", HighlightWhiteStyle, Background},
+		{"PaletteCategoryStyle", PaletteCategoryStyle, Background},
+		{"ResizeHandleActiveStyle", ResizeHandleActiveStyle, Background},
+		{"ThumbActiveStyle", ThumbActiveStyle, BackgroundAlt},
+	}
+	for _, check := range checks {
+		ratio := contrastRatio(check.style.GetForeground(), check.bg)
+		assert.GreaterOrEqual(t, ratio, 4.5,
+			"%s foreground must be readable on the light theme background", check.name)
 	}
 }

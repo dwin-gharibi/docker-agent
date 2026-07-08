@@ -40,6 +40,7 @@ var (
 
 	// Text hierarchy
 
+	TextBright    color.Color
 	TextPrimary   color.Color
 	TextSecondary color.Color
 	TextMuted     color.Color
@@ -131,7 +132,10 @@ var (
 
 // Text Styles
 var (
-	HighlightWhiteStyle = BaseStyle.Foreground(White).Bold(true)
+	// HighlightWhiteStyle emphasizes text drawn on the app background (key
+	// hints, selected values). It uses TextBright, not White: White is the
+	// selection foreground and would be unreadable on light themes.
+	HighlightWhiteStyle = BaseStyle.Foreground(TextBright).Bold(true)
 	MutedStyle          = BaseStyle.Foreground(TextMutedGray)
 	SecondaryStyle      = BaseStyle.Foreground(TextSecondary)
 	BoldStyle           = BaseStyle.Bold(true)
@@ -257,7 +261,7 @@ var (
 var (
 	PaletteCategoryStyle = BaseStyle.
 				Bold(true).
-				Foreground(White).
+				Foreground(TextBright).
 				MarginTop(1)
 
 	PaletteUnselectedActionStyle = BaseStyle.
@@ -436,7 +440,7 @@ var (
 var (
 	TrackStyle       = lipgloss.NewStyle().Foreground(BorderSecondary)
 	ThumbStyle       = lipgloss.NewStyle().Foreground(Info).Background(BackgroundAlt)
-	ThumbActiveStyle = lipgloss.NewStyle().Foreground(White).Background(BackgroundAlt)
+	ThumbActiveStyle = lipgloss.NewStyle().Foreground(TextBright).Background(BackgroundAlt)
 )
 
 // Resize Handle Style
@@ -449,7 +453,7 @@ var (
 				Bold(true)
 
 	ResizeHandleActiveStyle = BaseStyle.
-				Foreground(White).
+				Foreground(TextBright).
 				Bold(true)
 )
 

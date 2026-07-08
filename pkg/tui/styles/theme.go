@@ -1077,6 +1077,7 @@ func ApplyTheme(theme *Theme) {
 	BackgroundAlt = lipgloss.Color(c.BackgroundAlt)
 	// Text colors
 	White = lipgloss.Color(c.SelectedFg)
+	TextBright = lipgloss.Color(c.TextBright)
 	TextPrimary = lipgloss.Color(c.TextPrimary)
 	TextSecondary = lipgloss.Color(c.TextSecondary)
 	TextMuted = lipgloss.Color(c.AccentMuted)
@@ -1154,7 +1155,7 @@ func rebuildStyles() {
 	AppStyle = BaseStyle.Padding(0, AppPadding, 0, AppPadding)
 
 	// Text styles
-	HighlightWhiteStyle = BaseStyle.Foreground(White).Bold(true)
+	HighlightWhiteStyle = BaseStyle.Foreground(TextBright).Bold(true)
 	MutedStyle = BaseStyle.Foreground(TextMutedGray)
 	SecondaryStyle = BaseStyle.Foreground(TextSecondary)
 	BoldStyle = BaseStyle.Bold(true)
@@ -1260,7 +1261,7 @@ func rebuildStyles() {
 	// Command palette styles
 	PaletteCategoryStyle = BaseStyle.
 		Bold(true).
-		Foreground(White).
+		Foreground(TextBright).
 		MarginTop(1)
 
 	PaletteUnselectedActionStyle = BaseStyle.
@@ -1354,12 +1355,12 @@ func rebuildStyles() {
 	// Scrollbar styles
 	TrackStyle = lipgloss.NewStyle().Foreground(BorderSecondary)
 	ThumbStyle = lipgloss.NewStyle().Foreground(Info).Background(BackgroundAlt)
-	ThumbActiveStyle = lipgloss.NewStyle().Foreground(White).Background(BackgroundAlt)
+	ThumbActiveStyle = lipgloss.NewStyle().Foreground(TextBright).Background(BackgroundAlt)
 
 	// Resize handle styles
 	ResizeHandleStyle = BaseStyle.Foreground(BorderSecondary)
 	ResizeHandleHoverStyle = BaseStyle.Foreground(Info).Bold(true)
-	ResizeHandleActiveStyle = BaseStyle.Foreground(White).Bold(true)
+	ResizeHandleActiveStyle = BaseStyle.Foreground(TextBright).Bold(true)
 
 	// Notification styles
 	NotificationStyle = BaseStyle.
