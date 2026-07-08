@@ -6,12 +6,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/docker/docker-agent/pkg/chatgpt"
 	"github.com/docker/docker-agent/pkg/config"
 	"github.com/docker/docker-agent/pkg/config/latest"
 	"github.com/docker/docker-agent/pkg/environment"
@@ -133,6 +136,36 @@ func TestSetupWizard_CloudPathReasksOnEmptyKey(t *testing.T) {
 
 	assert.Contains(t, out.String(), "The key is empty")
 	assert.Equal(t, "sk-key", store.stored["ANTHROPIC_API_KEY"])
+}
+
+func TestSetupWizard_ChatGPTPathRunsBrowserSignIn(t *testing.T) {
+	t.Parallel()
+
+	providers := config.CloudProviderEnvVars()
+	idx := slices.IndexFunc(providers, func(p config.ProviderEnvVars) bool { return p.Provider == "chatgpt" })
+	require.GreaterOrEqual(t, idx, 0, "chatgpt must be offered by the wizard")
+
+	store := &fakeSecretStore{name: "keychain"}
+	// cloud -> chatgpt: no key prompt, no store prompt.
+	wizard, out, _ := newTestWizard(fmt.Sprintf("1\n%d\n", idx+1), nil, []environment.SecretStore{store}, nil, nil)
+	loginCalled := false
+	wizard.chatgptLogin = func(_ context.Context, _ io.Writer) (*chatgpt.LoginResult, error) {
+		loginCalled = true
+		return &chatgpt.LoginResult{Email: "user@example.com", Plan: "plus"}, nil
+	}
+
+	result, err := wizard.run(t.Context())
+	require.NoError(t, err)
+
+	assert.True(t, loginCalled)
+	assert.Empty(t, result.EnvVar, "the sign-in stores the credential itself; nothing to export")
+	assert.Equal(t, "chatgpt/"+config.DefaultModels["chatgpt"], result.Model)
+	assert.Empty(t, store.stored, "no secret store is involved")
+
+	output := out.String()
+	assert.Contains(t, output, "ChatGPT account sign-in")
+	assert.Contains(t, output, "Signed in as user@example.com.")
+	assert.Contains(t, output, "--model chatgpt/"+config.DefaultModels["chatgpt"])
 }
 
 func TestSetupWizard_LocalPathWithPulledModels(t *testing.T) {

@@ -2,7 +2,10 @@ package environment
 
 import (
 	"fmt"
+	"slices"
 	"strings"
+
+	"github.com/docker/docker-agent/pkg/chatgpt"
 )
 
 // SecretsDocsURL is the documentation page describing every built-in secret
@@ -38,6 +41,10 @@ func (e *RequiredEnvError) Error() string {
 	}
 	msg.WriteString("\n")
 	msg.WriteString(SecretSourcesHelp(example))
+
+	if slices.Contains(e.Missing, chatgpt.TokenEnvVar) {
+		fmt.Fprintf(&msg, "\n%s is normally supplied by signing in with your ChatGPT account: docker agent setup\n", chatgpt.TokenEnvVar)
+	}
 
 	if e.MissingModelCredentials {
 		msg.WriteString("\nNo API key? Run a local model instead: docker agent run --model dmr/ai/qwen3 ...\n(the model is pulled on first use; `docker model ls` shows models already pulled)\n")

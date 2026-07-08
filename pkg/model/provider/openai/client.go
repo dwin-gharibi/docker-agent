@@ -18,6 +18,7 @@ import (
 	"github.com/openai/openai-go/v3/shared"
 
 	"github.com/docker/docker-agent/pkg/chat"
+	"github.com/docker/docker-agent/pkg/chatgpt"
 	"github.com/docker/docker-agent/pkg/config/latest"
 	"github.com/docker/docker-agent/pkg/effort"
 	"github.com/docker/docker-agent/pkg/environment"
@@ -57,14 +58,30 @@ func NewClient(ctx context.Context, cfg *latest.ModelConfig, env environment.Pro
 	if gateway := globalOptions.Gateway(); gateway == "" {
 		var clientOptions []option.RequestOption
 
-		if cfg.TokenKey != "" {
+		switch {
+		case isChatGPTProvider(cfg):
+			// ChatGPT account (subscription) auth: a per-request middleware
+			// owns the Authorization and Codex headers so token refreshes
+			// apply mid-session. Fail fast with sign-in guidance when no
+			// credential is available at construction time.
+			tokenSource := chatgptTokenSource(env, cfg.TokenKey)
+			if _, err := tokenSource(ctx); err != nil {
+				slog.ErrorContext(ctx, "ChatGPT client creation failed", "error", err)
+				return nil, err
+			}
+			// The empty API key disables the SDK's OPENAI_API_KEY fallback.
+			clientOptions = append(clientOptions,
+				option.WithAPIKey(""),
+				option.WithMiddleware(chatgptAuthMiddleware(tokenSource)),
+			)
+		case cfg.TokenKey != "":
 			// Explicit token_key configured - use that env var
 			authToken, _ := env.Get(ctx, cfg.TokenKey)
 			if authToken == "" {
 				return nil, fmt.Errorf("%s environment variable is required", cfg.TokenKey)
 			}
 			clientOptions = append(clientOptions, option.WithAPIKey(authToken))
-		} else if isCustomProvider(cfg) {
+		case isCustomProvider(cfg):
 			// Custom provider (has api_type in ProviderOpts) without token_key - no auth
 			slog.DebugContext(ctx, "Custom provider with no token_key, sending requests without authentication",
 				"provider", cfg.Provider, "base_url", cfg.BaseURL)
@@ -311,6 +328,16 @@ func (c *Client) CreateChatCompletionStream(
 	// Check api_type from ProviderOpts to determine which schema to use.
 	// This allows custom providers to explicitly choose the API schema.
 	apiType := getAPIType(&c.ModelConfig)
+
+	// The ChatGPT Codex backend only serves /responses; there is no
+	// chat-completions endpoint to fall back to, so the provider always
+	// routes there, even over an explicit api_type.
+	if isChatGPTProvider(&c.ModelConfig) {
+		if apiType == "openai_chatcompletions" {
+			slog.DebugContext(ctx, "Ignoring api_type openai_chatcompletions: the ChatGPT backend only serves the Responses API")
+		}
+		return c.CreateResponseStream(ctx, messages, requestTools)
+	}
 
 	switch apiType {
 	case "openai_responses":
@@ -599,6 +626,10 @@ func (c *Client) CreateResponseStream(
 			Schema:      structuredOutput.Schema,
 			Strict:      param.NewOpt(structuredOutput.Strict),
 		}
+	}
+
+	if isChatGPTProvider(&c.ModelConfig) {
+		applyChatGPTResponsesPolicy(ctx, &params)
 	}
 
 	// Log the request in JSON format for debugging
@@ -1204,13 +1235,14 @@ func isCustomProvider(cfg *latest.ModelConfig) bool {
 //
 // This covers OpenAI directly, GitHub Copilot (which proxies the same
 // OpenAI models and rejects newer ones (gpt-5, Codex, ...) on the legacy
-// /chat/completions endpoint with a 400), and OpenCode Zen (which publishes
-// the same OpenAI Responses endpoint for its GPT model lineup). Detection is
+// /chat/completions endpoint with a 400), OpenCode Zen (which publishes
+// the same OpenAI Responses endpoint for its GPT model lineup), and the
+// ChatGPT Codex backend (which only serves /responses). Detection is
 // driven by modelinfo.SupportsResponsesAPI so new models are picked up by
 // naming convention rather than a hardcoded allow-list.
 func autoSelectsResponsesAPI(provider string) bool {
 	switch provider {
-	case "openai", "github-copilot", "opencode-zen":
+	case "openai", "github-copilot", "opencode-zen", chatgpt.ProviderName:
 		return true
 	}
 	return false

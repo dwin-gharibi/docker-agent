@@ -82,6 +82,44 @@ func TestDoctorCommand_SourcePrecedenceMatchesProviderChain(t *testing.T) {
 	assert.Regexp(t, `openai\s+found\s+OPENAI_API_KEY\s+env-file`, output)
 }
 
+func TestDoctorCommand_ChatGPTLoginSource(t *testing.T) {
+	t.Parallel()
+
+	// The chatgpt-login source serves the virtual CHATGPT_OAUTH_TOKEN
+	// variable from the stored browser sign-in.
+	login := environment.NewMapEnvProvider(map[string]string{"CHATGPT_OAUTH_TOKEN": "chatgpt-access-token"})
+
+	output, err := executeDoctor(t, nil, func(f *doctorFlags) {
+		f.runConfig.EnvProviderForTests = login
+		f.sourcesForTests = []environment.Source{
+			{Name: "environment", Provider: environment.NewMapEnvProvider(nil)},
+			{Name: "chatgpt-login", Provider: login},
+		}
+		f.dmrLister = func(context.Context) ([]string, error) { return []string{"ai/qwen3:latest"}, nil }
+		f.loadUserConfig = func() (*userconfig.Config, error) { return &userconfig.Config{}, nil }
+	})
+
+	require.NoError(t, err)
+	assert.Regexp(t, `chatgpt\s+found\s+CHATGPT_OAUTH_TOKEN\s+chatgpt-login`, output)
+	assert.Contains(t, output, "auto -> chatgpt/gpt-5.2")
+	assert.Contains(t, output, "No issues found.")
+	assert.NotContains(t, output, "chatgpt-access-token", "secret values must never be printed")
+}
+
+func TestDoctorCommand_ChatGPTDefaultModelWithoutLoginSuggestsSignIn(t *testing.T) {
+	t.Parallel()
+
+	output, err := executeDoctor(t, nil,
+		withDoctorTestEnv(nil, []string{"ai/qwen3:latest"}, nil),
+		func(f *doctorFlags) {
+			f.runConfig.DefaultModel = &latest.ModelConfig{Provider: "chatgpt", Model: "gpt-5.2"}
+		})
+
+	require.Error(t, err, "a default model without credentials is an issue")
+	assert.Regexp(t, `chatgpt\s+not set\s+CHATGPT_OAUTH_TOKEN`, output)
+	assert.Contains(t, output, "sign in with `docker agent setup` (pick chatgpt) or set CHATGPT_OAUTH_TOKEN")
+}
+
 func TestDoctorCommand_EmptyValueIsNotACredential(t *testing.T) {
 	t.Parallel()
 

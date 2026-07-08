@@ -15,6 +15,11 @@ _Use GPT-4o, GPT-5, GPT-5-mini, and other OpenAI models with docker-agent._
 export OPENAI_API_KEY="sk-..."
 ```
 
+> [!TIP]
+> No API key? A ChatGPT Plus/Pro/Business subscription can be used instead
+> through the [`chatgpt` provider](../chatgpt/index.md): sign in once with
+> `docker agent setup` (pick chatgpt).
+
 ## Configuration
 
 ### Inline

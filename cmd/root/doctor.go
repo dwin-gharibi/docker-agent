@@ -14,6 +14,7 @@ import (
 	"github.com/docker/cli/cli"
 	"github.com/spf13/cobra"
 
+	"github.com/docker/docker-agent/pkg/chatgpt"
 	"github.com/docker/docker-agent/pkg/config"
 	"github.com/docker/docker-agent/pkg/environment"
 	"github.com/docker/docker-agent/pkg/model/provider/dmr"
@@ -266,8 +267,8 @@ func (f *doctorFlags) buildReport(ctx context.Context, agentRef string) (*doctor
 		if found, known := credFound[auto.Provider]; known && !found {
 			autoStatus.Usable = false
 			report.Issues = append(report.Issues, fmt.Sprintf(
-				"the configured default model %s/%s has no credential for provider %s; set %s (%s)",
-				auto.Provider, auto.Model, auto.Provider, primaryEnvVar[auto.Provider], environment.SecretsDocsURL))
+				"the configured default model %s/%s has no credential for provider %s; %s (%s)",
+				auto.Provider, auto.Model, auto.Provider, providerCredentialHint(auto.Provider, primaryEnvVar[auto.Provider]), environment.SecretsDocsURL))
 		}
 	}
 	report.AutoModel = autoStatus
@@ -364,6 +365,16 @@ func (f *doctorFlags) listDMRModels(ctx context.Context) ([]string, error) {
 		return f.dmrLister(ctx)
 	}
 	return dmr.ListModels(ctx)
+}
+
+// providerCredentialHint phrases the remediation for a missing provider
+// credential: account-based providers point at the setup wizard's sign-in,
+// the rest at their API-key env var.
+func providerCredentialHint(provider, envVar string) string {
+	if provider == chatgpt.ProviderName {
+		return "sign in with `docker agent setup` (pick chatgpt) or set " + envVar
+	}
+	return "set " + envVar
 }
 
 // findSource returns the name of the first secret source that supplies a
