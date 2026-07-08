@@ -228,6 +228,48 @@ func TestDragCancelledByDialogAndKeys(t *testing.T) {
 	assert.False(t, m.dragging)
 }
 
+func TestStaleDragDoesNotLeakIntoNextGesture(t *testing.T) {
+	t.Parallel()
+
+	// A drag whose release was lost (tea.ExecProcess leaves mouse mode)
+	// must not turn the next click into a card move.
+	m := dragTestModel()
+	_, _ = m.handleClick(tea.MouseClickMsg{X: 5, Y: 5, Button: tea.MouseLeft})
+	m.handleMotion(tea.MouseMotionMsg{X: 65, Y: 5, Button: tea.MouseLeft})
+
+	// Next gesture: click on empty column space…
+	_, cmd := m.handleClick(tea.MouseClickMsg{X: 65, Y: 5 + 2*cardHeight, Button: tea.MouseLeft})
+	assert.Nil(t, cmd)
+	assert.False(t, m.dragging)
+	_, cmd = m.handleRelease(tea.MouseReleaseMsg{X: 65, Y: 5 + 2*cardHeight, Button: tea.MouseLeft})
+	assert.Nil(t, cmd, "a stale drag must not move a card on a plain click")
+
+	// …or on another card: the press rearms a clean candidate.
+	m = dragTestModel()
+	_, _ = m.handleClick(tea.MouseClickMsg{X: 5, Y: 5, Button: tea.MouseLeft})
+	m.handleMotion(tea.MouseMotionMsg{X: 65, Y: 5, Button: tea.MouseLeft})
+	_, _ = m.handleClick(tea.MouseClickMsg{X: 65, Y: 5, Button: tea.MouseLeft})
+	assert.False(t, m.dragging)
+	assert.Equal(t, "c", m.dragCardID)
+	_, cmd = m.handleRelease(tea.MouseReleaseMsg{X: 65, Y: 5, Button: tea.MouseLeft})
+	assert.Nil(t, cmd)
+}
+
+func TestWheelIgnoredWhileCardPressed(t *testing.T) {
+	t.Parallel()
+
+	m := dragTestModel()
+	_, _ = m.handleClick(tea.MouseClickMsg{X: 5, Y: 5, Button: tea.MouseLeft})
+	m.handleMotion(tea.MouseMotionMsg{X: 65, Y: 5, Button: tea.MouseLeft})
+
+	// A wheel event mid-drag must not move the selection: the drop-target
+	// highlight keys off selCol and the scroll would shift cards under the
+	// pointer.
+	m.handleWheel(tea.MouseWheelMsg{X: 65, Y: 5, Button: tea.MouseWheelDown})
+	assert.Equal(t, 0, m.selCol)
+	assert.Equal(t, 0, m.selRow)
+}
+
 func TestMoveCardResolvesByID(t *testing.T) {
 	t.Parallel()
 
