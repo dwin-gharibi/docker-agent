@@ -3,6 +3,93 @@
 All notable changes to this project will be documented in this file.
 
 
+## [v1.102.0] - 2026-07-08
+
+This release brings significant enhancements to the Kanban board (drag & drop, card management, shell access, sandbox fixes), a new ChatGPT provider, TUI layout customization, and numerous stability and usability fixes across the board, session management, and copy/paste experience.
+
+## What's New
+
+- Adds a `chatgpt` provider enabling sign-in with a ChatGPT Plus/Pro/Business account via `docker agent setup`, without requiring an `OPENAI_API_KEY`
+- Adds `/custom` slash command to open a layout customization dialog for sidebar position and section visibility, with live preview and persistent settings
+- Adds a **Section spacing** selector to the `/custom` layout dialog (Compact / Normal / Relaxed)
+- Adds warning and compacting states to the context-usage gauge, escalating color as usage approaches the compaction threshold and showing "compacting..." during compaction
+- Adds `s` shortcut on the board to open an interactive shell in the selected card's worktree
+- Adds digit keys 1–9 to move a board card directly to a numbered column, and adds mouse drag & drop to reposition cards
+- Adds drag ghost preview showing where a dragged card will be inserted in the drop-target column
+- Adds intermediate startup statuses (`starting` → `loading` → `attaching`) on board cards to show boot progress
+- Adds project editing and reordering on the board: press `e` or Enter on a project to rename it, with confirm-delete for destructive removals
+- Adds desktop notifications with hooks tip to the documentation, covering macOS and Linux examples for `on_user_input` and `stop` events
+
+## Improvements
+
+- Aligns TUI board card colors with the web board's status palette; `starting`/`loading`/`attaching` render in blue, `running` in green, and `paused` in a neutral color
+- Fades the dragged card immediately on the first mouse motion during a drag, providing instant visual feedback
+- Clarifies the dirty-worktree removal prompt by listing the consequences of `y` and `N` on separate lines before asking the question
+- Improves command categories in the help output
+- Documents env vars needed for `notify-send` hooks in detached sessions (SSH, tmux, containers)
+
+## Bug Fixes
+
+- Fixes board agent startup failures being silently discarded, leaving cards stuck in "starting" forever; failures are now surfaced on the card
+- Fixes board control-plane sockets being placed inside the data dir, which prevented cards from starting in Docker sandboxes; sockets are now placed in the system temp dir
+- Fixes board storing absolute paths that broke shared state in sandboxes; paths are now stored home-relative
+- Fixes board not forwarding `--config-dir`, `--data-dir`, and `--cache-dir` overrides to spawned agents
+- Fixes board path expansion, state load, and git repo check edge cases
+- Fixes stale drag state and ignores wheel events mid-drag on the board
+- Fixes a race condition where `RunSession`/`recallSession` clobbered the attached runtime's cancel, causing `DeleteSession` to abort in-flight streams incorrectly
+- Fixes session DB being reset on transient open errors (e.g. Ctrl-C, `SQLITE_BUSY`), which could silently wipe access to all past sessions
+- Fixes SQLite memory database opening before acquiring the advisory file lock, causing `SQLITE_BUSY` races under concurrent access
+- Fixes TUI selection copy being unreliable (random one-word copies, trailing padding, UI glyphs in clipboard) and improves copy button affordances
+- Fixes redundant copy toast appearing alongside the inline "copied" flash when clicking a copy button
+- Fixes emphasized text (e.g. "Esc to interrupt") being invisible on light themes due to incorrect color mapping
+- Fixes global config file management: resolves a TUI panic on malformed config and several silent data-loss paths in the load/save cycle
+- Fixes DNS resolution happening at construction time in `NewSSRFSafeTransport`, which could slow agent startup or fail silently when DNS is unavailable
+- Fixes board reporting why a relaunch failed when attaching to an errored card, and drops per-card controller state without racing in-flight relaunches
+- Fixes docs table of contents sidebar overlapping the footer on long pages by switching from `position:fixed` to `position:sticky`
+
+## Technical Changes
+
+- Renames `$BOARD_EDITOR` environment variable to `$DOCKER_AGENT_BOARD_EDITOR`; the old name is kept as a fallback for one release
+- Folds the ChatGPT sign-in flow into `docker agent setup` rather than a separate command
+- Removes the agent catalog example from documentation
+- Adds a lint rule flagging DNS resolution (`net.Lookup*` / `Resolver.Lookup*`) in constructors
+### Pull Requests
+
+- [#3503](https://github.com/docker/docker-agent/pull/3503) - fix(cli): resolve session DB default against the data dir
+- [#3506](https://github.com/docker/docker-agent/pull/3506) - docs: update CHANGELOG.md for v1.101.0
+- [#3507](https://github.com/docker/docker-agent/pull/3507) - chore: bump direct Go dependencies
+- [#3508](https://github.com/docker/docker-agent/pull/3508) - fix(board): surface agent startup failures instead of silently doing nothing
+- [#3509](https://github.com/docker/docker-agent/pull/3509) - feat(tui): add /custom command to customize layout
+- [#3510](https://github.com/docker/docker-agent/pull/3510) - fix(board): store paths home-relative so shared state works in sandboxes
+- [#3512](https://github.com/docker/docker-agent/pull/3512) - feat(provider): add chatgpt provider with ChatGPT account sign-in
+- [#3513](https://github.com/docker/docker-agent/pull/3513) - feat(board): edit, reorder, and confirm-delete projects
+- [#3514](https://github.com/docker/docker-agent/pull/3514) - chore(board): rename $BOARD_EDITOR to $DOCKER_AGENT_BOARD_EDITOR
+- [#3515](https://github.com/docker/docker-agent/pull/3515) - fix(board): run agent control-plane sockets outside the data dir so cards start in docker sandboxes
+- [#3516](https://github.com/docker/docker-agent/pull/3516) - feat(board): show intermediate startup statuses on cards
+- [#3517](https://github.com/docker/docker-agent/pull/3517) - feat(board): add `s` shortcut to open a shell in the card's worktree
+- [#3518](https://github.com/docker/docker-agent/pull/3518) - fix(board): forward directory overrides to spawned agents
+- [#3519](https://github.com/docker/docker-agent/pull/3519) - docs: sync documentation with recent main merges
+- [#3520](https://github.com/docker/docker-agent/pull/3520) - fix(board): clarify dirty-worktree removal prompt with explicit consequences
+- [#3521](https://github.com/docker/docker-agent/pull/3521) - feat(board): align TUI card colors with web board status palette
+- [#3522](https://github.com/docker/docker-agent/pull/3522) - feat(board): move cards to any column with digit keys and drag & drop
+- [#3523](https://github.com/docker/docker-agent/pull/3523) - Improve the command categories
+- [#3524](https://github.com/docker/docker-agent/pull/3524) - feat(board): fade dragged card immediately and fix stale drag state
+- [#3525](https://github.com/docker/docker-agent/pull/3525) - fix: don't clobber attached runtime's cancel in RunSession/recallSession
+- [#3526](https://github.com/docker/docker-agent/pull/3526) - docs: add desktop notifications with hooks tip
+- [#3527](https://github.com/docker/docker-agent/pull/3527) - fix(docs): switch .toc-aside from position:fixed to sticky in flex .main row
+- [#3529](https://github.com/docker/docker-agent/pull/3529) - fix(userconfig): harden global config file management
+- [#3530](https://github.com/docker/docker-agent/pull/3530) - fix(tui): unreadable emphasized text on light themes
+- [#3531](https://github.com/docker/docker-agent/pull/3531) - docs: document env vars for notify-send hooks in detached sessions
+- [#3532](https://github.com/docker/docker-agent/pull/3532) - feat(board): preview the dragged card at its insertion point
+- [#3533](https://github.com/docker/docker-agent/pull/3533) - feat(tui): add section spacing setting to /custom layout dialog
+- [#3534](https://github.com/docker/docker-agent/pull/3534) - fix(session): don't reset the session DB on transient open errors
+- [#3535](https://github.com/docker/docker-agent/pull/3535) - fix(tui): make selection copy reliable and improve copy affordances
+- [#3537](https://github.com/docker/docker-agent/pull/3537) - feat(tui): add warning/compacting states to the context-usage gauge
+- [#3538](https://github.com/docker/docker-agent/pull/3538) - fix(memory): open sqlite db under file lock to avoid SQLITE_BUSY races
+- [#3539](https://github.com/docker/docker-agent/pull/3539) - fix(tui): drop the redundant copy toast when the inline "copied" flash shows
+- [#3540](https://github.com/docker/docker-agent/pull/3540) - fix(ssrf): avoid DNS resolution at construction time in NewSSRFSafeTransport
+
+
 ## [v1.101.0] - 2026-07-07
 
 This release adds a setup wizard for first-time model configuration, an opt-in auto theme that follows the terminal's light/dark background, and several usability and bug fixes.
@@ -4536,3 +4623,5 @@ This release improves the terminal user interface with better error handling and
 [v1.100.0]: https://github.com/docker/docker-agent/releases/tag/v1.100.0
 
 [v1.101.0]: https://github.com/docker/docker-agent/releases/tag/v1.101.0
+
+[v1.102.0]: https://github.com/docker/docker-agent/releases/tag/v1.102.0
