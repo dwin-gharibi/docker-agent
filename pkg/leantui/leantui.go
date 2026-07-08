@@ -10,6 +10,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/docker/docker-agent/pkg/app"
+	"github.com/docker/docker-agent/pkg/gitbranch"
+	"github.com/docker/docker-agent/pkg/leantui/ui"
 	"github.com/docker/docker-agent/pkg/tui/service"
 )
 
@@ -30,11 +32,11 @@ type Config struct {
 // Run drives the lean TUI until the user exits. It owns the terminal (raw
 // mode, no alternate screen) for its lifetime and restores it on return.
 func Run(ctx context.Context, cfg Config) error {
-	term, err := newTerminal(os.Stdin, os.Stdout)
+	term, err := ui.NewTerminal(os.Stdin, os.Stdout)
 	if err != nil {
 		return err
 	}
-	defer term.restore()
+	defer term.Restore()
 
 	loopCtx, loopCancel := context.WithCancel(ctx)
 	defer loopCancel()
@@ -43,13 +45,13 @@ func Run(ctx context.Context, cfg Config) error {
 	m.commitWelcome()
 	m.refreshCommands(loopCtx)
 
-	keys := make(chan key, 64)
+	keys := make(chan ui.Key, 64)
 	events := make(chan any, 256)
 	resizes := make(chan [2]int, 4)
 	done := make(chan struct{})
 	defer close(done)
 
-	go readKeys(term.reader, keys, done)
+	go readKeys(term.Reader(), keys, done)
 	go func() {
 		m.app.SubscribeWith(loopCtx, func(msg tea.Msg) {
 			select {
@@ -60,7 +62,7 @@ func Run(ctx context.Context, cfg Config) error {
 	}()
 	go func() {
 		for {
-			w, h, ok := term.resized()
+			w, h, ok := term.Resized()
 			if !ok {
 				return
 			}
@@ -79,7 +81,9 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 		m.sendFirstMessage(loopCtx, first, cfg.FirstMessageAttachment)
 	}
-	m.queue = append(m.queue, cfg.QueuedMessages...)
+	for _, msg := range cfg.QueuedMessages {
+		m.enqueueFollowUp(msg, msg)
+	}
 
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
@@ -97,7 +101,7 @@ func Run(ctx context.Context, cfg Config) error {
 			m.render()
 		case sz := <-resizes:
 			m.width, m.height = sz[0], sz[1]
-			m.r.setSize(sz[0], sz[1])
+			m.r.SetSize(sz[0], sz[1])
 			m.render()
 		case <-ticker.C:
 			if m.busy {
@@ -114,12 +118,12 @@ func Run(ctx context.Context, cfg Config) error {
 	return nil
 }
 
-func readKeys(r io.Reader, keys chan<- key, done <-chan struct{}) {
-	p := &inputParser{}
+func readKeys(r io.Reader, keys chan<- ui.Key, done <-chan struct{}) {
+	p := &ui.InputParser{}
 	buf := make([]byte, 8192)
 	for {
 		n, err := r.Read(buf)
-		for _, k := range p.feed(buf[:n]) {
+		for _, k := range p.Feed(buf[:n]) {
 			select {
 			case keys <- k:
 			case <-done:
@@ -132,51 +136,34 @@ func readKeys(r io.Reader, keys chan<- key, done <-chan struct{}) {
 	}
 }
 
-type blockKind int
-
-const (
-	blockReasoning blockKind = iota
-	blockAssistant
-)
-
-type pendingBlock struct {
-	kind blockKind
-	text strings.Builder
-}
-
 type model struct {
 	app  *app.App
-	term *terminal
-	r    *renderer
+	term *ui.Terminal
+	r    *ui.Renderer
 
 	width  int
 	height int
 
-	editor *editor
-	ac     *autocomplete
+	screen *ui.Screen
 
-	status       statusData
+	status       ui.StatusModel
 	sessionState *service.SessionState
+	usage        *ui.UsageTracker
 
-	blocks       []*block
 	busy         bool
 	spinnerFrame int
-	pending      *pendingBlock
-	tools        map[string]*toolView
-	toolOrder    []string
-
-	runCancel context.CancelFunc
-	queue     []string
-
-	confirm *confirmState
+	runCancel    context.CancelFunc
+	queue        []ui.PendingUserMessage
+	pendingUsers []ui.PendingUserMessage
+	ignoredUsers []string
 
 	quitting         bool
 	appName          string
 	disabledCommands map[string]bool
 }
 
-func newModel(term *terminal, cfg Config) *model {
-	w, h := term.size()
+func newModel(term *ui.Terminal, cfg Config) *model {
+	w, h := term.Size()
 	appName := cfg.AppName
 	if appName == "" {
 		appName = "docker agent"
@@ -194,14 +181,13 @@ func newModel(term *terminal, cfg Config) *model {
 	return &model{
 		app:              cfg.App,
 		term:             term,
-		r:                newRenderer(term.writer, w, h),
+		r:                ui.NewRenderer(term.Writer(), w, h),
 		width:            w,
 		height:           h,
-		editor:           newEditor("Type a message, / for commands"),
-		ac:               newAutocomplete(),
-		tools:            make(map[string]*toolView),
-		status:           statusData{workingDir: cfg.WorkingDir, branch: gitBranch(cfg.WorkingDir)},
+		screen:           ui.NewScreen(cfg.WorkingDir, gitbranch.Current(cfg.WorkingDir), "Type a message, / for commands"),
+		status:           ui.StatusModel{WorkingDir: cfg.WorkingDir, Branch: gitbranch.Current(cfg.WorkingDir)},
 		sessionState:     sessionState,
+		usage:            ui.NewUsageTracker(),
 		appName:          appName,
 		disabledCommands: disabled,
 	}
@@ -210,24 +196,19 @@ func newModel(term *terminal, cfg Config) *model {
 // render assembles the full frame and reconciles it with the terminal.
 func (m *model) render() {
 	lines, cursorLine, cursorCol := m.buildLines()
-	m.r.frame(lines, cursorLine, cursorCol)
+	m.r.Frame(lines, cursorLine, cursorCol)
 }
 
 // renderFinal repaints the current state, then erases the input box and footer
 // so only the conversation remains once the program exits.
 func (m *model) renderFinal() {
-	m.flushPending()
+	m.screen.Transcript.FlushPending()
 	m.render()
-	m.r.eraseBelow(len(m.conversationLines(m.width)))
-}
-
-// addBlock appends a finalized, lazily-rendered block to the conversation.
-func (m *model) addBlock(render func(width int) []string) {
-	m.blocks = append(m.blocks, &block{render: render})
+	m.r.EraseBelow(len(m.screen.Transcript.Lines(m.width, m.spinnerFrame, m.busy, m.sessionState, m.pendingUsers)))
 }
 
 func (m *model) commitWelcome() {
-	m.addBlock(func(int) []string {
+	m.screen.Transcript.AddBlock(func(int) []string {
 		lines := make([]string, 0, bannerTopPadding+len(bannerLines)+2)
 		for range bannerTopPadding {
 			lines = append(lines, "")
@@ -235,11 +216,11 @@ func (m *model) commitWelcome() {
 
 		leftPad := strings.Repeat(" ", bannerLeftPadding)
 		for _, l := range bannerLines {
-			lines = append(lines, stAccent().Render(leftPad+l))
+			lines = append(lines, ui.StAccent().Render(leftPad+l))
 		}
 		lines = append(lines,
 			"",
-			stMuted().Render(leftPad+"Type a message, press / for commands, Ctrl+C to quit."),
+			ui.StMuted().Render(leftPad+"Type a message, press / for commands, Ctrl+C to quit."),
 		)
 		return lines
 	})

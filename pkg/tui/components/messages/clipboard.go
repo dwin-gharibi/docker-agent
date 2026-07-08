@@ -23,18 +23,18 @@ var (
 // copy behavior without touching the developer or CI machine's real clipboard.
 func SetClipboardWriterForTest(fn func(string) error) func() {
 	clipboardMu.Lock()
+	defer clipboardMu.Unlock()
 	prev := writeClipboard
 	if fn == nil {
 		writeClipboard = clipboard.WriteAll
 	} else {
 		writeClipboard = fn
 	}
-	clipboardMu.Unlock()
 
 	return func() {
 		clipboardMu.Lock()
+		defer clipboardMu.Unlock()
 		writeClipboard = prev
-		clipboardMu.Unlock()
 	}
 }
 

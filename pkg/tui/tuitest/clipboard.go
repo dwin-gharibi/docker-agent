@@ -17,8 +17,8 @@ func newClipboardStore() (*clipboardStore, func()) {
 	store := &clipboardStore{}
 	restore := messages.SetClipboardWriterForTest(func(s string) error {
 		store.mu.Lock()
+		defer store.mu.Unlock()
 		store.values = append(store.values, s)
-		store.mu.Unlock()
 		return nil
 	})
 	return store, restore

@@ -57,14 +57,18 @@ an `instruction`.
 ## Built-in toolsets
 
 Examples that wire up one of the toolsets shipped with docker-agent
-(`filesystem`, `shell`, `todo`, `think`, `memory`, `fetch`, `script`,
-`user_prompt`, `api`, `openapi`, `rag`, `model_picker`, …).
+(`filesystem`, `shell`, `background_jobs`, `todo`, `think`, `memory`,
+`fetch`, `script`, `user_prompt`, `api`, `openapi`, `rag`, `model_picker`, …).
 
 ### Filesystem & shell
 
 | File | What it shows |
 |------|---------------|
 | [`shell.yaml`](shell.yaml) | Plain `shell` toolset. |
+| [`background_jobs.yaml`](background_jobs.yaml) | `background_jobs` toolset for servers, watchers, and other long-running commands. |
+| [`shell_recall.yaml`](shell_recall.yaml) | `background_jobs` with recall enabled for finite long-running commands. |
+| [`docker-wiki.yaml`](docker-wiki.yaml) | OpenWiki-inspired documentation agent that initializes and updates a `docker-wiki/` directory with `/init`, `/update`, and `/status` commands. |
+| [`shell_safer.yaml`](shell_safer.yaml) | Shell toolset wired with the `safer_shell` builtin under `pre_tool_use` with `preempt_yolo: true` — destructive commands force confirmation regardless of `--yolo`; known-safe reads pass through silently. |
 | [`filesystem.yaml`](filesystem.yaml) | Plain `filesystem` toolset. |
 | [`filesystem_allow_deny.yaml`](filesystem_allow_deny.yaml) | Restricting the filesystem tool with allow/deny path lists. |
 | [`script_shell.yaml`](script_shell.yaml) | Defining custom shell commands as named tools via `type: script`. |
@@ -189,8 +193,21 @@ remote MCP endpoints.
 |------|---------------|
 | [`custom_provider.yaml`](custom_provider.yaml) | Talking to any OpenAI-compatible endpoint via a custom provider. |
 | [`compose-secrets.yaml`](compose-secrets.yaml) | Reading API keys from Docker Compose / Swarm secrets. |
-| [`env_placeholders.yaml`](env_placeholders.yaml) | `${ENV_VAR}` substitution inside the YAML. |
+| [`env_placeholders.yaml`](env_placeholders.yaml) | `${env.VAR}` substitution inside the YAML. |
+| [`model_env_substitution.yaml`](model_env_substitution.yaml) | `${env.VAR}` substitution in a model's `model` / `base_url`. |
 | [`nebius.yaml`](nebius.yaml) | Nebius cloud provider. |
+| [`baseten.yaml`](baseten.yaml) | Baseten cloud provider. |
+| [`ovhcloud.yaml`](ovhcloud.yaml) | OVHcloud AI Endpoints provider. |
+| [`groq.yaml`](groq.yaml) | Groq fast-inference provider. |
+| [`fireworks.yaml`](fireworks.yaml) | Fireworks AI open-model inference provider. |
+| [`deepseek.yaml`](deepseek.yaml) | DeepSeek chat and reasoning provider. |
+| [`cerebras.yaml`](cerebras.yaml) | Cerebras fast-inference provider. |
+| [`together.yaml`](together.yaml) | Together AI open-model inference provider. |
+| [`huggingface.yaml`](huggingface.yaml) | Hugging Face Inference Providers open-model router. |
+| [`moonshot.yaml`](moonshot.yaml) | Moonshot AI (Kimi K2) provider. |
+| [`vercel.yaml`](vercel.yaml) | Vercel AI Gateway multi-provider router. |
+| [`cloudflare-workers-ai.yaml`](cloudflare-workers-ai.yaml) | Cloudflare Workers AI edge-hosted open models. |
+| [`cloudflare-ai-gateway.yaml`](cloudflare-ai-gateway.yaml) | Cloudflare AI Gateway multi-provider router. |
 | [`grok.yaml`](grok.yaml) | xAI Grok model. |
 | [`github-copilot.yaml`](github-copilot.yaml) | GitHub Copilot models via OAuth device-flow. |
 | [`fallback_models.yaml`](fallback_models.yaml) | Automatic fallback to a secondary model when the primary fails. |

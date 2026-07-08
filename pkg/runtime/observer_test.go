@@ -29,14 +29,14 @@ type recordingObserver struct {
 func (o *recordingObserver) OnRunStart(_ context.Context, sess *session.Session) {
 	o.startCalls.Add(1)
 	o.mu.Lock()
+	defer o.mu.Unlock()
 	o.startSessID = sess.ID
-	o.mu.Unlock()
 }
 
 func (o *recordingObserver) OnEvent(_ context.Context, _ *session.Session, e Event) {
 	o.mu.Lock()
+	defer o.mu.Unlock()
 	o.events = append(o.events, e)
-	o.mu.Unlock()
 }
 
 func (o *recordingObserver) snapshot() []Event {
@@ -60,7 +60,7 @@ func runtimeWithObserver(t *testing.T, obs EventObserver) (*LocalRuntime, *sessi
 	a := agent.New("root", "instructions", agent.WithModel(prov))
 	tm := team.New(team.WithAgents(a))
 
-	r, err := NewLocalRuntime(tm,
+	r, err := NewLocalRuntime(t.Context(), tm,
 		WithModelStore(mockModelStore{}),
 		WithSessionCompaction(false),
 		WithEventObserver(obs),
@@ -129,8 +129,8 @@ func TestObserver_MultipleObserversFireInRegistrationOrder(t *testing.T) {
 		return &fnObserver{
 			onEvent: func(_ context.Context, _ *session.Session, _ Event) {
 				mu.Lock()
+				defer mu.Unlock()
 				order = append(order, name)
-				mu.Unlock()
 			},
 		}
 	}
@@ -142,7 +142,7 @@ func TestObserver_MultipleObserversFireInRegistrationOrder(t *testing.T) {
 	a := agent.New("root", "instructions", agent.WithModel(prov))
 	tm := team.New(team.WithAgents(a))
 
-	r, err := NewLocalRuntime(tm,
+	r, err := NewLocalRuntime(t.Context(), tm,
 		WithModelStore(mockModelStore{}),
 		WithSessionCompaction(false),
 		WithEventObserver(tag("first")),
@@ -175,7 +175,7 @@ func TestObserver_NilOptIsIgnored(t *testing.T) {
 	a := agent.New("root", "instructions", agent.WithModel(prov))
 	tm := team.New(team.WithAgents(a))
 
-	r, err := NewLocalRuntime(tm,
+	r, err := NewLocalRuntime(t.Context(), tm,
 		WithModelStore(mockModelStore{}),
 		WithEventObserver(nil),
 	)

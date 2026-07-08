@@ -29,8 +29,8 @@ func NewWheelCoalescer() *WheelCoalescer {
 // SetSender wires the message sender used to emit coalesced events.
 func (c *WheelCoalescer) SetSender(send func(tea.Msg)) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.send = send
-	c.mu.Unlock()
 }
 
 // Handle consumes a wheel message and returns true if it was coalesced.

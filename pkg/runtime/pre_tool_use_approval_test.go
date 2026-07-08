@@ -39,7 +39,7 @@ func recordingTool(name string, executed *bool) []tools.Tool {
 	return []tools.Tool{{
 		Name:       name,
 		Parameters: map[string]any{},
-		Handler: func(_ context.Context, _ tools.ToolCall) (*tools.ToolCallResult, error) {
+		Handler: func(_ context.Context, _ tools.ToolCall, _ tools.Runtime) (*tools.ToolCallResult, error) {
 			*executed = true
 			return tools.ResultSuccess("ok"), nil
 		},
@@ -107,7 +107,7 @@ func makeJudgedRuntime(
 	tm := team.New(teamOpts...)
 
 	var err error
-	rt, err = NewLocalRuntime(tm, WithSessionCompaction(false), WithModelStore(mockModelStore{}))
+	rt, err = NewLocalRuntime(t.Context(), tm, WithSessionCompaction(false), WithModelStore(mockModelStore{}))
 	require.NoError(t, err)
 	require.NoError(t, rt.hooksRegistry.RegisterBuiltin(hookName, func(_ context.Context, in *hooks.Input, _ []string) (*hooks.Output, error) {
 		if in == nil || in.HookEventName != hooks.EventPreToolUse {
@@ -277,7 +277,7 @@ func TestPreToolUseHook_ReceivesAgentName(t *testing.T) {
 		agent.WithToolSets(newStubToolSet(nil, agentTools, nil)),
 		agent.WithHooks(preToolUseHooksConfig(hookName)),
 	)
-	rt, err := NewLocalRuntime(team.New(team.WithAgents(root)),
+	rt, err := NewLocalRuntime(t.Context(), team.New(team.WithAgents(root)),
 		WithSessionCompaction(false), WithModelStore(mockModelStore{}))
 	require.NoError(t, err)
 

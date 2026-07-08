@@ -38,6 +38,16 @@ tasks:
     cmds:
       - rm -rf ./bin
 
+  update-models:
+    desc: Refresh the embedded models.dev catalog snapshot
+    cmds:
+      - go generate ./pkg/modelsdev/...
+
+  check-models-fresh:
+    desc: Fail if the embedded models.dev snapshot is stale (run update-models to refresh)
+    cmds:
+      - CHECK_MODELS_SNAPSHOT_FRESHNESS=1 go test -run TestSnapshotDateIsFresh ./pkg/modelsdev/
+
   deploy-local:
     desc: Deploy the cli-plugin
     aliases: [install]
@@ -103,12 +113,17 @@ tasks:
     cmds:
       - docker buildx build --push --platform linux/amd64,linux/arm64 -t docker/docker-agent --build-arg GIT_TAG --build-arg GIT_COMMIT .
 
+  template:
+    desc: Build the sandbox template image with the locally-built binary
+    cmds:
+      - docker buildx build --load --target=template --build-arg GIT_TAG --build-arg GIT_COMMIT -t docker/docker-agent-sbx-templates .
+
   docs-serve:
-    desc: Preview the Jekyll documentation site locally
+    desc: Preview the documentation site locally with Hugo
     dir: docs
     cmds:
       - docker build -t docker-agent-docs .
-      - docker run --rm -v $(cd .. && pwd)/docs:/srv/jekyll -e JEKYLL_ENV=development -p 4000:4000 docker-agent-docs jekyll serve --host 0.0.0.0 --config _config.yml,_config.dev.yml --livereload
+      - docker run --rm -v $(cd .. && pwd)/docs:/src -p 1313:1313 docker-agent-docs
 
   docs-check-links:
     desc: Build the documentation site and check for broken links

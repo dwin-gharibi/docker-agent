@@ -57,6 +57,14 @@ func NewCommandPaletteDialog(categories []commands.Category) Dialog {
 	return d
 }
 
+// IsCommandPalette reports whether d is the command palette dialog. It lets
+// observers (e.g. the getting-started tour) detect the palette opening
+// without coupling to the unexported concrete type.
+func IsCommandPalette(d Dialog) bool {
+	_, ok := d.(*commandPaletteDialog)
+	return ok
+}
+
 func (d *commandPaletteDialog) Init() tea.Cmd { return textinput.Blink }
 
 func (d *commandPaletteDialog) Update(msg tea.Msg) (layout.Model, tea.Cmd) {

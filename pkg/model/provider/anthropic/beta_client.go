@@ -23,8 +23,7 @@ import (
 
 // createBetaStream creates a streaming chat completion using the Beta
 // Messages API. It is used when any feature that requires a beta header is
-// enabled: extended/interleaved thinking, structured output, file attachments
-// (Files API), or task_budget.
+// enabled: extended/interleaved thinking, structured output, or task_budget.
 func (c *Client) createBetaStream(
 	ctx context.Context,
 	client anthropic.Client,
@@ -54,16 +53,9 @@ func (c *Client) createBetaStream(
 
 	sys := extractBetaSystemBlocks(messages)
 
-	// Check if messages contain file attachments to include the files-api beta header
-	needsFilesAPI := hasFileAttachments(messages)
-
 	betas := []anthropic.AnthropicBeta{
 		anthropic.AnthropicBetaInterleavedThinking2025_05_14,
 		"fine-grained-tool-streaming-2025-05-14",
-	}
-	if needsFilesAPI {
-		betas = append(betas, filesAPIBeta)
-		slog.DebugContext(ctx, "Anthropic Beta API: Including files-api beta header for file attachments")
 	}
 
 	params := anthropic.BetaMessageNewParams{
@@ -123,7 +115,7 @@ func (c *Client) createBetaStream(
 	}
 
 	stream := client.Beta.Messages.NewStreaming(ctx, params, requestOpts...)
-	trackUsage := c.ModelConfig.TrackUsage == nil || *c.ModelConfig.TrackUsage
+	trackUsage := c.TrackUsageEnabled()
 	ad := c.newBetaStreamAdapter(stream, trackUsage)
 
 	// Set up single retry for context length errors
@@ -293,7 +285,7 @@ func (c *Client) Rerank(ctx context.Context, query string, documents []types.Doc
 		return nil, err
 	}
 
-	scores, err := parseRerankScoresAnthropic(rawJSON, len(documents))
+	scores, err := providerutil.ParseRerankScores(rawJSON, len(documents))
 	if err != nil {
 		slog.ErrorContext(ctx, "Failed to parse Anthropic rerank scores", "error", err)
 		return nil, err
@@ -344,43 +336,6 @@ func extractAnthropicStructuredOutputJSON(msg *anthropic.BetaMessage) (string, e
 	}
 
 	return "", errors.New("no structured JSON text found in Anthropic BetaMessage content")
-}
-
-// parseRerankScoresAnthropic parses a JSON payload of the form {"scores":[...]} and validates length.
-// This helper is local to the Anthropic provider to avoid cyclic dependencies.
-func parseRerankScoresAnthropic(raw string, expected int) ([]float64, error) {
-	type rerankResponse struct {
-		Scores []float64 `json:"scores"`
-	}
-
-	raw = strings.TrimSpace(raw)
-
-	tryParse := func(s string) ([]float64, error) {
-		var rr rerankResponse
-		if err := json.Unmarshal([]byte(s), &rr); err != nil {
-			return nil, err
-		}
-		if len(rr.Scores) != expected {
-			return nil, fmt.Errorf("expected %d scores, got %d", expected, len(rr.Scores))
-		}
-		return rr.Scores, nil
-	}
-
-	// First attempt: parse whole string as JSON.
-	if scores, err := tryParse(raw); err == nil {
-		return scores, nil
-	}
-
-	// Fallback: extract the first {...} block and try again, in case the model added prose.
-	start := strings.Index(raw, "{")
-	end := strings.LastIndex(raw, "}")
-	if start >= 0 && end > start {
-		if scores, err := tryParse(raw[start : end+1]); err == nil {
-			return scores, nil
-		}
-	}
-
-	return nil, fmt.Errorf("invalid rerank JSON: %s", raw)
 }
 
 // accumulateBetaStreamResponse consumes a Beta streaming response and returns the final BetaMessage.

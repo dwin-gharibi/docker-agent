@@ -217,6 +217,89 @@ func TestCycleAgentThinkingLevel_AdvancesAndOverrides(t *testing.T) {
 	assert.Equal(t, effort.Low, level)
 }
 
+func TestSetAgentThinkingLevel(t *testing.T) {
+	t.Parallel()
+
+	newThinkingRuntime := func(cfg latest.ModelConfig, env map[string]string) (*LocalRuntime, *agent.Agent) {
+		root := agent.New("root", "test", agent.WithModel(newConfigProvider(cfg)))
+		r := &LocalRuntime{
+			team: team.New(team.WithAgents(root)),
+			modelSwitcherCfg: &ModelSwitcherConfig{
+				ProviderRegistry: testProviderRegistry(),
+				EnvProvider:      environment.NewMapEnvProvider(env),
+			},
+		}
+		return r, root
+	}
+
+	t.Run("supported level installs override", func(t *testing.T) {
+		t.Parallel()
+		r, root := newThinkingRuntime(
+			latest.ModelConfig{Provider: "openai", Model: "gpt-5"},
+			map[string]string{"OPENAI_API_KEY": "sk-test"},
+		)
+
+		level, err := r.SetAgentThinkingLevel(t.Context(), "root", effort.High)
+		require.NoError(t, err)
+		assert.Equal(t, effort.High, level)
+		require.True(t, root.HasModelOverride(), "setting a level must install a runtime override")
+
+		override := root.Model(t.Context())
+		require.NotNil(t, override)
+		budget := override.BaseConfig().ModelConfig.ThinkingBudget
+		require.NotNil(t, budget)
+		assert.Equal(t, "high", budget.Effort)
+	})
+
+	t.Run("unsupported level errors and lists supported levels", func(t *testing.T) {
+		t.Parallel()
+		r, root := newThinkingRuntime(
+			latest.ModelConfig{Provider: "openai", Model: "gpt-5"},
+			map[string]string{"OPENAI_API_KEY": "sk-test"},
+		)
+
+		// gpt-5 tops out at high: max must be rejected, not clamped.
+		_, err := r.SetAgentThinkingLevel(t.Context(), "root", effort.Max)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not supported")
+		assert.Contains(t, err.Error(), "high")
+		assert.False(t, root.HasModelOverride(), "no override should be set on rejection")
+	})
+
+	t.Run("non-reasoning model is unsupported", func(t *testing.T) {
+		t.Parallel()
+		r, root := newThinkingRuntime(
+			latest.ModelConfig{Provider: "openai", Model: "gpt-4o"},
+			map[string]string{"OPENAI_API_KEY": "sk-test"},
+		)
+
+		_, err := r.SetAgentThinkingLevel(t.Context(), "root", effort.High)
+		require.ErrorIs(t, err, ErrUnsupported)
+		assert.False(t, root.HasModelOverride())
+	})
+
+	t.Run("nil modelSwitcherCfg is unsupported", func(t *testing.T) {
+		t.Parallel()
+		root := agent.New("root", "test")
+		r := &LocalRuntime{team: team.New(team.WithAgents(root))}
+
+		_, err := r.SetAgentThinkingLevel(t.Context(), "root", effort.High)
+		require.ErrorIs(t, err, ErrUnsupported)
+	})
+
+	t.Run("model-specific top tier is accepted", func(t *testing.T) {
+		t.Parallel()
+		r, _ := newThinkingRuntime(
+			latest.ModelConfig{Provider: "anthropic", Model: "claude-opus-4-7"},
+			map[string]string{"ANTHROPIC_API_KEY": "sk-test"},
+		)
+
+		level, err := r.SetAgentThinkingLevel(t.Context(), "root", effort.Max)
+		require.NoError(t, err)
+		assert.Equal(t, effort.Max, level)
+	})
+}
+
 // TestCycleAgentThinkingLevel_PerModelTopTier verifies that cycling only
 // offers the top effort tiers to the Claude models whose API accepts them.
 func TestCycleAgentThinkingLevel_PerModelTopTier(t *testing.T) {
@@ -511,6 +594,73 @@ func TestGetAvailableProviders(t *testing.T) {
 
 			for _, want := range tt.wantProviders {
 				assert.True(t, got[want], "expected provider %s to be available", want)
+			}
+		})
+	}
+}
+
+// TestGetAvailableProviders_TemplatedAlias verifies that an alias with a
+// templated base URL (Cloudflare's account/gateway-scoped endpoints) is only
+// advertised once every env var its URL references is set, not on the token
+// alone. Otherwise the picker would surface catalog models that cannot be
+// selected (they fail at build time on the missing account/gateway id).
+func TestGetAvailableProviders_TemplatedAlias(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		envVars     map[string]string
+		wantPresent []string
+		wantAbsent  []string
+	}{
+		{
+			name:       "token alone does not advertise Cloudflare",
+			envVars:    map[string]string{"CLOUDFLARE_API_TOKEN": "cf-test"},
+			wantAbsent: []string{"cloudflare-workers-ai", "cloudflare-ai-gateway"},
+		},
+		{
+			name: "token and account id advertise workers-ai but not the gateway",
+			envVars: map[string]string{
+				"CLOUDFLARE_API_TOKEN":  "cf-test",
+				"CLOUDFLARE_ACCOUNT_ID": "acc-123",
+			},
+			wantPresent: []string{"cloudflare-workers-ai"},
+			wantAbsent:  []string{"cloudflare-ai-gateway"},
+		},
+		{
+			name: "token, account and gateway ids advertise both",
+			envVars: map[string]string{
+				"CLOUDFLARE_API_TOKEN":  "cf-test",
+				"CLOUDFLARE_ACCOUNT_ID": "acc-123",
+				"CLOUDFLARE_GATEWAY_ID": "gw-9",
+			},
+			wantPresent: []string{"cloudflare-workers-ai", "cloudflare-ai-gateway"},
+		},
+		{
+			name:        "static-URL alias is still advertised on its token alone",
+			envVars:     map[string]string{"AI_GATEWAY_API_KEY": "vck-test"},
+			wantPresent: []string{"vercel"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := &LocalRuntime{
+				modelSwitcherCfg: &ModelSwitcherConfig{
+					ProviderRegistry: testProviderRegistry(),
+					EnvProvider:      environment.NewMapEnvProvider(tt.envVars),
+				},
+			}
+
+			got := r.getAvailableProviders(t.Context())
+
+			for _, want := range tt.wantPresent {
+				assert.True(t, got[want], "expected provider %s to be available", want)
+			}
+			for _, absent := range tt.wantAbsent {
+				assert.False(t, got[absent], "expected provider %s to NOT be available", absent)
 			}
 		})
 	}

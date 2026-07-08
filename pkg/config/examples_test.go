@@ -15,6 +15,22 @@ import (
 	"github.com/docker/docker-agent/pkg/modelsdev"
 )
 
+// modelsDevAbsentProviders lists providers that are valid at runtime but
+// are not expected to exist in the remote models.dev catalog. The test
+// skips models.dev lookups for these to avoid false failures.
+var modelsDevAbsentProviders = map[string]bool{
+	"dmr":                   true, // Docker Model Runner (local, not in catalog)
+	"chatgpt":               true, // ChatGPT subscription backend; models.dev catalogs its models under the "openai" id
+	"opencode-zen":          true, // not yet registered in models.dev
+	"ovhcloud":              true, // OVHcloud AI Endpoints (not yet in models.dev)
+	"fireworks":             true, // models.dev catalogs Fireworks under the "fireworks-ai" id, not "fireworks"
+	"together":              true, // models.dev catalogs Together AI under the "togetherai" id, not "together"
+	"moonshot":              true, // models.dev catalogs Moonshot AI under the "moonshotai" id, not "moonshot"
+	"vercel":                true, // Vercel AI Gateway is a multi-provider router, not a models.dev catalog id
+	"cloudflare-workers-ai": true, // example uses an @cf/... model id not present in the models.dev snapshot (only variant ids like -fp8 are listed)
+	"cloudflare-ai-gateway": true, // multi-provider router; example model ids use the gateway's provider/model form, not guaranteed to match a models.dev id
+}
+
 func collectExamples(t *testing.T) []string {
 	t.Helper()
 
@@ -38,6 +54,8 @@ func collectExamples(t *testing.T) []string {
 }
 
 func TestParseExamples(t *testing.T) {
+	t.Parallel()
+
 	modelsStore, err := modelsdev.NewStore()
 	require.NoError(t, err)
 
@@ -67,8 +85,8 @@ func TestParseExamples(t *testing.T) {
 				}
 				require.NotEmpty(t, model.Provider)
 				require.NotEmpty(t, model.Model)
-				// Skip providers that don't have entries in models.dev
-				if model.Provider == "dmr" {
+				// Skip providers that don't have entries in models.dev.
+				if modelsDevAbsentProviders[model.Provider] {
 					continue
 				}
 				// Skip models with routing rules - they use multiple providers
@@ -89,6 +107,8 @@ func TestParseExamples(t *testing.T) {
 }
 
 func TestParseExamplesAfterMarshalling(t *testing.T) {
+	t.Parallel()
+
 	for _, file := range collectExamples(t) {
 		t.Run(file, func(t *testing.T) {
 			t.Parallel()
@@ -114,6 +134,8 @@ func TestParseExamplesAfterMarshalling(t *testing.T) {
 // configuration identical to its .yaml sibling, ensuring the HCL surface
 // stays in sync with the YAML schema.
 func TestHCLExamplesMatchYAML(t *testing.T) {
+	t.Parallel()
+
 	for _, file := range collectExamples(t) {
 		if filepath.Ext(file) != ".hcl" {
 			continue

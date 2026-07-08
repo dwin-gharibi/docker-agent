@@ -19,6 +19,7 @@ type RuntimeConfig struct {
 	EnvProviderForTests environment.Provider
 	envProviderCached   environment.Provider
 	envProviderOnce     sync.Once
+	envFilesErr         error
 
 	ModelsDevStoreOverride *modelsdev.Store
 	modelsDevStore         *modelsdev.Store
@@ -41,7 +42,8 @@ type Config struct {
 	Models         map[string]latest.ModelConfig
 	Providers      map[string]latest.ProviderConfig
 
-	// Hook overrides from CLI flags
+	// Hook overrides from user config and CLI flags
+	GlobalHooks      *latest.HooksConfig
 	HookPreToolUse   []string
 	HookPostToolUse  []string
 	HookSessionStart []string
@@ -81,6 +83,7 @@ func (runConfig *RuntimeConfig) Clone() *RuntimeConfig {
 		Config:                 runConfig.Config,
 		EnvProviderForTests:    runConfig.EnvProviderForTests,
 		envProviderCached:      env,
+		envFilesErr:            runConfig.envFilesErr,
 		ModelsDevStoreOverride: runConfig.ModelsDevStoreOverride,
 		modelsDevStore:         store,
 		modelsDevStoreErr:      storeErr,
@@ -139,6 +142,15 @@ func (runConfig *RuntimeConfig) EnvProvider() environment.Provider {
 	return runConfig.envProviderCached
 }
 
+// EnvFilesError reports a failure to resolve, read, or parse the configured
+// env files (--env-from-file). The provider chain silently falls back to the
+// default sources in that case, so callers that must not run without the
+// file's variables (e.g. the CLI) should surface this error and abort.
+func (runConfig *RuntimeConfig) EnvFilesError() error {
+	runConfig.EnvProvider() // materialize the provider chain
+	return runConfig.envFilesErr
+}
+
 func (runConfig *RuntimeConfig) computedEnvProvider() environment.Provider {
 	defaultEnv := environment.NewDefaultProvider()
 
@@ -147,12 +159,14 @@ func (runConfig *RuntimeConfig) computedEnvProvider() environment.Provider {
 	runConfig.EnvFiles, err = environment.AbsolutePaths(runConfig.WorkingDir, runConfig.EnvFiles)
 	if err != nil {
 		slog.Error("Failed to make env file paths absolute", "error", err)
+		runConfig.envFilesErr = err
 		return defaultEnv
 	}
 
 	envFilesProviders, err := environment.NewEnvFilesProvider(runConfig.EnvFiles)
 	if err != nil {
 		slog.Error("Failed to read env files", "error", err)
+		runConfig.envFilesErr = err
 		return defaultEnv
 	}
 

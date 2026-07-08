@@ -15,13 +15,13 @@ docker network create docs-linkcheck-net
 docker run -d --rm \
   --name docs-linkcheck \
   --network docs-linkcheck-net \
-  -v "${REPO_ROOT}/docs:/srv/jekyll" \
+  -v "${REPO_ROOT}/docs:/src" \
   docker-agent-docs \
-  jekyll serve --host 0.0.0.0 --config _config.yml,_config.dev.yml
+  hugo server --bind 0.0.0.0 --baseURL http://docs-linkcheck:1313/
 
-echo 'Waiting for Jekyll to start...'
+echo 'Waiting for Hugo to start...'
 for i in $(seq 1 30); do
-  docker run --rm --network docs-linkcheck-net curlimages/curl -sf http://docs-linkcheck:4000/ > /dev/null 2>&1 && break
+  docker run --rm --network docs-linkcheck-net curlimages/curl -sf http://docs-linkcheck:1313/ > /dev/null 2>&1 && break
   sleep 2
 done
 
@@ -34,4 +34,4 @@ docker run --rm \
   --exclude 'console.mistral.ai' \
   --exclude 'console.x.ai' \
   --rate-limit 20 \
-  http://docs-linkcheck:4000/
+  http://docs-linkcheck:1313/

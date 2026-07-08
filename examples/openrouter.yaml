@@ -1,0 +1,17 @@
+# yaml-language-server: $schema=../agent-schema.json
+
+models:
+  router:
+    provider: openrouter
+    model: meta-llama/llama-3.3-70b-instruct
+
+agents:
+  root:
+    model: router
+    description: Assistant using OpenRouter
+    instruction: |
+      You are a helpful assistant.
+    toolsets:
+      - type: filesystem
+      - type: shell
+      - type: think

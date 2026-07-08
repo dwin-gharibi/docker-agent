@@ -235,12 +235,12 @@ func (r *LocalRuntime) swapCurrentAgent(ctx context.Context, sessionID string, f
 	evts.Emit(AgentSwitching(true, from.Name(), to.Name()))
 	r.executeOnAgentSwitchHooks(ctx, from, sessionID, from.Name(), to.Name(), agentSwitchKindTransferTask)
 	r.setCurrentAgent(to.Name())
-	evts.Emit(AgentInfo(to.Name(), agentModelLabel(to), to.Description(), to.WelcomeMessage()))
+	evts.Emit(AgentInfo(to.Name(), agentModelLabel(ctx, to), to.Description(), to.WelcomeMessage()))
 	return func() {
 		r.setCurrentAgent(from.Name())
 		evts.Emit(AgentSwitching(false, to.Name(), from.Name()))
 		r.executeOnAgentSwitchHooks(ctx, from, sessionID, to.Name(), from.Name(), agentSwitchKindTransferTaskReturn)
-		evts.Emit(AgentInfo(from.Name(), agentModelLabel(from), from.Description(), from.WelcomeMessage()))
+		evts.Emit(AgentInfo(from.Name(), agentModelLabel(ctx, from), from.Description(), from.WelcomeMessage()))
 	}
 }
 
@@ -265,7 +265,7 @@ func (r *LocalRuntime) swapCurrentAgent(ctx context.Context, sessionID string, f
 func (r *LocalRuntime) runForwarding(ctx context.Context, parent *session.Session, evts EventSink, req delegationRequest) (*tools.ToolCallResult, error) {
 	span := trace.SpanFromContext(ctx)
 
-	callerAgent, err := r.team.Agent(r.CurrentAgentName())
+	callerAgent, err := r.team.Agent(r.currentAgentName())
 	if err != nil {
 		return nil, fmt.Errorf("current agent not found: %w", err)
 	}
@@ -366,6 +366,12 @@ func (r *LocalRuntime) runCollecting(ctx context.Context, parent *session.Sessio
 			if onContent != nil {
 				onContent(choice.Content)
 			}
+		}
+		// Token usage is the one event a background sub-session surfaces
+		// out-of-band: it carries the sub-session id and agent name, so the
+		// UI can keep per-agent context accounting for background agents.
+		if usage, ok := event.(*TokenUsageEvent); ok {
+			r.emitBackgroundEvent(usage)
 		}
 		if errEvt, ok := event.(*ErrorEvent); ok {
 			errMsg = errEvt.Error
@@ -558,7 +564,7 @@ func (r *LocalRuntime) handleHandoff(ctx context.Context, sess *session.Session,
 		return nil, fmt.Errorf("invalid arguments: %w", err)
 	}
 
-	ca := r.CurrentAgentName()
+	ca := r.currentAgentName()
 	currentAgent, err := r.team.Agent(ca)
 	if err != nil {
 		return nil, fmt.Errorf("current agent not found: %w", err)

@@ -1,10 +1,10 @@
 ---
 title: "API Server"
 description: "Expose your agents via an HTTP API for programmatic access, web frontends, and integrations."
-permalink: /features/api-server/
+keywords: docker agent, ai agents, features, api server
+weight: 80
+canonical: https://docs.docker.com/ai/docker-agent/features/api-server/
 ---
-
-# API Server
 
 _Expose your agents via an HTTP API for programmatic access, web frontends, and integrations._
 
@@ -42,7 +42,7 @@ All endpoints are under the `/api` prefix.
 | Method   | Path                                | Description                                             |
 | -------- | ----------------------------------- | ------------------------------------------------------- |
 | `GET`    | `/api/sessions`                     | List all sessions                                       |
-| `POST`   | `/api/sessions`                     | Create a new session                                    |
+| `POST`   | `/api/sessions`                     | Create a new session. Accepts an optional `title` field — when set, it is stored and LLM title generation is skipped. |
 | `GET`    | `/api/sessions/:id`                 | Get a session by ID (messages, tokens, permissions)     |
 | `GET`    | `/api/sessions/:id/status`          | Lightweight runtime state (streaming, title, agent, tokens). Requires an attached runtime. |
 | `GET`    | `/api/sessions/:id/snapshot`        | Full state in one call (stored fields + runtime state + `last_event_seq`) for gapless resync — see [Reconnecting without gaps](#reconnecting-without-gaps). |
@@ -104,7 +104,7 @@ curl -N -X POST http://localhost:8080/api/sessions/$SID/agent/team/reviewer \
 
 | Method | Path                     | Description                                                                                                                                                                                                                                          |
 | ------ | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST` | `/api/mcp-oauth/callback` | Deliver an OAuth deeplink callback to a pending unmanaged OAuth flow. Success path: `?state=<state>&code=<code>`; authorization-server error path: `?state=<state>&error=<error>&error_description=<desc>`. Returns 400 if `state` is missing or neither `code` nor `error` is provided; 404 if no flow is awaiting that `state`. See [Remote MCP OAuth]({{ '/features/remote-mcp/' | relative_url }}) for details. |
+| `POST` | `/api/mcp-oauth/callback` | Deliver an OAuth deeplink callback to a pending unmanaged OAuth flow. Success path: `?state=<state>&code=<code>`; authorization-server error path: `?state=<state>&error=<error>&error_description=<desc>`. Returns 400 if `state` is missing or neither `code` nor `error` is provided; 404 if no flow is awaiting that `state`. See [Remote MCP OAuth](../remote-mcp/index.md) for details. |
 
 ## Streaming Responses
 
@@ -158,6 +158,12 @@ $ curl -X POST http://localhost:8080/api/sessions \
   -H "Content-Type: application/json" -d '{}'
 {"id":"abc-123","title":"","created_at":"..."}
 
+# Create a session with a pre-supplied title (skips LLM title generation)
+$ curl -X POST http://localhost:8080/api/sessions \
+  -H "Content-Type: application/json" -d '{"title":"deploy check"}'
+{"id":"def-456","title":"deploy check","created_at":"..."}
+# title preserved; LLM title generation skipped
+
 # 3. Run the agent with a message
 $ curl -N -X POST http://localhost:8080/api/sessions/abc-123/agent/my-agent \
   -H "Content-Type: application/json" \
@@ -177,22 +183,18 @@ docker agent serve api <agent-file>|<agents-dir> [flags]
 | `-s, --session-db` | `session.db`     | Path to the SQLite session database              |
 | `--pull-interval`  | `0` (disabled)   | Auto-pull OCI reference every N minutes          |
 | `--fake`           | (none)           | Replay AI responses from cassette file (testing) |
-| `--record`         | (none)           | Record AI API interactions to cassette file      |
-| `--mcp-oauth-redirect-uri` | (none)   | Public HTTPS URL advertised as the OAuth `redirect_uri` for unmanaged MCP OAuth flows. When set, docker-agent drives PKCE and code exchange in-process and sends the full authorize URL to the client via elicitation. See [Remote MCP]({{ '/features/remote-mcp/' | relative_url }}) for details. |
+| `--record`         | (none)           | Record AI API interactions to cassette file. Routes through `--models-gateway` when one is configured. |
+| `--mcp-oauth-redirect-uri` | (none)   | Public HTTPS URL advertised as the OAuth `redirect_uri` for unmanaged MCP OAuth flows. When set, docker-agent drives PKCE and code exchange in-process and sends the full authorize URL to the client via elicitation. See [Remote MCP](../remote-mcp/index.md) for details. |
 
-<div class="callout callout-tip" markdown="1">
-<div class="callout-title">Live profiling (advanced)
-</div>
-  <p>For production diagnostics, set the <code>CAGENT_PPROF_ADDR</code> environment variable (or the hidden <code>--pprof-addr</code> flag) to a TCP address such as <code>127.0.0.1:6060</code>. docker-agent will start a Go pprof HTTP server at <code>/debug/pprof/</code>, which you can query with <code>go tool pprof</code>. Use a loopback address — a non-loopback binding logs a security warning. This flag is intentionally hidden from <code>--help</code>.</p>
+> [!TIP]
+> **Live profiling (advanced)**
+>
+> For production diagnostics, set the `CAGENT_PPROF_ADDR` environment variable (or the hidden `--pprof-addr` flag) to a TCP address such as `127.0.0.1:6060`. docker-agent will start a Go pprof HTTP server at `/debug/pprof/`, which you can query with `go tool pprof`. Use a loopback address — a non-loopback binding logs a security warning. This flag is intentionally hidden from `--help`.
 
-</div>
-
-<div class="callout callout-tip" markdown="1">
-<div class="callout-title">Multi-agent configs
-</div>
-  <p>You can point <code>docker agent serve api</code> at a directory containing multiple agent YAML files. Each becomes a separate agent accessible via <code>/api/agents</code>. Combine with <code>--pull-interval</code> to auto-refresh agents from an OCI registry.</p>
-
-</div>
+> [!TIP]
+> **Multi-agent configs**
+>
+> You can point `docker agent serve api` at a directory containing multiple agent YAML files. Each becomes a separate agent accessible via `/api/agents`. Combine with `--pull-interval` to auto-refresh agents from an OCI registry.
 
 ## Session Persistence
 
@@ -240,11 +242,10 @@ $ curl -X POST http://127.0.0.1:8080/api/sessions/$SID/followup \
     -d '{"messages":[{"content":"Now add tests"}]}'
 ```
 
-<div class="callout callout-info" markdown="1">
-<div class="callout-title">Discovering a run
-</div>
-  <p>Each run started with <code>--listen</code> writes a discovery record to <code>&lt;data-dir&gt;/runs/&lt;pid&gt;.json</code> containing its address and session id, so a supervising process can find a live run by session id, pid, or address.</p>
-</div>
+> [!NOTE]
+> **Discovering a run**
+>
+> Each run started with `--listen` writes a discovery record to `<data-dir>/runs/<pid>.json` containing its address and session id, so a supervising process can find a live run by session id, pid, or address.
 
 ## Session event stream and reconnection
 
@@ -349,9 +350,7 @@ The response `status` is `queued_streaming` (a turn is running or starting),
 `queued_idle` (delivered to an idle headless session, runs on the next turn),
 or `duplicate`.
 
-<div class="callout callout-info" markdown="1">
-<div class="callout-title">See also
-</div>
-  <p>For interactive use, see the <a href="{{ '/features/tui/' | relative_url }}">Terminal UI</a>. For agent-to-agent communication, see <a href="{{ '/features/a2a/' | relative_url }}">A2A Protocol</a> and <a href="{{ '/features/acp/' | relative_url }}">ACP</a>. For MCP integration, see <a href="{{ '/features/mcp-mode/' | relative_url }}">MCP Mode</a>. For an OpenAI-compatible chat-completions API, see the <a href="{{ '/features/chat-server/' | relative_url }}">Chat Server</a>.</p>
-
-</div>
+> [!NOTE]
+> **See also**
+>
+> For interactive use, see the [Terminal UI](../tui/index.md). For agent-to-agent communication, see [A2A Protocol](../a2a/index.md) and [ACP](../acp/index.md). For MCP integration, see [MCP Mode](../mcp-mode/index.md). For an OpenAI-compatible chat-completions API, see the [Chat Server](../chat-server/index.md).

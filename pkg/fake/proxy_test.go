@@ -55,6 +55,14 @@ func TestAPIKeyHeaderUpdater(t *testing.T) {
 			expectedHeader: "Authorization",
 			expectedValue:  "Bearer test-mistral-key",
 		},
+		{
+			name:           "OpenRouter",
+			host:           "https://openrouter.ai/api/v1",
+			envKey:         "OPENROUTER_API_KEY",
+			envValue:       "test-openrouter-key",
+			expectedHeader: "Authorization",
+			expectedValue:  "Bearer test-openrouter-key",
+		},
 	}
 
 	for _, tt := range tests {
@@ -72,6 +80,7 @@ func TestAPIKeyHeaderUpdater(t *testing.T) {
 }
 
 func TestAPIKeyHeaderUpdater_UnknownHost(t *testing.T) {
+	t.Parallel()
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, "https://example.com", http.NoBody)
 	require.NoError(t, err)
 
@@ -92,6 +101,7 @@ func TestTargetURLForHost(t *testing.T) {
 		{"https://api.anthropic.com", true},
 		{"https://generativelanguage.googleapis.com", true},
 		{"https://api.mistral.ai/v1", true},
+		{"https://openrouter.ai/api/v1", true},
 		{"https://unknown.host.com", false},
 	}
 
@@ -105,6 +115,42 @@ func TestTargetURLForHost(t *testing.T) {
 			} else {
 				assert.Nil(t, fn)
 			}
+		})
+	}
+}
+
+func TestTargetURLForHost_RewritesRequestURL(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		host string
+		path string
+		want string
+	}{
+		{
+			name: "OpenAI",
+			host: "https://api.openai.com/v1",
+			path: "/v1/chat/completions?stream=true",
+			want: "https://api.openai.com/v1/chat/completions?stream=true",
+		},
+		{
+			name: "OpenRouter preserves API prefix",
+			host: "https://openrouter.ai/api/v1",
+			path: "/v1/chat/completions?stream=true",
+			want: "https://openrouter.ai/api/v1/chat/completions?stream=true",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			fn := TargetURLForHost(tt.host)
+			require.NotNil(t, fn)
+
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, tt.path, http.NoBody)
+			assert.Equal(t, tt.want, fn(req))
 		})
 	}
 }
@@ -146,6 +192,7 @@ func (r *readerFromRecorder) ReadFrom(src io.Reader) (n int64, err error) {
 }
 
 func TestIsStreamResponse(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		contentType string
@@ -212,6 +259,7 @@ func TestIsStreamResponse(t *testing.T) {
 }
 
 func TestStreamCopy_ContextCancellation(t *testing.T) {
+	t.Parallel()
 	// Create a slow reader that blocks until closed
 	slowBody := newSlowReader()
 
@@ -250,6 +298,7 @@ func TestStreamCopy_ContextCancellation(t *testing.T) {
 }
 
 func TestStreamCopy_NormalCompletion(t *testing.T) {
+	t.Parallel()
 	// Create a response with a normal body
 	body := bytes.NewReader([]byte("test data"))
 	resp := &http.Response{
@@ -271,6 +320,7 @@ func TestStreamCopy_NormalCompletion(t *testing.T) {
 }
 
 func TestSimulatedStreamCopy_SSEEvents(t *testing.T) {
+	t.Parallel()
 	// Create a response with SSE-formatted data
 	sseData := "data: {\"chunk\": 1}\n\ndata: {\"chunk\": 2}\n\ndata: [DONE]\n\n"
 	resp := &http.Response{
@@ -324,6 +374,7 @@ func (w *notifyWriter) Flush() {
 }
 
 func TestSimulatedStreamCopy_ContextCancellation(t *testing.T) {
+	t.Parallel()
 	// Create a reader that provides some data then blocks
 	// to allow context cancellation to be tested
 	sseData := "data: first\n"

@@ -3,12 +3,11 @@ package runtime
 import (
 	"context"
 	"log/slog"
-	"strconv"
-	"strings"
 
 	"github.com/docker/docker-agent/pkg/agent"
 	"github.com/docker/docker-agent/pkg/chat"
 	"github.com/docker/docker-agent/pkg/compaction"
+	"github.com/docker/docker-agent/pkg/config/latest"
 	"github.com/docker/docker-agent/pkg/hooks"
 	"github.com/docker/docker-agent/pkg/model/provider"
 	"github.com/docker/docker-agent/pkg/model/provider/options"
@@ -25,13 +24,21 @@ const (
 	compactionReasonManual    = "manual"
 )
 
+// sessionCompactionEnabled reports whether automatic compaction (proactive
+// threshold trigger, post-overflow recovery) is active for the given agent:
+// the runtime-wide option ANDed with the agent's own `session_compaction`
+// config. Manual /compact is intentionally not gated by either flag.
+func (r *LocalRuntime) sessionCompactionEnabled(a *agent.Agent) bool {
+	return r.sessionCompaction && a.SessionCompaction()
+}
+
 // doCompact orchestrates a session compaction. It is intentionally thin:
 // the heavy lifting (extracting the conversation, running the LLM, computing
 // the kept-tail boundary) lives in [pkg/runtime/compactor]; this function
 // owns only what's runtime-private: hook dispatch, session mutation, event
 // emission, and persistence.
 //
-// reason is one of [compactionReasonThreshold] (proactive 90% trigger),
+// reason is one of [compactionReasonThreshold] (proactive threshold trigger),
 // [compactionReasonOverflow] (post-overflow recovery) or
 // [compactionReasonManual] (user-invoked /compact). It is forwarded to
 // BeforeCompaction / AfterCompaction hooks.
@@ -70,8 +77,14 @@ func (r *LocalRuntime) doCompact(ctx context.Context, sess *session.Session, a *
 
 	slog.DebugContext(ctx, "Generating summary for session", "session_id", sess.ID, "reason", reason)
 	events.Emit(SessionCompaction(sess.ID, "started", a.Name()))
+	// outcome qualifies the terminal "completed" event: "applied" when a
+	// summary was written to the session, "skipped" for no-ops (nothing
+	// to compact, empty model output), "failed" when an error was
+	// emitted. UIs use it to avoid announcing success for a compaction
+	// that did nothing.
+	outcome := CompactionOutcomeApplied
 	defer func() {
-		events.Emit(SessionCompaction(sess.ID, "completed", a.Name()))
+		events.Emit(SessionCompactionCompleted(sess.ID, outcome, a.Name()))
 	}()
 
 	// Choose the strategy: a hook-supplied summary if before_compaction
@@ -82,6 +95,7 @@ func (r *LocalRuntime) doCompact(ctx context.Context, sess *session.Session, a *
 			slog.ErrorContext(ctx, "Failed to generate session summary",
 				"error", "model definition unavailable")
 			events.Emit(ErrorForSession(sess.ID, "Failed to get model definition"))
+			outcome = CompactionOutcomeFailed
 			return
 		}
 
@@ -96,10 +110,12 @@ func (r *LocalRuntime) doCompact(ctx context.Context, sess *session.Session, a *
 		if err != nil {
 			slog.ErrorContext(ctx, "Failed to generate session summary", "error", err)
 			events.Emit(ErrorForSession(sess.ID, err.Error()))
+			outcome = CompactionOutcomeFailed
 			return
 		}
 		if result == nil {
 			// Empty summary — bail without applying anything.
+			outcome = CompactionOutcomeSkipped
 			return
 		}
 	}
@@ -161,23 +177,62 @@ func summaryFromHook(sess *session.Session, a *agent.Agent, pre *hooks.Result, c
 	}
 }
 
-// compactionContextLimit returns the agent's model context limit, or 0
-// when it can't be resolved. Failure is non-fatal: a before_compaction
-// hook may supply its own summary and never need the model definition.
-// The LLM strategy itself enforces ContextLimit > 0.
+// compactionContextLimit returns the context-window limit of the model that
+// generates the summary: the dedicated compaction model when one is
+// configured, otherwise the agent's own model. Returns 0 when it can't be
+// resolved. Failure is non-fatal: a before_compaction hook may supply its own
+// summary and never need the model definition. The LLM strategy itself
+// enforces ContextLimit > 0.
 //
 // See [LocalRuntime.resolveContextLimit] for the resolution order; we
 // pass the cloned summary-call provider so its provider_opts (which
 // match the underlying model) are considered.
 func (r *LocalRuntime) compactionContextLimit(ctx context.Context, a *agent.Agent) int64 {
-	if a == nil || a.Model(ctx) == nil {
+	if a == nil {
 		return 0
 	}
-	summaryModel := provider.CloneWithOptions(ctx, a.Model(ctx),
+	model := a.CompactionModel()
+	if model == nil {
+		model = a.Model(ctx)
+	}
+	if model == nil {
+		return 0
+	}
+	summaryModel := provider.CloneWithOptions(ctx, model,
 		options.WithStructuredOutput(nil),
 		options.WithMaxTokens(compactor.MaxSummaryTokens),
 	)
 	return r.resolveContextLimit(ctx, summaryModel, summaryModel.ID())
+}
+
+// effectiveContextLimit returns the context budget the running session
+// operates within: the primary model's window, capped by the dedicated
+// compaction model's (smaller) window when one is configured. It drives both
+// the proactive compaction trigger and the UI context gauge, so the gauge
+// fills to the compaction threshold (~90% by default) right as compaction
+// fires and the summary call can always ingest the conversation it must
+// compact. This is the maintainers' resolution
+// for issue #3241 for the case where the dedicated compaction model has the
+// smaller context window.
+//
+// With no dedicated compaction model it is simply primaryLimit (behaviour
+// unchanged). A non-positive compaction limit (an unresolvable compaction-model
+// definition) falls back to primaryLimit so a misconfigured compaction model
+// never suppresses compaction; conversely, when only the compaction model's
+// window is resolvable (e.g. a local primary absent from the catalogue), that
+// window is used so compaction still runs.
+func (r *LocalRuntime) effectiveContextLimit(ctx context.Context, a *agent.Agent, primaryLimit int64) int64 {
+	if a == nil || a.CompactionModel() == nil {
+		return primaryLimit
+	}
+	compactionLimit := r.compactionContextLimit(ctx, a)
+	if compactionLimit <= 0 {
+		return primaryLimit
+	}
+	if primaryLimit <= 0 {
+		return compactionLimit
+	}
+	return min(primaryLimit, compactionLimit)
 }
 
 // resolveContextLimit resolves the effective context window size for a
@@ -208,44 +263,14 @@ func (r *LocalRuntime) resolveContextLimit(ctx context.Context, p provider.Provi
 // models.dev catalogue does not have an entry for the configured
 // model (typically Docker Model Runner with a HuggingFace GGUF model).
 //
-// Accepted shapes mirror what YAML/JSON decoders may produce: int,
-// int64, float64, and decimal strings. Negative or zero values are
-// treated as "unset" so callers don't accidentally trigger
-// compaction with a degenerate limit.
+// The parsing is shared with the provider clients (which clamp max_tokens
+// against the same window) via [latest.ContextSizeFromProviderOpts], so the
+// two never disagree on how context_size is interpreted.
 func providerContextLimit(p provider.Provider) int64 {
 	if p == nil {
 		return 0
 	}
-	opts := p.BaseConfig().ModelConfig.ProviderOpts
-	v, ok := opts["context_size"]
-	if !ok {
-		return 0
-	}
-	var n int64
-	switch t := v.(type) {
-	case int64:
-		n = t
-	case int:
-		n = int64(t)
-	case int32:
-		n = int64(t)
-	case float64:
-		n = int64(t)
-	case float32:
-		n = int64(t)
-	case string:
-		parsed, err := strconv.ParseInt(strings.TrimSpace(t), 10, 64)
-		if err != nil {
-			return 0
-		}
-		n = parsed
-	default:
-		return 0
-	}
-	if n <= 0 {
-		return 0
-	}
-	return n
+	return latest.ContextSizeFromProviderOpts(p.BaseConfig().ModelConfig.ProviderOpts)
 }
 
 // runCompactionAgent runs an agent against a sub-session for compaction.
@@ -253,7 +278,7 @@ func providerContextLimit(p provider.Provider) int64 {
 // which avoids creating an import cycle on [pkg/runtime].
 func (r *LocalRuntime) runCompactionAgent(ctx context.Context, a *agent.Agent, sess *session.Session) error {
 	t := team.New(team.WithAgents(a))
-	rt, err := New(t, WithSessionCompaction(false))
+	rt, err := New(ctx, t, WithSessionCompaction(false))
 	if err != nil {
 		return err
 	}

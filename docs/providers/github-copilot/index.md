@@ -1,10 +1,10 @@
 ---
 title: "GitHub Copilot"
 description: "Use GitHub Copilot's hosted models (GPT-4o, Claude, Gemini, and more) with docker-agent through your GitHub subscription."
-permalink: /providers/github-copilot/
+keywords: docker agent, ai agents, model providers, llm, github copilot
+weight: 110
+canonical: https://docs.docker.com/ai/docker-agent/providers/github-copilot/
 ---
-
-# GitHub Copilot
 
 _Use GitHub Copilot's hosted models with docker-agent through your existing GitHub subscription._
 

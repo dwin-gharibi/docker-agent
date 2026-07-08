@@ -13,6 +13,7 @@ and examples consistent across every page on this site.
 | Internal identifiers / package names | as defined in code (e.g. `cagent`) — never invent new spellings in prose | mixing internal identifiers into user-facing copy |
 
 A simple rule of thumb:
+
 - **Talking about the product?** → "Docker Agent"
 - **Showing a command the user types?** → `docker agent run agent.yaml`
 
@@ -28,8 +29,8 @@ A simple rule of thumb:
 
 ## Code samples
 
-- All shell prompts use `$ ` (dollar + space) and the command on the
-  same line. Output, when shown, has no prompt.
+- All shell prompts use a dollar sign followed by a space (`$`) and the
+  command on the same line. Output, when shown, has no prompt.
 - YAML/HCL examples should be runnable as-is when reasonable, or end
   in `# ...` to make truncation explicit.
 - The canonical example agent uses `model: anthropic/claude-sonnet-4-5`.
@@ -38,21 +39,75 @@ A simple rule of thumb:
 
 ## Callouts
 
-Use the existing pattern; the new visual style does the rest:
+Callouts are written as portable GitHub-style alerts so the same
+Markdown renders correctly on docs.docker.com (Hugo), GitHub, and this
+site (a blockquote render hook upgrades them to the styled panels):
 
 ```markdown
-<div class="callout callout-tip" markdown="1">
-<div class="callout-title">When to use it</div>
-  <p>Body text.</p>
-</div>
+> [!TIP]
+> **When to use it**
+>
+> Body text.
 ```
 
-- `callout-info` — neutral context
-- `callout-tip` — positive, "consider this"
-- `callout-warning` — caution, breaking, security
+- `[!NOTE]` — neutral context
+- `[!TIP]` — positive, "consider this"
+- `[!IMPORTANT]` — must-read to succeed
+- `[!WARNING]` — caution, breaking, security
 
-Don't prefix the title with an emoji — the icon badge already provides
+The bold line directly after the marker is an optional title; omit it
+when the default label (Note, Tip, …) is enough. Don't prefix the
+title with an emoji — the icon badge already provides one.
+
+## Links
+
+Internal links are plain relative Markdown paths to the target file,
+including the `index.md` filename:
+
+```markdown
+See the [Quick Start](../../getting-started/quickstart/index.md).
+```
+
+Both this site and docs.docker.com render them through a Hugo link
+render hook that resolves the path to the target page's URL. Never
+use absolute `/path/` links in `docs/**` content — they break when
+the page is mounted on docs.docker.com.
+
+## Canonical URLs
+
+Every content page is mounted on docs.docker.com, and this site
+tracks `main` while docs.docker.com is pinned to a release — so the
+stable page is the authoritative copy. Each
+`docs/<section>/<page>/index.md` sets `canonical:` in its front
+matter (after `weight:`), derived from its path:
+
+```yaml
+canonical: https://docs.docker.com/ai/docker-agent/<section>/<page>/
+```
+
+The github.io layout renders it as the page's `rel=canonical` link;
+docs.docker.com ignores the value and self-canonicalizes. CI
+(`docs-lint` / `scripts/docs-check-canonical.sh`) fails when the
+value is missing or doesn't match the page path — mind it when
+scaffolding a new page from an existing one. The homepage, `404.md`
+and section `_index.md` files are not mirrored pages and don't set
 one.
+
+## Availability badges
+
+When a page documents a feature that is merged on `main` but not yet
+in a tagged release, mark it so readers of the stable docs know what
+to expect:
+
+```markdown
+> [!NOTE]
+> **Coming in v1.99**
+>
+> This feature is available on `main` and ships in v1.99.
+```
+
+Remove the badge in the release PR that tags the version (the
+CHANGELOG update is a good reminder to sweep for `Coming in` markers).
 
 ## Glossary one-liners
 

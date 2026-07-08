@@ -1,0 +1,17 @@
+# yaml-language-server: $schema=../agent-schema.json
+
+models:
+  huggingface_model:
+    provider: huggingface
+    model: meta-llama/Llama-3.3-70B-Instruct
+
+agents:
+  root:
+    model: huggingface_model
+    description: Assistant using Hugging Face Inference Providers
+    instruction: |
+      You are a helpful assistant.
+    toolsets:
+      - type: filesystem
+      - type: shell
+      - type: think

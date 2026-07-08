@@ -59,7 +59,7 @@ func forceHandoffTeam(t *testing.T, rootStream, summarizerStream *mockStream) (*
 	root := agent.New("root", "You extract", agent.WithModel(rootProv), agent.WithForceHandoff(summarizer))
 	tm := team.New(team.WithAgents(root, summarizer))
 
-	rt, err := NewLocalRuntime(tm, WithSessionCompaction(false), WithModelStore(mockModelStore{}))
+	rt, err := NewLocalRuntime(t.Context(), tm, WithSessionCompaction(false), WithModelStore(mockModelStore{}))
 	require.NoError(t, err)
 	return rt, sumProv
 }
@@ -90,7 +90,7 @@ func TestForceHandoff_RoutesToTargetOnNaturalStop(t *testing.T) {
 		require.False(t, isErr, "unexpected error event: %+v", errEv)
 	}
 
-	assert.Equal(t, "summarizer", rt.CurrentAgentName(), "current agent must be the force_handoff target after the run")
+	assert.Equal(t, "summarizer", rt.CurrentAgentName(t.Context()), "current agent must be the force_handoff target after the run")
 	assert.Equal(t, 1, sumProv.handoffCallCount(), "target agent's model must be invoked exactly once")
 	assert.Equal(t, "final summary", sess.GetLastAssistantMessageContent())
 
@@ -140,6 +140,6 @@ func TestForceHandoff_SkippedForPinnedSession(t *testing.T) {
 	}
 
 	assert.Equal(t, 0, sumProv.handoffCallCount(), "force_handoff target must not run for pinned sessions")
-	assert.Equal(t, "root", rt.CurrentAgentName())
+	assert.Equal(t, "root", rt.CurrentAgentName(t.Context()))
 	assert.Equal(t, "done", sess.GetLastAssistantMessageContent())
 }

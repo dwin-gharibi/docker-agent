@@ -16,16 +16,26 @@ import (
 )
 
 // gatherMissingEnvVars finds out which environment variables are required by the models and tools.
-// It returns the missing variables and any non-fatal error encountered during tool discovery.
-func gatherMissingEnvVars(ctx context.Context, cfg *latest.Config, modelsGateway string, env environment.Provider) (missing []string, toolErr error) {
+// It returns the missing variables, whether any of them is a model-provider
+// credential (as opposed to a tool secret), and any non-fatal error
+// encountered during tool discovery.
+func gatherMissingEnvVars(ctx context.Context, cfg *latest.Config, modelsGateway string, env environment.Provider) (missing []string, missingModelCreds bool, toolErr error) {
 	requiredEnv := map[string]bool{}
+	modelEnv := map[string]bool{}
 
 	// Models
+	var modelNames []string
 	if modelsGateway == "" {
-		names := GatherEnvVarsForModels(ctx, cfg, env)
-		for _, e := range names {
-			requiredEnv[e] = true
-		}
+		modelNames = GatherEnvVarsForModels(ctx, cfg, env)
+	} else {
+		// A gateway supplies credentials for routed models, but models that
+		// bypass it dial their provider directly and still need their own
+		// credentials present.
+		modelNames = gatherEnvVarsForModels(ctx, cfg, env, true)
+	}
+	for _, e := range modelNames {
+		requiredEnv[e] = true
+		modelEnv[e] = true
 	}
 
 	// Tools
@@ -44,13 +54,32 @@ func gatherMissingEnvVars(ctx context.Context, cfg *latest.Config, modelsGateway
 	for _, e := range sortedKeys(requiredEnv) {
 		if v, _ := env.Get(ctx, e); v == "" {
 			missing = append(missing, e)
+			missingModelCreds = missingModelCreds || modelEnv[e]
 		}
 	}
 
-	return missing, toolErr
+	return missing, missingModelCreds, toolErr
 }
 
 func GatherEnvVarsForModels(ctx context.Context, cfg *latest.Config, env environment.Provider) []string {
+	return gatherEnvVarsForModels(ctx, cfg, env, false)
+}
+
+// RequiredModelEnvVars returns the env vars the config's models need under
+// the given gateway configuration, mirroring the run-time preflight check:
+// every model credential when no models gateway is set, and only those of
+// models that bypass the gateway otherwise (the gateway supplies credentials
+// for routed models).
+func RequiredModelEnvVars(ctx context.Context, cfg *latest.Config, modelsGateway string, env environment.Provider) []string {
+	return gatherEnvVarsForModels(ctx, cfg, env, modelsGateway != "")
+}
+
+// gatherEnvVarsForModels collects the env vars required by model-backed agents.
+// When bypassOnly is true, only the leaf models that effectively dial their
+// provider directly (bypassing the models gateway) are inspected — used to
+// require direct provider credentials for those models even when a models
+// gateway would otherwise supply credentials for the rest.
+func gatherEnvVarsForModels(ctx context.Context, cfg *latest.Config, env environment.Provider, bypassOnly bool) []string {
 	requiredEnv := map[string]bool{}
 
 	// Inspect only the models that are actually used by docker-agent model-backed agents.
@@ -61,7 +90,7 @@ func GatherEnvVarsForModels(ctx context.Context, cfg *latest.Config, env environ
 		modelNames := strings.SplitSeq(agent.Model, ",")
 		for modelName := range modelNames {
 			modelName = strings.TrimSpace(modelName)
-			gatherEnvVarsForModel(ctx, cfg, modelName, requiredEnv, env)
+			gatherEnvVarsForModel(ctx, cfg, modelName, requiredEnv, env, bypassOnly)
 		}
 	}
 
@@ -70,22 +99,38 @@ func GatherEnvVarsForModels(ctx context.Context, cfg *latest.Config, env environ
 
 // gatherEnvVarsForModel collects required environment variables for a single model,
 // including any models referenced in its routing rules.
-func gatherEnvVarsForModel(ctx context.Context, cfg *latest.Config, modelName string, requiredEnv map[string]bool, env environment.Provider) {
+//
+// When bypassOnly is true, a leaf's credentials are collected only when that
+// leaf effectively bypasses the gateway. A routing model bypasses its whole
+// subtree (the runtime propagates the flag to the fallback and every routed
+// target), and a routed named model can additionally opt in on its own.
+func gatherEnvVarsForModel(ctx context.Context, cfg *latest.Config, modelName string, requiredEnv map[string]bool, env environment.Provider, bypassOnly bool) {
 	model := cfg.Models[modelName]
+	rootBypassed := model.BypassModelsGateway
 
-	// Add env vars for the model itself
-	addEnvVarsForModelConfig(ctx, &model, cfg.Providers, requiredEnv, env)
+	// The model's own provider/model is a leaf: either the model itself or, for
+	// a router, its fallback model. It bypasses iff the model bypasses.
+	if !bypassOnly || rootBypassed {
+		addEnvVarsForModelConfig(ctx, &model, cfg.Providers, requiredEnv, env)
+	}
 
-	// If the model has routing rules, also check all referenced models
+	// If the model has routing rules, also check all referenced models.
 	for _, rule := range model.Routing {
 		ruleModelName := rule.Model
 		if ruleModel, exists := cfg.Models[ruleModelName]; exists {
-			// Model reference - add its env vars
-			addEnvVarsForModelConfig(ctx, &ruleModel, cfg.Providers, requiredEnv, env)
+			// Named model reference. A routed target bypasses when the router
+			// does (propagation) or when it sets its own flag.
+			if !bypassOnly || rootBypassed || ruleModel.BypassModelsGateway {
+				addEnvVarsForModelConfig(ctx, &ruleModel, cfg.Providers, requiredEnv, env)
+			}
 		} else if providerName, _, ok := strings.Cut(ruleModelName, "/"); ok {
-			// Inline spec (e.g., "openai/gpt-4o") - infer env vars from provider
-			inlineModel := latest.ModelConfig{Provider: providerName}
-			addEnvVarsForModelConfig(ctx, &inlineModel, cfg.Providers, requiredEnv, env)
+			// Inline spec (e.g., "openai/gpt-4o") - infer env vars from provider.
+			// Inline specs carry no flag of their own; they bypass only via the
+			// router's propagated bypass.
+			if !bypassOnly || rootBypassed {
+				inlineModel := latest.ModelConfig{Provider: providerName}
+				addEnvVarsForModelConfig(ctx, &inlineModel, cfg.Providers, requiredEnv, env)
+			}
 		}
 	}
 }
@@ -93,6 +138,16 @@ func gatherEnvVarsForModel(ctx context.Context, cfg *latest.Config, modelName st
 // addEnvVarsForModelConfig adds required environment variables for a model config.
 // It checks custom providers first, then built-in aliases, then hardcoded fallbacks.
 func addEnvVarsForModelConfig(ctx context.Context, model *latest.ModelConfig, customProviders map[string]latest.ProviderConfig, requiredEnv map[string]bool, env environment.Provider) {
+	// The model and base_url fields support ${env.X}/${X} substitution, so any
+	// variable they reference must be set for the provider to be built (issue
+	// #2261). Collect these regardless of the credential logic below, which can
+	// return early (e.g. when base_url is set).
+	for _, field := range []string{model.Model, model.BaseURL} {
+		for _, name := range environment.Refs(field) {
+			requiredEnv[name] = true
+		}
+	}
+
 	// A model with non-API-key auth (e.g. Workload Identity Federation) does
 	// not require a TokenKey or the hardcoded API-key env var. Instead, the
 	// env vars referenced by its identity-token source are required.
@@ -132,6 +187,12 @@ func addEnvVarsForModelConfig(ctx context.Context, model *latest.ModelConfig, cu
 		// Check built-in aliases
 		if alias.TokenEnvVar != "" {
 			requiredEnv[alias.TokenEnvVar] = true
+		}
+		// A templated alias base URL (e.g. Cloudflare's account/gateway-scoped
+		// endpoint) references env vars that must resolve when the provider is
+		// built, so surface them in the preflight check too.
+		for _, name := range environment.Refs(alias.BaseURL) {
+			requiredEnv[name] = true
 		}
 	} else {
 		addEnvVarsForCoreProvider(ctx, model.Provider, model, requiredEnv, env)

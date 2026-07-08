@@ -13,6 +13,8 @@ import (
 // TestResponseAPIToolCallHandling verifies that tool calls from the Response API
 // are correctly accumulated even when they arrive with the same ID in multiple chunks
 func TestResponseAPIToolCallHandling(t *testing.T) {
+	t.Parallel()
+
 	// Simulate how the Response API sends tool calls:
 	// 1. First event with ID and name
 	// 2. Multiple events with the same ID adding arguments incrementally
@@ -48,6 +50,8 @@ func TestResponseAPIToolCallHandling(t *testing.T) {
 // TestResponseAPIMultipleToolCalls verifies that multiple tool calls
 // from the Response API are correctly tracked independently
 func TestResponseAPIMultipleToolCalls(t *testing.T) {
+	t.Parallel()
+
 	// Simulate multiple tool calls with interleaved arguments
 	stream := newStreamBuilder().
 		AddToolCallName("call_1", "search").
@@ -78,6 +82,8 @@ func TestResponseAPIMultipleToolCalls(t *testing.T) {
 }
 
 func TestPartialToolCallEventsContainOnlyNewArgumentBytes(t *testing.T) {
+	t.Parallel()
+
 	stream := newStreamBuilder().
 		AddToolCallName("call_abc", "write_file").
 		AddToolCallArguments("call_abc", `{"path":"story.md"`).
@@ -109,6 +115,8 @@ func TestPartialToolCallEventsContainOnlyNewArgumentBytes(t *testing.T) {
 }
 
 func TestPartialToolCallEventJSONIncludesToolDefinitionOnlyWhenPresent(t *testing.T) {
+	t.Parallel()
+
 	toolDef := &tools.Tool{Name: "write_file", Description: "Create file"}
 	withDef := &PartialToolCallEvent{
 		Type:           "partial_tool_call",

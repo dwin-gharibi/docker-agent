@@ -11,7 +11,6 @@ import (
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/docker/docker-agent/pkg/tui/components/scrollbar"
@@ -80,6 +79,12 @@ type Model struct {
 	lines       []string
 	totalHeight int
 
+	// lineWidths lazily caches the display width of each content line. It is
+	// invalidated when SetContent receives a different slice. Width
+	// measurement (ansi.StringWidth) dominates per-frame compose cost for
+	// large viewports, and content lines are immutable between rebuilds.
+	lineWidths []int
+
 	// scrollOffset tracks the desired scroll position independently of the
 	// scrollbar, so EnsureLineVisible works before SetContent is called.
 	scrollOffset int
@@ -115,10 +120,31 @@ func (m *Model) SetPosition(x, y int) {
 
 // SetContent provides the full content buffer and total height.
 // totalHeight may be >= len(lines) for virtual blank lines (e.g. bottomSlack).
+// The lines slice must not be mutated in place after being passed here;
+// callers rebuild a fresh slice when content changes.
 func (m *Model) SetContent(lines []string, totalHeight int) {
+	if len(lines) != len(m.lines) || (len(lines) > 0 && &lines[0] != &m.lines[0]) {
+		m.lineWidths = nil
+	}
 	m.lines = lines
 	m.totalHeight = max(totalHeight, len(lines))
 	m.sb.SetDimensions(m.height, m.totalHeight)
+}
+
+// lineWidth returns the display width of content line i, memoized across frames.
+func (m *Model) lineWidth(i int) int {
+	if m.lineWidths == nil {
+		m.lineWidths = make([]int, len(m.lines))
+		for j := range m.lineWidths {
+			m.lineWidths[j] = -1
+		}
+	}
+	if w := m.lineWidths[i]; w >= 0 {
+		return w
+	}
+	w := ansi.StringWidth(m.lines[i])
+	m.lineWidths[i] = w
+	return w
 }
 
 // NeedsScrollbar returns true if content is taller than the viewport.
@@ -262,11 +288,24 @@ func (m *Model) View() string {
 			visible[i] = m.lines[idx]
 		}
 	}
-	return m.compose(visible)
+	return m.compose(visible, m.scrollOffset)
 }
 
 // ViewWithLines renders pre-sliced visible lines with the scrollbar.
 func (m *Model) ViewWithLines(visibleLines []string) string {
+	return m.viewWithLines(visibleLines, -1)
+}
+
+// ViewWithRestyledLines is like [Model.ViewWithLines] for callers whose
+// visibleLines are sliced from the content set via [Model.SetContent] at the
+// current scroll offset (possibly restyled, e.g. selection or hover
+// highlights). Unchanged lines reuse memoized width lookups in compose;
+// restyled lines are re-measured.
+func (m *Model) ViewWithRestyledLines(visibleLines []string) string {
+	return m.viewWithLines(visibleLines, m.scrollOffset)
+}
+
+func (m *Model) viewWithLines(visibleLines []string, baseLine int) string {
 	if m.width <= 0 || m.height <= 0 {
 		return ""
 	}
@@ -275,9 +314,9 @@ func (m *Model) ViewWithLines(visibleLines []string) string {
 	if m.NeedsScrollbar() && len(visibleLines) < m.height {
 		result := make([]string, m.height)
 		copy(result, visibleLines)
-		return m.compose(result)
+		return m.compose(result, baseLine)
 	}
-	return m.compose(visibleLines)
+	return m.compose(visibleLines, baseLine)
 }
 
 // syncScrollbar syncs the local scroll offset to the scrollbar and reads back the clamped value.
@@ -287,13 +326,24 @@ func (m *Model) syncScrollbar() {
 	m.scrollOffset = m.sb.GetScrollOffset()
 }
 
-// compose pads/truncates lines to contentWidth and joins with the scrollbar column.
-func (m *Model) compose(lines []string) string {
+// compose pads/truncates lines to contentWidth and joins with the scrollbar
+// column. When baseLine >= 0, lines[i] that are unchanged from content line
+// baseLine+i take their display width from the memoized cache; restyled lines
+// are re-measured since restyling may not be exactly width-preserving for
+// complex grapheme clusters (ZWJ emoji, flags).
+func (m *Model) compose(lines []string, baseLine int) string {
 	contentWidth := m.ContentWidth()
 
 	// Pad or truncate each line to exact content width
 	for i, line := range lines {
-		w := ansi.StringWidth(line)
+		var w int
+		// The equality check is O(1) for unchanged lines: they share the same
+		// string backing, so it short-circuits on pointer identity.
+		if gi := baseLine + i; baseLine >= 0 && gi < len(m.lines) && line == m.lines[gi] {
+			w = m.lineWidth(gi)
+		} else {
+			w = ansi.StringWidth(line)
+		}
 		switch {
 		case w > contentWidth:
 			lines[i] = ansi.Truncate(line, contentWidth, "")
@@ -304,29 +354,43 @@ func (m *Model) compose(lines []string) string {
 
 	contentView := strings.Join(lines, "\n")
 
-	// Build the right-side column (scrollbar, placeholder, or nothing)
-	if m.NeedsScrollbar() {
-		return lipgloss.JoinHorizontal(lipgloss.Top, contentView, m.buildColumn(m.gapWidth), m.sb.View())
+	// Zip the right-side column (scrollbar or placeholder) directly: every
+	// line is exactly contentWidth wide at this point, so JoinHorizontal's
+	// per-line re-measuring would be pure overhead.
+	switch {
+	case m.NeedsScrollbar():
+		sbLines := m.sb.ViewLines()
+		gap := strings.Repeat(" ", m.gapWidth)
+		var b strings.Builder
+		b.Grow(len(contentView) + len(lines)*(m.gapWidth+scrollbar.Width*4))
+		for i, line := range lines {
+			if i > 0 {
+				b.WriteByte('\n')
+			}
+			b.WriteString(line)
+			b.WriteString(gap)
+			if i < len(sbLines) {
+				b.WriteString(sbLines[i])
+			} else {
+				b.WriteString(strings.Repeat(" ", scrollbar.Width))
+			}
+		}
+		return b.String()
+	case m.reserveScrollbarSpace:
+		blank := strings.Repeat(" ", m.gapWidth+scrollbar.Width)
+		var b strings.Builder
+		b.Grow(len(contentView) + len(lines)*len(blank))
+		for i, line := range lines {
+			if i > 0 {
+				b.WriteByte('\n')
+			}
+			b.WriteString(line)
+			b.WriteString(blank)
+		}
+		return b.String()
+	default:
+		return contentView
 	}
-	if m.reserveScrollbarSpace {
-		return lipgloss.JoinHorizontal(lipgloss.Top, contentView, m.buildColumnN(m.gapWidth+scrollbar.Width, len(lines)))
-	}
-	return contentView
-}
-
-// buildColumn returns a column of spaces with the given width and m.height lines.
-func (m *Model) buildColumn(colWidth int) string {
-	return m.buildColumnN(colWidth, m.height)
-}
-
-// buildColumnN returns a column of spaces with the given width and n lines.
-func (m *Model) buildColumnN(colWidth, n int) string {
-	col := strings.Repeat(" ", colWidth)
-	lines := make([]string, n)
-	for i := range lines {
-		lines[i] = col
-	}
-	return strings.Join(lines, "\n")
 }
 
 func (m *Model) updateScrollbarPosition() {

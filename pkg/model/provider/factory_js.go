@@ -100,11 +100,11 @@ func (r *Registry) createDirectProvider(ctx context.Context, cfg *latest.ModelCo
 	if r == nil {
 		r = DefaultRegistry()
 	}
-	var globalOptions options.ModelOptions
-	for _, opt := range opts {
-		opt(&globalOptions)
-	}
+	globalOptions := options.Apply(opts...)
 	enhancedCfg := applyProviderDefaults(cfg, globalOptions.Providers())
+	if err := expandModelConfigEnv(ctx, enhancedCfg, env); err != nil {
+		return nil, err
+	}
 	providerType := resolveProviderType(enhancedCfg)
 	factory, ok := r.factories[providerType]
 	if !ok {

@@ -13,7 +13,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
-	"sync"
+	"sync/atomic"
 
 	"github.com/docker/docker-agent/pkg/chat"
 	"github.com/docker/docker-agent/pkg/config/latest"
@@ -43,11 +43,13 @@ type ProviderFactory func(ctx context.Context, modelSpec string, models map[stri
 type Client struct {
 	base.Config
 
-	routes         []Provider
-	fallback       Provider
-	matcher        *matcher
-	mu             sync.RWMutex
-	lastSelectedID modelsdev.ID // ID of the provider selected by the most recent call
+	routes   []Provider
+	fallback Provider
+	matcher  *matcher
+	// lastSelectedID holds the ID of the provider selected by the most recent
+	// call. A plain atomic pointer suffices because it is the only mutable
+	// field; everything else is set once at construction and read-only after.
+	lastSelectedID atomic.Pointer[modelsdev.ID]
 }
 
 // NewClient creates a new rule-based routing client.
@@ -133,9 +135,7 @@ func (c *Client) CreateChatCompletionStream(
 	}
 
 	selectedID := provider.ID()
-	c.mu.Lock()
-	c.lastSelectedID = selectedID
-	c.mu.Unlock()
+	c.lastSelectedID.Store(&selectedID)
 	slog.DebugContext(ctx, "Rule-based router selected model",
 		"router", c.ID().String(),
 		"selected_model", selectedID.String(),
@@ -149,9 +149,10 @@ func (c *Client) CreateChatCompletionStream(
 // recent CreateChatCompletionStream call. This allows callers to display
 // the YAML-configured sub-model name for rule-based routing.
 func (c *Client) LastSelectedModelID() modelsdev.ID {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.lastSelectedID
+	if id := c.lastSelectedID.Load(); id != nil {
+		return *id
+	}
+	return modelsdev.ID{}
 }
 
 // selectProvider finds the best matching provider for the messages.

@@ -163,35 +163,85 @@ func TestRejectsTokenThinking(t *testing.T) {
 	}
 }
 
-func TestDefaultClaudeContextLimit(t *testing.T) {
+func TestSupportsAdaptiveThinking(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
 		model string
-		want  int64
+		want  bool
 	}{
-		{"claude-fable-5", 1_000_000},
-		{"claude-fable-5-20260609", 1_000_000},
-		{"claude-fable", 1_000_000},
-		{"CLAUDE-FABLE-5", 1_000_000},                                // case-insensitive
-		{"global.anthropic.claude-fable-5-20260609-v1:0", 1_000_000}, // Bedrock Fable inference profile
-		{"claude-opus-4-6", 1_000_000},
-		{"claude-opus-4-7", 1_000_000},
-		{"claude-opus-4-8", 1_000_000},
-		{"claude-opus-4-8-20260601", 1_000_000},
-		{"anthropic.claude-opus-4-8-20260601-v1:0", 1_000_000},        // Bedrock ID
-		{"global.anthropic.claude-opus-4-8-20260601-v1:0", 1_000_000}, // Bedrock inference profile
-		{"CLAUDE-OPUS-4-8", 1_000_000},                                // case-insensitive
-		{"claude-opus-4-5", 200_000},                                  // older Opus uses the 200k floor
-		{"claude-opus-4-80", 200_000},                                 // must not match
-		{"claude-sonnet-4-6", 200_000},
-		{"claude-fables", 200_000}, // must not match
-		{"", 200_000},
+		// Opus 4.6+ (also reject token thinking).
+		{"claude-opus-4-6", true},
+		{"claude-opus-4-7", true},
+		{"claude-opus-4-8", true},
+		{"claude-opus-4-8-20260601", true},
+		{"claude-opus-4.7", true}, // dotted minor
+		// Sonnet 4.6+.
+		{"claude-sonnet-4-6", true},
+		{"claude-sonnet-4-6-20251114", true},
+		// Claude 5 families.
+		{"claude-sonnet-5", true},
+		{"claude-opus-5", true},
+		// Codenamed frontier models.
+		{"claude-fable-5", true},
+		{"claude-mythos-5", true},
+		{"claude-mythos-preview", true},
+		// Not supported: token-only models.
+		{"claude-haiku-4-5", false},
+		{"claude-sonnet-4-5", false},
+		{"claude-sonnet-4-0", false},
+		{"claude-opus-4-5", false},
+		{"claude-opus-4-1", false},
+		{"claude-opus-4-0", false},
+		{"claude-opus-4-20250514", false}, // dated 4.0, trailing digits are a date
+		{"claude-opus-4-1-20250805", false},
+		// Claude 3.x (family precedes the version number).
+		{"claude-3-opus-20240229", false},
+		{"claude-3-5-sonnet-20241022", false},
+		{"claude-3-7-sonnet-20250219", false},
+		{"claude-3-haiku-20240307", false},
+		// Bedrock-style identifiers.
+		{"anthropic.claude-opus-4-8-20260601-v1:0", true},
+		{"global.anthropic.claude-sonnet-4-6-20251114-v1:0", true},
+		{"us.anthropic.claude-sonnet-4-6-v1:0", true},
+		{"global.anthropic.claude-sonnet-4-5-20250929-v1:0", false},
+		{"us.anthropic.claude-haiku-4-5-v1:0", false},
+		// Case-insensitive and whitespace-tolerant.
+		{"CLAUDE-SONNET-4-6", true},
+		{"  claude-opus-4-8  ", true},
+		// Non-Claude and empty.
+		{"gpt-5", false},
+		{"gemini-3-pro", false},
+		{"", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.model, func(t *testing.T) {
 			t.Parallel()
-			assert.Equal(t, tc.want, DefaultClaudeContextLimit(tc.model))
+			assert.Equal(t, tc.want, SupportsAdaptiveThinking(tc.model))
+		})
+	}
+}
+
+// TestSupportsAdaptiveThinkingSupersetOfRejects guards the invariant that every
+// model which rejects token-based thinking (and therefore requires adaptive)
+// also reports support for adaptive thinking. A violation would send a token
+// budget to a model that rejects it, or vice versa.
+func TestSupportsAdaptiveThinkingSupersetOfRejects(t *testing.T) {
+	t.Parallel()
+
+	models := []string{
+		"claude-opus-4-5", "claude-opus-4-6", "claude-opus-4-7", "claude-opus-4-8",
+		"claude-opus-4-8-20260601", "claude-sonnet-4-5", "claude-sonnet-4-6",
+		"claude-sonnet-5", "claude-haiku-4-5", "claude-fable-5",
+		"anthropic.claude-opus-4-8-v1:0", "global.anthropic.claude-opus-4-6-v1:0",
+	}
+	for _, m := range models {
+		t.Run(m, func(t *testing.T) {
+			t.Parallel()
+			if RejectsTokenThinking(m) {
+				assert.True(t, SupportsAdaptiveThinking(m),
+					"%q rejects token thinking but does not support adaptive thinking", m)
+			}
 		})
 	}
 }
@@ -373,6 +423,8 @@ func TestIsClaude_StoreErrorFallsBackToPattern(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestLoadCaps_QualifiedIDRequired(t *testing.T) {
+	t.Parallel()
+
 	store := modelsdev.NewDatabaseStore(&modelsdev.Database{Providers: map[string]modelsdev.Provider{
 		"anthropic": {
 			Models: map[string]modelsdev.Model{
@@ -405,6 +457,8 @@ func TestLoadCaps_QualifiedIDRequired(t *testing.T) {
 }
 
 func TestLoadCaps_VisionModel(t *testing.T) {
+	t.Parallel()
+
 	store := modelsdev.NewDatabaseStore(&modelsdev.Database{Providers: map[string]modelsdev.Provider{
 		"anthropic": {
 			Models: map[string]modelsdev.Model{
@@ -428,6 +482,8 @@ func TestLoadCaps_VisionModel(t *testing.T) {
 }
 
 func TestLoadCaps_TextOnlyModel(t *testing.T) {
+	t.Parallel()
+
 	store := modelsdev.NewDatabaseStore(&modelsdev.Database{Providers: map[string]modelsdev.Provider{
 		"openai": {
 			Models: map[string]modelsdev.Model{
@@ -451,6 +507,8 @@ func TestLoadCaps_TextOnlyModel(t *testing.T) {
 }
 
 func TestLoadCaps_ModelNotFound(t *testing.T) {
+	t.Parallel()
+
 	store := modelsdev.NewDatabaseStore(&modelsdev.Database{Providers: map[string]modelsdev.Provider{}})
 
 	mc := LoadCaps(t.Context(), store, modelsdev.NewID("unknown", "nonexistent-model"))
@@ -461,6 +519,8 @@ func TestLoadCaps_ModelNotFound(t *testing.T) {
 }
 
 func TestLoadCaps_OfficeDocsNotAllowed(t *testing.T) {
+	t.Parallel()
+
 	store := modelsdev.NewDatabaseStore(&modelsdev.Database{Providers: map[string]modelsdev.Provider{
 		"openai": {
 			Models: map[string]modelsdev.Model{
@@ -491,6 +551,8 @@ func TestLoadCaps_OfficeDocsNotAllowed(t *testing.T) {
 }
 
 func TestCapsWith(t *testing.T) {
+	t.Parallel()
+
 	mc := CapsWith(true, false)
 	assert.True(t, mc.Supports("image/jpeg"))
 	assert.False(t, mc.Supports("application/pdf"))
@@ -500,6 +562,8 @@ func TestCapsWith(t *testing.T) {
 }
 
 func TestSupports_AudioVideoRejected(t *testing.T) {
+	t.Parallel()
+
 	mc := CapsWith(true, true)
 
 	for _, mime := range []string{

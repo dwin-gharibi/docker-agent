@@ -44,12 +44,7 @@ func NewVertexClient(ctx context.Context, cfg *latest.ModelConfig, env environme
 		return nil, errors.New("vertex AI requires a GCP location")
 	}
 
-	var globalOptions options.ModelOptions
-	for _, opt := range opts {
-		if opt != nil {
-			opt(&globalOptions)
-		}
-	}
+	globalOptions := options.Apply(opts...)
 
 	// Resolve GCP credentials up front so we can return a descriptive error
 	// instead of the panic that vertex.WithGoogleAuth would raise.
@@ -91,10 +86,6 @@ func NewVertexClient(ctx context.Context, cfg *latest.ModelConfig, env environme
 			return client, nil
 		},
 	}
-
-	// File uploads via Anthropic's Files API are not supported on Vertex AI,
-	// but the FileManager is lazy and harmless if unused.
-	anthropicClient.fileManager = NewFileManager(anthropicClient.clientFn)
 
 	slog.DebugContext(ctx, "Anthropic (Vertex AI) client created successfully", "model", cfg.Model)
 	return anthropicClient, nil

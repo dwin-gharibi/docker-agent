@@ -1,16 +1,17 @@
 ---
 title: "Tasks Tool"
 description: "Persistent task database with priorities and dependencies, shared across sessions."
-permalink: /tools/tasks/
+keywords: docker agent, ai agents, tools, toolsets, tasks tool
+linkTitle: "Tasks"
+weight: 180
+canonical: https://docs.docker.com/ai/docker-agent/tools/tasks/
 ---
-
-# Tasks Tool
 
 _Persistent task database with priorities and dependencies, shared across sessions._
 
 ## Overview
 
-The tasks tool provides a persistent task database that survives across agent sessions. Unlike the [Todo tool]({{ '/tools/todo/' | relative_url }}), which maintains an in-memory task list for the current session only, the tasks tool stores tasks in a JSON file on disk so they can be accessed and updated across multiple sessions. Tasks support priorities and dependencies — a task is _blocked_ until every task it depends on is `done`.
+The tasks tool provides a persistent task database that survives across agent sessions. Unlike the [Todo tool](../todo/index.md), which maintains an in-memory task list for the current session only, the tasks tool stores tasks in a JSON file on disk so they can be accessed and updated across multiple sessions. Tasks support priorities and dependencies — a task is _blocked_ until every task it depends on is `done`.
 
 ## Configuration
 
@@ -52,9 +53,7 @@ agents:
         path: ./project-tasks.json
 ```
 
-<div class="callout callout-tip" markdown="1">
-<div class="callout-title">Tasks vs. Todo
-</div>
-  <p>Use the <strong>tasks</strong> tool when you need persistence across sessions, priorities, or dependencies (e.g., long-running projects, recurring work). Use the <a href="{{ '/tools/todo/' | relative_url }}">todo tool</a> for ephemeral, session-scoped task lists.</p>
-
-</div>
+> [!TIP]
+> **Tasks vs. Todo**
+>
+> Use the **tasks** tool when you need persistence across sessions, priorities, or dependencies (e.g., long-running projects, recurring work). Use the [todo tool](../todo/index.md) for ephemeral, session-scoped task lists.

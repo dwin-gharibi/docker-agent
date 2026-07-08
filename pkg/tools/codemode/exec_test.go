@@ -5,12 +5,15 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/docker/docker-agent/pkg/tools"
 )
 
 func TestRunJavascript(t *testing.T) {
+	t.Parallel()
 	tool := &codeModeTool{}
 
-	result, err := tool.runJavascript(t.Context(), `return "HELLO"`)
+	result, err := tool.runJavascript(t.Context(), tools.NopRuntime{}, `return "HELLO"`)
 	require.NoError(t, err)
 
 	assert.Equal(t, "HELLO", result.Value)
@@ -19,9 +22,10 @@ func TestRunJavascript(t *testing.T) {
 }
 
 func TestRunJavascript_error(t *testing.T) {
+	t.Parallel()
 	tool := &codeModeTool{}
 
-	result, err := tool.runJavascript(t.Context(), `==`)
+	result, err := tool.runJavascript(t.Context(), tools.NopRuntime{}, `==`)
 	require.NoError(t, err)
 
 	assert.Equal(t, "SyntaxError: SyntaxError: (anonymous): Line 2:1 Unexpected token == (and 2 more errors)", result.Value)
@@ -30,9 +34,10 @@ func TestRunJavascript_error(t *testing.T) {
 }
 
 func TestRunJavascript_console(t *testing.T) {
+	t.Parallel()
 	tool := &codeModeTool{}
 
-	result, err := tool.runJavascript(t.Context(), `console.log("to stdout"); console.error("to stderr"); return "RESULT";`)
+	result, err := tool.runJavascript(t.Context(), tools.NopRuntime{}, `console.log("to stdout"); console.error("to stderr"); return "RESULT";`)
 	require.NoError(t, err)
 
 	assert.Equal(t, "RESULT", result.Value)
@@ -41,9 +46,10 @@ func TestRunJavascript_console(t *testing.T) {
 }
 
 func TestRunJavascript_no_result(t *testing.T) {
+	t.Parallel()
 	tool := &codeModeTool{}
 
-	result, err := tool.runJavascript(t.Context(), ``)
+	result, err := tool.runJavascript(t.Context(), tools.NopRuntime{}, ``)
 	require.NoError(t, err)
 
 	assert.Empty(t, result.Value)

@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	neturl "net/url"
+	"strings"
 
 	gomcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -77,6 +79,12 @@ func sanitizeRemoteAddress(rawURL string) string {
 	return u.Host
 }
 
+// unixSocketPath mirrors pkg/server.Listen: it strips the "unix://" prefix so
+// `unix:///tmp/x.sock` maps to `/tmp/x.sock`.
+func unixSocketPath(rawURL string) (string, bool) {
+	return strings.CutPrefix(rawURL, "unix://")
+}
+
 func (c *remoteMCPClient) Initialize(ctx context.Context, _ *gomcp.InitializeRequest) (*gomcp.InitializeResult, error) {
 	// Create HTTP client with OAuth support. We keep a reference to the
 	// oauthTransport so we can enrich Connect errors with the server's own
@@ -89,15 +97,22 @@ func (c *remoteMCPClient) Initialize(ctx context.Context, _ *gomcp.InitializeReq
 
 	var transport gomcp.Transport
 
+	endpoint := c.url
+	if _, ok := unixSocketPath(c.url); ok {
+		// http.Client can't dial the "unix" scheme; the socket is dialed by
+		// the transport, the host here is a placeholder.
+		endpoint = "http://localhost/"
+	}
+
 	switch c.transportType {
 	case "sse":
 		transport = &gomcp.SSEClientTransport{
-			Endpoint:   c.url,
+			Endpoint:   endpoint,
 			HTTPClient: httpClient,
 		}
 	case "streamable", "streamable-http":
 		transport = &gomcp.StreamableClientTransport{
-			Endpoint:             c.url,
+			Endpoint:             endpoint,
 			HTTPClient:           httpClient,
 			DisableStandaloneSSE: true,
 		}
@@ -172,8 +187,8 @@ func enrichConnectError(err error, t *oauthTransport) error {
 // In managed mode, the client handles the OAuth flow instead of the server.
 func (c *remoteMCPClient) SetManagedOAuth(managed bool) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.managed = managed
-	c.mu.Unlock()
 }
 
 // SetUnmanagedOAuthRedirectURI sets the redirect URI docker-agent advertises
@@ -181,8 +196,8 @@ func (c *remoteMCPClient) SetManagedOAuth(managed bool) {
 // semantics.
 func (c *remoteMCPClient) SetUnmanagedOAuthRedirectURI(uri string) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.unmanagedOAuthRedirectURI = uri
-	c.mu.Unlock()
 }
 
 // createHTTPClient creates an HTTP client with custom headers and OAuth support.
@@ -227,8 +242,16 @@ func (c *remoteMCPClient) createHTTPClient() (*http.Client, *oauthTransport, err
 }
 
 func (c *remoteMCPClient) headerTransport() http.RoundTripper {
-	if len(c.headers) > 0 {
-		return upstream.NewHeaderTransport(http.DefaultTransport, c.headers)
+	base := http.DefaultTransport
+	if path, ok := unixSocketPath(c.url); ok {
+		t := http.DefaultTransport.(*http.Transport).Clone()
+		t.DialContext = func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "unix", path)
+		}
+		base = t
 	}
-	return http.DefaultTransport
+	if len(c.headers) > 0 {
+		return upstream.NewHeaderTransport(base, c.headers)
+	}
+	return base
 }

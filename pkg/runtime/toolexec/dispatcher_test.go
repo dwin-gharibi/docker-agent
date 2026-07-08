@@ -2,7 +2,10 @@ package toolexec_test
 
 import (
 	"context"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -20,6 +23,8 @@ import (
 // channel signals when a confirmation event lands so cancellation tests
 // don't need to busy-wait.
 type captureEmitter struct {
+	mu               sync.Mutex
+	confirmedOnce    sync.Once
 	calls            []tools.ToolCall
 	outputs          []outputRecord
 	responses        []responseRecord
@@ -47,14 +52,20 @@ type hookBlockRecord struct {
 }
 
 func (e *captureEmitter) EmitToolCall(tc tools.ToolCall, _ tools.Tool, _ string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	e.calls = append(e.calls, tc)
 }
 
 func (e *captureEmitter) EmitToolCallOutput(toolCallID string, _ tools.Tool, output, _ string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	e.outputs = append(e.outputs, outputRecord{ToolCallID: toolCallID, Output: output})
 }
 
 func (e *captureEmitter) EmitToolCallResponse(toolCallID string, _ tools.Tool, result *tools.ToolCallResult, output, _ string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	e.responses = append(e.responses, responseRecord{
 		ToolCallID: toolCallID,
 		Output:     output,
@@ -63,23 +74,24 @@ func (e *captureEmitter) EmitToolCallResponse(toolCallID string, _ tools.Tool, r
 }
 
 func (e *captureEmitter) EmitToolCallConfirmation(tc tools.ToolCall, _ tools.Tool, _ string, metadata map[string]string) {
+	e.mu.Lock()
 	e.confirmations = append(e.confirmations, tc)
 	e.confirmationMeta = append(e.confirmationMeta, metadata)
+	e.mu.Unlock()
 	if e.confirmed != nil {
-		select {
-		case <-e.confirmed:
-			// already closed
-		default:
-			close(e.confirmed)
-		}
+		e.confirmedOnce.Do(func() { close(e.confirmed) })
 	}
 }
 
 func (e *captureEmitter) EmitHookBlocked(tc tools.ToolCall, _ tools.Tool, message, _ string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	e.hookBlocks = append(e.hookBlocks, hookBlockRecord{ToolCall: tc, Message: message})
 }
 
 func (e *captureEmitter) EmitMessageAdded(_ string, msg *session.Message, _ string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	e.messages = append(e.messages, msg)
 }
 
@@ -88,6 +100,7 @@ func newAgent() *agent.Agent {
 }
 
 func TestDispatcher_RoutesToToolsetHandler(t *testing.T) {
+	t.Parallel()
 	a := newAgent()
 	sess := session.New()
 	sess.ToolsApproved = true // skip approval so we exercise the happy path
@@ -95,7 +108,7 @@ func TestDispatcher_RoutesToToolsetHandler(t *testing.T) {
 	var handlerCalls int
 	tool := tools.Tool{
 		Name: "echo",
-		Handler: func(_ context.Context, tc tools.ToolCall) (*tools.ToolCallResult, error) {
+		Handler: func(_ context.Context, tc tools.ToolCall, _ tools.Runtime) (*tools.ToolCallResult, error) {
 			handlerCalls++
 			return tools.ResultSuccess("hello " + tc.Function.Arguments), nil
 		},
@@ -117,16 +130,78 @@ func TestDispatcher_RoutesToToolsetHandler(t *testing.T) {
 	assert.False(t, em.responses[0].IsError)
 }
 
+func TestDispatcher_RunsToolHandlersInParallel(t *testing.T) {
+	t.Parallel()
+	a := newAgent()
+	sess := session.New()
+	sess.ToolsApproved = true
+
+	started := make(chan string, 2)
+	release := make(chan struct{})
+	var running atomic.Int32
+	var maxRunning atomic.Int32
+	tool := tools.Tool{
+		Name: "slow",
+		Handler: func(ctx context.Context, tc tools.ToolCall, _ tools.Runtime) (*tools.ToolCallResult, error) {
+			current := running.Add(1)
+			for {
+				observed := maxRunning.Load()
+				if current <= observed || maxRunning.CompareAndSwap(observed, current) {
+					break
+				}
+			}
+			started <- tc.ID
+			defer running.Add(-1)
+			select {
+			case <-release:
+				return tools.ResultSuccess("done " + tc.ID), nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		},
+	}
+
+	d := &toolexec.Dispatcher{AgentFor: func(*session.Session) *agent.Agent { return a }}
+	em := &captureEmitter{}
+	done := make(chan struct{})
+	go func() {
+		d.Process(t.Context(), sess, []tools.ToolCall{
+			{ID: "a", Function: tools.FunctionCall{Name: "slow", Arguments: `{}`}},
+			{ID: "b", Function: tools.FunctionCall{Name: "slow", Arguments: `{}`}},
+		}, []tools.Tool{tool}, em)
+		close(done)
+	}()
+
+	for range 2 {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for both tool handlers to start")
+		}
+	}
+	close(release)
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Process to finish")
+	}
+
+	assert.GreaterOrEqual(t, maxRunning.Load(), int32(2))
+	require.Len(t, em.responses, 2)
+}
+
 func TestDispatcher_EmitsToolOutputFromHandlerContext(t *testing.T) {
+	t.Parallel()
 	a := newAgent()
 	sess := session.New()
 	sess.ToolsApproved = true
 
 	tool := tools.Tool{
 		Name: "streamer",
-		Handler: func(ctx context.Context, _ tools.ToolCall) (*tools.ToolCallResult, error) {
-			tools.EmitOutput(ctx, "first\n")
-			tools.EmitOutput(ctx, "second\n")
+		Handler: func(ctx context.Context, _ tools.ToolCall, rt tools.Runtime) (*tools.ToolCallResult, error) {
+			rt.EmitOutput(ctx, "first\n")
+			rt.EmitOutput(ctx, "second\n")
 			return tools.ResultSuccess("done"), nil
 		},
 	}
@@ -146,13 +221,14 @@ func TestDispatcher_EmitsToolOutputFromHandlerContext(t *testing.T) {
 }
 
 func TestDispatcher_RecordsDocumentToolResult(t *testing.T) {
+	t.Parallel()
 	a := newAgent()
 	sess := session.New()
 	sess.ToolsApproved = true
 
 	tool := tools.Tool{
 		Name: "report",
-		Handler: func(context.Context, tools.ToolCall) (*tools.ToolCallResult, error) {
+		Handler: func(context.Context, tools.ToolCall, tools.Runtime) (*tools.ToolCallResult, error) {
 			return &tools.ToolCallResult{
 				Output: "created report",
 				Documents: []tools.DocumentContent{{
@@ -184,6 +260,7 @@ func TestDispatcher_RecordsDocumentToolResult(t *testing.T) {
 }
 
 func TestDispatcher_RoutesToRuntimeHandler(t *testing.T) {
+	t.Parallel()
 	a := newAgent()
 	sess := session.New()
 	sess.ToolsApproved = true
@@ -192,7 +269,7 @@ func TestDispatcher_RoutesToRuntimeHandler(t *testing.T) {
 	d := &toolexec.Dispatcher{
 		AgentFor: func(*session.Session) *agent.Agent { return a },
 		Handlers: map[string]toolexec.ToolHandler{
-			"transfer_task": func(_ context.Context, _ *session.Session, _ tools.ToolCall) (*tools.ToolCallResult, error) {
+			"transfer_task": func(_ context.Context, _ *session.Session, _ tools.ToolCall, _ tools.Runtime) (*tools.ToolCallResult, error) {
 				handlerCalls++
 				return tools.ResultSuccess("transferred"), nil
 			},
@@ -204,7 +281,7 @@ func TestDispatcher_RoutesToRuntimeHandler(t *testing.T) {
 	// for the same name.
 	tool := tools.Tool{
 		Name: "transfer_task",
-		Handler: func(context.Context, tools.ToolCall) (*tools.ToolCallResult, error) {
+		Handler: func(context.Context, tools.ToolCall, tools.Runtime) (*tools.ToolCallResult, error) {
 			t.Fatal("toolset handler must not be called when runtime handler exists")
 			return nil, nil
 		},
@@ -221,6 +298,7 @@ func TestDispatcher_RoutesToRuntimeHandler(t *testing.T) {
 }
 
 func TestDispatcher_UnknownToolEmitsErrorResponse(t *testing.T) {
+	t.Parallel()
 	a := newAgent()
 	sess := session.New()
 
@@ -240,7 +318,8 @@ func TestDispatcher_UnknownToolEmitsErrorResponse(t *testing.T) {
 	assert.Contains(t, em.responses[0].Output, "not available")
 }
 
-func TestDispatcher_UserCancellationStopsBatchAndSynthesizesRemaining(t *testing.T) {
+func TestDispatcher_UserCancellationStopsBatchAndErrorsAllCalls(t *testing.T) {
+	t.Parallel()
 	a := newAgent()
 	sess := session.New()
 
@@ -252,14 +331,17 @@ func TestDispatcher_UserCancellationStopsBatchAndSynthesizesRemaining(t *testing
 	em := &captureEmitter{confirmed: make(chan struct{})}
 
 	tool := tools.Tool{
-		Name:    "shell",
-		Handler: func(context.Context, tools.ToolCall) (*tools.ToolCallResult, error) { panic("must not run") },
+		Name:     "shell",
+		Category: "shell",
+		Handler: func(context.Context, tools.ToolCall, tools.Runtime) (*tools.ToolCallResult, error) {
+			panic("must not run")
+		},
 	}
 
 	// Cancel as soon as the dispatcher asks for confirmation on the first
-	// call. The remaining two calls in the batch must receive synthetic
-	// error responses so the conversation history stays consistent (the
-	// Responses API rejects orphaned tool calls).
+	// call. Every call in the batch must receive an error response so the
+	// conversation history stays consistent (the Responses API rejects
+	// orphaned tool calls).
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 	go func() {
@@ -277,20 +359,19 @@ func TestDispatcher_UserCancellationStopsBatchAndSynthesizesRemaining(t *testing
 	require.Len(t, em.responses, 3, "every call must produce a response")
 	for _, r := range em.responses {
 		assert.True(t, r.IsError, "every cancelled call must surface as an error response")
+		assert.Contains(t, r.Output, "canceled")
 	}
-	assert.Contains(t, em.responses[0].Output, "canceled by the user")
-	assert.Contains(t, em.responses[1].Output, "previous tool call")
-	assert.Contains(t, em.responses[2].Output, "previous tool call")
 }
 
 func TestDispatcher_ResumeApproveRunsTool(t *testing.T) {
+	t.Parallel()
 	a := newAgent()
 	sess := session.New()
 
 	var ran bool
 	tool := tools.Tool{
 		Name: "shell",
-		Handler: func(context.Context, tools.ToolCall) (*tools.ToolCallResult, error) {
+		Handler: func(context.Context, tools.ToolCall, tools.Runtime) (*tools.ToolCallResult, error) {
 			ran = true
 			return tools.ResultSuccess("done"), nil
 		},
@@ -318,12 +399,15 @@ func TestDispatcher_ResumeApproveRunsTool(t *testing.T) {
 }
 
 func TestDispatcher_ResumeRejectEmitsErrorResponseWithReason(t *testing.T) {
+	t.Parallel()
 	a := newAgent()
 	sess := session.New()
 
 	tool := tools.Tool{
-		Name:    "shell",
-		Handler: func(context.Context, tools.ToolCall) (*tools.ToolCallResult, error) { panic("must not run") },
+		Name: "shell",
+		Handler: func(context.Context, tools.ToolCall, tools.Runtime) (*tools.ToolCallResult, error) {
+			panic("must not run")
+		},
 	}
 
 	resume := make(chan toolexec.ResumeRequest, 1)
@@ -347,13 +431,14 @@ func TestDispatcher_ResumeRejectEmitsErrorResponseWithReason(t *testing.T) {
 }
 
 func TestDispatcher_ResumeApproveToolPersistsToSessionPermissions(t *testing.T) {
+	t.Parallel()
 	a := newAgent()
 	sess := session.New()
 
 	var ran bool
 	tool := tools.Tool{
 		Name: "shell",
-		Handler: func(context.Context, tools.ToolCall) (*tools.ToolCallResult, error) {
+		Handler: func(context.Context, tools.ToolCall, tools.Runtime) (*tools.ToolCallResult, error) {
 			ran = true
 			return tools.ResultSuccess("ok"), nil
 		},
@@ -379,6 +464,7 @@ func TestDispatcher_ResumeApproveToolPersistsToSessionPermissions(t *testing.T) 
 }
 
 func TestDispatcher_ReadOnlyHintAutoApproves(t *testing.T) {
+	t.Parallel()
 	a := newAgent()
 	sess := session.New() // ToolsApproved=false; no permissions configured
 
@@ -388,7 +474,7 @@ func TestDispatcher_ReadOnlyHintAutoApproves(t *testing.T) {
 		Annotations: tools.ToolAnnotations{
 			ReadOnlyHint: true,
 		},
-		Handler: func(context.Context, tools.ToolCall) (*tools.ToolCallResult, error) {
+		Handler: func(context.Context, tools.ToolCall, tools.Runtime) (*tools.ToolCallResult, error) {
 			ran = true
 			return tools.ResultSuccess("contents"), nil
 		},
@@ -411,12 +497,15 @@ func TestDispatcher_ReadOnlyHintAutoApproves(t *testing.T) {
 }
 
 func TestDispatcher_DenyByPermissionsEmitsErrorResponse(t *testing.T) {
+	t.Parallel()
 	a := newAgent()
 	sess := session.New()
 
 	tool := tools.Tool{
-		Name:    "shell",
-		Handler: func(context.Context, tools.ToolCall) (*tools.ToolCallResult, error) { panic("must not run") },
+		Name: "shell",
+		Handler: func(context.Context, tools.ToolCall, tools.Runtime) (*tools.ToolCallResult, error) {
+			panic("must not run")
+		},
 	}
 
 	d := &toolexec.Dispatcher{
@@ -448,6 +537,7 @@ func TestDispatcher_DenyByPermissionsEmitsErrorResponse(t *testing.T) {
 // with a stub HookDispatcher so the test doesn't depend on the
 // portcullis ruleset shipping a particular set of patterns.
 func TestDispatcher_ToolResponseTransformRewritesOutput(t *testing.T) {
+	t.Parallel()
 	a := newAgent()
 	sess := session.New()
 	sess.ToolsApproved = true
@@ -456,8 +546,9 @@ func TestDispatcher_ToolResponseTransformRewritesOutput(t *testing.T) {
 	rewritten := "output with [REDACTED]"
 
 	tool := tools.Tool{
-		Name: "leaky",
-		Handler: func(context.Context, tools.ToolCall) (*tools.ToolCallResult, error) {
+		Name:     "leaky",
+		Category: "filesystem",
+		Handler: func(context.Context, tools.ToolCall, tools.Runtime) (*tools.ToolCallResult, error) {
 			return tools.ResultSuccess(original), nil
 		},
 	}
@@ -499,6 +590,7 @@ func TestDispatcher_ToolResponseTransformRewritesOutput(t *testing.T) {
 // returns nil for the event), the original output flows through
 // untouched and no surprise allocations happen.
 func TestDispatcher_ToolResponseTransformIsNoOpWithoutHooks(t *testing.T) {
+	t.Parallel()
 	a := newAgent()
 	sess := session.New()
 	sess.ToolsApproved = true
@@ -506,8 +598,9 @@ func TestDispatcher_ToolResponseTransformIsNoOpWithoutHooks(t *testing.T) {
 	original := "untouched output"
 
 	tool := tools.Tool{
-		Name: "leaky",
-		Handler: func(context.Context, tools.ToolCall) (*tools.ToolCallResult, error) {
+		Name:     "leaky",
+		Category: "filesystem",
+		Handler: func(context.Context, tools.ToolCall, tools.Runtime) (*tools.ToolCallResult, error) {
 			return tools.ResultSuccess(original), nil
 		},
 	}
@@ -537,12 +630,15 @@ func TestDispatcher_ToolResponseTransformIsNoOpWithoutHooks(t *testing.T) {
 // rejection reason would leak — errorResponse used to bypass the
 // rewrite chain entirely.
 func TestDispatcher_ToolResponseTransformAppliesToErrorResponse(t *testing.T) {
+	t.Parallel()
 	a := newAgent()
 	sess := session.New()
 
 	tool := tools.Tool{
-		Name:    "shell",
-		Handler: func(context.Context, tools.ToolCall) (*tools.ToolCallResult, error) { panic("must not run") },
+		Name: "shell",
+		Handler: func(context.Context, tools.ToolCall, tools.Runtime) (*tools.ToolCallResult, error) {
+			panic("must not run")
+		},
 	}
 
 	rewritten := "rejected with [REDACTED] secret"
@@ -578,13 +674,16 @@ func TestDispatcher_ToolResponseTransformAppliesToErrorResponse(t *testing.T) {
 // toolset's static [tools.Tool.Metadata] reaches the tool-call
 // confirmation event when the user is prompted.
 func TestDispatcher_ConfirmationCarriesToolMetadata(t *testing.T) {
+	t.Parallel()
 	a := newAgent()
 	sess := session.New()
 
 	tool := tools.Tool{
 		Name:     "shell",
 		Metadata: map[string]string{"danger": "high", "category": "exec"},
-		Handler:  func(context.Context, tools.ToolCall) (*tools.ToolCallResult, error) { panic("must not run") },
+		Handler: func(context.Context, tools.ToolCall, tools.Runtime) (*tools.ToolCallResult, error) {
+			panic("must not run")
+		},
 	}
 
 	resume := make(chan toolexec.ResumeRequest, 1)
@@ -610,13 +709,16 @@ func TestDispatcher_ConfirmationCarriesToolMetadata(t *testing.T) {
 // permission_request hook can enrich the confirmation metadata and that
 // hook keys win over the toolset's own keys on a clash.
 func TestDispatcher_ConfirmationMergesHookMetadata(t *testing.T) {
+	t.Parallel()
 	a := newAgent()
 	sess := session.New()
 
 	tool := tools.Tool{
 		Name:     "shell",
 		Metadata: map[string]string{"danger": "high", "source": "toolset"},
-		Handler:  func(context.Context, tools.ToolCall) (*tools.ToolCallResult, error) { panic("must not run") },
+		Handler: func(context.Context, tools.ToolCall, tools.Runtime) (*tools.ToolCallResult, error) {
+			panic("must not run")
+		},
 	}
 
 	// Hook allows the prompt to proceed (no short-circuit) but contributes
@@ -657,12 +759,15 @@ func TestDispatcher_ConfirmationMergesHookMetadata(t *testing.T) {
 // the confirmation event carries nil metadata when neither the toolset
 // nor a hook contributed any, keeping the wire payload lean.
 func TestDispatcher_ConfirmationMetadataNilWhenNoneSupplied(t *testing.T) {
+	t.Parallel()
 	a := newAgent()
 	sess := session.New()
 
 	tool := tools.Tool{
-		Name:    "shell",
-		Handler: func(context.Context, tools.ToolCall) (*tools.ToolCallResult, error) { panic("must not run") },
+		Name: "shell",
+		Handler: func(context.Context, tools.ToolCall, tools.Runtime) (*tools.ToolCallResult, error) {
+			panic("must not run")
+		},
 	}
 
 	resume := make(chan toolexec.ResumeRequest, 1)
@@ -681,4 +786,289 @@ func TestDispatcher_ConfirmationMetadataNilWhenNoneSupplied(t *testing.T) {
 
 	require.Len(t, em.confirmationMeta, 1)
 	assert.Nil(t, em.confirmationMeta[0])
+}
+
+// TestDispatcher_PreToolUsePreYoloAskPreemptsYolo pins the load-
+// bearing property of the preempt-yolo lane of pre_tool_use: an Ask
+// verdict must route to user confirmation even when ToolsApproved
+// (--yolo / Allow All) would otherwise auto-run the call. Also
+// verifies the hook's Metadata reaches the confirmation event.
+func TestDispatcher_PreToolUsePreYoloAskPreemptsYolo(t *testing.T) {
+	t.Parallel()
+
+	a := newAgent()
+	sess := session.New()
+	sess.ToolsApproved = true
+
+	tool := tools.Tool{
+		Name: "shell",
+		Handler: func(context.Context, tools.ToolCall, tools.Runtime) (*tools.ToolCallResult, error) {
+			panic("must not run before approval")
+		},
+	}
+
+	hd := &stubHookDispatcher{
+		on: map[hooks.EventType]*hooks.Result{
+			hooks.EventPreToolUsePreYolo: {
+				Allowed:        true,
+				Decision:       hooks.DecisionAsk,
+				DecisionReason: "rm -rf <path>: irreversible",
+				Metadata: map[string]string{
+					"blast_radius": "high",
+					"category":     "fs-delete",
+				},
+			},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	d := &toolexec.Dispatcher{
+		AgentFor: func(*session.Session) *agent.Agent { return a },
+		Hooks:    hd,
+	}
+	em := &captureEmitter{confirmed: make(chan struct{})}
+	go func() {
+		<-em.confirmed
+		cancel()
+	}()
+
+	d.Process(ctx, sess, []tools.ToolCall{{
+		ID:       "danger",
+		Function: tools.FunctionCall{Name: "shell", Arguments: `{"cmd":"rm -rf /tmp/x"}`},
+	}}, []tools.Tool{tool}, em)
+
+	require.Len(t, em.confirmations, 1, "Ask must route to user confirmation despite --yolo")
+	require.Len(t, em.confirmationMeta, 1)
+	assert.Equal(t, "high", em.confirmationMeta[0]["blast_radius"],
+		"preempt-yolo hook Metadata must reach the confirmation event")
+	assert.Equal(t, "fs-delete", em.confirmationMeta[0]["category"])
+	require.Len(t, em.responses, 1)
+	assert.True(t, em.responses[0].IsError)
+	assert.Contains(t, em.responses[0].Output, "canceled by the user")
+}
+
+// TestDispatcher_PreToolUsePreYoloDenyShortCircuits pins the Deny
+// path: a preempt-yolo Deny verdict goes straight to errorResponse
+// without emitting a confirmation event or consulting
+// permission_request.
+func TestDispatcher_PreToolUsePreYoloDenyShortCircuits(t *testing.T) {
+	t.Parallel()
+
+	a := newAgent()
+	sess := session.New()
+	sess.ToolsApproved = true
+
+	tool := tools.Tool{
+		Name: "shell",
+		Handler: func(context.Context, tools.ToolCall, tools.Runtime) (*tools.ToolCallResult, error) {
+			panic("must not run when denied")
+		},
+	}
+
+	hd := &stubHookDispatcher{
+		on: map[hooks.EventType]*hooks.Result{
+			hooks.EventPreToolUsePreYolo: {
+				Allowed:        false,
+				Decision:       hooks.DecisionDeny,
+				DecisionReason: "blocked by policy",
+			},
+		},
+	}
+
+	d := &toolexec.Dispatcher{
+		AgentFor: func(*session.Session) *agent.Agent { return a },
+		Hooks:    hd,
+	}
+	em := &captureEmitter{}
+
+	d.Process(t.Context(), sess, []tools.ToolCall{{
+		ID:       "x",
+		Function: tools.FunctionCall{Name: "shell", Arguments: `{"cmd":"rm -rf /tmp/x"}`},
+	}}, []tools.Tool{tool}, em)
+
+	assert.Empty(t, em.confirmations, "Deny must not emit a confirmation event")
+	require.Len(t, em.responses, 1)
+	assert.True(t, em.responses[0].IsError)
+	assert.Contains(t, em.responses[0].Output, "pre_tool_use hook")
+	assert.Contains(t, em.responses[0].Output, "blocked by policy")
+}
+
+// TestDispatcher_PreToolUsePreYoloAllowIsAdvisory pins the Allow
+// path: an Allow verdict from the preempt-yolo lane is informational,
+// the pipeline still proceeds. With ToolsApproved=true the call must
+// auto-run.
+func TestDispatcher_PreToolUsePreYoloAllowIsAdvisory(t *testing.T) {
+	t.Parallel()
+
+	a := newAgent()
+	sess := session.New()
+	sess.ToolsApproved = true
+
+	ran := false
+	tool := tools.Tool{
+		Name: "shell",
+		Handler: func(context.Context, tools.ToolCall, tools.Runtime) (*tools.ToolCallResult, error) {
+			ran = true
+			return tools.ResultSuccess("ok"), nil
+		},
+	}
+
+	hd := &stubHookDispatcher{
+		on: map[hooks.EventType]*hooks.Result{
+			hooks.EventPreToolUsePreYolo: {
+				Allowed:  true,
+				Decision: hooks.DecisionAllow,
+			},
+		},
+	}
+
+	d := &toolexec.Dispatcher{
+		AgentFor: func(*session.Session) *agent.Agent { return a },
+		Hooks:    hd,
+	}
+	em := &captureEmitter{}
+
+	d.Process(t.Context(), sess, []tools.ToolCall{{
+		ID:       "x",
+		Function: tools.FunctionCall{Name: "shell", Arguments: `{"cmd":"ls /tmp"}`},
+	}}, []tools.Tool{tool}, em)
+
+	assert.True(t, ran, "Allow from preempt-yolo lane is advisory; --yolo must still allow the call")
+	assert.Empty(t, em.confirmations)
+}
+
+// TestDispatcher_PreToolUseDefaultLaneSkippedUnderYolo pins the
+// backwards-compat contract for default-lane pre_tool_use hooks: when
+// --yolo (ToolsApproved) auto-approves the call, the default lane is
+// NOT consulted. This protects existing pre_tool_use hooks
+// (llm_judge, redact_secrets) from a latency tax on every yolo'd
+// call — only entries that explicitly opt into preempt_yolo:true run
+// before Decide().
+func TestDispatcher_PreToolUseDefaultLaneSkippedUnderYolo(t *testing.T) {
+	t.Parallel()
+
+	a := newAgent()
+	sess := session.New()
+	sess.ToolsApproved = true
+
+	ran := false
+	tool := tools.Tool{
+		Name: "shell",
+		Handler: func(context.Context, tools.ToolCall, tools.Runtime) (*tools.ToolCallResult, error) {
+			ran = true
+			return tools.ResultSuccess("ok"), nil
+		},
+	}
+
+	// A default-lane pre_tool_use hook that WOULD ask the user — but
+	// must not be consulted because --yolo auto-approved upstream.
+	hd := &stubHookDispatcher{
+		on: map[hooks.EventType]*hooks.Result{
+			hooks.EventPreToolUse: {
+				Allowed:        true,
+				Decision:       hooks.DecisionAsk,
+				DecisionReason: "would normally ask",
+			},
+		},
+	}
+
+	d := &toolexec.Dispatcher{
+		AgentFor: func(*session.Session) *agent.Agent { return a },
+		Hooks:    hd,
+	}
+	em := &captureEmitter{}
+
+	d.Process(t.Context(), sess, []tools.ToolCall{{
+		ID:       "x",
+		Function: tools.FunctionCall{Name: "shell", Arguments: `{"cmd":"ls /tmp"}`},
+	}}, []tools.Tool{tool}, em)
+
+	assert.True(t, ran, "--yolo must auto-run when no preempt-yolo hook is registered")
+	assert.NotContains(t, hd.dispatched, hooks.EventPreToolUse,
+		"default pre_tool_use lane must not fire under --yolo; only preempt_yolo:true entries do")
+	assert.Empty(t, em.confirmations)
+}
+
+// TestDispatcher_NonInteractiveAskAutoDenies pins the universal
+// headless guard: any path that would reach askUser in a
+// non-interactive session (eval, MCP serve, A2A adapter) must
+// auto-deny rather than block on the Resume channel. This covers the
+// preempt-yolo Ask lane (this test), checker ForceAsk
+// (TestDispatcher_NonInteractiveCheckerForceAskAutoDenies), and the
+// default Ask
+// (TestDispatcher_NonInteractiveDefaultAskAutoDenies). Without this
+// guard each path would hang indefinitely with no Resume listener.
+func TestDispatcher_NonInteractiveAskAutoDenies(t *testing.T) {
+	a := newAgent()
+	sess := session.New()
+	sess.ToolsApproved = true
+	sess.NonInteractive = true
+
+	tool := tools.Tool{
+		Name: "shell",
+		Handler: func(context.Context, tools.ToolCall, tools.Runtime) (*tools.ToolCallResult, error) {
+			panic("must not run when denied")
+		},
+	}
+
+	hd := &stubHookDispatcher{
+		on: map[hooks.EventType]*hooks.Result{
+			hooks.EventPreToolUsePreYolo: {
+				Allowed:        true,
+				Decision:       hooks.DecisionAsk,
+				DecisionReason: "rm -rf <path>: irreversible",
+				Metadata:       map[string]string{"blast_radius": "high"},
+			},
+		},
+	}
+
+	d := &toolexec.Dispatcher{
+		AgentFor: func(*session.Session) *agent.Agent { return a },
+		Hooks:    hd,
+	}
+	em := &captureEmitter{}
+
+	d.Process(t.Context(), sess, []tools.ToolCall{{
+		ID:       "danger",
+		Function: tools.FunctionCall{Name: "shell", Arguments: `{"cmd":"rm -rf /tmp/x"}`},
+	}}, []tools.Tool{tool}, em)
+
+	require.Len(t, em.responses, 1)
+	assert.True(t, em.responses[0].IsError, "non-interactive ask must produce an error tool response")
+	assert.Contains(t, em.responses[0].Output, "non-interactive",
+		"deny message should name the cause so eval traces are debuggable")
+	assert.Empty(t, em.confirmations,
+		"confirmation event must not be emitted in non-interactive mode — there is no one to confirm")
+}
+
+// TestDispatcher_NonInteractiveDefaultAskAutoDenies covers the
+// no-rule-matched path: a non-interactive session with no preempt-yolo
+// hook, no checker rules, no readonly hint, and no --yolo. Today this
+// falls through to askUser and would hang. The guard must deny.
+func TestDispatcher_NonInteractiveDefaultAskAutoDenies(t *testing.T) {
+	a := newAgent()
+	sess := session.New()
+	sess.NonInteractive = true
+
+	tool := tools.Tool{
+		Name: "shell",
+		Handler: func(context.Context, tools.ToolCall, tools.Runtime) (*tools.ToolCallResult, error) {
+			panic("must not run when denied")
+		},
+	}
+
+	d := &toolexec.Dispatcher{
+		AgentFor: func(*session.Session) *agent.Agent { return a },
+	}
+	em := &captureEmitter{}
+
+	d.Process(t.Context(), sess, []tools.ToolCall{{
+		ID:       "x",
+		Function: tools.FunctionCall{Name: "shell", Arguments: `{"cmd":"docker ps"}`},
+	}}, []tools.Tool{tool}, em)
+
+	require.Len(t, em.responses, 1)
+	assert.True(t, em.responses[0].IsError)
+	assert.Contains(t, em.responses[0].Output, "non-interactive")
 }

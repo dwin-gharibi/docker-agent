@@ -45,6 +45,26 @@ func Expand(ctx context.Context, value string, env Provider) (string, error) {
 	return expanded, nil
 }
 
+// Refs returns the names of the environment variables referenced by value
+// using the same ${env.X} / ${X} syntax Expand resolves, in first-seen order
+// and de-duplicated. It lets callers discover which variables a config field
+// requires (e.g. for an up-front "missing env var" check) without resolving
+// them. A value with no references yields nil.
+func Refs(value string) []string {
+	value = path.NormalizeEnvRefs(value)
+
+	var names []string
+	seen := map[string]bool{}
+	os.Expand(value, func(name string) string {
+		if !seen[name] {
+			seen[name] = true
+			names = append(names, name)
+		}
+		return ""
+	})
+	return names
+}
+
 func ToValues(envMap map[string]string) []string {
 	var values []string
 	for k, v := range envMap {

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
+	"strings"
 	"sync"
 	"testing"
 
@@ -38,11 +40,11 @@ type mockRuntimeWithOverrides struct {
 	currentAgentInfoFn func(context.Context) runtime.CurrentAgentInfo
 }
 
-func (m *mockRuntimeWithOverrides) SetCurrentAgent(name string) error {
+func (m *mockRuntimeWithOverrides) SetCurrentAgent(ctx context.Context, name string) error {
 	if m.setCurrentAgentFn != nil {
 		return m.setCurrentAgentFn(name)
 	}
-	return m.mockRuntime.SetCurrentAgent(name)
+	return m.mockRuntime.SetCurrentAgent(ctx, name)
 }
 
 func (m *mockRuntimeWithOverrides) CurrentAgentInfo(ctx context.Context) runtime.CurrentAgentInfo {
@@ -52,11 +54,11 @@ func (m *mockRuntimeWithOverrides) CurrentAgentInfo(ctx context.Context) runtime
 	return m.mockRuntime.CurrentAgentInfo(ctx)
 }
 
-func (m *mockRuntime) CurrentAgentName() string { return "test" }
+func (m *mockRuntime) CurrentAgentName(context.Context) string { return "test" }
 func (m *mockRuntime) CurrentAgentInfo(context.Context) runtime.CurrentAgentInfo {
 	return runtime.CurrentAgentInfo{Name: "test"}
 }
-func (m *mockRuntime) SetCurrentAgent(string) error                                         { return nil }
+func (m *mockRuntime) SetCurrentAgent(context.Context, string) error                        { return nil }
 func (m *mockRuntime) CurrentAgentTools(context.Context) ([]tools.Tool, error)              { return nil, nil }
 func (m *mockRuntime) CurrentAgentToolsetStatuses() []tools.ToolsetStatus                   { return nil }
 func (m *mockRuntime) RestartToolset(context.Context, string) error                         { return nil }
@@ -90,19 +92,24 @@ func (m *mockRuntime) ExecuteMCPPrompt(context.Context, string, map[string]strin
 	return "", nil
 }
 func (m *mockRuntime) UpdateSessionTitle(context.Context, *session.Session, string) error { return nil }
-func (m *mockRuntime) TitleGenerator() *sessiontitle.Generator                            { return nil }
+func (m *mockRuntime) TitleGenerator(context.Context) *sessiontitle.Generator             { return nil }
 func (m *mockRuntime) Close() error                                                       { return nil }
-func (m *mockRuntime) Steer(runtime.QueuedMessage) error                                  { return nil }
-func (m *mockRuntime) FollowUp(runtime.QueuedMessage) error                               { return nil }
+func (m *mockRuntime) Steer(context.Context, runtime.QueuedMessage) error                 { return nil }
+func (m *mockRuntime) FollowUp(context.Context, runtime.QueuedMessage) error              { return nil }
 func (m *mockRuntime) QueueStatus() runtime.QueueStatus                                   { return runtime.QueueStatus{} }
 func (m *mockRuntime) TogglePause(context.Context) (bool, error)                          { return false, nil }
 func (m *mockRuntime) SetAgentModel(context.Context, string, string) error                { return nil }
 func (m *mockRuntime) CycleAgentThinkingLevel(context.Context, string) (effort.Level, error) {
 	return "", runtime.ErrUnsupported
 }
+
+func (m *mockRuntime) SetAgentThinkingLevel(context.Context, string, effort.Level) (effort.Level, error) {
+	return "", runtime.ErrUnsupported
+}
 func (m *mockRuntime) AvailableModels(context.Context) []runtime.ModelChoice                 { return nil }
 func (m *mockRuntime) SupportsModelSwitching() bool                                          { return false }
 func (m *mockRuntime) OnToolsChanged(func(runtime.Event))                                    {}
+func (m *mockRuntime) OnBackgroundEvent(func(runtime.Event))                                 {}
 func (m *mockRuntime) RegenerateTitle(context.Context, *session.Session, chan runtime.Event) {}
 
 func (m *mockRuntime) Resume(_ context.Context, req runtime.ResumeRequest) {
@@ -225,6 +232,38 @@ func TestMaxIterationsRejectInJSONModeWithoutYolo(t *testing.T) {
 	resumes := rt.getResumes()
 	assert.Equal(t, len(resumes), 1)
 	assert.Equal(t, resumes[0].Type, runtime.ResumeTypeReject)
+}
+
+// JSON mode has no stdin user — a ToolCallConfirmationEvent must be
+// rejected even under --yolo (AutoApprove=true), because the event
+// only fires when a preempt-yolo hook overrode yolo. Without this,
+// eval containers hang on the Resume channel.
+func TestToolCallConfirmationRejectedInJSONModeUnderYolo(t *testing.T) {
+	t.Parallel()
+
+	rt := &mockRuntime{
+		events: []runtime.Event{
+			&runtime.ToolCallConfirmationEvent{
+				Type: "tool_call_confirmation",
+				ToolCall: tools.ToolCall{
+					ID:       "call-1",
+					Function: tools.FunctionCall{Name: "shell", Arguments: `{"cmd":"rm -rf /tmp/x"}`},
+				},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	out := NewPrinter(&buf)
+	sess := session.New()
+	cfg := Config{AutoApprove: true, OutputJSON: true}
+
+	err := Run(t.Context(), out, cfg, rt, sess, []string{"hello"})
+	assert.NilError(t, err)
+
+	resumes := rt.getResumes()
+	assert.Equal(t, len(resumes), 1, "one Resume expected")
+	assert.Equal(t, resumes[0].Type, runtime.ResumeTypeReject, "JSON+yolo must reject confirmation events")
 }
 
 func TestElicitationAutoDeclineInJSONMode(t *testing.T) {
@@ -444,4 +483,89 @@ func TestPrepareUserMessage_CommandResolution(t *testing.T) {
 	assert.NilError(t, err)
 
 	assert.Equal(t, "Fix the file main.go", msg.Message.Content, "Command should be resolved with args")
+}
+
+// swapStdin replaces os.Stdin with a pipe carrying the given content for the
+// duration of the test. A pipe is never a terminal, so it also exercises the
+// non-TTY stdin paths. Tests using it must not run in parallel: os.Stdin is
+// process-global state.
+func swapStdin(t *testing.T, content string) {
+	t.Helper()
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("creating stdin pipe: %v", err)
+	}
+	if _, err := w.WriteString(content); err != nil {
+		t.Fatalf("writing stdin pipe: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("closing stdin pipe: %v", err)
+	}
+
+	old := os.Stdin
+	os.Stdin = r
+	t.Cleanup(func() {
+		os.Stdin = old
+		_ = r.Close()
+	})
+}
+
+// A run that would silently do nothing (no message, empty non-TTY stdin, e.g.
+// bare `docker agent` in CI) must fail with an actionable error instead of
+// exiting 0 with no output (issue #3442).
+func TestRunEmptyStdinNonTTYFails(t *testing.T) {
+	swapStdin(t, "")
+
+	rt := &mockRuntime{}
+	var buf bytes.Buffer
+	sess := session.New()
+
+	err := Run(t.Context(), NewPrinter(&buf), Config{}, rt, sess, nil)
+	assert.ErrorContains(t, err, "no message provided and stdin is not a terminal")
+	assert.ErrorContains(t, err, "interactive terminal")
+}
+
+func TestRunEmptyStdinWithDashFails(t *testing.T) {
+	swapStdin(t, "")
+
+	rt := &mockRuntime{}
+	var buf bytes.Buffer
+	sess := session.New()
+
+	err := Run(t.Context(), NewPrinter(&buf), Config{}, rt, sess, []string{"-"})
+	assert.ErrorContains(t, err, "no message received on stdin")
+}
+
+func TestRunPipedStdinStillWorks(t *testing.T) {
+	swapStdin(t, "hello agent\n")
+
+	rt := &mockRuntime{
+		events: []runtime.Event{&runtime.AgentChoiceEvent{Content: "4"}},
+	}
+	var buf bytes.Buffer
+	sess := session.New()
+
+	err := Run(t.Context(), NewPrinter(&buf), Config{}, rt, sess, nil)
+	assert.NilError(t, err)
+	assert.Equal(t, len(sess.GetAllMessages()) > 0, true)
+}
+
+// An ErrorEvent must surface exactly once: returned to the command layer
+// (which prints it), never also printed by the runner (issue #3442).
+func TestErrorEventReturnedNotPrinted(t *testing.T) {
+	t.Parallel()
+
+	rt := &mockRuntime{
+		events: []runtime.Event{runtime.Error("model failed: HTTP 404")},
+	}
+	var buf bytes.Buffer
+	sess := session.New()
+
+	err := Run(t.Context(), NewPrinter(&buf), Config{}, rt, sess, []string{"hello"})
+	assert.ErrorContains(t, err, "model failed: HTTP 404")
+
+	var runtimeErr RuntimeError
+	assert.Equal(t, errors.As(err, &runtimeErr), true)
+	assert.Equal(t, strings.Contains(buf.String(), "model failed"), false)
 }

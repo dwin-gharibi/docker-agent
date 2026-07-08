@@ -1,10 +1,10 @@
 ---
 title: "Troubleshooting"
 description: "Common issues and how to resolve them when working with docker-agent."
-permalink: /community/troubleshooting/
+keywords: docker agent, ai agents, community, troubleshooting
+weight: 20
+canonical: https://docs.docker.com/ai/docker-agent/community/troubleshooting/
 ---
-
-# Troubleshooting
 
 _Common issues and how to resolve them when working with docker-agent._
 
@@ -47,6 +47,66 @@ agents:
       cooldown: 1m # how long to stick with fallback after 429
 ```
 
+## Missing credentials or model errors
+
+When docker-agent can't find a usable model at startup, it fails fast with an actionable error. The message names the exact next step. `docker agent doctor` is the fastest way to see the full picture — which providers have credentials, whether Docker Model Runner is reachable, and which model `auto` would pick.
+
+### Required environment variables not set
+
+An agent (or a tool it uses) depends on environment variables that aren't configured:
+
+```text
+The following environment variables must be set:
+ - ANTHROPIC_API_KEY
+
+Provide them using any of these sources:
+ - Shell environment:  export ANTHROPIC_API_KEY=<value>
+ - Env file:           docker agent run --env-from-file <file> ...
+ - pass:               pass insert ANTHROPIC_API_KEY
+ - macOS Keychain:     security add-generic-password -a "$USER" -s ANTHROPIC_API_KEY -w
+
+See https://docs.docker.com/ai/docker-agent/guides/secrets/ for details.
+```
+
+Set the variable through any of the listed [secret sources](../../guides/secrets/index.md). When the missing variable is a model-provider API key, the error also suggests running a local model instead (`docker agent run --model dmr/ai/qwen3 ...`), which needs no API key, and links to the [Set Up a Model](../../getting-started/set-up-a-model/index.md) tutorial.
+
+### No model available (`auto` selection failed)
+
+The `auto` model selector found no configured cloud provider and no usable Docker Model Runner model:
+
+```text
+No model is currently available.
+
+To fix this, you can:
+  - Pull a Docker Model Runner model, e.g. `docker model pull ai/qwen3`
+  - Install Docker Model Runner: https://docs.docker.com/ai/model-runner/get-started/
+  - Configure an API key for a cloud provider:
+    - anthropic: ANTHROPIC_API_KEY
+    - openai: OPENAI_API_KEY
+    ...
+```
+
+Either configure a cloud provider API key (see [API keys not set](#api-keys-not-set) below) or pull a local model. The [Set Up a Model](../../getting-started/set-up-a-model/index.md) tutorial walks through both paths. Run `docker agent doctor` to see which providers have credentials and whether Docker Model Runner is reachable.
+
+### Docker Model Runner model not pulled
+
+A `dmr/...` model was requested but isn't available locally:
+
+```text
+model ai/qwen3 is not pulled in Docker Model Runner
+
+To resolve this, you can:
+  - Pull it first: docker model pull ai/qwen3
+  - Or choose a model that is already available (see `docker model ls`).
+```
+
+If instead you see `cannot query Docker Model Runner at <url>`, Docker Model Runner isn't installed or running — see the [Model Runner get-started guide](https://docs.docker.com/ai/model-runner/get-started/).
+
+> [!TIP]
+> **Diagnose before you run**
+>
+> Run `docker agent doctor` (or `docker agent doctor ./agent.yaml` to include a file's requirements) to check all three issues in one shot. It exits non-zero when something would block a run, making it useful as a CI preflight. See the [CLI reference](../../features/cli/index.md#docker-agent-doctor).
+
 ## Debug Mode
 
 The first step for any issue is enabling debug logging. This provides detailed information about what docker-agent is doing internally.
@@ -62,12 +122,8 @@ $ docker agent run config.yaml --debug --log-file ./debug.log
 $ docker agent run config.yaml --otel
 ```
 
-<div class="callout callout-tip" markdown="1">
-<div class="callout-title">Tip
-</div>
-  <p>Always enable <code>--debug</code> when reporting issues. The log file contains detailed traces of API calls, tool executions, and agent interactions.</p>
-
-</div>
+> [!TIP]
+> Always enable `--debug` when reporting issues. The log file contains detailed traces of API calls, tool executions, and agent interactions.
 
 ## Agent Not Responding
 
@@ -85,6 +141,7 @@ Each model provider requires its own API key as an environment variable:
 | Nebius        | `NEBIUS_API_KEY`                                    |
 | MiniMax       | `MINIMAX_API_KEY`                                   |
 | Requesty      | `REQUESTY_API_KEY`                                  |
+| OpenRouter    | `OPENROUTER_API_KEY`                                |
 | GitHub Copilot | `GITHUB_TOKEN` (PAT with `copilot` scope)          |
 | Azure OpenAI  | `AZURE_API_KEY` (override with `token_key`)         |
 | AWS Bedrock   | `AWS_BEARER_TOKEN_BEDROCK` or AWS credentials chain |
@@ -136,13 +193,12 @@ MCP tools using stdio transport must complete the initialization handshake befor
 3. Check that the MCP server process starts and responds to `initialize`
 4. Verify environment variables required by the tool are set (check `env` and `env_file` in the toolset config)
 
-<div class="callout callout-info" markdown="1">
-<div class="callout-title">Startup tool-listing timeout
-</div>
-  <p>At startup, docker-agent queries each toolset for its tool list. If a toolset does not respond within 10 seconds (e.g. a wedged MCP stdio server that never answers <code>tools/list</code>), that toolset is skipped with a warning and the remaining toolsets load normally. The sidebar resolves showing whichever tools did load — no infinite spinner. Enable <code>--debug</code> to see the warning message, and use <code>/toolset-restart &lt;name&gt;</code> once the server becomes responsive.</p>
-</div>
+> [!NOTE]
+> **Startup tool-listing timeout**
+>
+> At startup, docker-agent queries each toolset for its tool list. If a toolset does not respond within 10 seconds (e.g. a wedged MCP stdio server that never answers `tools/list`), that toolset is skipped with a warning and the remaining toolsets load normally. The sidebar resolves showing whichever tools did load — no infinite spinner. Enable `--debug` to see the warning message, and use `/toolset-restart <name>` once the server becomes responsive.
 
-If a toolset keeps crashing in a tight loop, tune the [`lifecycle`]({{ '/configuration/tools/#toolset-lifecycle' | relative_url }}) block on the toolset (e.g. raise `backoff.initial`, lower `max_restarts`, or switch to the `best-effort` profile) so a flaky dependency does not amplify into a restart storm.
+If a toolset keeps crashing in a tight loop, tune the [`lifecycle`](../../configuration/tools/index.md#toolset-lifecycle) block on the toolset (e.g. raise `backoff.initial`, lower `max_restarts`, or switch to the `best-effort` profile) so a flaky dependency does not amplify into a restart storm.
 
 ## Configuration Errors
 
@@ -166,12 +222,10 @@ docker-agent validates config at startup and reports errors with line numbers. C
 - MCP toolsets need either `command` (stdio), `remote` (Streamable HTTP/SSE), or `ref` (Docker)
 - Provider names must be one of: `openai`, `anthropic`, `google`, `amazon-bedrock`, `dmr`, etc.
 
-<div class="callout callout-info" markdown="1">
-<div class="callout-title">Schema Validation
-</div>
-  <p>Use the <a href="https://github.com/docker/docker-agent/blob/main/agent-schema.json">JSON schema</a> in your editor for real-time config validation and autocompletion.</p>
-
-</div>
+> [!NOTE]
+> **Schema Validation**
+>
+> Use the [JSON schema](https://github.com/docker/docker-agent/blob/main/agent-schema.json) in your editor for real-time config validation and autocompletion.
 
 ## Session &amp; Connectivity Issues
 
@@ -216,7 +270,7 @@ The API server stores every conversation as a distinct session in the SQLite dat
 
 - Check if MCP tools are adding latency (visible in debug logs)
 - Use the `/cost` command in TUI to see token usage and identify expensive interactions
-- For DMR, consider enabling [speculative decoding]({{ '/providers/dmr/' | relative_url }}) for faster inference
+- For DMR, consider enabling [speculative decoding](../../providers/dmr/index.md) for faster inference
 
 ### Tool resource leaks
 
@@ -250,14 +304,12 @@ When reviewing debug logs, search for these key patterns:
 | `"Tool call"`               | A tool is being executed                                                                         |
 | `"Tool call result"`        | Tool execution completed                                                                         |
 | `"Stream stopped"`          | Agent finished processing                                                                        |
-| `HTTP 429`                  | Rate limiting — consider adding a [fallback model]({{ '/configuration/agents/' | relative_url }}) |
+| `HTTP 429`                  | Rate limiting — consider adding a [fallback model](../../configuration/agents/index.md) |
 | `context canceled`          | Operation was interrupted (timeout or user cancel)                                               |
 | `[RAG Manager]`             | RAG retrieval operations                                                                         |
 | `[Reranker]`                | Reranking operations                                                                             |
 
-<div class="callout callout-warning" markdown="1">
-<div class="callout-title">Still stuck?
-</div>
-  <p>If these steps don't resolve your issue, file a bug on the <a href="https://github.com/docker/docker-agent/issues">GitHub issue tracker</a> with your debug log attached, or ask on <a href="https://dockercommunity.slack.com/archives/C09DASHHRU4">Slack</a>.</p>
-
-</div>
+> [!WARNING]
+> **Still stuck?**
+>
+> If these steps don't resolve your issue, file a bug on the [GitHub issue tracker](https://github.com/docker/docker-agent/issues) with your debug log attached, or ask on [Slack](https://dockercommunity.slack.com/archives/C09DASHHRU4).

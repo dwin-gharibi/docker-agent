@@ -12,9 +12,11 @@ import (
 )
 
 func TestSetupRecordingProxy_EmptyPath(t *testing.T) {
+	t.Parallel()
+
 	var runConfig config.RuntimeConfig
 
-	cassettePath, cleanup, err := setupRecordingProxy("", &runConfig)
+	cassettePath, cleanup, err := setupRecordingProxy(t.Context(), "", &runConfig)
 
 	require.NoError(t, err)
 	assert.Empty(t, cassettePath)
@@ -29,7 +31,7 @@ func TestSetupRecordingProxy_AutoGeneratesFilename(t *testing.T) {
 
 	var runConfig config.RuntimeConfig
 
-	cassettePath, cleanup, err := setupRecordingProxy("true", &runConfig)
+	cassettePath, cleanup, err := setupRecordingProxy(t.Context(), "true", &runConfig)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, cleanup()) }()
 
@@ -39,12 +41,14 @@ func TestSetupRecordingProxy_AutoGeneratesFilename(t *testing.T) {
 }
 
 func TestSetupRecordingProxy_CreatesProxy(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := t.TempDir()
 	cassettePath := filepath.Join(tmpDir, "test-recording")
 
 	var runConfig config.RuntimeConfig
 
-	resultPath, cleanup, err := setupRecordingProxy(cassettePath, &runConfig)
+	resultPath, cleanup, err := setupRecordingProxy(t.Context(), cassettePath, &runConfig)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, cleanup()) }()
 

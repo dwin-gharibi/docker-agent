@@ -5,11 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 
+	"github.com/docker/docker-agent/pkg/chatgpt"
 	"github.com/docker/docker-agent/pkg/config/latest"
 	"github.com/docker/docker-agent/pkg/environment"
+	"github.com/docker/docker-agent/pkg/model/provider"
 )
 
 // DMRModelLister returns the IDs of the models currently available to Docker
@@ -24,26 +27,76 @@ type providerConfig struct {
 	name    string   // provider name (e.g., "anthropic")
 	envVars []string // env vars to check - provider is available if ANY is set
 	hint    string   // description for error messages
+	// apiKeyEnvVar is the single secret API-key env var that authenticates this
+	// provider and is safe to forward into an isolated environment (e.g. an eval
+	// container). It is empty when the provider has no forwardable single secret
+	// (e.g. amazon-bedrock's multi-variable AWS credentials, or DMR which needs
+	// none). It intentionally differs from envVars, which also contains non-secret
+	// detection/mode flags (e.g. GOOGLE_GENAI_USE_VERTEXAI) that must never be
+	// forwarded as credentials.
+	apiKeyEnvVar string
 }
 
 // cloudProviders defines the available cloud providers in priority order.
 // The first provider with a configured API key will be selected by AutoModelConfig.
 // DMR is always appended as the final fallback (not listed here).
+//
+// opencode-zen is ordered before opencode-go because both share OPENCODE_API_KEY:
+// when the key is set, Zen wins auto-selection. A subscriber who only uses Go
+// should set the provider explicitly (e.g. `--model opencode-go/...`) rather than
+// relying on auto; see docs/providers/opencode-go for details.
 var cloudProviders = []providerConfig{
-	{"anthropic", []string{"ANTHROPIC_API_KEY"}, "ANTHROPIC_API_KEY"},
-	{"openai", []string{"OPENAI_API_KEY"}, "OPENAI_API_KEY"},
+	{"anthropic", []string{"ANTHROPIC_API_KEY"}, "ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY"},
+	{"openai", []string{"OPENAI_API_KEY"}, "OPENAI_API_KEY", "OPENAI_API_KEY"},
+	// The chatgpt credential is the OAuth login stored by the `docker agent
+	// setup` sign-in, surfaced as a virtual env var by the "chatgpt-login"
+	// source. It is ordered after openai so adding a ChatGPT sign-in never
+	// changes auto-selection for users that already export OPENAI_API_KEY.
+	{"chatgpt", []string{chatgpt.TokenEnvVar}, "sign in with your ChatGPT account: `docker agent setup`", ""},
 	{"google", []string{
 		"GOOGLE_API_KEY",
 		"GEMINI_API_KEY",
 		"GOOGLE_GENAI_USE_VERTEXAI",
-	}, "GOOGLE_API_KEY (or GEMINI_API_KEY, GOOGLE_GENAI_USE_VERTEXAI)"},
-	{"mistral", []string{"MISTRAL_API_KEY"}, "MISTRAL_API_KEY"},
+	}, "GOOGLE_API_KEY (or GEMINI_API_KEY, GOOGLE_GENAI_USE_VERTEXAI)", "GOOGLE_API_KEY"},
+	{"mistral", []string{"MISTRAL_API_KEY"}, "MISTRAL_API_KEY", "MISTRAL_API_KEY"},
+	{"openrouter", []string{"OPENROUTER_API_KEY"}, "OPENROUTER_API_KEY", "OPENROUTER_API_KEY"},
+	{"baseten", []string{"BASETEN_API_KEY"}, "BASETEN_API_KEY", "BASETEN_API_KEY"},
+	{"ovhcloud", []string{"OVH_AI_ENDPOINTS_ACCESS_TOKEN"}, "OVH_AI_ENDPOINTS_ACCESS_TOKEN", "OVH_AI_ENDPOINTS_ACCESS_TOKEN"},
+	{"groq", []string{"GROQ_API_KEY"}, "GROQ_API_KEY", "GROQ_API_KEY"},
+	{"fireworks", []string{"FIREWORKS_API_KEY"}, "FIREWORKS_API_KEY", "FIREWORKS_API_KEY"},
+	{"deepseek", []string{"DEEPSEEK_API_KEY"}, "DEEPSEEK_API_KEY", "DEEPSEEK_API_KEY"},
+	{"cerebras", []string{"CEREBRAS_API_KEY"}, "CEREBRAS_API_KEY", "CEREBRAS_API_KEY"},
+	{"together", []string{"TOGETHER_API_KEY"}, "TOGETHER_API_KEY", "TOGETHER_API_KEY"},
+	{"huggingface", []string{"HF_TOKEN"}, "HF_TOKEN", "HF_TOKEN"},
+	{"moonshot", []string{"MOONSHOT_API_KEY"}, "MOONSHOT_API_KEY", "MOONSHOT_API_KEY"},
+	{"vercel", []string{"AI_GATEWAY_API_KEY"}, "AI_GATEWAY_API_KEY", "AI_GATEWAY_API_KEY"},
 	{"amazon-bedrock", []string{
 		"AWS_BEARER_TOKEN_BEDROCK",
 		"AWS_ACCESS_KEY_ID",
 		"AWS_PROFILE",
 		"AWS_ROLE_ARN",
-	}, "AWS_ACCESS_KEY_ID (or AWS_PROFILE, AWS_ROLE_ARN, AWS_BEARER_TOKEN_BEDROCK)"},
+	}, "AWS_ACCESS_KEY_ID (or AWS_PROFILE, AWS_ROLE_ARN, AWS_BEARER_TOKEN_BEDROCK)", ""},
+	{"opencode-zen", []string{"OPENCODE_API_KEY"}, "OPENCODE_API_KEY", "OPENCODE_API_KEY"},
+	{"opencode-go", []string{"OPENCODE_API_KEY"}, "OPENCODE_API_KEY", "OPENCODE_API_KEY"},
+}
+
+// ProviderEnvVars associates a cloud provider known to auto-selection with
+// the environment variables that can supply its credentials.
+type ProviderEnvVars struct {
+	Provider string
+	EnvVars  []string
+}
+
+// CloudProviderEnvVars returns, in auto-selection priority order, every cloud
+// provider with the environment variables that can hold its credentials.
+// Diagnostic commands (e.g. `docker agent doctor`) use it to report credential
+// state without duplicating the provider table.
+func CloudProviderEnvVars() []ProviderEnvVars {
+	out := make([]ProviderEnvVars, 0, len(cloudProviders))
+	for _, p := range cloudProviders {
+		out = append(out, ProviderEnvVars{Provider: p.name, EnvVars: slices.Clone(p.envVars)})
+	}
+	return out
 }
 
 // AutoModelFallbackError is returned when auto model selection fails because
@@ -81,10 +134,12 @@ func (e *AutoModelFallbackError) Error() string {
 		}
 	}
 	b.WriteString("No model is currently available.\n\nTo fix this, you can:\n")
+	b.WriteString("  - Run `docker agent setup` to configure a provider API key or a local model interactively\n")
 	b.WriteString("  - Pull a Docker Model Runner model, e.g. `docker model pull ai/qwen3`\n")
 	b.WriteString("  - Install Docker Model Runner: https://docs.docker.com/ai/model-runner/get-started/\n")
 	b.WriteString("  - Configure an API key for a cloud provider:\n")
 	b.WriteString(strings.Join(hints, "\n"))
+	fmt.Fprintf(&b, "\n\nStep-by-step model setup (API key or local): %s", environment.ModelSetupDocsURL)
 	return b.String()
 }
 
@@ -94,11 +149,64 @@ func (e *AutoModelFallbackError) Unwrap() error { return e.Cause }
 
 var DefaultModels = map[string]string{
 	"openai":         "gpt-5",
+	"chatgpt":        "gpt-5.2",
 	"anthropic":      "claude-sonnet-4-6",
 	"google":         "gemini-3.5-flash",
 	"dmr":            "ai/qwen3:latest",
 	"mistral":        "mistral-small-latest",
+	"openrouter":     "meta-llama/llama-3.3-70b-instruct",
+	"baseten":        "deepseek-ai/DeepSeek-V3.1",
+	"ovhcloud":       "Qwen3.5-397B-A17B",
+	"groq":           "llama-3.3-70b-versatile",
+	"fireworks":      "accounts/fireworks/models/kimi-k2-instruct",
+	"deepseek":       "deepseek-chat",
+	"cerebras":       "gpt-oss-120b",
+	"together":       "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+	"huggingface":    "meta-llama/Llama-3.3-70B-Instruct",
+	"moonshot":       "kimi-k2-0905-preview",
+	"vercel":         "openai/gpt-5",
 	"amazon-bedrock": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+	"opencode-go":    "deepseek-v4-flash",
+	"opencode-zen":   "deepseek-v4-flash-free",
+}
+
+// nonForwardableTokenEnvVars lists provider token env vars that are NOT safe to
+// forward as model credentials into an isolated environment (e.g. an eval
+// container), even though a provider alias uses them for auth. GITHUB_TOKEN is
+// a broad, general-purpose GitHub credential (git, gh, CI, packages) that the
+// github-copilot alias happens to reuse; forwarding it would leak far more
+// access than a dedicated model API key. CHATGPT_OAUTH_TOKEN is a short-lived
+// OAuth access token bound to a ChatGPT subscription, not an API key.
+var nonForwardableTokenEnvVars = map[string]bool{
+	"GITHUB_TOKEN":      true,
+	chatgpt.TokenEnvVar: true,
+}
+
+// ProviderAPIKeyEnvVars returns the deduplicated, sorted set of environment
+// variables that hold a dedicated model-provider API key. Callers that need to
+// forward provider credentials (e.g. into a container) should use this instead
+// of hard-coding a list of API key names, so it stays in sync as providers are
+// added.
+//
+// It only includes single-secret API keys: it deliberately excludes non-secret
+// detection/mode flags (e.g. GOOGLE_GENAI_USE_VERTEXAI), multi-variable
+// credential sets that cannot be forwarded as one secret (e.g. AWS/Bedrock),
+// and broad general-purpose tokens (see nonForwardableTokenEnvVars). Providers
+// needing those must be given credentials explicitly.
+func ProviderAPIKeyEnvVars() []string {
+	seen := map[string]bool{}
+	add := func(name string) {
+		if name != "" && !nonForwardableTokenEnvVars[name] {
+			seen[name] = true
+		}
+	}
+	for _, p := range cloudProviders {
+		add(p.apiKeyEnvVar)
+	}
+	for _, alias := range provider.EachAlias() {
+		add(alias.TokenEnvVar)
+	}
+	return slices.Sorted(maps.Keys(seen))
 }
 
 func AvailableProviders(ctx context.Context, modelsGateway string, env environment.Provider) []string {
@@ -252,9 +360,9 @@ func looksLikeEmbeddingModel(modelID string) bool {
 	return strings.Contains(strings.ToLower(modelID), "embed")
 }
 
-func PreferredMaxTokens(provider string) *int64 {
+func PreferredMaxTokens(providerName string) *int64 {
 	var mt int64 = 32000
-	if provider == "dmr" {
+	if providerName == "dmr" {
 		mt = 16000
 	}
 	return &mt

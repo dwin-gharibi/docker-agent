@@ -39,36 +39,19 @@ var HookConfigSync = &cop.Func{
 	},
 	Scope: cop.OnlyFile("pkg/config/latest/types.go"),
 	Run: func(p *cop.Pass) {
-		// pkg/config/latest/types.go ↔ ../../hooks/types.go
-		hookFile, err := p.ParseSibling("../../hooks/types.go")
-		if err != nil {
-			return
-		}
-		hookEvents := cop.StringConstsIn(hookFile, func(name string) bool {
+		hookEvents, err := p.SiblingStringConsts("../../hooks/types.go", func(name string) bool {
 			return strings.HasPrefix(name, "Event")
 		})
-		if len(hookEvents) == 0 {
+		if err != nil || len(hookEvents) == 0 {
 			return
 		}
 
-		ts, st := p.StructType("HooksConfig")
+		ts, _ := p.StructType("HooksConfig")
 		if ts == nil {
-			// Schema didn't ship HooksConfig (or this isn't the right
-			// types.go) — nothing meaningful the cop can say.
 			return
 		}
+		cfgFields := p.StructStringFields("HooksConfig", "json")
 
-		// Build Go-name -> wire-name and the reverse, to diff in both directions.
-		cfgFields := map[string]string{}
-		for _, fld := range st.Fields.List {
-			opts, ok := cop.ParseTagOptions(cop.FieldTag(fld), "json")
-			if !ok || !opts.HasName() {
-				continue
-			}
-			for _, n := range fld.Names {
-				cfgFields[n.Name] = opts.Name
-			}
-		}
 		cfgByJSON := map[string]string{}
 		for goName, jsonName := range cfgFields {
 			cfgByJSON[jsonName] = goName

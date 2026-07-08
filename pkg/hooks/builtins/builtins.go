@@ -27,12 +27,25 @@
 //     tool output. Same builtin, dispatches on
 //     event so a single name covers all three
 //     legs of the feature.
+//   - limit_large_tool_results
+//     (tool_response_transform) — store oversized tool output in a temp file
+//     and replace it with a bounded tail plus notice
+//   - safer_shell           (pre_tool_use)    — classify destructive
+//     shell commands against an embedded taxonomy
+//     and force user confirmation regardless of
+//     --yolo / permission allow-rules. Registered
+//     with preempt_yolo:true so the entry fires
+//     before Decide(). Filters by tool name
+//     internally; no-op for non-shell calls.
+//     Auto-injected by `safer: true` on a shell
+//     toolset (see ApplyAgentDefaults).
 //   - http_post              (any event)       — POST args[1] to args[0]
 //
 // Reference any of them from a hook YAML entry as
 // `{type: builtin, command: "<name>"}`. The runtime additionally
 // auto-injects add_date / add_environment_info / add_prompt_files /
 // redact_secrets from the matching agent flags via [ApplyAgentDefaults].
+// It also always injects limit_large_tool_results as a safety hook.
 // snapshot auto-injection lives on the controller returned by
 // [RegisterSnapshot] and is plumbed into the runtime as an
 // [AutoInjector], not as another bool on [AgentDefaults].
@@ -56,12 +69,40 @@ import (
 	"github.com/docker/docker-agent/pkg/hooks"
 )
 
+// Option configures the builtin registration. The zero options install the
+// production defaults; tests use the exported With… helpers to inject
+// alternatives (e.g. an SSRF-unsafe HTTP client) without mutating any
+// package-level state.
+type Option func(*options)
+
+type options struct {
+	httpPostClient httpDoer
+}
+
+// WithHTTPPostClient overrides the HTTP client used by the http_post builtin.
+// Tests pass an SSRF-unsafe client so http_post can reach httptest.NewServer
+// (which binds to 127.0.0.1); production callers omit it and get the safe
+// dial-time-protected client.
+func WithHTTPPostClient(client httpDoer) Option {
+	return func(o *options) {
+		o.httpPostClient = client
+	}
+}
+
 // Register installs the stock builtin hooks on r.
 //
 // Note: the snapshot builtin is NOT installed by Register. It ships
 // its own entry point ([RegisterSnapshot]) so the embedder receives a
 // [SnapshotController] for driving /undo, /snapshots, /reset.
-func Register(r *hooks.Registry) error {
+func Register(r *hooks.Registry, opts ...Option) error {
+	var o options
+	for _, opt := range opts {
+		opt(&o)
+	}
+	if o.httpPostClient == nil {
+		o.httpPostClient = defaultHTTPPostClient()
+	}
+
 	return errors.Join(
 		r.RegisterBuiltin(AddDate, addDate),
 		r.RegisterBuiltin(AddEnvironmentInfo, addEnvironmentInfo),
@@ -73,7 +114,9 @@ func Register(r *hooks.Registry) error {
 		r.RegisterBuiltin(AddRecentCommits, addRecentCommits),
 		r.RegisterBuiltin(MaxIterations, maxIterations),
 		r.RegisterBuiltin(RedactSecrets, redactSecrets),
-		r.RegisterBuiltin(HTTPPost, httpPost),
+		r.RegisterBuiltin(LimitLargeToolResults, limitLargeToolResults),
+		r.RegisterBuiltin(SaferShell, saferShell),
+		r.RegisterBuiltin(HTTPPost, newHTTPPost(o.httpPostClient)),
 		r.RegisterBuiltin(Unload, unload),
 	)
 }
@@ -91,6 +134,13 @@ type AgentDefaults struct {
 	// makes the auto-injection idempotent against an explicit YAML
 	// entry that already names the same builtin.
 	RedactSecrets bool
+	// SaferShell auto-injects the safer_shell builtin under
+	// pre_tool_use with preempt_yolo:true so the entry fires before
+	// Decide()/--yolo. Equivalent to writing the hook entry by hand.
+	// Set from the shell toolset's `safer: true` flag during agent
+	// loading; the builtin filters by tool name internally so it's a
+	// no-op for agents whose shell toolset doesn't opt in.
+	SaferShell bool
 }
 
 // AutoInjector adds default hooks to an agent's hook configuration.
@@ -118,6 +168,11 @@ func ApplyAgentDefaults(cfg *hooks.Config, d AgentDefaults) *hooks.Config {
 	if cfg == nil {
 		cfg = &hooks.Config{}
 	}
+	cfg.ToolResponseTransform = append([]hooks.MatcherConfig{{
+		Matcher: "*",
+		Hooks:   []hooks.Hook{builtinHook(LimitLargeToolResults)},
+	}}, cfg.ToolResponseTransform...)
+	cfg.SessionEnd = append(cfg.SessionEnd, builtinHook(LimitLargeToolResults))
 	if d.AddDate {
 		cfg.TurnStart = append(cfg.TurnStart, builtinHook(AddDate))
 	}
@@ -143,6 +198,21 @@ func ApplyAgentDefaults(cfg *hooks.Config, d AgentDefaults) *hooks.Config {
 		cfg.ToolResponseTransform = append(cfg.ToolResponseTransform, hooks.MatcherConfig{
 			Matcher: "*",
 			Hooks:   []hooks.Hook{builtinHook(RedactSecrets)},
+		})
+	}
+	if d.SaferShell {
+		// Wildcard matcher: the builtin filters by tool name
+		// internally (no-op for non-shell calls). preempt_yolo:true
+		// makes the entry fire BEFORE Decide() so destructive-command
+		// verdicts cannot be bypassed by --yolo or permission
+		// allow-rules. Idempotent against an explicit YAML
+		// pre_tool_use entry naming the same builtin via the dedup in
+		// hooks.Executor.hooksFor.
+		preemptYolo := true
+		cfg.PreToolUse = append(cfg.PreToolUse, hooks.MatcherConfig{
+			Matcher:     "*",
+			PreemptYolo: &preemptYolo,
+			Hooks:       []hooks.Hook{builtinHook(SaferShell)},
 		})
 	}
 	if cfg.IsEmpty() {

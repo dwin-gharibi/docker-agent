@@ -12,8 +12,8 @@ func resetDefaultStore(t *testing.T) {
 	defaultStoreMu.Unlock()
 	t.Cleanup(func() {
 		defaultStoreMu.Lock()
+		defer defaultStoreMu.Unlock()
 		defaultFactory, defaultStore = prevFactory, prevStore
-		defaultStoreMu.Unlock()
 	})
 }
 

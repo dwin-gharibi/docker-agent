@@ -82,6 +82,7 @@ type Summary struct {
 	CreatedAt   time.Time
 	Starred     bool
 	NumMessages int
+	WorkingDir  string
 }
 
 // Store defines the interface for session storage
@@ -182,6 +183,7 @@ func (s *InMemorySessionStore) GetSessionSummaries(_ context.Context) ([]Summary
 			CreatedAt:   value.CreatedAt,
 			Starred:     value.Starred,
 			NumMessages: value.MessageCount(),
+			WorkingDir:  value.WorkingDir,
 		})
 		return true
 	})
@@ -295,16 +297,15 @@ func (s *InMemorySessionStore) UpdateMessage(_ context.Context, messageID int64,
 	var found bool
 	s.sessions.Range(func(_ string, session *Session) bool {
 		session.mu.Lock()
+		defer session.mu.Unlock()
 		for i := range session.Messages {
 			if session.Messages[i].Message == nil || session.Messages[i].Message.ID != messageID {
 				continue
 			}
 			session.Messages[i].Message = updated
 			found = true
-			session.mu.Unlock()
 			return false
 		}
-		session.mu.Unlock()
 		return true
 	})
 	if !found {
@@ -338,8 +339,8 @@ func (s *InMemorySessionStore) AddSummary(_ context.Context, sessionID, summary 
 		return ErrNotFound
 	}
 	session.mu.Lock()
+	defer session.mu.Unlock()
 	session.Messages = append(session.Messages, Item{Summary: summary, FirstKeptEntry: firstKeptEntry})
-	session.mu.Unlock()
 	return nil
 }
 
@@ -462,8 +463,8 @@ func (s *InMemorySessionStore) Close() error {
 // at path. If migrations fail (other than a version mismatch or a filesystem
 // open failure) the existing database is moved aside to <path>.bak and a
 // fresh one is created.
-func NewSQLiteSessionStore(path string) (Store, error) {
-	store, err := openAndMigrateSQLiteStore(path)
+func NewSQLiteSessionStore(ctx context.Context, path string) (Store, error) {
+	store, err := openAndMigrateSQLiteStore(ctx, path)
 	if err != nil {
 		// Don't attempt recovery for version mismatch - the user needs to upgrade,
 		// not silently lose their data by starting fresh.
@@ -481,22 +482,22 @@ func NewSQLiteSessionStore(path string) (Store, error) {
 		}
 
 		// If migrations failed, try to recover by backing up the database and starting fresh
-		slog.Warn("Failed to open session store, attempting recovery", "error", err)
+		slog.WarnContext(ctx, "Failed to open session store, attempting recovery", "error", err)
 
 		backupErr := backupDatabase(path)
 		if backupErr != nil {
 			// Return the original error if backup failed
-			slog.Error("Failed to backup database for recovery", "error", backupErr)
+			slog.ErrorContext(ctx, "Failed to backup database for recovery", "error", backupErr)
 			return nil, fmt.Errorf("migration failed: %w (backup also failed: %w)", err, backupErr)
 		}
 
 		// Try again with a fresh database
-		store, err = openAndMigrateSQLiteStore(path)
+		store, err = openAndMigrateSQLiteStore(ctx, path)
 		if err != nil {
 			return nil, fmt.Errorf("migration failed even after database reset: %w", err)
 		}
 
-		slog.Info("Successfully recovered session store with fresh database")
+		slog.InfoContext(ctx, "Successfully recovered session store with fresh database")
 	}
 
 	return store, nil
@@ -510,24 +511,24 @@ func NewSQLiteSessionStore(path string) (Store, error) {
 // This is intended primarily for tests that want to use an in-memory database
 // (sql.Open("sqlite", ":memory:")) or pre-seed a database with non-default
 // state. Production callers should use NewSQLiteSessionStore.
-func NewSQLiteSessionStoreFromDB(db *sql.DB) (*SQLiteSessionStore, error) {
+func NewSQLiteSessionStoreFromDB(ctx context.Context, db *sql.DB) (*SQLiteSessionStore, error) {
 	if db == nil {
 		return nil, errors.New("db is nil")
 	}
-	if err := setupAndMigrate(db); err != nil {
+	if err := setupAndMigrate(ctx, db); err != nil {
 		return nil, err
 	}
 	return &SQLiteSessionStore{db: db}, nil
 }
 
 // openAndMigrateSQLiteStore opens the database and runs migrations
-func openAndMigrateSQLiteStore(path string) (*SQLiteSessionStore, error) {
-	db, err := sqliteutil.OpenDB(path)
+func openAndMigrateSQLiteStore(ctx context.Context, path string) (*SQLiteSessionStore, error) {
+	db, err := sqliteutil.OpenDB(ctx, path)
 	if err != nil {
 		return nil, err
 	}
 
-	if err := setupAndMigrate(db); err != nil {
+	if err := setupAndMigrate(ctx, db); err != nil {
 		db.Close()
 		if sqliteutil.IsCantOpenError(err) {
 			return nil, sqliteutil.DiagnoseDBOpenError(path, err)
@@ -542,8 +543,8 @@ func openAndMigrateSQLiteStore(path string) (*SQLiteSessionStore, error) {
 // all pending schema migrations. The bootstrap schema only declares the
 // columns the very first migration expects to find; later columns are added
 // by subsequent ALTER TABLE migrations.
-func setupAndMigrate(db *sql.DB) error {
-	_, err := db.ExecContext(context.Background(), `
+func setupAndMigrate(ctx context.Context, db *sql.DB) error {
+	_, err := db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS sessions (
 			id TEXT PRIMARY KEY,
 			messages TEXT,
@@ -555,7 +556,7 @@ func setupAndMigrate(db *sql.DB) error {
 	}
 
 	migrationManager := NewMigrationManager(db)
-	return migrationManager.InitializeMigrations(context.Background())
+	return migrationManager.InitializeMigrations(ctx)
 }
 
 // backupDatabase moves the database file (and related WAL files) to a backup
@@ -854,7 +855,7 @@ func (s *SQLiteSessionStore) GetSessions(ctx context.Context) ([]*Session, error
 // This is much faster than GetSessions as it doesn't load message content.
 func (s *SQLiteSessionStore) GetSessionSummaries(ctx context.Context) ([]Summary, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT s.id, s.title, s.created_at, s.starred,
+		`SELECT s.id, s.title, s.created_at, s.starred, s.working_dir,
 		        (SELECT COUNT(*) FROM session_items si WHERE si.session_id = s.id AND si.item_type = 'message')
 		 FROM sessions s
 		 WHERE s.parent_id IS NULL OR s.parent_id = ''
@@ -869,14 +870,16 @@ func (s *SQLiteSessionStore) GetSessionSummaries(ctx context.Context) ([]Summary
 		var (
 			summary      Summary
 			createdAtStr string
+			workingDir   sql.NullString
 		)
-		if err := rows.Scan(&summary.ID, &summary.Title, &createdAtStr, &summary.Starred, &summary.NumMessages); err != nil {
+		if err := rows.Scan(&summary.ID, &summary.Title, &createdAtStr, &summary.Starred, &workingDir, &summary.NumMessages); err != nil {
 			return nil, err
 		}
 		summary.CreatedAt, err = time.Parse(time.RFC3339, createdAtStr)
 		if err != nil {
 			return nil, err
 		}
+		summary.WorkingDir = workingDir.String
 		summaries = append(summaries, summary)
 	}
 

@@ -2,6 +2,8 @@ package root
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -10,6 +12,7 @@ import (
 
 	"github.com/docker/docker-agent/pkg/config"
 	"github.com/docker/docker-agent/pkg/config/latest"
+	"github.com/docker/docker-agent/pkg/environment"
 	"github.com/docker/docker-agent/pkg/userconfig"
 )
 
@@ -70,26 +73,30 @@ func TestGatewayLogic(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv("CAGENT_MODELS_GATEWAY", tt.env) // Make sure the user doesn't have an old env set
-			t.Setenv("DOCKER_AGENT_MODELS_GATEWAY", tt.env)
+			t.Parallel()
 
-			// Mock user config loader
-			original := loadUserConfig
-			loadUserConfig = func() (*userconfig.Config, error) {
+			// Inject env via a map provider rather than t.Setenv so the
+			// test stays parallel-safe.
+			loadUserConfig := func() (*userconfig.Config, error) {
 				if tt.userConfig != nil {
 					return tt.userConfig, nil
 				}
 				return &userconfig.Config{}, nil
 			}
-			t.Cleanup(func() { loadUserConfig = original })
 
 			cmd := &cobra.Command{
 				RunE: func(*cobra.Command, []string) error {
 					return nil
 				},
 			}
-			runConfig := config.RuntimeConfig{}
-			addGatewayFlags(cmd, &runConfig)
+			env := map[string]string{}
+			if tt.env != "" {
+				env[envModelsGateway] = tt.env
+			}
+			runConfig := config.RuntimeConfig{
+				EnvProviderForTests: environment.NewMapEnvProvider(env),
+			}
+			addGatewayFlags(cmd, &runConfig, loadUserConfig)
 
 			cmd.SetArgs(tt.args)
 			err := cmd.Execute()
@@ -101,6 +108,8 @@ func TestGatewayLogic(t *testing.T) {
 }
 
 func TestGatewayFlags_CallsAncestorPersistentPreRunE(t *testing.T) {
+	t.Parallel()
+
 	// Regression test: addGatewayFlags overrides PersistentPreRunE on the command
 	// it is applied to. When that command is nested under an intermediate parent
 	// (e.g. root → serve → api), the old code only checked cmd.Parent(), so a
@@ -121,7 +130,7 @@ func TestGatewayFlags_CallsAncestorPersistentPreRunE(t *testing.T) {
 		RunE: func(*cobra.Command, []string) error { return nil },
 	}
 	runConfig := config.RuntimeConfig{}
-	addGatewayFlags(leaf, &runConfig)
+	addGatewayFlags(leaf, &runConfig, userconfig.Load)
 
 	middle.AddCommand(leaf)
 	root.AddCommand(middle)
@@ -132,6 +141,8 @@ func TestGatewayFlags_CallsAncestorPersistentPreRunE(t *testing.T) {
 }
 
 func TestGatewayFlags_RunsParentBeforeMaterialisingEnvProvider(t *testing.T) {
+	t.Parallel()
+
 	// Regression test: the persistent pre-run for the gateway flags
 	// used to call runConfig.EnvProvider() before invoking the parent
 	// PersistentPreRunE that overrides --config-dir / --cache-dir /
@@ -162,7 +173,7 @@ func TestGatewayFlags_RunsParentBeforeMaterialisingEnvProvider(t *testing.T) {
 	runConfig := config.RuntimeConfig{
 		EnvProviderForTests: &recordingProvider{onGet: func() { envProviderConsulted = true }},
 	}
-	addGatewayFlags(leaf, &runConfig)
+	addGatewayFlags(leaf, &runConfig, userconfig.Load)
 	root.AddCommand(leaf)
 
 	root.SetArgs([]string{"leaf"})
@@ -281,25 +292,28 @@ func TestDefaultModelLogic(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv("DOCKER_AGENT_DEFAULT_MODEL", tt.env)
+			t.Parallel()
 
-			// Mock user config loader
-			original := loadUserConfig
-			loadUserConfig = func() (*userconfig.Config, error) {
+			loadUserConfig := func() (*userconfig.Config, error) {
 				if tt.userConfig != nil {
 					return tt.userConfig, nil
 				}
 				return &userconfig.Config{}, nil
 			}
-			t.Cleanup(func() { loadUserConfig = original })
 
 			cmd := &cobra.Command{
 				RunE: func(*cobra.Command, []string) error {
 					return nil
 				},
 			}
-			runConfig := config.RuntimeConfig{}
-			addGatewayFlags(cmd, &runConfig)
+			env := map[string]string{}
+			if tt.env != "" {
+				env[envDefaultModel] = tt.env
+			}
+			runConfig := config.RuntimeConfig{
+				EnvProviderForTests: environment.NewMapEnvProvider(env),
+			}
+			addGatewayFlags(cmd, &runConfig, loadUserConfig)
 
 			cmd.SetArgs(nil)
 			err := cmd.Execute()
@@ -314,4 +328,60 @@ func TestDefaultModelLogic(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A missing or malformed --env-from-file must abort the run instead of being
+// logged and skipped: the flag is the documented way to supply credentials
+// (issue #3442).
+func TestEnvFromFileErrorsAbortPreRun(t *testing.T) {
+	t.Parallel()
+
+	loadUserConfig := func() (*userconfig.Config, error) {
+		return &userconfig.Config{}, nil
+	}
+
+	t.Run("missing file", func(t *testing.T) {
+		t.Parallel()
+
+		cmd := &cobra.Command{
+			SilenceErrors: true,
+			SilenceUsage:  true,
+			RunE:          func(*cobra.Command, []string) error { return nil },
+		}
+		runConfig := config.RuntimeConfig{
+			Config: config.Config{EnvFiles: []string{filepath.Join(t.TempDir(), "missing.env")}},
+		}
+		addGatewayFlags(cmd, &runConfig, loadUserConfig)
+
+		cmd.SetArgs(nil)
+		err := cmd.Execute()
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "--env-from-file")
+		assert.Contains(t, err.Error(), "missing.env")
+	})
+
+	t.Run("malformed file", func(t *testing.T) {
+		t.Parallel()
+
+		bad := filepath.Join(t.TempDir(), "bad.env")
+		require.NoError(t, os.WriteFile(bad, []byte("NOT_A_PAIR\n"), 0o600))
+
+		cmd := &cobra.Command{
+			SilenceErrors: true,
+			SilenceUsage:  true,
+			RunE:          func(*cobra.Command, []string) error { return nil },
+		}
+		runConfig := config.RuntimeConfig{
+			Config: config.Config{EnvFiles: []string{bad}},
+		}
+		addGatewayFlags(cmd, &runConfig, loadUserConfig)
+
+		cmd.SetArgs(nil)
+		err := cmd.Execute()
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "--env-from-file")
+		assert.Contains(t, err.Error(), "bad.env")
+	})
 }

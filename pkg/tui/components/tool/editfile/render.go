@@ -17,7 +17,6 @@ import (
 	"github.com/docker/docker-agent/pkg/concurrent"
 	"github.com/docker/docker-agent/pkg/lrucache"
 	"github.com/docker/docker-agent/pkg/tools"
-	"github.com/docker/docker-agent/pkg/tools/builtin/filesystem"
 	"github.com/docker/docker-agent/pkg/tui/styles"
 	"github.com/docker/docker-agent/pkg/tui/types"
 )
@@ -61,11 +60,11 @@ var (
 // Call this when the theme changes to pick up new colors.
 func InvalidateCaches() {
 	cacheMu.Lock()
+	defer cacheMu.Unlock()
 	cache.Range(func(_ string, c *toolRenderCache) bool {
 		c.renderCached = false
 		return true
 	})
-	cacheMu.Unlock()
 }
 
 type chromaToken struct {
@@ -112,18 +111,18 @@ func renderEditFile(toolCall tools.ToolCall, width int, splitView bool, toolStat
 	result := renderEditFileUncached(toolCall, width, splitView, toolStatus)
 
 	cacheMu.Lock()
+	defer cacheMu.Unlock()
 	c.rendered = result
 	c.renderCached = true
 	c.renderedWidth = width
 	c.renderedSplit = splitView
 	c.renderedStatus = toolStatus
-	cacheMu.Unlock()
 
 	return result
 }
 
 func renderEditFileUncached(toolCall tools.ToolCall, width int, splitView bool, toolStatus types.ToolStatus) string {
-	args, err := filesystem.ParseEditFileArgs([]byte(toolCall.Function.Arguments))
+	args, err := parseEditFileArgs(toolCall.Function.Arguments)
 	if err != nil {
 		return ""
 	}
@@ -165,16 +164,16 @@ func countDiffLines(toolCall tools.ToolCall, _ types.ToolStatus) (added, removed
 	added, removed = countDiffLinesUncached(toolCall)
 
 	cacheMu.Lock()
+	defer cacheMu.Unlock()
 	c.added = added
 	c.removed = removed
 	c.lineCounted = true
-	cacheMu.Unlock()
 
 	return added, removed
 }
 
 func countDiffLinesUncached(toolCall tools.ToolCall) (added, removed int) {
-	args, err := filesystem.ParseEditFileArgs([]byte(toolCall.Function.Arguments))
+	args, err := parseEditFileArgs(toolCall.Function.Arguments)
 	if err != nil {
 		return 0, 0
 	}

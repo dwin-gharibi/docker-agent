@@ -57,6 +57,14 @@ func TestIsRetryableModelError(t *testing.T) {
 		{name: "reset before headers", err: errors.New("reset before headers"), expected: true},
 		{name: "upstream connect error", err: errors.New("upstream connect error"), expected: true},
 		{name: "HTTP/2 INTERNAL_ERROR", err: fmt.Errorf("error receiving from stream: %w", errors.New("stream error: stream ID 1; INTERNAL_ERROR; received from peer")), expected: true},
+		// Stream truncated mid-response during a long prefill (issue #3298):
+		// the upstream / proxy dropped a healthy connection before the first
+		// token. Retryable so the warm-cache retry can beat the idle limit.
+		{name: "stream truncated - unexpected end of JSON input", err: fmt.Errorf("error receiving from stream: %w", errors.New("unexpected end of JSON input")), expected: true},
+		{name: "stream truncated - unexpected EOF", err: fmt.Errorf("error receiving from stream: %w", errors.New("unexpected EOF")), expected: true},
+		// A genuinely malformed (not merely truncated) JSON payload stays
+		// non-retryable: "invalid character ..." is not a truncation signature.
+		{name: "malformed stream - invalid character not retried", err: fmt.Errorf("error receiving from stream: %w", errors.New("invalid character 'x' looking for beginning of value")), expected: false},
 		{name: "context overflow - prompt too long", err: errors.New("prompt is too long: 226360 tokens > 200000 maximum"), expected: false},
 		{name: "context overflow - thinking budget", err: errors.New("max_tokens must be greater than thinking.budget_tokens"), expected: false},
 		{name: "context overflow - wrapped", err: &ContextOverflowError{Underlying: errors.New("test")}, expected: false},
@@ -467,12 +475,53 @@ func TestMatchesTransientPattern(t *testing.T) {
 	}
 }
 
+func TestIsStreamTruncationError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		err      error
+		expected bool
+	}{
+		{name: "nil error", err: nil, expected: false},
+		{name: "unexpected end of JSON input", err: errors.New("unexpected end of JSON input"), expected: true},
+		{name: "unexpected EOF", err: errors.New("unexpected EOF"), expected: true},
+		{name: "mixed case", err: errors.New("Unexpected EOF"), expected: true},
+		{name: "wrapped by stream layer", err: fmt.Errorf("error receiving from stream: %w", errors.New("unexpected end of JSON input")), expected: true},
+		// Context teardown must NOT be claimed as an upstream truncation, even
+		// if the message happens to mention EOF-ish text.
+		{name: "context canceled", err: context.Canceled, expected: false},
+		{name: "context deadline", err: context.DeadlineExceeded, expected: false},
+		{name: "clean EOF is not a truncation signature", err: errors.New("EOF"), expected: false},
+		{name: "unrelated error", err: errors.New("connection refused"), expected: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.expected, IsStreamTruncationError(tt.err), "IsStreamTruncationError(%v)", tt.err)
+		})
+	}
+}
+
 func TestFormatError(t *testing.T) {
 	t.Parallel()
 
 	t.Run("nil error", func(t *testing.T) {
 		t.Parallel()
 		assert.Empty(t, FormatError(nil))
+	})
+
+	t.Run("stream truncation shows prefill/timeout guidance", func(t *testing.T) {
+		t.Parallel()
+		err := fmt.Errorf("error receiving from stream: %w", errors.New("unexpected end of JSON input"))
+		msg := FormatError(err)
+		assert.Contains(t, msg, "closed unexpectedly before it completed its response")
+		// Covers both the silent-prefill drop and a mid-stream cut, since the
+		// truncation patterns can fire after partial tokens have streamed too.
+		assert.Contains(t, msg, "prefill")
+		assert.Contains(t, msg, "mid-stream")
+		assert.NotContains(t, msg, "unexpected end of JSON input")
 	})
 
 	t.Run("context overflow shows user-friendly message", func(t *testing.T) {

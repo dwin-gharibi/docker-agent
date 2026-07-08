@@ -1,10 +1,11 @@
 ---
 title: "Memory Tool"
 description: "Persistent key-value storage backed by SQLite for cross-session recall."
-permalink: /tools/memory/
+keywords: docker agent, ai agents, tools, toolsets, memory tool
+linkTitle: "Memory"
+weight: 100
+canonical: https://docs.docker.com/ai/docker-agent/tools/memory/
 ---
-
-# Memory Tool
 
 _Persistent key-value storage backed by SQLite for cross-session recall._
 
@@ -54,8 +55,5 @@ Memories support an optional `category` field for organization and filtering. Co
 - `project` — Project-specific context
 - `decision` — Past decisions and their rationale
 
-<div class="callout callout-tip" markdown="1">
-<div class="callout-title">Tip
-</div>
-  <p>Memory is especially useful for long-running assistants that need to recall information across conversations — like coding preferences, project conventions, or context discovered during previous sessions.</p>
-</div>
+> [!TIP]
+> Memory is especially useful for long-running assistants that need to recall information across conversations — like coding preferences, project conventions, or context discovered during previous sessions.

@@ -47,11 +47,13 @@ func (f *fakeTranscriber) Stop() {
 // newSpeakTestModel builds an appModel wired with a fakeTranscriber so that the
 // speech-to-text handlers can be tested in isolation. It leverages the same
 // minimal scaffolding used by the exit tests.
-func newSpeakTestModel(ft *fakeTranscriber) *appModel {
+func newSpeakTestModel(tb testing.TB, ft *fakeTranscriber) *appModel {
+	tb.Helper()
 	page := &mockChatPage{}
 	ed := &mockEditor{}
 
 	return &appModel{
+		ctx:                     tb.Context,
 		chatPages:               map[string]chat.Page{"test": page},
 		sessionStates:           map[string]*service.SessionState{},
 		editors:                 map[string]editor.Editor{"test": ed},
@@ -65,8 +67,10 @@ func newSpeakTestModel(ft *fakeTranscriber) *appModel {
 }
 
 func TestHandleStartSpeak_NoOpIfAlreadyRunning(t *testing.T) {
+	t.Parallel()
+
 	ft := &fakeTranscriber{running: true}
-	m := newSpeakTestModel(ft)
+	m := newSpeakTestModel(t, ft)
 
 	_, cmd := m.handleStartSpeak()
 	if cmd != nil {
@@ -78,8 +82,10 @@ func TestHandleStartSpeak_NoOpIfAlreadyRunning(t *testing.T) {
 }
 
 func TestHandleStartSpeak_ReturnsErrorNotificationOnStartFailure(t *testing.T) {
+	t.Parallel()
+
 	ft := &fakeTranscriber{startErr: errors.New("boom")}
-	m := newSpeakTestModel(ft)
+	m := newSpeakTestModel(t, ft)
 
 	_, cmd := m.handleStartSpeak()
 	if cmd == nil {
@@ -107,8 +113,10 @@ func TestHandleStartSpeak_ReturnsErrorNotificationOnStartFailure(t *testing.T) {
 }
 
 func TestHandleStopSpeak_NoOpWhenNotRunning(t *testing.T) {
+	t.Parallel()
+
 	ft := &fakeTranscriber{running: false}
-	m := newSpeakTestModel(ft)
+	m := newSpeakTestModel(t, ft)
 
 	_, cmd := m.handleStopSpeak()
 	if cmd != nil {
@@ -120,8 +128,10 @@ func TestHandleStopSpeak_NoOpWhenNotRunning(t *testing.T) {
 }
 
 func TestHandleStopSpeak_StopsAndNotifies(t *testing.T) {
+	t.Parallel()
+
 	ft := &fakeTranscriber{running: true}
-	m := newSpeakTestModel(ft)
+	m := newSpeakTestModel(t, ft)
 	// Pretend a previous start opened a channel.
 	m.transcriptCh = make(chan string, 1)
 

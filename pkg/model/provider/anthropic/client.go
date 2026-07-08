@@ -1,7 +1,6 @@
 package anthropic
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -37,8 +36,7 @@ import (
 type Client struct {
 	base.Config
 
-	clientFn    func(context.Context) (anthropic.Client, error)
-	fileManager *FileManager
+	clientFn func(context.Context) (anthropic.Client, error)
 }
 
 // NewClient creates a new Anthropic client from the provided configuration
@@ -58,12 +56,7 @@ func NewClient(ctx context.Context, cfg *latest.ModelConfig, env environment.Pro
 		return nil, errors.New("environment provider is required")
 	}
 
-	var globalOptions options.ModelOptions
-	for _, opt := range opts {
-		if opt != nil {
-			opt(&globalOptions)
-		}
-	}
+	globalOptions := options.Apply(opts...)
 
 	anthropicClient := &Client{
 		Config: base.Config{
@@ -80,13 +73,7 @@ func NewClient(ctx context.Context, cfg *latest.ModelConfig, env environment.Pro
 			return nil, err
 		}
 		httpClient := httpclient.NewHTTPClient(ctx)
-		if w := globalOptions.TransportWrapper(); w != nil {
-			if wrapped := w(httpClient.Transport); wrapped != nil {
-				httpClient.Transport = wrapped
-			} else {
-				slog.WarnContext(ctx, "HTTP transport wrapper returned nil; using original transport")
-			}
-		}
+		globalOptions.WrapTransport(ctx, httpClient)
 		requestOptions := append([]option.RequestOption{
 			option.WithHTTPClient(httpClient),
 		}, authOpts...)
@@ -103,23 +90,17 @@ func NewClient(ctx context.Context, cfg *latest.ModelConfig, env environment.Pro
 		}
 		// When using a Gateway targeting a Docker domain, tokens are short-lived.
 		// Only require and inject the Docker JWT if the gateway is a .docker.com URL.
-		if environment.IsTrustedDockerURL(gateway) {
-			// Fail fast if Docker Desktop's auth token isn't available
-			if token, _ := env.Get(ctx, environment.DockerDesktopTokenEnv); token == "" {
-				slog.ErrorContext(ctx, "Anthropic client creation failed", "error", "failed to get Docker Desktop's authentication token")
-				return nil, errors.New("sorry, you first need to sign in Docker Desktop to use the Docker AI Gateway")
-			}
+		if err := base.VerifyDockerGatewayAuth(ctx, env, gateway); err != nil {
+			slog.ErrorContext(ctx, "Anthropic client creation failed", "error", "failed to get Docker Desktop's authentication token")
+			return nil, err
 		}
 
 		// When using a Gateway, tokens are short-lived.
 		anthropicClient.clientFn = func(ctx context.Context) (anthropic.Client, error) {
-			var authToken string
-			if environment.IsTrustedDockerURL(gateway) {
-				// Query a fresh auth token each time the client is used
-				authToken, _ = env.Get(ctx, environment.DockerDesktopTokenEnv)
-				if authToken == "" {
-					return anthropic.Client{}, errors.New(base.NoDesktopTokenErrorMessage)
-				}
+			// Query a fresh auth token each time the client is used.
+			authToken, err := base.GatewayAuthToken(ctx, env, gateway)
+			if err != nil {
+				return anthropic.Client{}, err
 			}
 
 			url, err := url.Parse(gateway)
@@ -129,25 +110,10 @@ func NewClient(ctx context.Context, cfg *latest.ModelConfig, env environment.Pro
 			baseURL := fmt.Sprintf("%s://%s%s/", url.Scheme, url.Host, url.Path)
 
 			// Configure a custom HTTP client to inject headers and query params used by the Gateway.
-			httpOptions := []httpclient.Opt{
-				httpclient.WithProxiedBaseURL(cmp.Or(cfg.BaseURL, "https://api.anthropic.com/")),
-				httpclient.WithProvider(cfg.Provider),
-				httpclient.WithModel(cfg.Model),
-				httpclient.WithModelName(cfg.Name),
-				httpclient.WithQuery(url.Query()),
-			}
-			if globalOptions.GeneratingTitle() {
-				httpOptions = append(httpOptions, httpclient.WithHeader("X-Cagent-GeneratingTitle", "1"))
-			}
+			httpOptions := base.GatewayHTTPOptions(url, "https://api.anthropic.com/", cfg, globalOptions.GeneratingTitle())
 
 			gatewayHTTPClient := httpclient.NewHTTPClient(ctx, httpOptions...)
-			if w := globalOptions.TransportWrapper(); w != nil {
-				if wrapped := w(gatewayHTTPClient.Transport); wrapped != nil {
-					gatewayHTTPClient.Transport = wrapped
-				} else {
-					slog.WarnContext(ctx, "HTTP transport wrapper returned nil; using original transport")
-				}
-			}
+			globalOptions.WrapTransport(ctx, gatewayHTTPClient)
 			clientOptions := []option.RequestOption{
 				option.WithBaseURL(baseURL),
 				option.WithHTTPClient(gatewayHTTPClient),
@@ -162,10 +128,6 @@ func NewClient(ctx context.Context, cfg *latest.ModelConfig, env environment.Pro
 	}
 
 	slog.DebugContext(ctx, "Anthropic client created successfully", "model", cfg.Model)
-
-	// Initialize FileManager for file uploads
-	anthropicClient.fileManager = NewFileManager(anthropicClient.clientFn)
-
 	return anthropicClient, nil
 }
 
@@ -196,19 +158,6 @@ func buildDirectAuthOptions(ctx context.Context, cfg *latest.ModelConfig, env en
 	}
 	slog.DebugContext(ctx, "Anthropic API key found")
 	return []option.RequestOption{option.WithAPIKey(apiKey)}, nil
-}
-
-// hasFileAttachments checks if any messages contain file attachments.
-// This is used to determine if we need to use the Beta API (Files API is Beta-only).
-func hasFileAttachments(messages []chat.Message) bool {
-	for i := range messages {
-		for _, part := range messages[i].MultiContent {
-			if part.Type == chat.MessagePartTypeFile && part.File != nil {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // CreateChatCompletionStream creates a streaming chat completion request
@@ -246,11 +195,9 @@ func (c *Client) CreateChatCompletionStream(
 	// Route to the Beta Messages API when any of the following are set:
 	//  - interleaved thinking
 	//  - structured output (requires beta header)
-	//  - file attachments (Files API is Beta-only)
 	//  - task_budget (requires the task-budgets beta header)
 	if c.interleavedThinkingEnabled() ||
 		c.ModelOptions.StructuredOutput() != nil ||
-		hasFileAttachments(messages) ||
 		!c.ModelConfig.TaskBudget.IsZero() {
 		return c.createBetaStream(ctx, client, messages, requestTools, maxTokens)
 	}
@@ -330,7 +277,7 @@ func (c *Client) CreateChatCompletionStream(
 	requestOpts = append(requestOpts, option.WithHeader("anthropic-beta", betas))
 
 	stream := client.Messages.NewStreaming(ctx, params, requestOpts...)
-	trackUsage := c.ModelConfig.TrackUsage == nil || *c.ModelConfig.TrackUsage
+	trackUsage := c.TrackUsageEnabled()
 	ad := c.newStreamAdapter(stream, trackUsage)
 
 	// Set up single retry for context length errors
@@ -599,8 +546,7 @@ func extractMediaType(prefix string) string {
 }
 
 // convertUserMultiContent converts user message multi-content parts to Anthropic content blocks.
-// It handles text and images (base64 and URL). File uploads are NOT supported in the non-Beta API
-// and will return an error - callers should use hasFileAttachments() to route to the Beta API.
+// It handles text, legacy image URLs, and document attachments.
 func (c *Client) convertUserMultiContent(ctx context.Context, parts []chat.MessagePart) ([]anthropic.ContentBlockParamUnion, error) {
 	contentBlocks := make([]anthropic.ContentBlockParamUnion, 0, len(parts))
 
@@ -613,35 +559,24 @@ func (c *Client) convertUserMultiContent(ctx context.Context, parts []chat.Messa
 			if part.ImageURL == nil {
 				continue
 			}
-			// Handle base64 data URLs (legacy format)
 			if strings.HasPrefix(part.ImageURL.URL, "data:") {
 				urlParts := strings.SplitN(part.ImageURL.URL, ",", 2)
 				if len(urlParts) == 2 {
-					mediaType := extractMediaType(urlParts[0])
-					base64Data := urlParts[1]
-
 					contentBlocks = append(contentBlocks, anthropic.NewImageBlock(anthropic.Base64ImageSourceParam{
-						Data:      base64Data,
-						MediaType: anthropic.Base64ImageSourceMediaType(mediaType),
+						Data:      urlParts[1],
+						MediaType: anthropic.Base64ImageSourceMediaType(extractMediaType(urlParts[0])),
 					}))
 				}
 			} else if strings.HasPrefix(part.ImageURL.URL, "http://") || strings.HasPrefix(part.ImageURL.URL, "https://") {
-				// URL-based images
 				contentBlocks = append(contentBlocks, anthropic.NewImageBlock(anthropic.URLImageSourceParam{
 					URL: part.ImageURL.URL,
 				}))
 			}
 
 		case chat.MessagePartTypeFile:
-			if part.File == nil {
-				continue
+			if part.File != nil {
+				slog.WarnContext(ctx, "anthropic: dropping legacy file attachment; use document attachments instead", "path", part.File.Path)
 			}
-
-			// File uploads require the Beta API - this code path should not be reached
-			// if hasFileAttachments() correctly routes to createBetaStream().
-			// Return a clear error if we somehow get here.
-			return nil, fmt.Errorf("file attachments require the Beta API; use hasFileAttachments() to route correctly (path=%q, file_id=%q)",
-				part.File.Path, part.File.FileID)
 
 		case chat.MessagePartTypeDocument:
 			if part.Document != nil {
@@ -655,17 +590,6 @@ func (c *Client) convertUserMultiContent(ctx context.Context, parts []chat.Messa
 	}
 
 	return contentBlocks, nil
-}
-
-// createFileContentBlock creates the appropriate content block for a file based on its MIME type.
-// Note: File uploads via the Files API require the Beta API. This function supports images
-// (which have OfFile in the Beta API only) and documents. For non-Beta API usage with files,
-// the caller should handle the conversion differently or use base64 encoding.
-func createFileContentBlock(fileID, mimeType string) (anthropic.ContentBlockParamUnion, error) {
-	// The standard (non-Beta) API doesn't support file references in ImageBlockParamSourceUnion
-	// or DocumentBlockParamSourceUnion. Files API is Beta-only.
-	// For now, we return an error directing users to use the Beta API path.
-	return anthropic.ContentBlockParamUnion{}, fmt.Errorf("file uploads require the Beta API; file_id=%s, mime_type=%s", fileID, mimeType)
 }
 
 // applyMessageCacheControl adds ephemeral cache control to the last content block
@@ -761,20 +685,6 @@ func ConvertParametersToSchema(params any) (anthropic.ToolInputSchemaParam, erro
 	return schema, nil
 }
 
-// CleanupFiles removes all files uploaded during this session from Anthropic's storage.
-func (c *Client) CleanupFiles(ctx context.Context) error {
-	if c.fileManager == nil {
-		return nil
-	}
-	return c.fileManager.CleanupAll(ctx)
-}
-
-// FileManager returns the file manager for this client, allowing external cleanup.
-// Returns nil if file uploads are not supported or not initialized.
-func (c *Client) FileManager() *FileManager {
-	return c.fileManager
-}
-
 // marshalToMap is a helper that converts any value to a map[string]any via JSON marshaling.
 // This is used to inspect SDK union types without depending on their internal structure.
 // It's shared by both standard and Beta API validation/repair code.
@@ -800,10 +710,11 @@ func contentArray(m map[string]any) []any {
 }
 
 // contextLimit returns the context window for this client's model, sourced
-// from models.dev when available and falling back to the model family's
-// standard Claude window otherwise.
+// from models.dev (including the embedded snapshot) when available, and
+// falling back to the conservative 200k Claude floor only when no catalogue
+// entry exists.
 func (c *Client) contextLimit(ctx context.Context) int64 {
-	return modelinfo.ContextLimit(ctx, c.ModelOptions.ModelsDevStore(), c.ID(), modelinfo.DefaultClaudeContextLimit(c.ModelConfig.Model))
+	return modelinfo.ContextLimit(ctx, c.ModelOptions.ModelsDevStore(), c.ID(), modelinfo.DefaultAnthropicContextLimit)
 }
 
 // clampMaxTokens returns the effective max_tokens value after capping to the

@@ -20,7 +20,7 @@ func (c *Calculator) Add(a, b int) int {
 }
 `)
 
-	chunks, err := processor.Process("calc.go", content)
+	chunks, err := processor.Process(t.Context(), "calc.go", content)
 	require.NoError(t, err)
 	require.Len(t, chunks, 1)
 
@@ -36,6 +36,7 @@ func (c *Calculator) Add(a, b int) int {
 }
 
 func TestTreeSitterPreProcessor_IncludesGodocComments(t *testing.T) {
+	t.Parallel()
 	processor := NewDocumentProcessor(80, 0, false)
 
 	// Test case with godoc-style comments
@@ -54,7 +55,7 @@ func Subtract(a, b int) int {
 `)
 
 	// Use small chunk size to force separate chunks
-	chunks, err := processor.Process("test.go", content)
+	chunks, err := processor.Process(t.Context(), "test.go", content)
 	require.NoError(t, err)
 	require.Len(t, chunks, 2, "Expected 2 chunks (one per function)")
 
@@ -69,6 +70,7 @@ func Subtract(a, b int) int {
 }
 
 func TestTreeSitterPreProcessor_FunctionWithoutComment(t *testing.T) {
+	t.Parallel()
 	processor := NewDocumentProcessor(1000, 0, false)
 
 	content := []byte(`package main
@@ -78,7 +80,7 @@ func Multiply(a, b int) int {
 }
 `)
 
-	chunks, err := processor.Process("test.go", content)
+	chunks, err := processor.Process(t.Context(), "test.go", content)
 	require.NoError(t, err)
 	require.Len(t, chunks, 1)
 
@@ -88,6 +90,7 @@ func Multiply(a, b int) int {
 }
 
 func TestTreeSitterPreProcessor_MethodWithComment(t *testing.T) {
+	t.Parallel()
 	processor := NewDocumentProcessor(1000, 0, false)
 
 	content := []byte(`package main
@@ -100,7 +103,7 @@ func (c Calculator) Calculate(a, b int) int {
 }
 `)
 
-	chunks, err := processor.Process("test.go", content)
+	chunks, err := processor.Process(t.Context(), "test.go", content)
 	require.NoError(t, err)
 	require.Len(t, chunks, 1)
 
@@ -110,6 +113,7 @@ func (c Calculator) Calculate(a, b int) int {
 }
 
 func TestTreeSitterPreProcessor_MultilineComment(t *testing.T) {
+	t.Parallel()
 	processor := NewDocumentProcessor(1000, 0, false)
 
 	content := []byte(`package main
@@ -125,7 +129,7 @@ func Divide(a, b int) (int, error) {
 }
 `)
 
-	chunks, err := processor.Process("test.go", content)
+	chunks, err := processor.Process(t.Context(), "test.go", content)
 	require.NoError(t, err)
 	require.Len(t, chunks, 1)
 
@@ -137,6 +141,7 @@ func Divide(a, b int) (int, error) {
 }
 
 func TestTreeSitterPreProcessor_BlankLinesBetweenCommentAndFunction(t *testing.T) {
+	t.Parallel()
 	processor := NewDocumentProcessor(1000, 0, false)
 
 	// Test with more than one blank line between comment and function
@@ -151,7 +156,7 @@ func Process() {
 }
 `)
 
-	chunks, err := processor.Process("test.go", content)
+	chunks, err := processor.Process(t.Context(), "test.go", content)
 	require.NoError(t, err)
 	require.Len(t, chunks, 1)
 
@@ -161,6 +166,7 @@ func Process() {
 }
 
 func TestTreeSitterPreProcessor_AdjacentComment(t *testing.T) {
+	t.Parallel()
 	processor := NewDocumentProcessor(1000, 0, false)
 
 	// Test with no blank line between comment and function (most common godoc style)
@@ -172,7 +178,7 @@ func Handler() {
 }
 `)
 
-	chunks, err := processor.Process("test.go", content)
+	chunks, err := processor.Process(t.Context(), "test.go", content)
 	require.NoError(t, err)
 	require.Len(t, chunks, 1)
 
@@ -182,6 +188,7 @@ func Handler() {
 }
 
 func TestTreeSitterPreProcessor_MixedCommentsAndFunctions(t *testing.T) {
+	t.Parallel()
 	processor := NewDocumentProcessor(80, 0, false)
 
 	content := []byte(`package main
@@ -205,7 +212,7 @@ func Third() {
 `)
 
 	// Use small chunk size to force separate chunks
-	chunks, err := processor.Process("test.go", content)
+	chunks, err := processor.Process(t.Context(), "test.go", content)
 	require.NoError(t, err)
 	require.Len(t, chunks, 3)
 
@@ -224,6 +231,7 @@ func Third() {
 }
 
 func TestTreeSitterPreProcessor_ChunkSizeRespected(t *testing.T) {
+	t.Parallel()
 	processor := NewDocumentProcessor(50, 0, false)
 
 	content := []byte(`package main
@@ -240,7 +248,7 @@ func Another(x int) int {
 `)
 
 	// Set a small chunk size to force separate chunks
-	chunks, err := processor.Process("test.go", content)
+	chunks, err := processor.Process(t.Context(), "test.go", content)
 	require.NoError(t, err)
 
 	// With a small chunk size, functions should be in separate chunks
@@ -248,6 +256,7 @@ func Another(x int) int {
 }
 
 func TestTreeSitterPreProcessor_LargeFunctionExceedsChunkSize(t *testing.T) {
+	t.Parallel()
 	processor := NewDocumentProcessor(50, 0, false)
 
 	content := []byte(`package main
@@ -269,7 +278,7 @@ func ProcessData() {
 `)
 
 	// Set chunk size smaller than the function
-	chunks, err := processor.Process("test.go", content)
+	chunks, err := processor.Process(t.Context(), "test.go", content)
 	require.NoError(t, err)
 	require.Len(t, chunks, 1, "Large function should be in its own chunk despite exceeding limit")
 
@@ -279,12 +288,13 @@ func ProcessData() {
 }
 
 func TestTreeSitterPreProcessor_UnsupportedExtension(t *testing.T) {
+	t.Parallel()
 	processor := NewDocumentProcessor(1000, 0, false)
 
 	content := []byte(`console.log("hello");`)
 
 	// For unsupported extensions, it falls back to text chunking
-	chunks, err := processor.Process("test.js", content)
+	chunks, err := processor.Process(t.Context(), "test.js", content)
 	require.NoError(t, err)
 	// Text fallback should produce chunks
 	require.NotNil(t, chunks)
@@ -292,17 +302,19 @@ func TestTreeSitterPreProcessor_UnsupportedExtension(t *testing.T) {
 }
 
 func TestTreeSitterPreProcessor_EmptyFile(t *testing.T) {
+	t.Parallel()
 	processor := NewDocumentProcessor(1000, 0, false)
 
 	content := []byte(`package main`)
 
-	chunks, err := processor.Process("test.go", content)
+	chunks, err := processor.Process(t.Context(), "test.go", content)
 	require.NoError(t, err)
 	// Falls back to text chunking for files with no functions
 	require.NotEmpty(t, chunks)
 }
 
 func TestTreeSitterPreProcessor_BlockCommentStyle(t *testing.T) {
+	t.Parallel()
 	processor := NewDocumentProcessor(1000, 0, false)
 
 	content := []byte(`package main
@@ -316,7 +328,7 @@ func BlockCommented() {
 }
 `)
 
-	chunks, err := processor.Process("test.go", content)
+	chunks, err := processor.Process(t.Context(), "test.go", content)
 	require.NoError(t, err)
 	require.Len(t, chunks, 1)
 
@@ -327,6 +339,7 @@ func BlockCommented() {
 }
 
 func TestTreeSitterPreProcessor_FunctionsGroupedInChunk(t *testing.T) {
+	t.Parallel()
 	processor := NewDocumentProcessor(10000, 0, false)
 
 	content := []byte(`package main
@@ -348,7 +361,7 @@ func C() int {
 `)
 
 	// Large chunk size should group all functions together
-	chunks, err := processor.Process("test.go", content)
+	chunks, err := processor.Process(t.Context(), "test.go", content)
 	require.NoError(t, err)
 	require.Len(t, chunks, 1, "Expected all small functions to be grouped in one chunk")
 

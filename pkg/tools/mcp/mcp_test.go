@@ -80,8 +80,8 @@ func newReconnectableMock() *reconnectableMockClient {
 
 func (m *reconnectableMockClient) Initialize(context.Context, *mcp.InitializeRequest) (*mcp.InitializeResult, error) {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.waitCh = make(chan struct{}) // fresh channel for each session
-	m.mu.Unlock()
 	return &mcp.InitializeResult{}, nil
 }
 
@@ -95,13 +95,13 @@ func (m *reconnectableMockClient) Wait() error {
 
 func (m *reconnectableMockClient) Close(context.Context) error {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	// Close the wait channel to unblock Wait().
 	select {
 	case <-m.waitCh:
 	default:
 		close(m.waitCh)
 	}
-	m.mu.Unlock()
 	return nil
 }
 
@@ -176,7 +176,7 @@ func TestToolsAndCallToolRoundTrip(t *testing.T) {
 					Name:      exposed[0].Name,
 					Arguments: `{}`,
 				},
-			})
+			}, tools.NopRuntime{})
 			require.NoError(t, err)
 			assert.Equal(t, tt.serverToolName, capturedName,
 				"callTool() must forward the original (unprefixed) tool name to the server")
@@ -259,7 +259,7 @@ func TestCallToolStripsToolsetNamePrefix(t *testing.T) {
 					Name:      tt.calledToolName,
 					Arguments: `{}`,
 				},
-			})
+			}, tools.NopRuntime{})
 
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantForwardName, capturedName)
@@ -315,7 +315,7 @@ func TestCallToolStripsNullArguments(t *testing.T) {
 					Name:      "test_tool",
 					Arguments: tt.arguments,
 				},
-			})
+			}, tools.NopRuntime{})
 
 			require.NoError(t, err)
 			assert.Equal(t, "ok", result.Output)
@@ -607,7 +607,7 @@ func TestCallToolRecoversFromErrSessionMissing(t *testing.T) {
 			Name:      "test_tool",
 			Arguments: `{"key": "value"}`,
 		},
-	})
+	}, tools.NopRuntime{})
 
 	require.NoError(t, err)
 	assert.Equal(t, "recovered", result.Output)

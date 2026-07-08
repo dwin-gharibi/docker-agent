@@ -1,0 +1,19 @@
+# yaml-language-server: $schema=../agent-schema.json
+
+# Requires CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN in the environment.
+# The account-scoped base URL is resolved from CLOUDFLARE_ACCOUNT_ID.
+models:
+  cloudflare_model:
+    provider: cloudflare-workers-ai
+    model: "@cf/meta/llama-3.1-8b-instruct"
+
+agents:
+  root:
+    model: cloudflare_model
+    description: Assistant using Cloudflare Workers AI
+    instruction: |
+      You are a helpful assistant.
+    toolsets:
+      - type: filesystem
+      - type: shell
+      - type: think

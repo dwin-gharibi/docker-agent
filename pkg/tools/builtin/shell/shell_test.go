@@ -2,6 +2,7 @@ package shell
 
 import (
 	"encoding/json"
+	"io"
 	"os"
 	"os/exec"
 	"runtime"
@@ -32,24 +33,26 @@ func TestNew(t *testing.T) {
 }
 
 func TestShellTool_HandlerEcho(t *testing.T) {
+	t.Parallel()
 	tool := New(nil, &config.RuntimeConfig{Config: config.Config{WorkingDir: t.TempDir()}})
 
 	result, err := tool.handler.RunShell(t.Context(), RunShellArgs{
 		Cmd: "echo 'hello world'",
 		Cwd: "",
-	})
+	}, tools.NopRuntime{})
 	require.NoError(t, err)
 	assert.Contains(t, result.Output, "hello world")
 }
 
 func TestShellTool_HandlerWithCwd(t *testing.T) {
+	t.Parallel()
 	tool := New(nil, &config.RuntimeConfig{Config: config.Config{WorkingDir: t.TempDir()}})
 	tmpDir := t.TempDir()
 
 	result, err := tool.handler.RunShell(t.Context(), RunShellArgs{
 		Cmd: "pwd",
 		Cwd: tmpDir,
-	})
+	}, tools.NopRuntime{})
 	require.NoError(t, err)
 	// The output might contain extra newlines or other characters,
 	// so we just check if it contains the temp dir path
@@ -114,59 +117,45 @@ func TestRunShellArgs_UnmarshalJSON_AcceptsCmdAndCommand(t *testing.T) {
 	}
 }
 
-func TestRunShellBackgroundArgs_UnmarshalJSON_AcceptsCmdAndCommand(t *testing.T) {
-	t.Parallel()
-
-	var viaCmd RunShellBackgroundArgs
-	require.NoError(t, json.Unmarshal([]byte(`{"cmd":"sleep 1","cwd":"/tmp"}`), &viaCmd))
-	assert.Equal(t, "sleep 1", viaCmd.Cmd)
-	assert.Equal(t, "/tmp", viaCmd.Cwd)
-
-	var viaCommand RunShellBackgroundArgs
-	require.NoError(t, json.Unmarshal([]byte(`{"command":"sleep 1"}`), &viaCommand))
-	assert.Equal(t, "sleep 1", viaCommand.Cmd)
-
-	// A blank "cmd" must not shadow a valid "command" alias.
-	var blankCmd RunShellBackgroundArgs
-	require.NoError(t, json.Unmarshal([]byte(`{"cmd":"   ","command":"sleep 1"}`), &blankCmd))
-	assert.Equal(t, "sleep 1", blankCmd.Cmd)
-}
-
 // Exercises the end-to-end dispatch path: a tool-call whose raw arguments
 // use "command" instead of "cmd" must execute normally rather than return
 // the missing-parameter error.
 func TestShellTool_HandlerAcceptsCommandAlias(t *testing.T) {
+	t.Parallel()
 	tool := New(nil, &config.RuntimeConfig{Config: config.Config{WorkingDir: t.TempDir()}})
 
 	var params RunShellArgs
 	require.NoError(t, json.Unmarshal([]byte(`{"command":"echo hello-from-alias"}`), &params))
 
-	result, err := tool.handler.RunShell(t.Context(), params)
+	result, err := tool.handler.RunShell(t.Context(), params, tools.NopRuntime{})
 	require.NoError(t, err)
 	assert.Contains(t, result.Output, "hello-from-alias")
 }
 
 func TestShellTool_HandlerMissingCmdReturnsActionableError(t *testing.T) {
+	t.Parallel()
 	tool := New(nil, &config.RuntimeConfig{Config: config.Config{WorkingDir: t.TempDir()}})
 
-	result, err := tool.handler.RunShell(t.Context(), RunShellArgs{})
+	result, err := tool.handler.RunShell(t.Context(), RunShellArgs{}, tools.NopRuntime{})
 	require.NoError(t, err)
 	assert.Contains(t, result.Output, `"cmd"`,
 		"error must name the expected parameter so the model can self-correct")
 }
 
 func TestShellTool_HandlerError(t *testing.T) {
+	t.Parallel()
 	tool := New(nil, &config.RuntimeConfig{Config: config.Config{WorkingDir: t.TempDir()}})
 
 	result, err := tool.handler.RunShell(t.Context(), RunShellArgs{
 		Cmd: "command_that_does_not_exist",
 		Cwd: "",
-	})
+	}, tools.NopRuntime{})
 	require.NoError(t, err, "Handler should not return an error")
 	assert.Contains(t, result.Output, "Error executing command")
 }
 
 func TestShellTool_OutputSchema(t *testing.T) {
+	t.Parallel()
 	tool := New(nil, &config.RuntimeConfig{Config: config.Config{WorkingDir: t.TempDir()}})
 
 	allTools, err := tool.Tools(t.Context())
@@ -179,6 +168,7 @@ func TestShellTool_OutputSchema(t *testing.T) {
 }
 
 func TestShellTool_ParametersAreObjects(t *testing.T) {
+	t.Parallel()
 	tool := New(nil, &config.RuntimeConfig{Config: config.Config{WorkingDir: t.TempDir()}})
 
 	allTools, err := tool.Tools(t.Context())
@@ -192,38 +182,14 @@ func TestShellTool_ParametersAreObjects(t *testing.T) {
 	}
 }
 
-// Minimal tests for background job features
-func TestShellTool_RunBackgroundJob(t *testing.T) {
+func TestShellTool_OnlyExposesShell(t *testing.T) {
+	t.Parallel()
 	tool := New(nil, &config.RuntimeConfig{Config: config.Config{WorkingDir: t.TempDir()}})
-	err := tool.Start(t.Context())
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		_ = tool.Stop(t.Context())
-	})
 
-	result, err := tool.handler.RunShellBackground(t.Context(), RunShellBackgroundArgs{Cmd: "echo test"})
+	allTools, err := tool.Tools(t.Context())
 	require.NoError(t, err)
-	assert.Contains(t, result.Output, "Background job started with ID:")
-}
-
-func TestShellTool_ListBackgroundJobs(t *testing.T) {
-	tool := New(nil, &config.RuntimeConfig{Config: config.Config{WorkingDir: t.TempDir()}})
-	err := tool.Start(t.Context())
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		_ = tool.Stop(t.Context())
-	})
-
-	// Start a background job first
-	_, err = tool.handler.RunShellBackground(t.Context(), RunShellBackgroundArgs{Cmd: "echo test"})
-	require.NoError(t, err)
-
-	// No need to wait - ListBackgroundJobs shows jobs regardless of status
-	listResult, err := tool.handler.ListBackgroundJobs(t.Context(), nil)
-
-	require.NoError(t, err)
-	assert.Contains(t, listResult.Output, "Background Jobs:")
-	assert.Contains(t, listResult.Output, "ID: job_")
+	require.Len(t, allTools, 1)
+	assert.Equal(t, ToolNameShell, allTools[0].Name)
 }
 
 func TestShellTool_Instructions(t *testing.T) {
@@ -233,8 +199,8 @@ func TestShellTool_Instructions(t *testing.T) {
 
 	instructions := tool.Instructions()
 
-	// Check that native instructions are returned
 	assert.Contains(t, instructions, "Shell Tools")
+	assert.NotContains(t, instructions, "run_background_job")
 }
 
 func TestResolveWorkDir(t *testing.T) {
@@ -265,6 +231,7 @@ func TestResolveWorkDir(t *testing.T) {
 }
 
 func TestShellTool_RelativeCwdResolvesAgainstWorkingDir(t *testing.T) {
+	t.Parallel()
 	// Create a directory structure: workingDir/subdir/
 	workingDir := t.TempDir()
 	subdir := workingDir + "/subdir"
@@ -275,7 +242,7 @@ func TestShellTool_RelativeCwdResolvesAgainstWorkingDir(t *testing.T) {
 	result, err := tool.handler.RunShell(t.Context(), RunShellArgs{
 		Cmd: "pwd",
 		Cwd: "subdir",
-	})
+	}, tools.NopRuntime{})
 	require.NoError(t, err)
 	assert.Contains(t, result.Output, subdir,
 		"relative cwd must resolve against the configured workingDir, not the process cwd")
@@ -292,6 +259,7 @@ func TestShellTool_RelativeCwdResolvesAgainstWorkingDir(t *testing.T) {
 // With the WaitDelay safeguard the tool must return within a small fraction
 // of the configured timeout.
 func TestShellTool_BackgroundedChildDoesNotBlockReturn(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX shell backgrounding semantics; skipped on Windows")
 	}
@@ -304,7 +272,7 @@ func TestShellTool_BackgroundedChildDoesNotBlockReturn(t *testing.T) {
 		// open for 30s. The tool must return as soon as the shell exits.
 		Cmd:     "sleep 30 &",
 		Timeout: 20,
-	})
+	}, tools.NopRuntime{})
 	elapsed := time.Since(start)
 
 	require.NoError(t, err)
@@ -318,6 +286,7 @@ func TestShellTool_BackgroundedChildDoesNotBlockReturn(t *testing.T) {
 // shell tool's process-group kill cannot reach it on timeout), cmd.WaitDelay
 // must still allow the tool call to return.
 func TestShellTool_DetachedBackgroundedChildDoesNotBlockReturn(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX shell backgrounding semantics; skipped on Windows")
 	}
@@ -338,7 +307,7 @@ func TestShellTool_DetachedBackgroundedChildDoesNotBlockReturn(t *testing.T) {
 			// it. Only cmd.WaitDelay can unblock Wait() here.
 			Cmd:     "setsid sleep 30 &",
 			Timeout: 20,
-		})
+		}, tools.NopRuntime{})
 	}()
 
 	select {
@@ -355,6 +324,7 @@ func TestShellTool_DetachedBackgroundedChildDoesNotBlockReturn(t *testing.T) {
 // the error path we take when cmd.Start() succeeded but a follow-up call
 // (e.g. createProcessGroup) failed.
 func TestReapSpawnedChild(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX-specific: relies on /bin/sh and ProcessState.Exited()")
 	}
@@ -377,14 +347,18 @@ func TestReapSpawnedChild(t *testing.T) {
 // TestReapSpawnedChild_HandlesAlreadyExited verifies that reaping a process
 // that has already exited is a no-op (does not block, does not panic).
 func TestReapSpawnedChild_HandlesAlreadyExited(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX-specific")
 	}
 
 	cmd := exec.CommandContext(t.Context(), "/bin/sh", "-c", "exit 0")
+	stdout, err := cmd.StdoutPipe()
+	require.NoError(t, err)
 	require.NoError(t, cmd.Start())
-	// Give the child a moment to exit on its own.
-	time.Sleep(50 * time.Millisecond)
+	// EOF on stdout means the child has exited (its fds are closed on exit).
+	_, err = io.ReadAll(stdout)
+	require.NoError(t, err)
 
 	done := make(chan struct{})
 	go func() {

@@ -2,12 +2,14 @@ package leantui
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 
 	"github.com/docker/docker-agent/pkg/app"
 	"github.com/docker/docker-agent/pkg/effort"
+	"github.com/docker/docker-agent/pkg/leantui/ui"
 	"github.com/docker/docker-agent/pkg/runtime"
 	"github.com/docker/docker-agent/pkg/session"
 	"github.com/docker/docker-agent/pkg/sessiontitle"
@@ -21,13 +23,17 @@ type cycleThinkingRuntime struct {
 	level      effort.Level
 	err        error
 	cycleCalls int
+	setCalls   int
+	setLevel   effort.Level
+	steered    []runtime.QueuedMessage
+	steerErr   error
 }
 
 func (r *cycleThinkingRuntime) CurrentAgentInfo(context.Context) runtime.CurrentAgentInfo {
 	return runtime.CurrentAgentInfo{}
 }
-func (r *cycleThinkingRuntime) CurrentAgentName() string     { return "coder" }
-func (r *cycleThinkingRuntime) SetCurrentAgent(string) error { return nil }
+func (r *cycleThinkingRuntime) CurrentAgentName(context.Context) string       { return "coder" }
+func (r *cycleThinkingRuntime) SetCurrentAgent(context.Context, string) error { return nil }
 func (r *cycleThinkingRuntime) CurrentAgentTools(context.Context) ([]tools.Tool, error) {
 	return nil, nil
 }
@@ -77,12 +83,18 @@ func (r *cycleThinkingRuntime) UpdateSessionTitle(_ context.Context, sess *sessi
 	sess.Title = title
 	return nil
 }
-func (r *cycleThinkingRuntime) TitleGenerator() *sessiontitle.Generator { return nil }
-func (r *cycleThinkingRuntime) Close() error                            { return nil }
-func (r *cycleThinkingRuntime) Stop()                                   {}
-func (r *cycleThinkingRuntime) Steer(runtime.QueuedMessage) error       { return nil }
-func (r *cycleThinkingRuntime) FollowUp(runtime.QueuedMessage) error    { return nil }
-func (r *cycleThinkingRuntime) QueueStatus() runtime.QueueStatus        { return runtime.QueueStatus{} }
+func (r *cycleThinkingRuntime) TitleGenerator(context.Context) *sessiontitle.Generator { return nil }
+func (r *cycleThinkingRuntime) Close() error                                           { return nil }
+func (r *cycleThinkingRuntime) Stop()                                                  {}
+func (r *cycleThinkingRuntime) Steer(_ context.Context, msg runtime.QueuedMessage) error {
+	if r.steerErr != nil {
+		return r.steerErr
+	}
+	r.steered = append(r.steered, msg)
+	return nil
+}
+func (r *cycleThinkingRuntime) FollowUp(context.Context, runtime.QueuedMessage) error { return nil }
+func (r *cycleThinkingRuntime) QueueStatus() runtime.QueueStatus                      { return runtime.QueueStatus{} }
 
 func (r *cycleThinkingRuntime) TogglePause(context.Context) (bool, error) {
 	return false, nil
@@ -95,32 +107,114 @@ func (r *cycleThinkingRuntime) CycleAgentThinkingLevel(context.Context, string) 
 	}
 	return r.level, nil
 }
+
+func (r *cycleThinkingRuntime) SetAgentThinkingLevel(_ context.Context, _ string, level effort.Level) (effort.Level, error) {
+	r.setCalls++
+	if r.err != nil {
+		return "", r.err
+	}
+	r.setLevel = level
+	return level, nil
+}
 func (r *cycleThinkingRuntime) AvailableModels(context.Context) []runtime.ModelChoice { return nil }
 func (r *cycleThinkingRuntime) SupportsModelSwitching() bool                          { return r.supports }
 func (r *cycleThinkingRuntime) OnToolsChanged(func(runtime.Event))                    {}
+func (r *cycleThinkingRuntime) OnBackgroundEvent(func(runtime.Event))                 {}
 
 var _ runtime.Runtime = (*cycleThinkingRuntime)(nil)
 
 func TestShiftTabCyclesThinkingLevel(t *testing.T) {
+	t.Parallel()
 	rt := &cycleThinkingRuntime{supports: true, level: effort.High}
 	m := bareModel(24)
 	m.app = app.New(t.Context(), rt, session.New())
 
-	m.handleKey(t.Context(), key{typ: keyShiftTab})
+	m.handleKey(t.Context(), ui.Key{Typ: ui.KeyShiftTab})
 
 	assert.Equal(t, 1, rt.cycleCalls)
-	assert.Equal(t, "high", m.status.thinking)
-	assert.Len(t, m.blocks, 1)
+	assert.Equal(t, "high", m.status.Thinking)
+	assert.Zero(t, m.screen.Transcript.BlockCount())
 }
 
 func TestShiftTabReportsUnsupportedThinkingLevel(t *testing.T) {
+	t.Parallel()
 	rt := &cycleThinkingRuntime{supports: true, err: runtime.ErrUnsupported}
 	m := bareModel(24)
 	m.app = app.New(t.Context(), rt, session.New())
 
-	m.handleKey(t.Context(), key{typ: keyShiftTab})
+	m.handleKey(t.Context(), ui.Key{Typ: ui.KeyShiftTab})
 
 	assert.Equal(t, 1, rt.cycleCalls)
-	assert.Empty(t, m.status.thinking)
-	assert.Len(t, m.blocks, 1)
+	assert.Empty(t, m.status.Thinking)
+	assert.Equal(t, 1, m.screen.Transcript.BlockCount())
+}
+
+func TestEffortCommandSetsThinkingLevel(t *testing.T) {
+	t.Parallel()
+	rt := &cycleThinkingRuntime{supports: true}
+	m := bareModel(24)
+	m.app = app.New(t.Context(), rt, session.New())
+
+	m.handleSetThinkingLevel(t.Context(), "high")
+
+	assert.Equal(t, 1, rt.setCalls)
+	assert.Equal(t, effort.High, rt.setLevel)
+	assert.Equal(t, "high", m.status.Thinking)
+}
+
+func TestEffortCommandRejectsUnknownLevel(t *testing.T) {
+	t.Parallel()
+	rt := &cycleThinkingRuntime{supports: true}
+	m := bareModel(24)
+	m.app = app.New(t.Context(), rt, session.New())
+
+	m.handleSetThinkingLevel(t.Context(), "turbo")
+
+	assert.Zero(t, rt.setCalls)
+	assert.Empty(t, m.status.Thinking)
+	assert.Equal(t, 1, m.screen.Transcript.BlockCount())
+}
+
+func TestEditorSubmitWhileBusySteersAndRendersAtStreamEnd(t *testing.T) {
+	t.Parallel()
+	rt := &cycleThinkingRuntime{}
+	m := bareModel(24)
+	m.app = app.New(t.Context(), rt, session.New())
+	m.busy = true
+	m.screen.Transcript.AppendAssistant("assistant is still streaming")
+	m.screen.Editor.SetText("turn left")
+
+	m.handleEnter(t.Context())
+
+	if assert.Len(t, rt.steered, 1) {
+		assert.Equal(t, "turn left", rt.steered[0].Content)
+	}
+	assert.Empty(t, m.queue)
+	assert.Len(t, m.pendingUsers, 1)
+
+	joined := strings.Join(m.screen.Transcript.Lines(80, 0, true, m.sessionState, m.pendingUsers), "\n")
+	assistantAt := strings.Index(joined, "assistant is still streaming")
+	steerAt := strings.Index(joined, "turn left")
+	assert.NotEqual(t, -1, assistantAt)
+	assert.NotEqual(t, -1, steerAt)
+	assert.Less(t, assistantAt, steerAt)
+}
+
+func TestSteeredUserEventConfirmsPendingAfterAssistant(t *testing.T) {
+	t.Parallel()
+	m := bareModel(24)
+	m.busy = true
+	m.screen.Transcript.AppendAssistant("assistant response")
+	m.addPendingUser("/change", "resolved steering prompt", ui.PendingUserSteer)
+
+	m.handleEvent(t.Context(), runtime.UserMessage("resolved steering prompt\n", "session", nil, 1))
+
+	assert.Empty(t, m.pendingUsers)
+	assert.Equal(t, 2, m.screen.Transcript.BlockCount())
+	joined := strings.Join(m.screen.Transcript.Lines(80, 0, true, m.sessionState, nil), "\n")
+	assistantAt := strings.Index(joined, "assistant response")
+	steerAt := strings.Index(joined, "/change")
+	assert.NotEqual(t, -1, assistantAt)
+	assert.NotEqual(t, -1, steerAt)
+	assert.Less(t, assistantAt, steerAt)
 }

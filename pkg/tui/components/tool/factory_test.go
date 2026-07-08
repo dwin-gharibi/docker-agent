@@ -16,6 +16,7 @@ import (
 
 // withCleanToolRegistry snapshots the package-global custom renderer registry and
 // restores it when the test finishes, so Register calls don't leak across tests.
+// Tests using it must not run in parallel: they would race on the shared registry.
 func withCleanToolRegistry(t *testing.T) {
 	t.Helper()
 	customMu.Lock()
@@ -24,8 +25,8 @@ func withCleanToolRegistry(t *testing.T) {
 	customMu.Unlock()
 	t.Cleanup(func() {
 		customMu.Lock()
+		defer customMu.Unlock()
 		custom = saved
-		customMu.Unlock()
 	})
 }
 

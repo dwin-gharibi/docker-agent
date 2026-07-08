@@ -17,19 +17,39 @@ import (
 	"github.com/docker/docker-agent/pkg/tools"
 )
 
-// nowFn returns the current time. Indirected through a package-level variable
-// so that tests can install a deterministic clock via setNowForTest.
-var nowFn = time.Now
-
-// newIDFn returns a fresh session ID. Indirected through a package-level
-// variable so that tests can install a deterministic ID generator via
-// setIDForTest.
-var newIDFn = func() string { return uuid.New().String() }
+// defaultNewID returns a fresh random session ID.
+func defaultNewID() string { return uuid.New().String() }
 
 const (
 	// toolContentPlaceholder is the text used to replace truncated tool content
 	toolContentPlaceholder = "[content truncated]"
 )
+
+// SafetyPolicy is the per-session safety preference. It is data only:
+// the runtime forwards it to hooks via [hooks.Input.SafetyPolicy] and
+// classifiers (e.g. safer_shell) adapt on it. Empty ⇒ derive from
+// ToolsApproved (true ⇒ unsafe, false ⇒ strict).
+type SafetyPolicy string
+
+const (
+	// SafetyPolicyUnsafe: --yolo / ToolsApproved=true equivalent.
+	// Classifiers stay silent, tool calls auto-approve.
+	SafetyPolicyUnsafe SafetyPolicy = "unsafe"
+	// SafetyPolicySafer: auto-approve except classifier-flagged
+	// destructive calls (blast_radius low/medium/high).
+	SafetyPolicySafer SafetyPolicy = "safer"
+	// SafetyPolicyStrict: today's no-yolo CLI default — prompt for
+	// anything not auto-approved by a checker rule.
+	SafetyPolicyStrict SafetyPolicy = "strict"
+)
+
+func (p SafetyPolicy) IsValid() bool {
+	switch p {
+	case "", SafetyPolicyUnsafe, SafetyPolicySafer, SafetyPolicyStrict:
+		return true
+	}
+	return false
+}
 
 // Item represents a message, a sub-session, a summary, or a recorded error.
 type Item struct {
@@ -94,6 +114,16 @@ type Session struct {
 	// mu protects Messages from concurrent read/write access.
 	mu sync.RWMutex `json:"-"`
 
+	// now and newID are per-session sources of time and identity. They are
+	// indirected (rather than calling time.Now/uuid.New directly) so that
+	// tests can inject a deterministic clock and ID generator via WithClock
+	// and WithIDGen without mutating any process-global state — which keeps
+	// such tests safe to run with t.Parallel(). Sessions created outside New
+	// (e.g. via JSON deserialization or struct literals) leave these nil; use
+	// the now() and newID() accessors which fall back to real implementations.
+	clock func() time.Time `json:"-"`
+	idgen func() string    `json:"-"`
+
 	// ID is the unique identifier for the session
 	ID string `json:"id"`
 
@@ -117,8 +147,13 @@ type Session struct {
 	// CreatedAt is the time the session was created
 	CreatedAt time.Time `json:"created_at"`
 
-	// ToolsApproved is a flag to indicate if the tools have been approved
+	// ToolsApproved is the legacy --yolo signal. New code should
+	// prefer SafetyPolicy; option setters keep the two in sync.
 	ToolsApproved bool `json:"tools_approved"`
+
+	// SafetyPolicy is the per-session safety preference. See the
+	// [SafetyPolicy] type doc for the three modes and empty-value semantics.
+	SafetyPolicy SafetyPolicy `json:"safety_policy,omitempty"`
 
 	// NonInteractive indicates the session is running in a non-interactive context
 	// (e.g. MCP server, A2A adapter, evaluation framework) where there is no user
@@ -239,7 +274,7 @@ type PermissionsConfig struct {
 type Message struct {
 	// ID is the database ID of the message (used for persistence tracking)
 	ID        int64        `json:"-"`
-	AgentName string       `json:"agentName"` // TODO: rename to agent_name
+	AgentName string       `json:"agent_name"`
 	Message   chat.Message `json:"message"`
 	// Implicit is an optional field to indicate if the message shouldn't be shown to the user. It's needed for special  situations
 	// like when an agent transfers a task to another agent - new session is created with a default user message, but this shouldn't be shown to the user.
@@ -247,19 +282,51 @@ type Message struct {
 	Implicit bool `json:"implicit,omitempty"`
 }
 
+// UnmarshalJSON accepts both the current "agent_name" key and the legacy
+// "agentName" key emitted by exports prior to the rename. When "agent_name"
+// is absent or empty, a non-empty legacy value wins; absent and empty are
+// deliberately not distinguished since no producer emits both keys.
+func (m *Message) UnmarshalJSON(data []byte) error {
+	type message Message // alias to avoid infinite recursion
+	aux := struct {
+		*message
+
+		LegacyAgentName string `json:"agentName"`
+	}{message: (*message)(m)}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	if m.AgentName == "" {
+		m.AgentName = aux.LegacyAgentName
+	}
+	return nil
+}
+
 func ImplicitUserMessage(content string) *Message {
-	msg := UserMessage(content)
+	return ImplicitUserMessageAt(time.Now(), content)
+}
+
+// ImplicitUserMessageAt is like ImplicitUserMessage but stamps the message with
+// an explicit creation time, letting callers (and tests) avoid the wall clock.
+func ImplicitUserMessageAt(createdAt time.Time, content string) *Message {
+	msg := UserMessageAt(createdAt, content)
 	msg.Implicit = true
 	return msg
 }
 
 func UserMessage(content string, multiContent ...chat.MessagePart) *Message {
+	return UserMessageAt(time.Now(), content, multiContent...)
+}
+
+// UserMessageAt is like UserMessage but stamps the message with an explicit
+// creation time, letting callers (and tests) avoid the wall clock.
+func UserMessageAt(createdAt time.Time, content string, multiContent ...chat.MessagePart) *Message {
 	return &Message{
 		Message: chat.Message{
 			Role:         chat.MessageRoleUser,
 			Content:      content,
 			MultiContent: multiContent,
-			CreatedAt:    nowFn().Format(time.RFC3339),
+			CreatedAt:    createdAt.Format(time.RFC3339),
 		},
 	}
 }
@@ -272,11 +339,17 @@ func NewAgentMessage(agentName string, message *chat.Message) *Message {
 }
 
 func SystemMessage(content string) *Message {
+	return SystemMessageAt(time.Now(), content)
+}
+
+// SystemMessageAt is like SystemMessage but stamps the message with an explicit
+// creation time, letting callers (and tests) avoid the wall clock.
+func SystemMessageAt(createdAt time.Time, content string) *Message {
 	return &Message{
 		Message: chat.Message{
 			Role:      chat.MessageRoleSystem,
 			Content:   content,
-			CreatedAt: nowFn().Format(time.RFC3339),
+			CreatedAt: createdAt.Format(time.RFC3339),
 		},
 	}
 }
@@ -491,8 +564,8 @@ func cloneSchemaValue(v any) any {
 // AddMessage adds a message to the session
 func (s *Session) AddMessage(msg *Message) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.Messages = append(s.Messages, NewMessageItem(msg))
-	s.mu.Unlock()
 }
 
 // SetUsage records cumulative input/output token counts under s.mu.
@@ -500,9 +573,9 @@ func (s *Session) AddMessage(msg *Message) {
 // these fields without it.
 func (s *Session) SetUsage(input, output int64) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.InputTokens = input
 	s.OutputTokens = output
-	s.mu.Unlock()
 }
 
 // Usage returns a consistent snapshot of the cumulative input/output
@@ -519,25 +592,25 @@ func (s *Session) Usage() (input, output int64) {
 // observe the new tokens without the matching summary item.
 func (s *Session) ApplyCompaction(inputTokens, outputTokens int64, item Item) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.InputTokens = inputTokens
 	s.OutputTokens = outputTokens
 	s.Messages = append(s.Messages, item)
-	s.mu.Unlock()
 }
 
 // AddSubSession adds a sub-session to the session
 func (s *Session) AddSubSession(subSession *Session) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.Messages = append(s.Messages, NewSubSessionItem(subSession))
-	s.mu.Unlock()
 }
 
 // AddError appends a recorded error to the session so it survives reload and
 // JSON export.
 func (s *Session) AddError(e *Error) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.Messages = append(s.Messages, NewErrorItem(e))
-	s.mu.Unlock()
 }
 
 // Duration calculates the duration of the session from message timestamps.
@@ -684,6 +757,21 @@ func (s *Session) AddAttachedFile(absPath string) {
 	s.AttachedFiles = append(s.AttachedFiles, absPath)
 }
 
+// RemoveAttachedFile removes absPath from the session's attached files and
+// reports whether it was present. Removing a path only stops it from being
+// propagated to future sub-agent delegations and skill prompts; file content
+// already inlined in past messages is untouched.
+func (s *Session) RemoveAttachedFile(absPath string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	i := slices.Index(s.AttachedFiles, absPath)
+	if i < 0 {
+		return false
+	}
+	s.AttachedFiles = slices.Delete(s.AttachedFiles, i, i+1)
+	return true
+}
+
 // AttachedFilesSnapshot returns a copy of the session's attached file paths.
 // Callers may freely mutate the returned slice without affecting the session.
 func (s *Session) AttachedFilesSnapshot() []string {
@@ -696,19 +784,19 @@ type Opt func(s *Session)
 
 func WithUserMessage(content string) Opt {
 	return func(s *Session) {
-		s.AddMessage(UserMessage(content))
+		s.AddMessage(UserMessageAt(s.now(), content))
 	}
 }
 
 func WithImplicitUserMessage(content string) Opt {
 	return func(s *Session) {
-		s.AddMessage(ImplicitUserMessage(content))
+		s.AddMessage(ImplicitUserMessageAt(s.now(), content))
 	}
 }
 
 func WithSystemMessage(content string) Opt {
 	return func(s *Session) {
-		s.AddMessage(SystemMessage(content))
+		s.AddMessage(SystemMessageAt(s.now(), content))
 	}
 }
 
@@ -755,9 +843,28 @@ func WithMessages(messages []Item) Opt {
 	}
 }
 
+// WithToolsApproved is the legacy --yolo setter. Prefer
+// [WithSafetyPolicy]. With toolsApproved=true and no explicit
+// SafetyPolicy, pins the policy to [SafetyPolicyUnsafe].
 func WithToolsApproved(toolsApproved bool) Opt {
 	return func(s *Session) {
 		s.ToolsApproved = toolsApproved
+		if toolsApproved && s.SafetyPolicy == "" {
+			s.SafetyPolicy = SafetyPolicyUnsafe
+		}
+	}
+}
+
+// WithSafetyPolicy sets the session's safety preference.
+// [SafetyPolicyUnsafe] also flips ToolsApproved=true so legacy branches
+// on ToolsApproved keep working. The other modes leave ToolsApproved
+// alone — set both if you want auto-approve + selective gating.
+func WithSafetyPolicy(policy SafetyPolicy) Opt {
+	return func(s *Session) {
+		s.SafetyPolicy = policy
+		if policy == SafetyPolicyUnsafe {
+			s.ToolsApproved = true
+		}
 	}
 }
 
@@ -806,6 +913,28 @@ func WithParentID(parentID string) Opt {
 func WithID(id string) Opt {
 	return func(s *Session) {
 		s.ID = id
+	}
+}
+
+// WithClock injects the time source used for the session's CreatedAt, for
+// timestamping messages it generates (summaries, compaction input), and for
+// messages added through WithUserMessage/WithSystemMessage/
+// WithImplicitUserMessage. Because those message options read the clock when
+// they run, WithClock must precede them in the option list (the natural
+// ordering). Primarily for tests that need a deterministic clock; production
+// code leaves it unset and falls back to time.Now.
+func WithClock(now func() time.Time) Opt {
+	return func(s *Session) {
+		s.clock = now
+	}
+}
+
+// WithIDGen injects the generator used to mint the session ID when no explicit
+// ID is provided. Primarily for tests that need deterministic IDs; production
+// code leaves it unset and falls back to a random UUID.
+func WithIDGen(gen func() string) Opt {
+	return func(s *Session) {
+		s.idgen = gen
 	}
 }
 
@@ -904,17 +1033,41 @@ func (s *Session) OwnCost() float64 {
 	return cost
 }
 
+// now returns the session's current time, falling back to time.Now for
+// sessions created without a clock (e.g. JSON deserialization).
+func (s *Session) now() time.Time {
+	if s.clock != nil {
+		return s.clock()
+	}
+	return time.Now()
+}
+
+// newID returns a fresh session ID using the session's generator, falling back
+// to a random UUID for sessions created without one.
+func (s *Session) newID() string {
+	if s.idgen != nil {
+		return s.idgen()
+	}
+	return defaultNewID()
+}
+
 // New creates a new agent session
 func New(opts ...Opt) *Session {
 	s := &Session{
-		ID:              newIDFn(),
-		CreatedAt:       nowFn(),
 		SendUserMessage: true,
 	}
 
 	for _, opt := range opts {
 		opt(s)
 	}
+
+	// Generate the ID and creation time after options run so that
+	// WithClock/WithIDGen (and WithID) can influence them. WithID short-
+	// circuits the generator when an explicit ID was provided.
+	if s.ID == "" {
+		s.ID = s.newID()
+	}
+	s.CreatedAt = s.now()
 
 	slog.Debug("Creating new session", "session_id", s.ID)
 	return s
@@ -1005,6 +1158,32 @@ func buildInvariantSystemMessages(a *agent.Agent) []chat.Message {
 	return messages
 }
 
+// summaryMessagePrefix prefixes the synthetic user message that carries a
+// compaction summary into the prompt. Shared by buildSessionSummaryMessages
+// and CompactionInput; exposed to callers via SummaryMessageContent.
+const summaryMessagePrefix = "Session Summary: "
+
+// SummaryMessageContent returns the content of the synthetic user message
+// that GetMessages emits to carry a compaction summary into the prompt.
+// Callers that need to recognize that message in GetMessages output (e.g.
+// the runtime's context-window breakdown) match against this exact string
+// instead of duplicating the prefix.
+func SummaryMessageContent(summary string) string {
+	return summaryMessagePrefix + summary
+}
+
+// LastSummary returns the most recent compaction summary stored in the
+// session history, or "" when the session has never been compacted.
+func (s *Session) LastSummary() string {
+	items := s.snapshotItems()
+	for i := range slices.Backward(items) {
+		if items[i].Summary != "" {
+			return items[i].Summary
+		}
+	}
+	return ""
+}
+
 // buildSessionSummaryMessages builds system messages containing the session summary
 // if one exists. Session summaries are context-specific per session and thus should not have a checkpoint (they will be cached alongside the first user message anyway)
 //
@@ -1013,7 +1192,7 @@ func buildInvariantSystemMessages(a *agent.Agent) []chat.Message {
 // first kept message so that recent context is preserved after compaction.
 // Otherwise it is lastSummaryIndex+1 (i.e. right after the summary item), or
 // 0 when there is no summary.
-func buildSessionSummaryMessages(items []Item) ([]chat.Message, int) {
+func (s *Session) buildSessionSummaryMessages(items []Item) ([]chat.Message, int) {
 	var messages []chat.Message
 	// Find the last summary index to determine where conversation messages start
 	// and to include the summary in session summary messages
@@ -1028,8 +1207,8 @@ func buildSessionSummaryMessages(items []Item) ([]chat.Message, int) {
 	if lastSummaryIndex >= 0 && lastSummaryIndex < len(items) {
 		messages = append(messages, chat.Message{
 			Role:      chat.MessageRoleUser,
-			Content:   "Session Summary: " + items[lastSummaryIndex].Summary,
-			CreatedAt: nowFn().Format(time.RFC3339),
+			Content:   SummaryMessageContent(items[lastSummaryIndex].Summary),
+			CreatedAt: s.now().Format(time.RFC3339),
 		})
 	}
 
@@ -1093,8 +1272,8 @@ func (s *Session) CompactionInput() ([]chat.Message, []int) {
 	if lastSummaryIndex >= 0 {
 		messages = append(messages, chat.Message{
 			Role:      chat.MessageRoleUser,
-			Content:   "Session Summary: " + items[lastSummaryIndex].Summary,
-			CreatedAt: nowFn().Format(time.RFC3339),
+			Content:   SummaryMessageContent(items[lastSummaryIndex].Summary),
+			CreatedAt: s.now().Format(time.RFC3339),
 		})
 		// The synthetic message stands in for the prior summary item;
 		// when this index lands inside the kept tail we want the
@@ -1137,7 +1316,7 @@ func (s *Session) GetMessages(a *agent.Agent, extraSystemMessages ...chat.Messag
 	items := s.snapshotItems()
 
 	// Build session summary messages (vary per session)
-	summaryMessages, startIndex := buildSessionSummaryMessages(items)
+	summaryMessages, startIndex := s.buildSessionSummaryMessages(items)
 
 	var messages []chat.Message
 	messages = append(messages, invariantMessages...)

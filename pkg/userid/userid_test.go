@@ -8,15 +8,15 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/docker/docker-agent/pkg/paths"
 )
 
 func TestGet_GeneratesAndPersistsUUID(t *testing.T) {
-	dir := t.TempDir()
-	useConfigDir(t, dir)
+	t.Parallel()
 
-	id := Get()
+	dir := t.TempDir()
+	r := New(dir)
+
+	id := r.Get()
 
 	require.NotEmpty(t, id)
 	_, err := uuid.Parse(id)
@@ -28,69 +28,52 @@ func TestGet_GeneratesAndPersistsUUID(t *testing.T) {
 }
 
 func TestGet_ReturnsExistingUUID(t *testing.T) {
-	dir := t.TempDir()
-	useConfigDir(t, dir)
+	t.Parallel()
 
+	dir := t.TempDir()
 	const stored = "11111111-2222-3333-4444-555555555555"
 	require.NoError(t, os.WriteFile(filepath.Join(dir, fileName), []byte(stored+"\n"), 0o600))
 
-	assert.Equal(t, stored, Get(), "Get must return the persisted UUID, trimmed")
+	assert.Equal(t, stored, New(dir).Get(), "Get must return the persisted UUID, trimmed")
 }
 
 func TestGet_RegeneratesOnEmptyFile(t *testing.T) {
-	dir := t.TempDir()
-	useConfigDir(t, dir)
+	t.Parallel()
 
+	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, fileName), []byte("   \n"), 0o600))
 
-	id := Get()
+	id := New(dir).Get()
 	require.NotEmpty(t, id)
 	_, err := uuid.Parse(id)
 	require.NoError(t, err, "Get must regenerate when the existing file is blank")
 }
 
 func TestGet_CachesAcrossCalls(t *testing.T) {
-	dir := t.TempDir()
-	useConfigDir(t, dir)
+	t.Parallel()
 
-	first := Get()
+	dir := t.TempDir()
+	r := New(dir)
+
+	first := r.Get()
 
 	// Mutating the file on disk after the first call must not change
 	// the value returned by subsequent calls (it is served from the
 	// in-memory cache).
 	require.NoError(t, os.WriteFile(filepath.Join(dir, fileName), []byte("changed-on-disk"), 0o600))
 
-	assert.Equal(t, first, Get(), "Get must return the cached value on subsequent calls")
-}
-
-// useConfigDir points paths.GetConfigDir at dir for the duration of the
-// test and resets the in-memory cache so [Get] is forced to re-read
-// from disk. The override is removed and the cache is cleared on
-// cleanup so subsequent tests start fresh.
-//
-// These tests intentionally do not call [t.Parallel] because they
-// share package-level mutable state (the cached UUID and the global
-// config-dir override).
-func useConfigDir(t *testing.T, dir string) {
-	t.Helper()
-
-	paths.SetConfigDir(dir)
-	ResetForTests()
-
-	t.Cleanup(func() {
-		paths.SetConfigDir("")
-		ResetForTests()
-	})
+	assert.Equal(t, first, r.Get(), "Get must return the cached value on subsequent calls")
 }
 
 func TestGet_RegeneratesOnInvalidUUID(t *testing.T) {
-	dir := t.TempDir()
-	useConfigDir(t, dir)
+	t.Parallel()
 
+	dir := t.TempDir()
 	// Write an invalid UUID to the file (e.g., manually corrupted)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, fileName), []byte("not-a-valid-uuid"), 0o600))
 
-	id := Get()
+	r := New(dir)
+	id := r.Get()
 	require.NotEmpty(t, id)
 	_, err := uuid.Parse(id)
 	require.NoError(t, err, "Get must regenerate when the existing file contains an invalid UUID")

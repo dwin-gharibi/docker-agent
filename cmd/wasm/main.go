@@ -202,8 +202,8 @@ func chatJS(_ js.Value, args []js.Value) any {
 		go func() {
 			defer func() {
 				abortState.mu.Lock()
+				defer abortState.mu.Unlock()
 				cancel()
-				abortState.mu.Unlock()
 			}()
 
 			result, err := runChat(ctx, yamlStr, agentName, envMap, messages, onEvent)

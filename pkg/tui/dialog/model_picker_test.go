@@ -8,7 +8,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/docker/docker-agent/pkg/model/provider"
 	"github.com/docker/docker-agent/pkg/runtime"
 )
 
@@ -302,16 +301,14 @@ func TestValidateCustomModelSpec(t *testing.T) {
 			errMsg:  "model name cannot be empty",
 		},
 		{
-			name:    "unknown provider",
+			name:    "custom provider is allowed syntactically",
 			spec:    "foobar/some-model",
-			wantErr: true,
-			errMsg:  "unknown provider 'foobar'",
+			wantErr: false,
 		},
 		{
-			name:    "unknown provider in alloy",
+			name:    "custom provider in alloy is allowed syntactically",
 			spec:    "openai/gpt-4o,unknown/model",
-			wantErr: true,
-			errMsg:  "unknown provider 'unknown'",
+			wantErr: false,
 		},
 		{
 			name:    "case insensitive provider",
@@ -344,24 +341,6 @@ func TestValidateCustomModelSpec(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestIsValidProvider(t *testing.T) {
-	t.Parallel()
-
-	// All known providers (core + aliases) should be valid
-	for _, name := range provider.AllProviders() {
-		assert.True(t, provider.IsKnownProvider(name), "provider %s should be known", name)
-	}
-
-	// Case-insensitive
-	assert.True(t, provider.IsKnownProvider("OPENAI"))
-	assert.True(t, provider.IsKnownProvider("OpenAI"))
-
-	// Unknown providers
-	assert.False(t, provider.IsKnownProvider("unknown"))
-	assert.False(t, provider.IsKnownProvider("foo"))
-	assert.False(t, provider.IsKnownProvider(""))
 }
 
 func TestModelPickerSortingWithCatalog(t *testing.T) {

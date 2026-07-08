@@ -12,6 +12,8 @@ import (
 )
 
 func TestBuildTaskSystemMessage(t *testing.T) {
+	t.Parallel()
+
 	t.Run("with expected output", func(t *testing.T) {
 		msg := buildTaskSystemMessage("do the thing", "a result", nil)
 		assert.Contains(t, msg, "<task>\ndo the thing\n</task>")
@@ -34,6 +36,8 @@ func TestBuildTaskSystemMessage(t *testing.T) {
 }
 
 func TestAgentNames(t *testing.T) {
+	t.Parallel()
+
 	agents := []*agent.Agent{
 		agent.New("alpha", ""),
 		agent.New("beta", ""),
@@ -43,6 +47,8 @@ func TestAgentNames(t *testing.T) {
 }
 
 func TestValidateAgentInList(t *testing.T) {
+	t.Parallel()
+
 	agents := []*agent.Agent{
 		agent.New("sub1", ""),
 		agent.New("sub2", ""),
@@ -70,6 +76,8 @@ func TestValidateAgentInList(t *testing.T) {
 }
 
 func TestNewSubSession(t *testing.T) {
+	t.Parallel()
+
 	parent := session.New(session.WithUserMessage("hello"))
 	childAgent := agent.New("worker", "a worker agent",
 		agent.WithMaxIterations(10),
@@ -151,6 +159,8 @@ func TestNewSubSession(t *testing.T) {
 }
 
 func TestSubSessionConfig_DefaultValues(t *testing.T) {
+	t.Parallel()
+
 	// Verify zero-value SubSessionConfig produces a valid session
 	parent := session.New(session.WithUserMessage("hello"))
 	childAgent := agent.New("worker", "")
@@ -169,6 +179,8 @@ func TestSubSessionConfig_DefaultValues(t *testing.T) {
 }
 
 func TestSubSessionConfig_InheritsAgentLimits(t *testing.T) {
+	t.Parallel()
+
 	parent := session.New(session.WithUserMessage("hello"))
 
 	t.Run("with custom limits", func(t *testing.T) {
@@ -204,6 +216,8 @@ func TestSubSessionConfig_InheritsAgentLimits(t *testing.T) {
 }
 
 func TestSubSessionInheritsAttachedFiles(t *testing.T) {
+	t.Parallel()
+
 	parent := session.New(session.WithUserMessage("hello"))
 	parent.AddAttachedFile("/abs/foo.go")
 	parent.AddAttachedFile("/abs/bar.go")
@@ -233,6 +247,8 @@ func TestSubSessionInheritsAttachedFiles(t *testing.T) {
 }
 
 func TestSubSessionWithoutAttachedFilesOmitsBlock(t *testing.T) {
+	t.Parallel()
+
 	parent := session.New(session.WithUserMessage("hello"))
 	childAgent := agent.New("worker", "")
 	cfg := SubSessionConfig{

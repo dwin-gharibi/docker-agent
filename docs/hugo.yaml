@@ -1,0 +1,79 @@
+# Hugo configuration for https://docker.github.io/docker-agent/
+#
+# The same Markdown source is mounted on docs.docker.com by the
+# docker/docs Hugo module (pinned to a release tag), while this site
+# builds from main as the edge/preview docs (issue #3371). Content
+# sections are mounted explicitly below so site tooling (layouts,
+# css, js) never leaks into either build.
+
+baseURL: https://docker.github.io/docker-agent/
+title: Docker Agent
+
+# Section, taxonomy and feed pages were never part of the Jekyll site;
+# section _index.md files exist for the docs.docker.com mount only. The
+# standalone 404 kind is disabled because 404.md is a content page
+# emitted at /404.html, which is where GitHub Pages looks for it.
+disableKinds: [section, taxonomy, term, rss, sitemap, "404"]
+
+params:
+  tagline: Run AI agents like containers.
+  description: Run AI agents from a YAML file. Define them once, share them through any OCI registry, and run them anywhere — by Docker.
+
+# Fail the build when a relative .md link doesn't resolve, matching
+# the docker/docs build so link breakage is caught here first.
+refLinksErrorLevel: ERROR
+
+# aliases: front matter values are docs.docker.com redirect paths from
+# the pre-mount hand-authored pages; they are meaningless on github.io
+# (Jekyll ignored them too).
+disableAliases: true
+
+markup:
+  goldmark:
+    extensions:
+      # Match docker/docs so both surfaces render the same characters.
+      typographer: false
+    renderer:
+      # Content pages use inline HTML (<kbd>, landing-page grids).
+      unsafe: true
+  highlight:
+    # Emit Pygments-style classes; css/style.css owns the token colors.
+    noClasses: false
+
+module:
+  mounts:
+    # Content sections — the same directories docker/docs mounts.
+    - source: getting-started
+      target: content/getting-started
+    - source: concepts
+      target: content/concepts
+    - source: configuration
+      target: content/configuration
+    - source: tools
+      target: content/tools
+    - source: providers
+      target: content/providers
+    - source: features
+      target: content/features
+    - source: guides
+      target: content/guides
+    - source: community
+      target: content/community
+    # github.io-only pages.
+    - source: index.md
+      target: content/_index.md
+    - source: 404.md
+      target: content/404.md
+    # Site chrome, kept at their historical paths.
+    - source: demo.gif
+      target: static/demo.gif
+    - source: assets
+      target: static/assets
+    - source: css
+      target: static/css
+    - source: js
+      target: static/js
+    - source: layouts
+      target: layouts
+    - source: data
+      target: data

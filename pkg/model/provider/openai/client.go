@@ -18,6 +18,7 @@ import (
 	"github.com/openai/openai-go/v3/shared"
 
 	"github.com/docker/docker-agent/pkg/chat"
+	"github.com/docker/docker-agent/pkg/chatgpt"
 	"github.com/docker/docker-agent/pkg/config/latest"
 	"github.com/docker/docker-agent/pkg/effort"
 	"github.com/docker/docker-agent/pkg/environment"
@@ -25,6 +26,7 @@ import (
 	"github.com/docker/docker-agent/pkg/model/provider/base"
 	"github.com/docker/docker-agent/pkg/model/provider/oaistream"
 	"github.com/docker/docker-agent/pkg/model/provider/options"
+	"github.com/docker/docker-agent/pkg/model/provider/providerutil"
 	"github.com/docker/docker-agent/pkg/modelinfo"
 	"github.com/docker/docker-agent/pkg/rag/prompts"
 	"github.com/docker/docker-agent/pkg/rag/types"
@@ -50,23 +52,36 @@ func NewClient(ctx context.Context, cfg *latest.ModelConfig, env environment.Pro
 		return nil, errors.New("model configuration is required")
 	}
 
-	var globalOptions options.ModelOptions
-	for _, opt := range opts {
-		opt(&globalOptions)
-	}
+	globalOptions := options.Apply(opts...)
 
 	var clientFn func(context.Context) (*openai.Client, error)
 	if gateway := globalOptions.Gateway(); gateway == "" {
 		var clientOptions []option.RequestOption
 
-		if cfg.TokenKey != "" {
+		switch {
+		case isChatGPTProvider(cfg):
+			// ChatGPT account (subscription) auth: a per-request middleware
+			// owns the Authorization and Codex headers so token refreshes
+			// apply mid-session. Fail fast with sign-in guidance when no
+			// credential is available at construction time.
+			tokenSource := chatgptTokenSource(env, cfg.TokenKey)
+			if _, err := tokenSource(ctx); err != nil {
+				slog.ErrorContext(ctx, "ChatGPT client creation failed", "error", err)
+				return nil, err
+			}
+			// The empty API key disables the SDK's OPENAI_API_KEY fallback.
+			clientOptions = append(clientOptions,
+				option.WithAPIKey(""),
+				option.WithMiddleware(chatgptAuthMiddleware(tokenSource)),
+			)
+		case cfg.TokenKey != "":
 			// Explicit token_key configured - use that env var
 			authToken, _ := env.Get(ctx, cfg.TokenKey)
 			if authToken == "" {
 				return nil, fmt.Errorf("%s environment variable is required", cfg.TokenKey)
 			}
 			clientOptions = append(clientOptions, option.WithAPIKey(authToken))
-		} else if isCustomProvider(cfg) {
+		case isCustomProvider(cfg):
 			// Custom provider (has api_type in ProviderOpts) without token_key - no auth
 			slog.DebugContext(ctx, "Custom provider with no token_key, sending requests without authentication",
 				"provider", cfg.Provider, "base_url", cfg.BaseURL)
@@ -103,13 +118,7 @@ func NewClient(ctx context.Context, cfg *latest.ModelConfig, env environment.Pro
 		clientOptions = append(clientOptions, option.WithMiddleware(oaistream.ErrorBodyMiddleware()))
 
 		httpClient := httpclient.NewHTTPClient(ctx)
-		if w := globalOptions.TransportWrapper(); w != nil {
-			if wrapped := w(httpClient.Transport); wrapped != nil {
-				httpClient.Transport = wrapped
-			} else {
-				slog.WarnContext(ctx, "HTTP transport wrapper returned nil; using original transport")
-			}
-		}
+		globalOptions.WrapTransport(ctx, httpClient)
 		clientOptions = append(clientOptions, option.WithHTTPClient(httpClient))
 
 		client := openai.NewClient(clientOptions...)
@@ -119,23 +128,17 @@ func NewClient(ctx context.Context, cfg *latest.ModelConfig, env environment.Pro
 	} else {
 		// When using a Gateway targeting a Docker domain, tokens are short-lived.
 		// Only require and inject the Docker JWT if the gateway is a .docker.com URL.
-		if environment.IsTrustedDockerURL(gateway) {
-			// Fail fast if Docker Desktop's auth token isn't available
-			if token, _ := env.Get(ctx, environment.DockerDesktopTokenEnv); token == "" {
-				slog.ErrorContext(ctx, "OpenAI client creation failed", "error", "failed to get Docker Desktop's authentication token")
-				return nil, errors.New("sorry, you first need to sign in Docker Desktop to use the Docker AI Gateway")
-			}
+		if err := base.VerifyDockerGatewayAuth(ctx, env, gateway); err != nil {
+			slog.ErrorContext(ctx, "OpenAI client creation failed", "error", "failed to get Docker Desktop's authentication token")
+			return nil, err
 		}
 
 		// When using a Gateway, tokens are short-lived.
 		clientFn = func(ctx context.Context) (*openai.Client, error) {
-			var authToken string
-			if environment.IsTrustedDockerURL(gateway) {
-				// Query a fresh auth token each time the client is used
-				authToken, _ = env.Get(ctx, environment.DockerDesktopTokenEnv)
-				if authToken == "" {
-					return nil, errors.New(base.NoDesktopTokenErrorMessage)
-				}
+			// Query a fresh auth token each time the client is used.
+			authToken, err := base.GatewayAuthToken(ctx, env, gateway)
+			if err != nil {
+				return nil, err
 			}
 
 			url, err := url.Parse(gateway)
@@ -145,25 +148,10 @@ func NewClient(ctx context.Context, cfg *latest.ModelConfig, env environment.Pro
 			baseURL := fmt.Sprintf("%s://%s%s/v1/", url.Scheme, url.Host, url.Path)
 
 			// Configure a custom HTTP client to inject headers and query params used by the Gateway.
-			httpOptions := []httpclient.Opt{
-				httpclient.WithProxiedBaseURL(cmp.Or(cfg.BaseURL, "https://api.openai.com/v1")),
-				httpclient.WithProvider(cfg.Provider),
-				httpclient.WithModel(cfg.Model),
-				httpclient.WithModelName(cfg.Name),
-				httpclient.WithQuery(url.Query()),
-			}
-			if globalOptions.GeneratingTitle() {
-				httpOptions = append(httpOptions, httpclient.WithHeader("X-Cagent-GeneratingTitle", "1"))
-			}
+			httpOptions := base.GatewayHTTPOptions(url, "https://api.openai.com/v1", cfg, globalOptions.GeneratingTitle())
 
 			gatewayHTTPClient := httpclient.NewHTTPClient(ctx, httpOptions...)
-			if w := globalOptions.TransportWrapper(); w != nil {
-				if wrapped := w(gatewayHTTPClient.Transport); wrapped != nil {
-					gatewayHTTPClient.Transport = wrapped
-				} else {
-					slog.WarnContext(ctx, "HTTP transport wrapper returned nil; using original transport")
-				}
-			}
+			globalOptions.WrapTransport(ctx, gatewayHTTPClient)
 			clientOptions := []option.RequestOption{
 				option.WithBaseURL(baseURL),
 				option.WithHTTPClient(gatewayHTTPClient),
@@ -214,7 +202,115 @@ func (c *Client) Close() {
 // convertMessages converts chat.Message to openai.ChatCompletionMessageParamUnion
 // using the shared oaistream implementation.
 func (c *Client) convertMessages(ctx context.Context, messages []chat.Message) []openai.ChatCompletionMessageParamUnion {
-	return oaistream.ConvertMessages(ctx, messages, c.ID(), c.ModelOptions.ModelsDevStore(), c.CapsOverride())
+	converted := oaistream.ConvertMessages(ctx, messages, c.ID(), c.ModelOptions.ModelsDevStore(), c.CapsOverride())
+	// Coalesce consecutive same-role (system/user) messages into one for generic
+	// OpenAI-compatible endpoints. docker-agent emits a separate system message
+	// per source (the agent instruction plus each toolset's instructions), but
+	// some such backends reject a request that carries more than one system
+	// message. Two failure modes have been observed: OVHcloud's Qwen3.5 returns
+	// an empty stream (#3145), while vLLM serving Qwen 3.5/3.6 fails hard with
+	// "HTTP 400: System message must be at the beginning" (#2327, #3344) because
+	// the model's Jinja chat template only allows a system message at index 0.
+	// The DMR client already applies this merge for the same reason.
+	if shouldMergeConsecutiveMessages(&c.ModelConfig) {
+		return oaistream.MergeConsecutiveMessages(converted)
+	}
+	return converted
+}
+
+// openModelHostProviders are built-in OpenAI-compatible aliases that front
+// arbitrary open-weight models (Qwen, GLM, Llama, DeepSeek, ...) whose
+// server-side chat templates may reject a request with more than one system
+// message. First-party APIs with a fixed, vendor-controlled model lineup
+// (openai, mistral, xai, minimax, github-copilot, opencode) tolerate multiple
+// system messages and are deliberately absent so their behavior is unchanged.
+var openModelHostProviders = map[string]bool{
+	"baseten":     true,
+	"ovhcloud":    true,
+	"openrouter":  true,
+	"nebius":      true,
+	"nvidia":      true,
+	"cerebras":    true,
+	"fireworks":   true,
+	"together":    true,
+	"huggingface": true,
+	"vercel":      true,
+	// Cloudflare Workers AI serves open-weight models directly; the AI Gateway
+	// fronts them (and other providers) through one endpoint. Both plausibly
+	// reach models with strict single-system-message chat templates.
+	"cloudflare-workers-ai": true,
+	"cloudflare-ai-gateway": true,
+}
+
+// shouldMergeConsecutiveMessages reports whether the chat-completions request
+// should coalesce consecutive same-role messages before sending.
+//
+// docker-agent emits one system message per source (the agent instruction plus
+// each toolset's instructions). Some OpenAI-compatible backends reject more than
+// one system message because the served model's Jinja chat template only allows
+// a system message at index 0 (Qwen 3.5/3.6 on vLLM, #2327/#3344), or return an
+// empty stream (OVHcloud Qwen3.5, #3145). Merging is a safe normalization
+// (same-role content is concatenated), and the DMR client already does it.
+//
+// It is scoped to endpoints that plausibly front such models: explicit
+// chat-completions custom providers, a self-hosted server reached by pointing
+// the openai provider at a custom base_url (vLLM/SGLang), and the open-model
+// host aliases above. The official OpenAI API and other first-party APIs are
+// left untouched.
+func shouldMergeConsecutiveMessages(cfg *latest.ModelConfig) bool {
+	if cfg == nil {
+		return false
+	}
+	// Custom providers pin the chat-completions api_type in ProviderOpts.
+	if getAPIType(cfg) == "openai_chatcompletions" {
+		return true
+	}
+	// A custom base_url on the openai provider means a self-hosted or
+	// third-party OpenAI-compatible server (e.g. vLLM), not api.openai.com.
+	if cfg.Provider == "openai" && cfg.BaseURL != "" {
+		return true
+	}
+	return openModelHostProviders[cfg.Provider]
+}
+
+// contextLimit returns this model's context window in tokens, preferring an
+// explicit provider_opts.context_size (authoritative for self-hosted
+// endpoints) and falling back to the models.dev catalogue. It returns 0 when
+// the window cannot be determined, in which case [clampMaxTokens] leaves
+// max_tokens untouched.
+func (c *Client) contextLimit(ctx context.Context) int64 {
+	if n := latest.ContextSizeFromProviderOpts(c.ModelConfig.ProviderOpts); n > 0 {
+		return n
+	}
+	return modelinfo.ContextLimit(ctx, c.ModelOptions.ModelsDevStore(), c.ID(), 0)
+}
+
+// clampMaxTokens caps a configured max_tokens (the per-response completion
+// budget) so it cannot consume the whole context window, leaving headroom for
+// the prompt. OpenAI-compatible servers such as vLLM reject a request when
+// prompt_tokens + max_tokens exceeds the model's context window, so a
+// max_tokens set equal to the window makes even a one-token prompt fail with a
+// "maximum context length" error (issue #3387). When the window is unknown (0)
+// the value is returned unchanged; a genuinely oversized prompt is then handled
+// by the runtime's overflow detection and compaction, not here.
+func clampMaxTokens(ctx context.Context, configured, window int64, model string) int64 {
+	if window <= 0 {
+		return configured
+	}
+	const safety = int64(1024)
+	capped := max(window-safety, 1)
+	if configured > capped {
+		slog.WarnContext(ctx,
+			"max_tokens exceeds the context window minus headroom; clamping to leave room for the prompt",
+			"configured", configured,
+			"clamped", capped,
+			"context_window", window,
+			"model", model,
+			"see", "https://github.com/docker/docker-agent/issues/3387",
+		)
+		return capped
+	}
+	return configured
 }
 
 // CreateChatCompletionStream creates a streaming chat completion request
@@ -232,6 +328,16 @@ func (c *Client) CreateChatCompletionStream(
 	// Check api_type from ProviderOpts to determine which schema to use.
 	// This allows custom providers to explicitly choose the API schema.
 	apiType := getAPIType(&c.ModelConfig)
+
+	// The ChatGPT Codex backend only serves /responses; there is no
+	// chat-completions endpoint to fall back to, so the provider always
+	// routes there, even over an explicit api_type.
+	if isChatGPTProvider(&c.ModelConfig) {
+		if apiType == "openai_chatcompletions" {
+			slog.DebugContext(ctx, "Ignoring api_type openai_chatcompletions: the ChatGPT backend only serves the Responses API")
+		}
+		return c.CreateResponseStream(ctx, messages, requestTools)
+	}
 
 	switch apiType {
 	case "openai_responses":
@@ -256,7 +362,7 @@ func (c *Client) CreateChatCompletionStream(
 		return nil, errors.New("at least one message is required")
 	}
 
-	trackUsage := c.ModelConfig.TrackUsage == nil || *c.ModelConfig.TrackUsage
+	trackUsage := c.TrackUsageEnabled()
 
 	params := openai.ChatCompletionNewParams{
 		Model:    c.ModelConfig.Model,
@@ -280,11 +386,12 @@ func (c *Client) CreateChatCompletionStream(
 	}
 
 	if maxToken := c.ModelConfig.MaxTokens; maxToken != nil && *maxToken > 0 {
+		effective := clampMaxTokens(ctx, *maxToken, c.contextLimit(ctx), c.ModelConfig.Model)
 		if !modelinfo.SupportsResponsesAPI(c.ModelConfig.Model) {
-			params.MaxTokens = openai.Int(*maxToken)
-			slog.DebugContext(ctx, "OpenAI request configured with max tokens", "max_tokens", *maxToken, "model", c.ModelConfig.Model)
+			params.MaxTokens = openai.Int(effective)
+			slog.DebugContext(ctx, "OpenAI request configured with max tokens", "max_tokens", effective, "model", c.ModelConfig.Model)
 		} else {
-			params.MaxCompletionTokens = openai.Int(*maxToken)
+			params.MaxCompletionTokens = openai.Int(effective)
 			slog.DebugContext(ctx, "using max_completion_tokens instead of max_tokens for Responses-API models", "model", c.ModelConfig.Model)
 		}
 	}
@@ -423,7 +530,7 @@ func (c *Client) CreateResponseStream(
 	}
 
 	if maxToken := c.ModelConfig.MaxTokens; maxToken != nil && *maxToken > 0 {
-		maxTokens := *maxToken
+		maxTokens := clampMaxTokens(ctx, *maxToken, c.contextLimit(ctx), c.ModelConfig.Model)
 		params.MaxOutputTokens = param.NewOpt(maxTokens)
 		slog.DebugContext(ctx, "OpenAI responses request configured with max output tokens", "max_output_tokens", maxTokens)
 	}
@@ -521,6 +628,10 @@ func (c *Client) CreateResponseStream(
 		}
 	}
 
+	if isChatGPTProvider(&c.ModelConfig) {
+		applyChatGPTResponsesPolicy(ctx, &params)
+	}
+
 	// Log the request in JSON format for debugging
 	if requestJSON, err := json.Marshal(params); err == nil {
 		slog.DebugContext(ctx, "OpenAI responses request", "request", string(requestJSON))
@@ -534,7 +645,7 @@ func (c *Client) CreateResponseStream(
 	// dials raw TCP and never calls http.RoundTripper, so the wrapper cannot intercept those
 	// connections. Fall back to SSE so the wrapper applies to all requests.
 	transport := getTransport(&c.ModelConfig)
-	trackUsage := c.ModelConfig.TrackUsage == nil || *c.ModelConfig.TrackUsage
+	trackUsage := c.TrackUsageEnabled()
 
 	switch {
 	case transport == "websocket" && c.ModelOptions.Gateway() == "" && c.ModelOptions.TransportWrapper() == nil:
@@ -1045,7 +1156,7 @@ func (c *Client) Rerank(ctx context.Context, query string, documents []types.Doc
 		return nil, err
 	}
 
-	scores, err := parseRerankScores(raw, len(documents))
+	scores, err := providerutil.ParseRerankScores(raw, len(documents))
 	if err != nil {
 		slog.ErrorContext(ctx, "Failed to parse OpenAI rerank scores", "error", err)
 		return nil, err
@@ -1100,42 +1211,6 @@ func extractOpenAIContentAsString(msg openai.ChatCompletionMessage) (string, err
 	}
 }
 
-// parseRerankScores parses a JSON payload of the form {"scores":[...]} and validates length.
-func parseRerankScores(raw string, expected int) ([]float64, error) {
-	type rerankResponse struct {
-		Scores []float64 `json:"scores"`
-	}
-
-	raw = strings.TrimSpace(raw)
-
-	tryParse := func(s string) ([]float64, error) {
-		var rr rerankResponse
-		if err := json.Unmarshal([]byte(s), &rr); err != nil {
-			return nil, err
-		}
-		if len(rr.Scores) != expected {
-			return nil, fmt.Errorf("expected %d scores, got %d", expected, len(rr.Scores))
-		}
-		return rr.Scores, nil
-	}
-
-	// First attempt: parse whole string as JSON.
-	if scores, err := tryParse(raw); err == nil {
-		return scores, nil
-	}
-
-	// Fallback: extract the first {...} block and try again, in case the model added prose.
-	start := strings.Index(raw, "{")
-	end := strings.LastIndex(raw, "}")
-	if start >= 0 && end > start {
-		if scores, err := tryParse(raw[start : end+1]); err == nil {
-			return scores, nil
-		}
-	}
-
-	return nil, fmt.Errorf("invalid rerank JSON: %s", raw)
-}
-
 // getAPIType extracts the api_type from ProviderOpts if present.
 // Returns the api_type string or empty string if not set.
 func getAPIType(cfg *latest.ModelConfig) string {
@@ -1158,14 +1233,16 @@ func isCustomProvider(cfg *latest.ModelConfig) bool {
 // autoSelectsResponsesAPI reports whether, absent an explicit api_type, the
 // provider should auto-select the Responses API for models that require it.
 //
-// This covers OpenAI directly and GitHub Copilot, which proxies the same
+// This covers OpenAI directly, GitHub Copilot (which proxies the same
 // OpenAI models and rejects newer ones (gpt-5, Codex, ...) on the legacy
-// /chat/completions endpoint with a 400. Detection is driven by
-// modelinfo.SupportsResponsesAPI so new models are picked up by naming
-// convention rather than a hardcoded allow-list.
+// /chat/completions endpoint with a 400), OpenCode Zen (which publishes
+// the same OpenAI Responses endpoint for its GPT model lineup), and the
+// ChatGPT Codex backend (which only serves /responses). Detection is
+// driven by modelinfo.SupportsResponsesAPI so new models are picked up by
+// naming convention rather than a hardcoded allow-list.
 func autoSelectsResponsesAPI(provider string) bool {
 	switch provider {
-	case "openai", "github-copilot":
+	case "openai", "github-copilot", "opencode-zen", chatgpt.ProviderName:
 		return true
 	}
 	return false

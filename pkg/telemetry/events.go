@@ -5,8 +5,8 @@ import (
 	"time"
 )
 
-func (tc *Client) TrackSynchronous(_ context.Context, structuredEvent StructuredEvent) {
-	tc.track(context.Background(), structuredEvent, false)
+func (tc *Client) TrackSynchronous(ctx context.Context, structuredEvent StructuredEvent) {
+	tc.track(ctx, structuredEvent, false)
 }
 
 // Track records a structured telemetry event with type-safe properties (synchronous)
@@ -15,7 +15,7 @@ func (tc *Client) Track(ctx context.Context, structuredEvent StructuredEvent) {
 	tc.track(ctx, structuredEvent, true)
 }
 
-func (tc *Client) track(_ context.Context, structuredEvent StructuredEvent, async bool) {
+func (tc *Client) track(ctx context.Context, structuredEvent StructuredEvent, async bool) {
 	eventType := structuredEvent.GetEventType()
 	structuredProps := structuredEvent.ToStructuredProperties()
 
@@ -43,9 +43,9 @@ func (tc *Client) track(_ context.Context, structuredEvent StructuredEvent, asyn
 	}
 
 	if async {
-		go tc.sendEvent(&event) //nolint:gosec // telemetry is fire-and-forget; sendEvent uses its own context internally
+		go tc.sendEvent(context.WithoutCancel(ctx), &event)
 	} else {
-		tc.sendEvent(&event)
+		tc.sendEvent(ctx, &event)
 	}
 }
 
@@ -79,16 +79,14 @@ func (tc *Client) RecordSessionStart(ctx context.Context, agentName, sessionID s
 // RecordError records a general session error
 func (tc *Client) RecordError(_ context.Context, errorMsg string) {
 	tc.mu.Lock()
+	defer tc.mu.Unlock()
 
 	if tc.session.SessionEnded || tc.session.AgentName == "" || tc.session.ID == "" {
-		tc.mu.Unlock()
 		return
 	}
 
 	tc.session.ErrorCount++
 	tc.session.Error = append(tc.session.Error, errorMsg)
-
-	tc.mu.Unlock()
 }
 
 // RecordSessionEnd finalizes session tracking

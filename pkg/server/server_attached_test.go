@@ -31,7 +31,7 @@ func TestAttachedServer_SteerReachesAttachedRuntime(t *testing.T) {
 
 	sm := NewSessionManager(ctx, config.Sources{}, store, 0, &config.RuntimeConfig{})
 	fake := &fakeRuntime{}
-	sm.AttachRuntime(sess.ID, fake, sess)
+	sm.AttachRuntime(t.Context(), sess.ID, fake, sess)
 
 	srv := NewWithManager(sm, "")
 
@@ -56,7 +56,7 @@ func TestAttachedServer_EventStreamEmitsRegisteredEvents(t *testing.T) {
 	require.NoError(t, store.AddSession(ctx, sess))
 
 	sm := NewSessionManager(ctx, config.Sources{}, store, 0, &config.RuntimeConfig{})
-	sm.AttachRuntime(sess.ID, &fakeRuntime{}, sess)
+	sm.AttachRuntime(t.Context(), sess.ID, &fakeRuntime{}, sess)
 
 	events := make(chan any, 4)
 	sm.RegisterEventSource(sess.ID, func(ctx context.Context, send func(any)) {
@@ -138,7 +138,7 @@ func TestAttachedServer_DeleteSessionStopsEventStream(t *testing.T) {
 	require.NoError(t, store.AddSession(ctx, sess))
 
 	sm := NewSessionManager(ctx, config.Sources{}, store, 0, &config.RuntimeConfig{})
-	sm.AttachRuntime(sess.ID, &fakeRuntime{}, sess)
+	sm.AttachRuntime(t.Context(), sess.ID, &fakeRuntime{}, sess)
 
 	sourceStarted := make(chan struct{})
 	sourceCtxDone := make(chan struct{})
@@ -203,7 +203,7 @@ func TestAttachedServer_StatusEndpointReturnsCurrentState(t *testing.T) {
 
 	sm := NewSessionManager(ctx, config.Sources{}, store, 0, &config.RuntimeConfig{})
 	fake := &fakeRuntime{}
-	sm.AttachRuntime(sess.ID, fake, sess)
+	sm.AttachRuntime(t.Context(), sess.ID, fake, sess)
 
 	srv := NewWithManager(sm, "")
 
@@ -235,7 +235,7 @@ func TestAttachedServer_FollowUpWhileIdleReturnsQueuedIdle(t *testing.T) {
 	require.NoError(t, store.AddSession(ctx, sess))
 
 	sm := NewSessionManager(ctx, config.Sources{}, store, 0, &config.RuntimeConfig{})
-	sm.AttachRuntime(sess.ID, &fakeRuntime{}, sess)
+	sm.AttachRuntime(t.Context(), sess.ID, &fakeRuntime{}, sess)
 
 	srv := NewWithManager(sm, "")
 
@@ -262,7 +262,7 @@ func TestAttachedServer_ReadyEndpointReturnsImmediately(t *testing.T) {
 	require.NoError(t, store.AddSession(ctx, sess))
 
 	sm := NewSessionManager(ctx, config.Sources{}, store, 0, &config.RuntimeConfig{})
-	sm.AttachRuntime(sess.ID, &fakeRuntime{}, sess)
+	sm.AttachRuntime(t.Context(), sess.ID, &fakeRuntime{}, sess)
 
 	srv := NewWithManager(sm, "")
 
@@ -312,8 +312,10 @@ func TestAttachedServer_DeleteWithWaitBlocksUntilStreamStops(t *testing.T) {
 	require.NoError(t, store.AddSession(ctx, sess))
 
 	sm := NewSessionManager(ctx, config.Sources{}, store, 0, &config.RuntimeConfig{})
-	fake := &fakeRuntime{streamDelay: 200 * time.Millisecond}
-	sm.AttachRuntime(sess.ID, fake, sess)
+	// The fake stream is held open by release (DELETE cancels the attach
+	// context, not the stream context), so the test controls when it ends.
+	fake := &fakeRuntime{release: make(chan struct{})}
+	sm.AttachRuntime(t.Context(), sess.ID, fake, sess)
 
 	srv := NewWithManager(sm, "")
 
@@ -327,8 +329,49 @@ func TestAttachedServer_DeleteWithWaitBlocksUntilStreamStops(t *testing.T) {
 	ch, err := sm.RunSession(ctx, sess.ID, "agent", "root", []api.Message{{Content: "hello"}}, "")
 	require.NoError(t, err)
 
-	// DELETE with wait should block until stream finishes (200ms).
-	resp := httpDoTCP(t, ctx, http.MethodDelete, addr+"/api/sessions/"+sess.ID+"?wait=true&timeout=5s", nil)
+	// Fire DELETE with wait; it must not respond until the stream exits.
+	// Plain http here: assertions must stay on the test goroutine.
+	respCh := make(chan []byte, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		req, err := http.NewRequestWithContext(ctx, http.MethodDelete, addr+"/api/sessions/"+sess.ID+"?wait=true&timeout=5s", http.NoBody)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		defer resp.Body.Close()
+		out, err := io.ReadAll(resp.Body)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		respCh <- out
+	}()
+
+	// Once the session is deregistered, the DELETE is parked in WaitStopped.
+	require.Eventually(t, func() bool {
+		_, ok := sm.runtimeSessions.Load(sess.ID)
+		return !ok
+	}, 2*time.Second, time.Millisecond)
+	select {
+	case <-respCh:
+		t.Fatal("DELETE returned before the stream goroutine exited")
+	default:
+	}
+
+	// Let the stream finish; the DELETE response must follow.
+	close(fake.release)
+	var resp []byte
+	select {
+	case resp = <-respCh:
+	case err := <-errCh:
+		t.Fatalf("DELETE failed: %v", err)
+	}
 	assert.Contains(t, string(resp), "deleted")
 
 	// Stream channel should be drained by now.
@@ -350,7 +393,7 @@ func TestAttachedServer_EventStreamReplaysFromLastEventID(t *testing.T) {
 	require.NoError(t, store.AddSession(ctx, sess))
 
 	sm := NewSessionManager(ctx, config.Sources{}, store, 0, &config.RuntimeConfig{})
-	sm.AttachRuntime(sess.ID, &fakeRuntime{}, sess)
+	sm.AttachRuntime(t.Context(), sess.ID, &fakeRuntime{}, sess)
 
 	events := make(chan any, 8)
 	sm.RegisterEventSource(sess.ID, func(ctx context.Context, send func(any)) {
@@ -405,7 +448,7 @@ func TestAttachedServer_EventStreamSignalsGapWhenResumePointEvicted(t *testing.T
 	require.NoError(t, store.AddSession(ctx, sess))
 
 	sm := NewSessionManager(ctx, config.Sources{}, store, 0, &config.RuntimeConfig{})
-	sm.AttachRuntime(sess.ID, &fakeRuntime{}, sess)
+	sm.AttachRuntime(t.Context(), sess.ID, &fakeRuntime{}, sess)
 
 	// Tiny buffer so early events are evicted.
 	_, pumpCancel := context.WithCancel(t.Context())
@@ -476,7 +519,7 @@ func TestAttachedServer_SnapshotReturnsStateAndLastEventSeq(t *testing.T) {
 	require.NoError(t, store.AddSession(ctx, sess))
 
 	sm := NewSessionManager(ctx, config.Sources{}, store, 0, &config.RuntimeConfig{})
-	sm.AttachRuntime(sess.ID, &fakeRuntime{}, sess)
+	sm.AttachRuntime(t.Context(), sess.ID, &fakeRuntime{}, sess)
 
 	events := make(chan any, 4)
 	sm.RegisterEventSource(sess.ID, func(ctx context.Context, send func(any)) {
@@ -543,8 +586,9 @@ func TestAttachedServer_DeleteEmitsSessionExited(t *testing.T) {
 	require.NoError(t, store.AddSession(ctx, sess))
 
 	sm := NewSessionManager(ctx, config.Sources{}, store, 0, &config.RuntimeConfig{})
-	sm.AttachRuntime(sess.ID, &fakeRuntime{}, sess)
-	sm.RegisterEventSource(sess.ID, func(ctx context.Context, _ func(any)) {
+	sm.AttachRuntime(t.Context(), sess.ID, &fakeRuntime{}, sess)
+	sm.RegisterEventSource(sess.ID, func(ctx context.Context, send func(any)) {
+		send(map[string]string{"type": "hello"})
 		<-ctx.Done()
 	})
 
@@ -560,15 +604,15 @@ func TestAttachedServer_DeleteEmitsSessionExited(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
-	// Give the SSE handler a moment to register, then delete the session.
-	require.Eventually(t, func() bool {
-		return sm.HasEventSource(sess.ID)
-	}, 2*time.Second, time.Millisecond)
-	time.Sleep(50 * time.Millisecond)
+	// Read the first event so we know the SSE handler has subscribed to the
+	// event log; deleting before that could drop the log from the registry
+	// and close the stream without a session_exited event.
+	_, types := readSSE(t, resp.Body, 1)
+	require.Equal(t, []string{"hello"}, types)
 	require.NoError(t, sm.DeleteSession(ctx, sess.ID))
 
 	// The client must receive a terminal session_exited event.
-	_, types := readSSE(t, resp.Body, 1)
+	_, types = readSSE(t, resp.Body, 1)
 	assert.Equal(t, []string{"session_exited"}, types)
 }
 
@@ -584,14 +628,14 @@ func TestAttachedServer_FollowUpIdempotencyKeyDedupes(t *testing.T) {
 	require.NoError(t, store.AddSession(ctx, sess))
 
 	sm := NewSessionManager(ctx, config.Sources{}, store, 0, &config.RuntimeConfig{})
-	sm.AttachRuntime(sess.ID, &fakeRuntime{}, sess)
+	sm.AttachRuntime(t.Context(), sess.ID, &fakeRuntime{}, sess)
 
 	var mu sync.Mutex
 	var delivered []string
 	sm.RegisterFollowUpInjector(sess.ID, func(_ context.Context, content string) {
 		mu.Lock()
+		defer mu.Unlock()
 		delivered = append(delivered, content)
-		mu.Unlock()
 	})
 
 	srv := NewWithManager(sm, "")
@@ -647,11 +691,10 @@ func TestAttachedServer_StatusWaitBlocksUntilAttached(t *testing.T) {
 	go func() { _ = srv.Serve(ctx, ln) }()
 	addr := "http://" + ln.Addr().String()
 
-	// Attach a little later, while the request is already waiting.
-	go func() {
-		time.Sleep(80 * time.Millisecond)
-		sm.AttachRuntime(sess.ID, &fakeRuntime{}, sess)
-	}()
+	// Attach concurrently: whether the request is already parked in
+	// WaitSessionAttached or the attach lands first, the response must
+	// carry the session.
+	go sm.AttachRuntime(t.Context(), sess.ID, &fakeRuntime{}, sess)
 
 	resp := httpDoTCP(t, ctx, http.MethodGet, addr+"/api/sessions/"+sess.ID+"/status?wait=5s", nil)
 	var status api.SessionStatusResponse

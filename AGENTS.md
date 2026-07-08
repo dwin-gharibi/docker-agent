@@ -19,6 +19,13 @@ evident. Never write comments that merely restate what the code does (e.g.
 something is done a certain way, document non-obvious edge cases, or clarify
 complex algorithms that cannot be simplified further.
 
+Keep comments short and to the point:
+
+- Prefer a single concise line over a multi-line block
+- Cut filler words, restated context, and obvious explanations
+- Write terse notes, not prose — assume an experienced reader
+- If a comment needs a paragraph, the code probably needs refactoring instead
+
 ## Working Approach
 
 - Use tools to gather information rather than relying on assumptions

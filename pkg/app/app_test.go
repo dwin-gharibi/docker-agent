@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -33,8 +34,8 @@ type mockRuntime struct {
 func (m *mockRuntime) CurrentAgentInfo(ctx context.Context) runtime.CurrentAgentInfo {
 	return runtime.CurrentAgentInfo{}
 }
-func (m *mockRuntime) CurrentAgentName() string          { return "mock" }
-func (m *mockRuntime) SetCurrentAgent(name string) error { return nil }
+func (m *mockRuntime) CurrentAgentName(context.Context) string              { return "mock" }
+func (m *mockRuntime) SetCurrentAgent(_ context.Context, name string) error { return nil }
 func (m *mockRuntime) CurrentAgentTools(ctx context.Context) ([]tools.Tool, error) {
 	return nil, nil
 }
@@ -83,13 +84,13 @@ func (m *mockRuntime) UpdateSessionTitle(_ context.Context, sess *session.Sessio
 	sess.Title = title
 	return nil
 }
-func (m *mockRuntime) TitleGenerator() *sessiontitle.Generator   { return nil }
-func (m *mockRuntime) Close() error                              { return nil }
-func (m *mockRuntime) Stop()                                     {}
-func (m *mockRuntime) Steer(_ runtime.QueuedMessage) error       { return nil }
-func (m *mockRuntime) FollowUp(_ runtime.QueuedMessage) error    { return nil }
-func (m *mockRuntime) QueueStatus() runtime.QueueStatus          { return runtime.QueueStatus{} }
-func (m *mockRuntime) TogglePause(context.Context) (bool, error) { return false, nil }
+func (m *mockRuntime) TitleGenerator(context.Context) *sessiontitle.Generator    { return nil }
+func (m *mockRuntime) Close() error                                              { return nil }
+func (m *mockRuntime) Stop()                                                     {}
+func (m *mockRuntime) Steer(_ context.Context, _ runtime.QueuedMessage) error    { return nil }
+func (m *mockRuntime) FollowUp(_ context.Context, _ runtime.QueuedMessage) error { return nil }
+func (m *mockRuntime) QueueStatus() runtime.QueueStatus                          { return runtime.QueueStatus{} }
+func (m *mockRuntime) TogglePause(context.Context) (bool, error)                 { return false, nil }
 func (m *mockRuntime) SetAgentModel(context.Context, string, string) error {
 	return nil
 }
@@ -97,9 +98,14 @@ func (m *mockRuntime) SetAgentModel(context.Context, string, string) error {
 func (m *mockRuntime) CycleAgentThinkingLevel(context.Context, string) (effort.Level, error) {
 	return "", runtime.ErrUnsupported
 }
+
+func (m *mockRuntime) SetAgentThinkingLevel(context.Context, string, effort.Level) (effort.Level, error) {
+	return "", runtime.ErrUnsupported
+}
 func (m *mockRuntime) AvailableModels(context.Context) []runtime.ModelChoice { return nil }
 func (m *mockRuntime) SupportsModelSwitching() bool                          { return false }
 func (m *mockRuntime) OnToolsChanged(func(runtime.Event))                    {}
+func (m *mockRuntime) OnBackgroundEvent(func(runtime.Event))                 {}
 
 // Verify mockRuntime implements runtime.Runtime
 var _ runtime.Runtime = (*mockRuntime)(nil)
@@ -167,6 +173,49 @@ func TestApp_Retry_SuppressesReEmittedUserMessage(t *testing.T) {
 		"only the post-StreamStarted user message should be forwarded")
 }
 
+// backgroundEventMockRuntime captures the handler App.Start registers via
+// OnBackgroundEvent so tests can emit background events through it.
+type backgroundEventMockRuntime struct {
+	mockRuntime
+
+	handler func(runtime.Event)
+}
+
+func (m *backgroundEventMockRuntime) OnBackgroundEvent(handler func(runtime.Event)) {
+	m.handler = handler
+}
+
+// TestApp_Start_ForwardsBackgroundEvents verifies Start wires the runtime's
+// out-of-band background-event hook into the app's event stream, so token
+// usage from background agent tasks reaches the TUI subscribers.
+func TestApp_Start_ForwardsBackgroundEvents(t *testing.T) {
+	t.Parallel()
+
+	rt := &backgroundEventMockRuntime{}
+	events := make(chan tea.Msg, 16)
+	app := &App{
+		runtime: rt,
+		session: session.New(),
+		events:  events,
+	}
+
+	app.Start(t.Context())
+	require.NotNil(t, rt.handler, "Start must register the background-event handler")
+
+	usage := runtime.NewTokenUsageEvent("bg-session", "worker", &runtime.Usage{
+		ContextLength: 150,
+		ContextLimit:  1000,
+	})
+	rt.handler(usage)
+
+	select {
+	case msg := <-events:
+		assert.Equal(t, usage, msg, "the background event must reach the app's event stream unchanged")
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the forwarded background event")
+	}
+}
+
 // stubSnapshotController is a tiny SnapshotController used by the app
 // tests to drive /undo without spinning up a real shadow-git
 // repository. enabled gates SnapshotsEnabled(), and the (files, ok,
@@ -195,14 +244,13 @@ var _ builtins.SnapshotController = (*stubSnapshotController)(nil)
 func TestApp_NewSession_PreservesToolsApproved(t *testing.T) {
 	t.Parallel()
 
-	ctx := t.Context()
 	rt := &mockRuntime{}
 
 	// Create initial session with tools approved
 	initialSess := session.New(session.WithToolsApproved(true))
 	require.True(t, initialSess.ToolsApproved, "Initial session should have tools approved")
 
-	app := New(ctx, rt, initialSess)
+	app := New(t.Context(), rt, initialSess)
 
 	// Call NewSession - should preserve ToolsApproved
 	app.NewSession()
@@ -213,14 +261,13 @@ func TestApp_NewSession_PreservesToolsApproved(t *testing.T) {
 func TestApp_NewSession_PreservesHideToolResults(t *testing.T) {
 	t.Parallel()
 
-	ctx := t.Context()
 	rt := &mockRuntime{}
 
 	// Create initial session with hide tool results
 	initialSess := session.New(session.WithHideToolResults(true))
 	require.True(t, initialSess.HideToolResults, "Initial session should have HideToolResults")
 
-	app := New(ctx, rt, initialSess)
+	app := New(t.Context(), rt, initialSess)
 
 	// Call NewSession - should preserve HideToolResults
 	app.NewSession()
@@ -235,6 +282,7 @@ func TestApp_NewSession_WithNilSession(t *testing.T) {
 
 	// Create app with nil session (edge case)
 	app := &App{
+		ctx:     t.Context,
 		runtime: rt,
 		session: nil,
 	}
@@ -322,7 +370,7 @@ func TestApp_ResolveSkillCommand_NoLocalRuntime(t *testing.T) {
 	ctx := t.Context()
 	rt := &mockRuntime{}
 	sess := session.New()
-	app := New(ctx, rt, sess)
+	app := New(t.Context(), rt, sess)
 
 	// mockRuntime is not a LocalRuntime, so no skills should be returned
 	resolved, err := app.ResolveSkillCommand(ctx, "/some-skill")
@@ -336,7 +384,7 @@ func TestApp_ResolveSkillCommand_NotSlashCommand(t *testing.T) {
 	ctx := t.Context()
 	rt := &mockRuntime{}
 	sess := session.New()
-	app := New(ctx, rt, sess)
+	app := New(t.Context(), rt, sess)
 
 	resolved, err := app.ResolveSkillCommand(ctx, "not a slash command")
 	require.NoError(t, err)
@@ -347,7 +395,7 @@ func TestApp_UndoLastSnapshot(t *testing.T) {
 	t.Parallel()
 
 	ctx := t.Context()
-	app := New(ctx, &mockRuntime{}, session.New(),
+	app := New(t.Context(), &mockRuntime{}, session.New(),
 		WithSnapshotController(&stubSnapshotController{enabled: true, files: 2, ok: true}),
 	)
 	result, err := app.UndoLastSnapshot(ctx)
@@ -359,7 +407,7 @@ func TestApp_UndoLastSnapshot_NoSnapshot(t *testing.T) {
 	t.Parallel()
 
 	ctx := t.Context()
-	app := New(ctx, &mockRuntime{}, session.New(),
+	app := New(t.Context(), &mockRuntime{}, session.New(),
 		WithSnapshotController(&stubSnapshotController{enabled: true}),
 	)
 	_, err := app.UndoLastSnapshot(ctx)
@@ -373,7 +421,7 @@ func TestApp_UndoLastSnapshot_NoController(t *testing.T) {
 	// so the same UI affordance can light up regardless of which
 	// runtime the embedder paired the App with.
 	ctx := t.Context()
-	app := New(ctx, &mockRuntime{}, session.New())
+	app := New(t.Context(), &mockRuntime{}, session.New())
 	_, err := app.UndoLastSnapshot(ctx)
 	require.ErrorIs(t, err, ErrNothingToUndo)
 	assert.False(t, app.SnapshotsEnabled())
@@ -385,6 +433,7 @@ func TestApp_SnapshotsEnabled_DoesNotRequireSession(t *testing.T) {
 	// SnapshotsEnabled answers a controller-capability question; it
 	// must not silently return false just because no session is attached.
 	app := &App{
+		ctx:                t.Context,
 		runtime:            &mockRuntime{},
 		session:            nil,
 		snapshotController: &stubSnapshotController{enabled: true},
@@ -399,7 +448,7 @@ func TestApp_SubscribeWith_FanOutToMultipleSubscribers(t *testing.T) {
 	defer cancel()
 
 	rt := &mockRuntime{}
-	app := New(ctx, rt, session.New())
+	app := New(t.Context(), rt, session.New())
 
 	recv := func() (chan tea.Msg, context.CancelFunc) {
 		subCtx, subCancel := context.WithCancel(ctx)
@@ -500,6 +549,7 @@ func TestApp_InjectUserMessage(t *testing.T) {
 
 	events := make(chan tea.Msg, 4)
 	app := &App{
+		ctx:     t.Context,
 		runtime: &mockRuntime{},
 		session: session.New(),
 		events:  events,
@@ -515,4 +565,85 @@ func TestApp_InjectUserMessage(t *testing.T) {
 	default:
 		t.Fatal("expected a SendMsg to be emitted")
 	}
+}
+
+func TestApp_DropAttachedFile(t *testing.T) {
+	t.Parallel()
+
+	newAppWithAttachments := func(store session.Store, paths ...string) (*App, *session.Session) {
+		sess := session.New(session.WithAttachedFiles(paths))
+		return New(t.Context(), &mockRuntime{store: store}, sess), sess
+	}
+
+	t.Run("drops by exact path and syncs the store", func(t *testing.T) {
+		t.Parallel()
+		store := session.NewInMemorySessionStore()
+		app, sess := newAppWithAttachments(store, "/abs/foo.go", "/abs/bar.go")
+
+		dropped, err := app.DropAttachedFile(t.Context(), "/abs/foo.go")
+		require.NoError(t, err)
+		assert.Equal(t, "/abs/foo.go", dropped)
+		assert.Equal(t, []string{"/abs/bar.go"}, sess.AttachedFilesSnapshot())
+
+		stored, err := store.GetSession(t.Context(), sess.ID)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"/abs/bar.go"}, stored.AttachedFilesSnapshot())
+	})
+
+	t.Run("drops by unique base name", func(t *testing.T) {
+		t.Parallel()
+		app, sess := newAppWithAttachments(nil, "/abs/dir/foo.go", "/abs/dir/bar.go")
+
+		dropped, err := app.DropAttachedFile(t.Context(), "foo.go")
+		require.NoError(t, err)
+		assert.Equal(t, "/abs/dir/foo.go", dropped)
+		assert.Equal(t, []string{"/abs/dir/bar.go"}, sess.AttachedFilesSnapshot())
+	})
+
+	t.Run("rejects ambiguous base names", func(t *testing.T) {
+		t.Parallel()
+		app, sess := newAppWithAttachments(nil, "/abs/a/foo.go", "/abs/b/foo.go")
+
+		_, err := app.DropAttachedFile(t.Context(), "foo.go")
+		require.ErrorContains(t, err, "matches 2 attached files")
+		assert.Len(t, sess.AttachedFilesSnapshot(), 2)
+	})
+
+	t.Run("rejects unknown files and blank input", func(t *testing.T) {
+		t.Parallel()
+		app, _ := newAppWithAttachments(nil, "/abs/foo.go")
+
+		_, err := app.DropAttachedFile(t.Context(), "/abs/other.go")
+		require.ErrorContains(t, err, "not attached")
+
+		_, err = app.DropAttachedFile(t.Context(), "   ")
+		require.ErrorContains(t, err, "no file specified")
+	})
+
+	t.Run("reports when nothing is attached", func(t *testing.T) {
+		t.Parallel()
+		app, _ := newAppWithAttachments(nil)
+
+		_, err := app.DropAttachedFile(t.Context(), "foo.go")
+		require.ErrorContains(t, err, "no files are attached")
+	})
+
+	t.Run("returns error when no session", func(t *testing.T) {
+		t.Parallel()
+		app := &App{runtime: &mockRuntime{}}
+
+		_, err := app.DropAttachedFile(t.Context(), "foo.go")
+		require.ErrorContains(t, err, "no active session")
+	})
+}
+
+func TestResolveAttachedFile_RelativePath(t *testing.T) {
+	t.Parallel()
+
+	abs, err := filepath.Abs("notes.md")
+	require.NoError(t, err)
+
+	resolved, err := resolveAttachedFile([]string{abs}, "notes.md")
+	require.NoError(t, err)
+	assert.Equal(t, abs, resolved)
 }

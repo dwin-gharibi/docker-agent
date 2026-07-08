@@ -97,12 +97,21 @@ func TestForWorkspace(t *testing.T) {
 		},
 	}
 
+	// Write the fake "docker" executable once and have it cat a data
+	// file the subtests rewrite. Re-creating the script per subtest
+	// would pay the macOS cold-exec penalty (~0.2s) every time, since
+	// the OS validates each freshly written binary on first run.
+	fakeDir := t.TempDir()
+	dataFile := filepath.Join(fakeDir, "ls.json")
+	script := fmt.Sprintf("#!/bin/sh\ncat %q\n", dataFile)
+	require.NoError(t, os.WriteFile(filepath.Join(fakeDir, "docker"), []byte(script), 0o755))
+	// Prepend (not replace) so the fake "docker" wins while the script
+	// can still resolve "cat".
+	t.Setenv("PATH", fakeDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			fakeDir := t.TempDir()
-			script := fmt.Sprintf("#!/bin/sh\necho '%s'\n", tt.json)
-			require.NoError(t, os.WriteFile(filepath.Join(fakeDir, "docker"), []byte(script), 0o755))
-			t.Setenv("PATH", fakeDir)
+			require.NoError(t, os.WriteFile(dataFile, []byte(tt.json), 0o600))
 
 			backend := sandbox.NewBackend(false)
 			got := backend.ForWorkspace(t.Context(), tt.wd)
@@ -165,6 +174,7 @@ func TestForWorkspace_SbxBackend(t *testing.T) {
 }
 
 func TestExtraWorkspace(t *testing.T) {
+	t.Parallel()
 	t.Run("empty ref", func(t *testing.T) {
 		assert.Empty(t, sandbox.ExtraWorkspace("/workspace", ""))
 	})

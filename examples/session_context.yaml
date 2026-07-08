@@ -1,0 +1,26 @@
+# Reuse a previous session as context.
+#
+# The session_context toolset lets an agent discover earlier sessions and pull
+# one in as context, instead of asking the user to re-explain past work or
+# manually export/import a conversation.
+#
+# list_sessions returns recent sessions (the current one is never listed);
+# read_session returns a transcript by id or by a relative reference like "-1"
+# (most recent). Long transcripts are truncated, keeping the most recent
+# messages, so a big history cannot overflow the context window.
+
+agents:
+  root:
+    model: anthropic/claude-sonnet-4-5
+    description: Assistant that can build on earlier sessions
+    instruction: |
+      You can reuse work from earlier sessions. When the user refers to a
+      previous conversation ("like we discussed yesterday", "continue from
+      last time"), call list_sessions to find the relevant one, then
+      read_session to pull in its transcript before answering. Only read a
+      session when its content is actually relevant — do not read sessions
+      speculatively.
+    toolsets:
+      - type: session_context
+      - type: filesystem
+        readonly: true

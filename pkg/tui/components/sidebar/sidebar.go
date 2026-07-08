@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"maps"
 	"os"
-	"os/exec"
 	"slices"
 	"strconv"
 	"strings"
@@ -17,7 +16,8 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/docker/docker-agent/pkg/effort"
-	"github.com/docker/docker-agent/pkg/paths"
+	"github.com/docker/docker-agent/pkg/gitbranch"
+	pathx "github.com/docker/docker-agent/pkg/path"
 	"github.com/docker/docker-agent/pkg/runtime"
 	"github.com/docker/docker-agent/pkg/session"
 	"github.com/docker/docker-agent/pkg/tools"
@@ -40,6 +40,15 @@ const (
 	ModeCollapsed
 )
 
+// SectionVisibility controls which optional sidebar sections are rendered.
+// The zero value shows everything.
+type SectionVisibility struct {
+	HideUsage  bool
+	HideAgents bool
+	HideTools  bool
+	HideTodos  bool
+}
+
 // Model represents a sidebar component
 type Model interface {
 	layout.Model
@@ -49,6 +58,9 @@ type Model interface {
 	SetTokenUsage(event *runtime.TokenUsageEvent)
 	SetTodos(result *tools.ToolCallResult) error
 	SetMode(mode Mode)
+	// SetMirroredPadding swaps the horizontal edge padding so the sidebar hugs
+	// the terminal edge when rendered on the left of the chat.
+	SetMirroredPadding(mirrored bool)
 	SetAgentInfo(agentName, model, description string) tea.Cmd
 	SetTeamInfo(availableAgents []runtime.AgentDetails)
 	SetAgentSwitching(switching bool)
@@ -56,6 +68,10 @@ type Model interface {
 	SetSkillsInfo(availableSkills int)
 	SetSessionStarred(starred bool)
 	SetQueuedMessages(messages ...string)
+	// SetSectionVisibility controls which optional sidebar sections are rendered.
+	SetSectionVisibility(v SectionVisibility)
+	// SetSectionGap sets the number of blank lines between sidebar sections.
+	SetSectionGap(lines int)
 	GetSize() (width, height int)
 	LoadFromSession(sess *session.Session)
 	// ResetStreamTracking clears the active-stream stack so a new top-level run
@@ -118,7 +134,6 @@ type model struct {
 	layoutCfg          LayoutConfig              // layout configuration for spacing
 	sessionUsage       map[string]*runtime.Usage // sessionID -> latest usage snapshot
 	todoComp           *todotool.SidebarComponent
-	mcpInit            bool
 	ragIndexing        map[string]*ragIndexingState // strategy name -> indexing state
 	spinner            spinner.Spinner
 	spinnerActive      bool // true when spinner is registered with animation coordinator
@@ -149,7 +164,11 @@ type model struct {
 	preferredWidth     int      // user's preferred width (persisted across collapse/expand)
 	editingTitle       bool     // true when inline title editing is active
 	titleInput         textinput.Model
-	lastTitleClickTime time.Time // for double-click detection on title
+	lastTitleClickTime time.Time         // for double-click detection on title
+	sectionVisibility  SectionVisibility // which optional sections are rendered
+	sectionGap         int               // blank lines between sections in vertical mode
+
+	ctx func() context.Context
 
 	// Render cache to avoid re-rendering sections on every frame during scroll
 	cachedLines          []string // Cached rendered lines
@@ -168,7 +187,7 @@ type model struct {
 }
 
 // New creates a new sidebar bound to the given session state.
-func New(sessionState *service.SessionState) Model {
+func New(ctx context.Context, sessionState *service.SessionState) Model {
 	ti := textinput.New()
 	ti.Placeholder = "Session title"
 	ti.CharLimit = 50
@@ -177,6 +196,7 @@ func New(sessionState *service.SessionState) Model {
 	wd, branch := getCurrentWorkingDirectory()
 
 	m := &model{
+		ctx:          func() context.Context { return context.WithoutCancel(ctx) },
 		width:        20,
 		layoutCfg:    DefaultLayoutConfig(),
 		height:       24,
@@ -193,6 +213,7 @@ func New(sessionState *service.SessionState) Model {
 		workingDirectory: wd,
 		gitBranchName:    branch,
 		preferredWidth:   DefaultWidth,
+		sectionGap:       defaultSectionGap,
 		titleInput:       ti,
 		cacheDirty:       true, // Initial render needed
 		layoutDirty:      true, // First render must probe scrollbar visibility
@@ -206,7 +227,7 @@ func (m *model) Init() tea.Cmd {
 
 // needsSpinner returns true if any spinner-driving state is active.
 func (m *model) needsSpinner() bool {
-	return m.workingAgent != "" || m.toolsLoading || m.mcpInit || m.titleRegenerating
+	return m.workingAgent != "" || m.toolsLoading || m.titleRegenerating
 }
 
 // startSpinner registers the spinner with the animation coordinator if not already active.
@@ -257,6 +278,12 @@ func (m *model) SetTokenUsage(event *runtime.TokenUsageEvent) {
 	// Store/replace by session ID (each event has cumulative totals for that session)
 	usage := *event.Usage
 	m.sessionUsage[event.SessionID] = &usage
+
+	// Record the per-agent snapshot in the shared session state so the
+	// agent roster and the agent-details dialog can show per-agent context
+	// usage. Background agent tasks reach this path too: their usage
+	// events are forwarded out-of-band by the runtime.
+	m.sessionState.SetAgentUsage(event.AgentName, usage)
 
 	// Mark session as having content once we receive token usage
 	m.sessionHasContent = true
@@ -333,6 +360,27 @@ func (m *model) SetSessionStarred(starred bool) {
 // SetQueuedMessages sets the list of queued message previews to display
 func (m *model) SetQueuedMessages(queuedMessages ...string) {
 	m.queuedMessages = queuedMessages
+	m.invalidateCache()
+}
+
+// SetSectionVisibility controls which optional sidebar sections are rendered.
+func (m *model) SetSectionVisibility(v SectionVisibility) {
+	if m.sectionVisibility == v {
+		return
+	}
+	m.sectionVisibility = v
+	m.invalidateCache()
+}
+
+// SetSectionGap sets the number of blank lines between sidebar sections.
+func (m *model) SetSectionGap(lines int) {
+	if lines < 0 {
+		lines = 0
+	}
+	if m.sectionGap == lines {
+		return
+	}
+	m.sectionGap = lines
 	m.invalidateCache()
 }
 
@@ -517,10 +565,6 @@ func (m *model) ResetStreamTracking() {
 	m.invalidateCache()
 }
 
-func formatCost(cost float64) string {
-	return fmt.Sprintf("%.2f", cost)
-}
-
 // activeSessionID returns the session whose usage the sidebar should display:
 // the deepest currently-running stream, or the main session when idle. It is
 // derived from the stream stack rather than the (rapidly toggling) current
@@ -561,26 +605,30 @@ func (m *model) activeSessionTokens() (tokens int64, found bool) {
 
 // contextPercent returns a context usage percentage string for the active session.
 func (m *model) contextPercent() string {
-	if usage, ok := m.activeSessionUsage(); ok && usage.ContextLimit > 0 {
-		percent := (float64(usage.ContextLength) / float64(usage.ContextLimit)) * 100
-		return fmt.Sprintf("%.0f%%", percent)
+	if usage, ok := m.activeSessionUsage(); ok {
+		return usageContextPercent(usage)
 	}
 	return ""
 }
 
-// gitBranch returns the current git branch name for the given directory,
-// or an empty string if the directory is not inside a git repository.
-func gitBranch(dir string) string {
-	if dir == "" {
+// usageContextPercent formats a usage snapshot's context fill as "N%", or ""
+// when the snapshot is missing or its context limit is unknown.
+func usageContextPercent(usage *runtime.Usage) string {
+	if usage == nil || usage.ContextLimit <= 0 {
 		return ""
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--abbrev-ref", "HEAD").Output()
-	if err != nil {
-		return ""
+	percent := (float64(usage.ContextLength) / float64(usage.ContextLimit)) * 100
+	return fmt.Sprintf("%.0f%%", percent)
+}
+
+// agentContextPercent returns the latest known context usage percentage for
+// the named agent ("N%"), or "" when the agent has not run yet or its
+// context limit is unknown.
+func (m *model) agentContextPercent(agentName string) string {
+	if usage, ok := m.sessionState.AgentUsage(agentName); ok {
+		return usageContextPercent(&usage)
 	}
-	return strings.TrimSpace(string(out))
+	return ""
 }
 
 // formatWorkingDirectory formats a raw directory path for display,
@@ -590,15 +638,7 @@ func formatWorkingDirectory(rawDir string) (display, branch string) {
 	if rawDir == "" {
 		return "", ""
 	}
-
-	branch = gitBranch(rawDir)
-
-	display = rawDir
-	if homeDir := paths.GetHomeDir(); homeDir != "" && strings.HasPrefix(display, homeDir) {
-		display = "~" + display[len(homeDir):]
-	}
-
-	return display, branch
+	return pathx.ShortenHome(rawDir), gitbranch.Current(rawDir)
 }
 
 // getCurrentWorkingDirectory returns the current working directory with home directory
@@ -625,6 +665,15 @@ func (m *model) workingDirWithBranch() string {
 	return result
 }
 
+// workingDirLine renders the working directory with the sidebar's accent
+// block, shared by the vertical Session tab and the collapsed band.
+func (m *model) workingDirLine() string {
+	if m.workingDirectory == "" {
+		return ""
+	}
+	return styles.TabAccentStyle.Render("█") + styles.TabPrimaryStyle.Render(" "+m.workingDirWithBranch())
+}
+
 // Update handles messages and updates the component state.
 func (m *model) Update(msg tea.Msg) (layout.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -639,25 +688,6 @@ func (m *model) Update(msg tea.Msg) (layout.Model, tea.Cmd) {
 		return m, nil
 	case *runtime.TokenUsageEvent:
 		m.SetTokenUsage(msg)
-		return m, nil
-	case *runtime.MCPInitStartedEvent:
-		// Ignore if stream was cancelled (stale event from before cancellation)
-		if m.streamCancelled {
-			return m, nil
-		}
-		if !m.mcpInit {
-			m.mcpInit = true
-			m.invalidateCache()
-			cmd := m.startSpinner()
-			return m, cmd
-		}
-		return m, nil
-	case *runtime.MCPInitFinishedEvent:
-		if m.mcpInit {
-			m.mcpInit = false
-			m.invalidateCache()
-			m.stopSpinner() // Will only stop if no other state needs it
-		}
 		return m, nil
 	case *runtime.RAGIndexingStartedEvent:
 		// Ignore if stream was cancelled (stale event from before cancellation)
@@ -773,7 +803,6 @@ func (m *model) Update(msg tea.Msg) (layout.Model, tea.Cmd) {
 		m.workingAgent = ""
 		m.sessionStack = nil
 		m.toolsLoading = false
-		m.mcpInit = false
 		m.titleRegenerating = false
 		// Force-stop main spinner if it was active (state is now cleared)
 		if m.spinnerActive {
@@ -821,8 +850,8 @@ func (m *model) Update(msg tea.Msg) (layout.Model, tea.Cmd) {
 		var cmds []tea.Cmd
 		needsInvalidate := false
 
-		// Update main spinner when MCP is initializing, tools are loading, agent is working, or title is regenerating
-		if m.mcpInit || m.toolsLoading || m.workingAgent != "" || m.titleRegenerating {
+		// Update main spinner when tools are loading, agent is working, or title is regenerating
+		if m.toolsLoading || m.workingAgent != "" || m.titleRegenerating {
 			model, cmd := m.spinner.Update(msg)
 			m.spinner = model.(spinner.Spinner)
 			cmds = append(cmds, cmd)
@@ -897,9 +926,12 @@ func (m *model) computeCollapsedViewModel(contentWidth int) CollapsedViewModel {
 	vm := CollapsedViewModel{
 		TitleWithStar:    titleWithStar,
 		WorkingIndicator: m.workingIndicatorCollapsed(),
-		WorkingDir:       m.workingDirWithBranch(),
-		UsageSummary:     m.tokenUsageSummary(),
+		WorkingDir:       m.workingDirLine(),
+		InfoLine:         m.collapsedInfoLine(),
 		ContentWidth:     contentWidth,
+	}
+	if !m.sectionVisibility.HideUsage {
+		vm.UsageSummary = m.tokenUsageSummary()
 	}
 
 	titleWidth := lipgloss.Width(vm.TitleWithStar)
@@ -923,6 +955,95 @@ func (m *model) computeCollapsedViewModel(contentWidth int) CollapsedViewModel {
 func (m *model) CollapsedHeight(outerWidth int) int {
 	contentWidth := max(outerWidth-m.layoutCfg.PaddingLeft-m.layoutCfg.PaddingRight, 1)
 	return m.computeCollapsedViewModel(contentWidth).LineCount()
+}
+
+// collapsedInfoLine returns a one-line summary of the agents, tools, and
+// todos sections for the collapsed band, honoring section visibility.
+func (m *model) collapsedInfoLine() string {
+	var parts []string
+	appendPart := func(part string) {
+		if part != "" {
+			parts = append(parts, part)
+		}
+	}
+
+	if !m.sectionVisibility.HideAgents {
+		appendPart(m.agentSummaryCollapsed())
+	}
+	if !m.sectionVisibility.HideTools {
+		appendPart(m.toolsSummaryCollapsed())
+	}
+	if !m.sectionVisibility.HideTodos {
+		appendPart(m.todosSummaryCollapsed())
+	}
+
+	return strings.Join(parts, styles.MutedStyle.Render(" · "))
+}
+
+// agentSummaryCollapsed renders the current agent (in its accent color) with
+// its model and the number of other agents in the team.
+func (m *model) agentSummaryCollapsed() string {
+	name := m.sessionState.CurrentAgentName()
+	if name == "" {
+		return ""
+	}
+
+	summary := styles.AgentAccentStyleFor(name).Render("▶ " + name)
+	if m.agentModel != "" {
+		summary += styles.MutedStyle.Render(" " + m.agentModel)
+	}
+	if n := len(m.availableAgents); n > 1 {
+		summary += styles.MutedStyle.Render(fmt.Sprintf(" +%d", n-1))
+	}
+	return summary
+}
+
+// toolsSummaryCollapsed renders the tools/skills counts with the sidebar's
+// accent block, or the loading spinner while the toolset is starting.
+func (m *model) toolsSummaryCollapsed() string {
+	if m.toolsLoading {
+		return m.spinner.View() + styles.TabPrimaryStyle.Render(" loading tools…")
+	}
+
+	var parts []string
+	if m.availableTools > 0 {
+		label := "tools"
+		if m.availableTools == 1 {
+			label = "tool"
+		}
+		parts = append(parts, fmt.Sprintf("%d %s", m.availableTools, label))
+	}
+	if m.availableSkills > 0 {
+		label := "skills"
+		if m.availableSkills == 1 {
+			label = "skill"
+		}
+		parts = append(parts, fmt.Sprintf("%d %s", m.availableSkills, label))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return styles.TabAccentStyle.Render("█") + styles.TabPrimaryStyle.Render(" "+strings.Join(parts, ", "))
+}
+
+// todosSummaryCollapsed renders the completed/total todo counts with the
+// same status icons as the vertical TO-DO tab.
+func (m *model) todosSummaryCollapsed() string {
+	completed, total := m.todoComp.Counts()
+	if total == 0 {
+		return ""
+	}
+
+	var icon string
+	switch completed {
+	case total:
+		icon = styles.CompletedStyle.Render("✓")
+	case 0:
+		icon = styles.ToBeDoneStyle.Render("◯")
+	default:
+		icon = styles.InProgressStyle.Render("◔")
+	}
+	return icon + styles.TabPrimaryStyle.Render(fmt.Sprintf(" %d/%d todos", completed, total))
 }
 
 func (m *model) collapsedView() string {
@@ -988,28 +1109,48 @@ func (m *model) renderFromCache() string {
 }
 
 // renderSections renders all sidebar sections and returns them as lines.
+// Sections are separated by sectionGap blank lines; each appendSection call
+// returns the index of the section's first line so click zones can be anchored.
 func (m *model) renderSections(contentWidth int) []string {
 	var lines []string
 
-	appendSection := func(section string) {
-		if section != "" {
-			lines = append(lines, strings.Split(section, "\n")...)
+	appendSection := func(section string) int {
+		if section == "" {
+			return len(lines)
 		}
+		if len(lines) > 0 {
+			for range m.sectionGap {
+				lines = append(lines, "")
+			}
+		}
+		start := len(lines)
+		lines = append(lines, strings.Split(section, "\n")...)
+		return start
 	}
 
 	appendSection(m.sessionInfo(contentWidth))
-	appendSection(m.tokenUsage(contentWidth))
+	if !m.sectionVisibility.HideUsage {
+		appendSection(m.tokenUsage(contentWidth))
+	}
 	appendSection(m.queueSection(contentWidth))
 
 	// Track where agent entries start so we can detect clicks on agent names
 	agentSectionStart := len(lines)
-	appendSection(m.agentInfo(contentWidth))
+	if m.sectionVisibility.HideAgents {
+		m.agentLineOwners = nil
+	} else {
+		agentSectionStart = appendSection(m.agentInfo(contentWidth))
+	}
 	m.buildAgentClickZones(agentSectionStart)
 
-	appendSection(m.toolsetInfo(contentWidth))
+	if !m.sectionVisibility.HideTools {
+		appendSection(m.toolsetInfo(contentWidth))
+	}
 
-	m.todoComp.SetSize(contentWidth)
-	appendSection(strings.TrimSuffix(m.todoComp.Render(), "\n"))
+	if !m.sectionVisibility.HideTodos {
+		m.todoComp.SetSize(contentWidth)
+		appendSection(m.todoComp.Render())
+	}
 
 	return lines
 }
@@ -1046,10 +1187,6 @@ func (m *model) groupedRAGIndexing() (ragNames []string, ragGroups map[string][]
 func (m *model) workingIndicator() string {
 	var indicators []string
 
-	if m.mcpInit {
-		indicators = append(indicators, styles.ActiveStyle.Render(m.spinner.View()+" Initializing MCP servers…"))
-	}
-
 	ragNames, ragGroups := m.groupedRAGIndexing()
 	for _, ragName := range ragNames {
 		strategies := ragGroups[ragName]
@@ -1078,10 +1215,6 @@ func (m *model) workingIndicator() string {
 // workingIndicatorCollapsed returns a single-line version of the working indicator for collapsed mode
 func (m *model) workingIndicatorCollapsed() string {
 	var labels []string
-
-	if m.mcpInit {
-		labels = append(labels, "Initializing MCP servers…")
-	}
 
 	ragNames, ragGroups := m.groupedRAGIndexing()
 	for _, ragName := range ragNames {
@@ -1133,42 +1266,34 @@ func (m *model) computeUsageStats() usageStats {
 }
 
 func (m *model) tokenUsage(contentWidth int) string {
+	return m.renderTab("Token Usage", m.tokenUsageLine(), contentWidth)
+}
+
+// tokenUsageLine renders the usage line shared by the vertical Token Usage
+// tab and the collapsed band: token glyph, count, context %, cost, and the
+// sub-session count, all with the same styling.
+func (m *model) tokenUsageLine() string {
 	s := m.computeUsageStats()
 
 	line := styles.MutedStyle.Render(styles.TokenGlyph+" ") + toolcommon.FormatTokenCount(s.tokens)
 	if s.contextPct != "" {
 		line += " (" + s.contextPct + ")"
 	}
-	line += " " + styles.TabAccentStyle.Render("$"+formatCost(s.totalCost))
+	line += " " + styles.TabAccentStyle.Render(toolcommon.FormatCostUSD(s.totalCost))
 	if s.sessionCount > 1 {
 		line += " " + styles.MutedStyle.Render(fmt.Sprintf("(%d sub-sessions)", s.sessionCount-1))
 	}
 
-	return m.renderTab("Token Usage", line, contentWidth)
+	return line
 }
 
-// tokenUsageSummary returns a single-line summary for horizontal layout.
+// tokenUsageSummary returns the usage line for the collapsed band, empty
+// until any usage has been recorded.
 func (m *model) tokenUsageSummary() string {
 	if len(m.sessionUsage) == 0 {
 		return ""
 	}
-
-	s := m.computeUsageStats()
-
-	parts := []string{"Tokens: " + toolcommon.FormatTokenCount(s.tokens)}
-	if s.sessionCount > 1 {
-		if s.contextPct != "" {
-			parts = append(parts, "Context: "+s.contextPct)
-		}
-		parts = append(parts, "Cost: $"+formatCost(s.totalCost), fmt.Sprintf("%d sub-sessions", s.sessionCount-1))
-	} else {
-		parts = append(parts, "Cost: $"+formatCost(s.totalCost))
-		if s.contextPct != "" {
-			parts = append(parts, "Context: "+s.contextPct)
-		}
-	}
-
-	return strings.Join(parts, " | ")
+	return m.tokenUsageLine()
 }
 
 func (m *model) sessionInfo(contentWidth int) string {
@@ -1192,7 +1317,7 @@ func (m *model) sessionInfo(contentWidth int) string {
 	}
 
 	if m.workingDirectory != "" {
-		lines = append(lines, styles.TabAccentStyle.Render("█")+styles.TabPrimaryStyle.Render(" "+m.workingDirWithBranch()))
+		lines = append(lines, m.workingDirLine())
 	}
 
 	return m.renderTab("Session", strings.Join(lines, "\n"), contentWidth)
@@ -1228,14 +1353,17 @@ func (m *model) queueSection(contentWidth int) string {
 	return m.renderTab(title, strings.Join(lines, "\n"), contentWidth)
 }
 
-// agentInfo renders the Agents panel: the current agent as a focus card in its
-// natural config-order position, and every other agent as a compact two-line
-// roster row, with a blank separator line between entries so the two-line rows
-// and the card don't blend together. It records which body line belongs to
-// which agent (agentLineOwners) so click zones can be registered explicitly
-// (see buildAgentClickZones) rather than re-derived from blank-line heuristics;
-// each separator carries an empty owner so it stays unclickable and never
-// shifts an agent's click zone.
+// agentInfo renders the Agents panel: every agent as a two-line entry, with a
+// blank separator line between entries. Line 1 shows the agent's name (in its
+// accent color), the thinking badge right-aligned, and the "^N" switch shortcut
+// flush against the right edge; line 2 shows the indented provider/model with
+// the agent's latest context usage percentage right-aligned once known. The
+// current agent is marked with ▶ (or the spinner while it works); the other
+// agents pad that marker column so their names stay aligned. Descriptions are
+// deliberately omitted. Each content line is owned by its agent (agentLineOwners)
+// so click zones can be registered explicitly (see buildAgentClickZones) and a
+// click on either line switches to that agent; separators carry an empty owner
+// so they stay unclickable.
 func (m *model) agentInfo(contentWidth int) string {
 	// Read current agent from session state so sidebar updates when agent is switched
 	currentAgent := m.sessionState.CurrentAgentName()
@@ -1251,44 +1379,40 @@ func (m *model) agentInfo(contentWidth int) string {
 		agentTitle += " ↔"
 	}
 
-	rl := m.computeRosterLayout(contentWidth, currentAgent)
+	// Compute the shared column widths once so every entry aligns and the badge
+	// width is not recomputed per agent.
+	glyphOnly := contentWidth < rowGlyphOnlyMinWidth
+	badgeWidth := m.badgeColumnWidth(glyphOnly)
+	nameWidth := max(1, contentWidth-agentMarkerWidth-minGap-badgeWidth-1-agentShortcutWidth)
 
-	var bodyLines []string
-	var owners []string
+	var bodyLines, owners []string
 	add := func(line, owner string) {
 		bodyLines = append(bodyLines, line)
 		owners = append(owners, owner)
 	}
-
 	for i, agent := range m.availableAgents {
-		// Separate every agent entry with a blank line so the two-line rows and
-		// the focus card stay visually distinct. The separator carries an empty
-		// owner so it is never attributed to an agent or made clickable.
+		// Separate entries with a blank, unowned line so the two-line entries stay
+		// visually distinct without being attributed to (or made clickable for)
+		// any agent.
 		if len(bodyLines) > 0 {
 			add("", "")
 		}
-		if agent.Name == currentAgent {
-			for _, line := range m.renderAgentCard(agent, i, contentWidth) {
-				add(line, agent.Name)
-			}
-			continue
-		}
-		for _, line := range m.renderAgentRow(agent, i, rl) {
+		current := agent.Name == currentAgent
+		for _, line := range m.renderAgentLine(agent, i, contentWidth, nameWidth, badgeWidth, glyphOnly, current) {
 			add(line, agent.Name)
 		}
 	}
-
 	m.agentLineOwners = owners
 
 	return m.renderTab(agentTitle, strings.Join(bodyLines, "\n"), contentWidth)
 }
 
 // thinkingKind classifies an agent's raw thinking wire label into the badge
-// vocabulary used by the card and roster rows.
+// vocabulary used by the agent lines.
 type thinkingKind int
 
 const (
-	thinkingNone     thinkingKind = iota // empty label: no badge / no card line
+	thinkingNone     thinkingKind = iota // empty label: no badge
 	thinkingOff                          // "off": disabled on a capable model
 	thinkingAdaptive                     // "adaptive": adaptive budget
 	thinkingTokens                       // decimal token count
@@ -1325,11 +1449,11 @@ func isAllDigits(s string) bool {
 	return true
 }
 
-// thinkingBadge returns the styled right-aligned roster badge for an agent's
-// thinking label and the compact single-cell form used in the glyph-only
-// degradation step. Both are empty when the agent has no thinking
-// configuration. The vocabulary carries no ✻ glyph: the effort gauge is the
-// only visual language for thinking.
+// thinkingBadge returns the styled right-aligned badge for an agent's thinking
+// label and the compact single-cell form used in the glyph-only degradation
+// step. Both are empty when the agent has no thinking configuration. The
+// vocabulary carries no ✻ glyph: the effort gauge is the only visual language
+// for thinking.
 func thinkingBadge(label string) (badge, compact string) {
 	kind, tokens := classifyThinking(label)
 	switch kind {
@@ -1357,197 +1481,90 @@ func thinkingBadge(label string) (badge, compact string) {
 	}
 }
 
-// cardThinkingLine returns the focus card's thinking body line
-// "thinking <gauge> <wording>" (no ✻), or "" when the agent has no thinking
-// configuration. The gauge and wording are shared with the agent-details dialog
-// via toolcommon.ThinkingGaugeValue, so all three surfaces speak one language.
-func cardThinkingLine(label string) string {
-	gv := toolcommon.ThinkingGaugeValue(label)
-	if gv == "" {
-		return ""
-	}
-	return styles.MutedStyle.Render("thinking ") + gv
-}
-
-// rosterLayout holds the roster column widths computed once per render so all
-// rows align. Each non-current agent renders on two lines: line 1 is the
-// shortcut + colored name with the thinking badge right-aligned at the content
-// edge; line 2 is the indented provider/model. glyphOnly collapses line 1's
-// badge to a single cell near MinWidth.
-type rosterLayout struct {
-	contentWidth int
-	nameWidth    int
-	modelWidth   int
-	badgeWidth   int
-	glyphOnly    bool
-}
-
-// computeRosterLayout derives the roster column widths for the given content
-// width. The two-line layout always keeps the model (on its own line 2), so the
-// only degradation is line 1's badge: below rowGlyphOnlyMinWidth (near MinWidth)
-// the gauge collapses to a single cell to give the name column more room.
-func (m *model) computeRosterLayout(contentWidth int, currentAgent string) rosterLayout {
-	fullBadge, compactBadge := 0, 0
+// badgeColumnWidth returns the widest thinking badge across the roster so every
+// agent line reserves the same badge column and the badges stay aligned.
+// glyphOnly selects the single-cell compact form used near MinWidth.
+func (m *model) badgeColumnWidth(glyphOnly bool) int {
+	w := 0
 	for _, a := range m.availableAgents {
-		if a.Name == currentAgent {
-			continue // the current agent renders as the card, not a row
+		full, compact := thinkingBadge(a.Thinking)
+		b := full
+		if glyphOnly {
+			b = compact
 		}
-		b, c := thinkingBadge(a.Thinking)
-		fullBadge = max(fullBadge, lipgloss.Width(b))
-		compactBadge = max(compactBadge, lipgloss.Width(c))
+		w = max(w, lipgloss.Width(b))
 	}
-
-	l := rosterLayout{contentWidth: contentWidth, badgeWidth: fullBadge}
-	if contentWidth < rowGlyphOnlyMinWidth {
-		l.glyphOnly = true
-		l.badgeWidth = compactBadge
-	}
-
-	// Line 1: shortcut + name + minGap + right-aligned badge.
-	l.nameWidth = max(1, contentWidth-rowShortcutWidth-minGap-l.badgeWidth)
-	// Line 2: indented provider/model.
-	l.modelWidth = max(1, contentWidth-rowIndentWidth)
-	return l
+	return w
 }
 
-// rowShortcutCell renders the fixed-width leading cell of a roster row: the
-// spinner frame when the agent is working, the "^N" hint for agents 1–9, or
-// blank padding otherwise.
-func (m *model) rowShortcutCell(agent runtime.AgentDetails, index int) string {
+// padRight pads a (possibly styled) string with trailing spaces to width.
+func padRight(s string, width int) string {
+	return s + strings.Repeat(" ", max(0, width-lipgloss.Width(s)))
+}
+
+// padLeft pads a (possibly styled) string with leading spaces to width, i.e.
+// right-aligns it within the column.
+func padLeft(s string, width int) string {
+	return strings.Repeat(" ", max(0, width-lipgloss.Width(s))) + s
+}
+
+// renderAgentLine renders a single agent as two lines:
+//
+//	▶ name            <thinking> ^N
+//	  provider/model         <ctx%>
+//
+// Line 1: the name is left-aligned in its accent color, the thinking badge is
+// right-aligned in a shared column, and the "^N" switch shortcut sits flush
+// against the right edge. The current agent is marked with ▶ (or the spinner
+// while it — or any agent — is working); other agents pad the marker column so
+// the names stay aligned. Line 2: the indented provider/model, left-truncated
+// so its informative tail survives, with the agent's latest known context
+// usage percentage right-aligned once the agent has run (background agent
+// tasks included). The description is omitted. Agents past the 9th have no
+// shortcut.
+func (m *model) renderAgentLine(agent runtime.AgentDetails, index, contentWidth, nameWidth, badgeWidth int, glyphOnly, current bool) []string {
+	agentStyle := styles.AgentAccentStyleFor(agent.Name)
+
+	var marker string
 	switch {
 	case m.workingAgent == agent.Name:
-		frame := styles.AgentAccentStyleFor(agent.Name).Render(m.spinner.RawFrame())
-		return frame + strings.Repeat(" ", max(0, rowShortcutWidth-lipgloss.Width(frame)))
-	case index >= 0 && index < 9:
-		hint := styles.MutedStyle.Render(fmt.Sprintf("^%d", index+1))
-		return hint + strings.Repeat(" ", max(0, rowShortcutWidth-lipgloss.Width(hint)))
-	default:
-		return strings.Repeat(" ", rowShortcutWidth)
+		marker = agentStyle.Render(m.spinner.RawFrame())
+	case current:
+		marker = agentStyle.Render("▶")
 	}
-}
+	left := padRight(marker, agentMarkerWidth) + agentStyle.Render(toolcommon.TruncateText(agent.Name, nameWidth))
 
-// rightAlign appends padding so hint sits flush against the right edge of width.
-func rightAlign(left, hint string, width int) string {
-	if hint == "" {
-		return left
-	}
-	space := max(1, width-lipgloss.Width(left)-lipgloss.Width(hint))
-	return left + strings.Repeat(" ", space) + hint
-}
-
-// renderAgentRow renders a non-current agent as two lines: line 1 is the
-// shortcut (or spinner) + colored name with the thinking badge right-aligned at
-// the content edge; line 2 is the indented provider/model (or harness type).
-// Harness and non-reasoning agents simply have no badge on line 1. Both lines
-// are owned by the agent so a click on either switches to it.
-func (m *model) renderAgentRow(agent runtime.AgentDetails, index int, l rosterLayout) []string {
-	agentStyle := styles.AgentAccentStyleFor(agent.Name)
-	shortcut := m.rowShortcutCell(agent, index)
-
-	name := toolcommon.TruncateText(agent.Name, l.nameWidth)
 	badge, compact := thinkingBadge(agent.Thinking)
-	if l.glyphOnly {
+	if glyphOnly {
 		badge = compact
 	}
-	line1 := rightAlign(shortcut+agentStyle.Render(name), badge, l.contentWidth)
+
+	var shortcut string
+	if index >= 0 && index < 9 {
+		shortcut = styles.MutedStyle.Render(fmt.Sprintf("^%d", index+1))
+	}
+
+	right := padLeft(badge, badgeWidth) + " " + padLeft(shortcut, agentShortcutWidth)
+	gap := max(1, contentWidth-lipgloss.Width(left)-lipgloss.Width(right))
+	line1 := left + strings.Repeat(" ", gap) + right
 
 	modelText := agent.Model
 	if agent.Provider != "" {
 		modelText = agent.Provider + "/" + agent.Model
 	}
-	model := toolcommon.TruncateTextLeft(modelText, l.modelWidth)
-	line2 := strings.Repeat(" ", rowIndentWidth) + styles.MutedStyle.Render(model)
+	ctxPercent := m.agentContextPercent(agent.Name)
+	modelWidth := contentWidth - agentMarkerWidth
+	if ctxPercent != "" {
+		modelWidth -= lipgloss.Width(ctxPercent) + 1
+	}
+	model := toolcommon.TruncateTextLeft(modelText, max(1, modelWidth))
+	line2 := strings.Repeat(" ", agentMarkerWidth) + styles.MutedStyle.Render(model)
+	if ctxPercent != "" {
+		gap := max(1, contentWidth-lipgloss.Width(line2)-lipgloss.Width(ctxPercent))
+		line2 += strings.Repeat(" ", gap) + styles.MutedStyle.Render(ctxPercent)
+	}
 
 	return []string{line1, line2}
-}
-
-// renderAgentCard renders the multi-line focus card for the current agent.
-func (m *model) renderAgentCard(agent runtime.AgentDetails, index, contentWidth int) []string {
-	agentStyle := styles.AgentAccentStyleFor(agent.Name)
-	var prefix string
-	if m.workingAgent == agent.Name {
-		prefix = agentStyle.Render(m.spinner.RawFrame()) + " "
-	} else {
-		prefix = agentStyle.Render("▶") + " "
-	}
-	var hint string
-	if index >= 0 && index < 9 {
-		hint = styles.MutedStyle.Render(fmt.Sprintf("^%d", index+1))
-	}
-	header := rightAlign(prefix+agentStyle.Render(agent.Name), hint, contentWidth)
-
-	bodyWidth := contentWidth - treePrefixWidth
-	var nodes [][]string
-	if desc := wrapDescription(agent.Description, bodyWidth, 2); len(desc) > 0 {
-		nodes = append(nodes, desc)
-	}
-	modelText := agent.Model
-	if agent.Provider != "" {
-		modelText = agent.Provider + "/" + agent.Model
-	}
-	if modelText != "" {
-		nodes = append(nodes, []string{toolcommon.TruncateTextLeft(modelText, bodyWidth)})
-	}
-	if line := cardThinkingLine(agent.Thinking); line != "" {
-		nodes = append(nodes, []string{line})
-	}
-
-	lines := []string{header}
-	lines = append(lines, renderTreeNodes(nodes)...)
-	return lines
-}
-
-// renderTreeNodes renders body nodes with tree-structure prefixes. Each node is
-// one or more already-styled lines; the last node uses "└ ", earlier nodes use
-// "├ ", and continuation lines use "│ " (or blank under the last node).
-func renderTreeNodes(nodes [][]string) []string {
-	var out []string
-	for ni, node := range nodes {
-		last := ni == len(nodes)-1
-		for li, line := range node {
-			var prefix string
-			switch {
-			case li == 0 && last:
-				prefix = "└ "
-			case li == 0:
-				prefix = "├ "
-			case last:
-				prefix = "  "
-			default:
-				prefix = "│ "
-			}
-			out = append(out, styles.MutedStyle.Render(prefix)+line)
-		}
-	}
-	return out
-}
-
-// wrapDescription wraps plain description text to at most maxLines lines within
-// width, appending an ellipsis to the final line when content is dropped.
-func wrapDescription(desc string, width, maxLines int) []string {
-	if desc == "" || width <= 0 || maxLines <= 0 {
-		return nil
-	}
-	wrapped := toolcommon.WrapLinesWords(desc, width)
-	if len(wrapped) <= maxLines {
-		return wrapped
-	}
-	wrapped = wrapped[:maxLines]
-	wrapped[maxLines-1] = ellipsizePlain(wrapped[maxLines-1], width)
-	return wrapped
-}
-
-// ellipsizePlain shortens plain text to width and guarantees a trailing ellipsis
-// to signal dropped content.
-func ellipsizePlain(s string, width int) string {
-	if width <= 1 {
-		return "…"
-	}
-	r := []rune(s)
-	for lipgloss.Width(string(r)) > width-1 {
-		r = r[:len(r)-1]
-	}
-	return strings.TrimRight(string(r), " ") + "…"
 }
 
 // buildAgentClickZones populates agentClickZones from the explicit per-line
@@ -1684,6 +1701,23 @@ func (m *model) GetSize() (width, height int) {
 
 func (m *model) SetMode(mode Mode) {
 	m.mode = mode
+	m.invalidateCache()
+}
+
+// SetMirroredPadding swaps the horizontal edge padding so the content hugs
+// the terminal edge when the sidebar is rendered on the left of the chat,
+// with the breathing room moved to the chat side.
+func (m *model) SetMirroredPadding(mirrored bool) {
+	cfg := DefaultLayoutConfig()
+	if mirrored {
+		cfg.PaddingLeft, cfg.PaddingRight = cfg.PaddingRight, cfg.PaddingLeft
+	}
+	if m.layoutCfg == cfg {
+		return
+	}
+	m.layoutCfg = cfg
+	m.updateScrollviewPosition()
+	m.updateTitleInputWidth()
 	m.invalidateCache()
 }
 

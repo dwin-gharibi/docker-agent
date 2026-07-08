@@ -92,8 +92,8 @@ func (s *FallbackSpan) IncrementAttempt() {
 		return
 	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.attempts++
-	s.mu.Unlock()
 }
 
 // SetFinalModel records the model that ultimately served the response.
@@ -104,8 +104,8 @@ func (s *FallbackSpan) SetFinalModel(model string) {
 		return
 	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.final = model
-	s.mu.Unlock()
 }
 
 // RecordError stores an error and an error.type label for the metric.
@@ -131,8 +131,8 @@ func (s *FallbackSpan) SetOutcome(outcome string) {
 		return
 	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.outcome = outcome
-	s.mu.Unlock()
 }
 
 // End closes the span and flushes accumulated attributes.
@@ -222,8 +222,8 @@ func (s *RetrievalSpan) SetResultCount(n int) {
 		return
 	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.resultCount = n
-	s.mu.Unlock()
 }
 
 // RecordError marks the retrieval span as failed.

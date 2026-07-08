@@ -1,10 +1,11 @@
 ---
 title: "Filesystem Tool"
 description: "Read, write, list, search, and navigate files and directories."
-permalink: /tools/filesystem/
+keywords: docker agent, ai agents, tools, toolsets, filesystem tool
+linkTitle: "Filesystem"
+weight: 10
+canonical: https://docs.docker.com/ai/docker-agent/tools/filesystem/
 ---
-
-# Filesystem Tool
 
 _Read, write, list, search, and navigate files and directories._
 
@@ -55,7 +56,7 @@ Entries in either list are expanded as follows:
 
 - `"."` — the agent's working directory
 - `"~"` or `"~/..."` — the user's home directory
-- `"$VAR"` / `"${VAR}"` — environment variable expansion
+- `"$VAR"` / `"${VAR}"` / `"${env.VAR}"` — environment variable expansion
 - absolute paths — used as-is
 - relative paths — anchored at the working directory
 
@@ -108,8 +109,5 @@ Post-edit commands run with the same working directory as the agent. If a comman
 
 See [`examples/post_edit.yaml`](https://github.com/docker/docker-agent/blob/main/examples/post_edit.yaml) for a complete example.
 
-<div class="callout callout-tip" markdown="1">
-<div class="callout-title">Tip
-</div>
-  <p>The filesystem tool resolves paths relative to the working directory. Agents can also use absolute paths.</p>
-</div>
+> [!TIP]
+> The filesystem tool resolves paths relative to the working directory. Agents can also use absolute paths.

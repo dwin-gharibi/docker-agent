@@ -10,6 +10,8 @@ import (
 )
 
 func TestParseOnEventFlags(t *testing.T) {
+	t.Parallel()
+
 	hooks, err := parseOnEventFlags([]string{
 		"stream_stopped=say done",
 		"*=tee /tmp/events.log",
@@ -23,6 +25,8 @@ func TestParseOnEventFlags(t *testing.T) {
 }
 
 func TestParseOnEventFlags_BadFormat(t *testing.T) {
+	t.Parallel()
+
 	cases := []string{"no-equals", "=missing-type"}
 	for _, s := range cases {
 		_, err := parseOnEventFlags([]string{s})
@@ -31,6 +35,8 @@ func TestParseOnEventFlags_BadFormat(t *testing.T) {
 }
 
 func TestBoundedWriter_CapsAtMaxHookOutput(t *testing.T) {
+	t.Parallel()
+
 	var b boundedWriter
 
 	n, err := b.Write(bytes.Repeat([]byte("a"), maxHookOutput-3))

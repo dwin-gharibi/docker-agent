@@ -26,10 +26,12 @@ type fakeRuntime struct {
 
 	concurrentStreams atomic.Int32
 	maxConcurrent     atomic.Int32
-	streamDelay       time.Duration
+	// release, when non-nil, keeps the stream open until it is closed or
+	// the stream context is cancelled; when nil the stream ends at once.
+	release chan struct{}
 }
 
-func (f *fakeRuntime) RunStream(_ context.Context, _ *session.Session) <-chan runtime.Event {
+func (f *fakeRuntime) RunStream(ctx context.Context, _ *session.Session) <-chan runtime.Event {
 	cur := f.concurrentStreams.Add(1)
 	for {
 		old := f.maxConcurrent.Load()
@@ -40,7 +42,12 @@ func (f *fakeRuntime) RunStream(_ context.Context, _ *session.Session) <-chan ru
 
 	ch := make(chan runtime.Event)
 	go func() {
-		time.Sleep(f.streamDelay)
+		if f.release != nil {
+			select {
+			case <-f.release:
+			case <-ctx.Done():
+			}
+		}
 		f.concurrentStreams.Add(-1)
 		close(ch)
 	}()
@@ -49,15 +56,15 @@ func (f *fakeRuntime) RunStream(_ context.Context, _ *session.Session) <-chan ru
 
 func (f *fakeRuntime) Resume(_ context.Context, _ runtime.ResumeRequest) {}
 
-func (f *fakeRuntime) Steer(_ runtime.QueuedMessage) error { return nil }
+func (f *fakeRuntime) Steer(_ context.Context, _ runtime.QueuedMessage) error { return nil }
 
-func (f *fakeRuntime) FollowUp(_ runtime.QueuedMessage) error { return nil }
+func (f *fakeRuntime) FollowUp(_ context.Context, _ runtime.QueuedMessage) error { return nil }
 
 func (f *fakeRuntime) ResumeElicitation(_ context.Context, _ tools.ElicitationAction, _ map[string]any) error {
 	return nil
 }
 
-func (f *fakeRuntime) CurrentAgentName() string { return "root" }
+func (f *fakeRuntime) CurrentAgentName(context.Context) string { return "root" }
 
 // SupportsModelSwitching reports false by default. Tests that exercise
 // the /models endpoints embed fakeRuntime and override this.
@@ -73,6 +80,7 @@ func newTestSessionManager(t *testing.T, sess *session.Session, fake *fakeRuntim
 	sm := &SessionManager{
 		runtimeSessions:   concurrent.NewMap[string, *activeRuntimes](),
 		deletedSessions:   concurrent.NewMap[string, *activeRuntimes](),
+		eventLogs:         concurrent.NewMap[string, *pumpedEventLog](),
 		followUpInjectors: concurrent.NewMap[string, FollowUpInjector](),
 		followUpKeys:      concurrent.NewMap[string, *idempotencyCache](),
 		sessionStore:      store,
@@ -103,8 +111,8 @@ func TestAttachRuntime_RegistersRuntimeForExternalDriver(t *testing.T) {
 	require.NoError(t, store.AddSession(ctx, sess))
 
 	sm := NewSessionManager(ctx, config.Sources{}, store, 0, &config.RuntimeConfig{})
-	fake := &fakeRuntime{streamDelay: 10 * time.Millisecond}
-	sm.AttachRuntime(sess.ID, fake, sess)
+	fake := &fakeRuntime{}
+	sm.AttachRuntime(t.Context(), sess.ID, fake, sess)
 
 	// Steer routes through the attached runtime, not a freshly built one.
 	require.NoError(t, sm.SteerSession(ctx, sess.ID, []api.Message{{Content: "hi"}}))
@@ -118,17 +126,16 @@ func TestRunSession_ConcurrentRequestReturnsErrSessionBusy(t *testing.T) {
 
 	ctx := t.Context()
 	sess := session.New()
-	fake := &fakeRuntime{streamDelay: 500 * time.Millisecond}
+	release := make(chan struct{})
+	fake := &fakeRuntime{release: release}
 	sm := newTestSessionManager(t, sess, fake)
 
-	// Start the first stream.
+	// Start the first stream. RunSession acquires the streaming lock
+	// synchronously, so the session is busy as soon as it returns.
 	ch1, err := sm.RunSession(ctx, sess.ID, "agent", "root", []api.Message{
 		{Content: "first"},
 	}, "")
 	require.NoError(t, err)
-
-	// Give the goroutine a moment to acquire the streaming lock.
-	time.Sleep(50 * time.Millisecond)
 
 	// The second request should fail immediately with ErrSessionBusy.
 	_, err = sm.RunSession(ctx, sess.ID, "agent", "root", []api.Message{
@@ -136,7 +143,8 @@ func TestRunSession_ConcurrentRequestReturnsErrSessionBusy(t *testing.T) {
 	}, "")
 	require.ErrorIs(t, err, ErrSessionBusy)
 
-	// Drain first stream to let it complete.
+	// Let the first stream complete and drain it.
+	close(release)
 	for range ch1 {
 	}
 
@@ -156,15 +164,14 @@ func TestRunSession_MessagesNotAddedWhenBusy(t *testing.T) {
 
 	ctx := t.Context()
 	sess := session.New()
-	fake := &fakeRuntime{streamDelay: 500 * time.Millisecond}
+	release := make(chan struct{})
+	fake := &fakeRuntime{release: release}
 	sm := newTestSessionManager(t, sess, fake)
 
 	ch1, err := sm.RunSession(ctx, sess.ID, "agent", "root", []api.Message{
 		{Content: "first"},
 	}, "")
 	require.NoError(t, err)
-
-	time.Sleep(50 * time.Millisecond)
 
 	msgCountBefore := len(sess.GetAllMessages())
 
@@ -176,6 +183,7 @@ func TestRunSession_MessagesNotAddedWhenBusy(t *testing.T) {
 	// Messages should not have been added.
 	assert.Len(t, sess.GetAllMessages(), msgCountBefore)
 
+	close(release)
 	for range ch1 {
 	}
 }
@@ -187,7 +195,7 @@ func TestRunSession_SequentialRequestsSucceed(t *testing.T) {
 
 	ctx := t.Context()
 	sess := session.New()
-	fake := &fakeRuntime{streamDelay: 10 * time.Millisecond}
+	fake := &fakeRuntime{}
 	sm := newTestSessionManager(t, sess, fake)
 
 	for range 3 {
@@ -209,8 +217,8 @@ func TestRunSession_DifferentSessionsConcurrently(t *testing.T) {
 
 	ctx := t.Context()
 	store := session.NewInMemorySessionStore()
-	fake1 := &fakeRuntime{streamDelay: 200 * time.Millisecond}
-	fake2 := &fakeRuntime{streamDelay: 200 * time.Millisecond}
+	fake1 := &fakeRuntime{}
+	fake2 := &fakeRuntime{}
 
 	sess1 := session.New()
 	sess2 := session.New()
@@ -269,7 +277,7 @@ type recordingFollowUpRuntime struct {
 	followUps []string
 }
 
-func (r *recordingFollowUpRuntime) FollowUp(msg runtime.QueuedMessage) error {
+func (r *recordingFollowUpRuntime) FollowUp(_ context.Context, msg runtime.QueuedMessage) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.followUps = append(r.followUps, msg.Content)
@@ -336,6 +344,27 @@ func TestFollowUpSession_UnknownSession(t *testing.T) {
 
 	_, _, err := sm.FollowUpSession(t.Context(), "does-not-exist", []api.Message{{Content: "x"}}, "")
 	assert.ErrorIs(t, err, ErrSessionNotRunning)
+}
+
+func TestRecallSession_DeleteCancelsRecalledRunAndDoesNotResurrect(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	sess := session.New()
+	fake := &fakeRuntime{release: make(chan struct{})}
+	sm := newTestSessionManager(t, sess, fake)
+
+	recall := runtime.QueuedMessage{Content: "background job finished"}
+	require.NoError(t, sm.recallSession(ctx, sess.ID, recall))
+	require.Eventually(t, func() bool {
+		return fake.concurrentStreams.Load() == 1
+	}, time.Second, 10*time.Millisecond)
+
+	require.NoError(t, sm.DeleteSession(ctx, sess.ID))
+	require.NoError(t, sm.WaitStopped(ctx, sess.ID, time.Second))
+
+	_, err := sm.sessionStore.GetSession(ctx, sess.ID)
+	assert.ErrorIs(t, err, session.ErrNotFound)
 }
 
 // TestFollowUpSession_IdempotencyKeyDedupes verifies that two follow-ups with

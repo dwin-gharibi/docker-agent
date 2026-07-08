@@ -146,8 +146,9 @@ func (m *MigrationManager) applyMigration(ctx context.Context, migration *Migrat
 		return err
 	}
 	defer func() {
-		// TODO: handle error
-		_ = tx.Rollback()
+		if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+			slog.ErrorContext(ctx, "failed to rollback migration transaction", "error", err)
+		}
 	}()
 
 	// Execute SQL migration if present

@@ -1,10 +1,10 @@
 ---
 title: "Managing Secrets"
 description: "How to securely provide API keys and credentials to docker-agent using environment variables, env files, Docker Compose secrets, macOS Keychain, pass, and 1Password references."
-permalink: /guides/secrets/
+keywords: docker agent, ai agents, guides, managing secrets
+weight: 30
+canonical: https://docs.docker.com/ai/docker-agent/guides/secrets/
 ---
-
-# Managing Secrets
 
 _How to securely provide API keys and credentials to docker-agent._
 
@@ -16,10 +16,11 @@ docker-agent needs API keys to talk to model providers (OpenAI, Anthropic, etc.)
 | --- | --- | --- |
 | 1 | [Environment variables](#environment-variables) | `export OPENAI_API_KEY=sk-...` |
 | 2 | [Docker Compose secrets](#docker-compose-secrets) | Files in `/run/secrets/` |
-| 3 | [Credential helper](#credential-helper) | Custom command declared in `~/.config/cagent/config.yaml` under `credential_helper:` |
-| 4 | [Docker Desktop](#docker-desktop) | Secrets stored by the Docker Desktop backend (no setup on a Desktop install) |
-| 5 | [`pass` password manager](#pass-password-manager) | `pass insert OPENAI_API_KEY` |
-| 6 | [macOS Keychain](#macos-keychain) | `security add-generic-password` |
+| 3 | [docker agent env file](#docker-agent-env-file) | `~/.config/cagent/.env`, written by `docker agent setup` |
+| 4 | [Credential helper](#credential-helper) | Custom command declared in `~/.config/cagent/config.yaml` under `credential_helper:` |
+| 5 | [Docker Desktop](#docker-desktop) | Secrets stored by the Docker Desktop backend (no setup on a Desktop install) |
+| 6 | [`pass` password manager](#pass-password-manager) | `pass insert OPENAI_API_KEY` |
+| 7 | [macOS Keychain](#macos-keychain) | `security add-generic-password` |
 
 The first provider that has a value wins. You can mix and match — for example, use environment variables for one key and Keychain for another.
 
@@ -45,6 +46,7 @@ Common variables:
 | `ANTHROPIC_API_KEY` | Anthropic |
 | `GOOGLE_API_KEY` | Google Gemini |
 | `MISTRAL_API_KEY` | Mistral |
+| `OPENROUTER_API_KEY` | OpenRouter |
 | `XAI_API_KEY` | xAI |
 | `NEBIUS_API_KEY` | Nebius |
 
@@ -80,10 +82,19 @@ The file format supports:
 - Quoted values: `KEY="value with spaces"`
 - Blank lines are ignored
 
-<div class="callout callout-warning" markdown="1">
-<div class="callout-title">Important</div>
-<p>Add <code>.env</code> to your <code>.gitignore</code> to avoid committing secrets to version control.</p>
-</div>
+> [!IMPORTANT]
+> Add `.env` to your `.gitignore` to avoid committing secrets to version control.
+
+## docker agent env file
+
+A `.env` file (same format as above) at `~/.config/cagent/.env` is read automatically on every run — no `--env-from-file` flag needed. It is where [`docker agent setup`](../../features/cli/index.md#docker-agent-setup) stores API keys when you choose the env-file location, and you can edit it by hand:
+
+```bash
+# ~/.config/cagent/.env
+OPENAI_API_KEY=sk-...
+```
+
+The file is created with owner-only permissions (`0600`), but the values are stored in plain text: prefer the OS keychain or `pass` when available.
 
 ## Docker Compose Secrets
 
@@ -231,10 +242,10 @@ docker agent run agent.yaml
 
 References follow the `op://<vault>/<item>/<field>` format. Make sure the `op` CLI is installed and you are signed in (`op signin`) so that non-interactive reads succeed.
 
-<div class="callout callout-warning" markdown="1">
-<div class="callout-title">Behaviour when resolution fails</div>
-<p>If the value starts with <code>op://</code> but the <code>op</code> CLI is not installed, or the reference cannot be read (not signed in, wrong path, locked vault), docker-agent logs a warning and treats the variable as <strong>unset</strong> — it never forwards the raw <code>op://</code> reference to a model provider or tool.</p>
-</div>
+> [!WARNING]
+> **Behaviour when resolution fails**
+>
+> If the value starts with `op://` but the `op` CLI is not installed, or the reference cannot be read (not signed in, wrong path, locked vault), docker-agent logs a warning and uses an **empty value** — it never forwards the raw `op://` reference to a model provider or tool. Resolved references (and deterministic failures) are cached for the lifetime of the run; transient failures such as a cancelled lookup are not cached, so a later attempt can retry.
 
 ## Choosing a Method
 
@@ -242,6 +253,7 @@ References follow the `op://<vault>/<item>/<field>` format. Make sure the `op` C
 | --- | --- | --- |
 | Environment variables | Quick local development, scripts | Low |
 | Env files | Team projects, multiple keys | Low |
+| docker agent env file | Keys used across all projects, written by `docker agent setup` | Low |
 | Docker Compose secrets | Containerized deployments, CI/CD | Medium |
 | `pass` | Linux/macOS, GPG-based workflows | Medium |
 | macOS Keychain | macOS local development | Low |
@@ -270,4 +282,4 @@ agents:
       - type: shell
 ```
 
-The ruleset covers GitHub PATs, AWS / GCP / Azure credentials, Stripe / Slack / GitLab / Hugging Face tokens, JWTs, PEM-encoded private keys, Docker Hub PATs, and many others. Each detected span is replaced with the literal `[REDACTED]`. See the [Redacting Secrets]({{ '/configuration/agents/#redacting-secrets' | relative_url }}) section in the agent configuration reference for the full picture and important caveats about false negatives.
+The ruleset covers GitHub PATs, AWS / GCP / Azure credentials, Stripe / Slack / GitLab / Hugging Face tokens, JWTs, PEM-encoded private keys, Docker Hub PATs, and many others. Each detected span is replaced with the literal `[REDACTED]`. See the [Redacting Secrets](../../configuration/agents/index.md#redacting-secrets) section in the agent configuration reference for the full picture and important caveats about false negatives.

@@ -1,16 +1,15 @@
 ---
 title: "Terminal UI (TUI)"
 description: "docker-agent's default interface is a rich, interactive terminal UI with file attachments, themes, session management, and more."
-permalink: /features/tui/
+keywords: docker agent, ai agents, features, terminal ui (tui)
+linkTitle: "Terminal UI"
+weight: 10
+canonical: https://docs.docker.com/ai/docker-agent/features/tui/
 ---
-
-# Terminal UI (TUI)
 
 _docker-agent's default interface is a rich, interactive terminal UI with file attachments, themes, session management, and more._
 
-<div class="demo-container">
-  <img src="{{ '/demo.gif' | relative_url }}" alt="docker-agent TUI in action showing an interactive agent session" loading="lazy">
-</div>
+![docker-agent TUI in action showing an interactive agent session](../../demo.gif)
 
 ## Launching the TUI
 
@@ -58,6 +57,8 @@ settings:
 
 Omit `lean` or set it to `false` to keep the full TUI as the default. You can still use `--lean` for a single run, or `--lean=false` to use the full TUI when `settings.lean` is enabled.
 
+The lean TUI supports **steering**: messages submitted while the agent is running are queued and delivered to the active session. Pending steering messages appear with muted styling at the end of the live stream so you can see what will be sent next.
+
 ## Slash Commands
 
 Type `/` during a session to see available commands, or press <kbd>Ctrl</kbd>+<kbd>K</kbd> for the command palette:
@@ -75,12 +76,16 @@ Type `/` during a session to see available commands, or press <kbd>Ctrl</kbd>+<k
 | `/export`          | Export the session as HTML                                                           |
 | `/sessions`        | Browse and load past sessions                                                        |
 | `/model`           | Change the model for the current agent                                               |
+| `/effort`          | Set the current model's reasoning-effort level (`/effort <none\|minimal\|low\|medium\|high\|xhigh\|max>`, or `/effort` alone to pick from the supported levels; reasoning models only) |
+| `/custom`          | Customize the TUI layout: sidebar position, section spacing, and visible sidebar sections |
 | `/theme`           | Change the color theme                                                               |
 | `/yolo`            | Toggle automatic tool call approval                                                  |
 | `/title`           | Set or regenerate session title                                                      |
 | `/attach`          | Attach a file to your message                                                        |
 | `/shell`           | Open a shell                                                                         |
 | `/star`            | Star/unstar the current session                                                      |
+| `/context`         | Show a context-window breakdown: estimated tokens per category (system prompt, tool definitions, prompt files, messages, tool results, compaction summary), plus a per-file inventory of attached files and prompt files. Select an attached file with the arrow keys and press <kbd>d</kbd> to drop it |
+| `/drop`            | Remove an attached file from the session context (`/drop <path>`, or `/drop` alone to review and drop from the `/context` dialog)  |
 | `/cost`            | Show cost breakdown for this session                                                 |
 | `/eval`            | Create an evaluation report                                                          |
 | `/pause`           | Pause/resume the runtime loop. While the agent is mid-request, the resize handle shows "Pausing…" until the in-flight request completes; once the loop is blocked the indicator changes to "⏸ Paused". Run `/pause` again to resume. |
@@ -96,7 +101,7 @@ Slash commands (both built-in and named) execute immediately when entered. Regul
 
 ### Agents Panel
 
-The sidebar's **Agents** section lists every agent in the team. The current agent is shown as a focus **card** (rendered in place at its position in the list) with its name, a wrapped description, its full `provider/model`, and a thinking line. Every other agent is shown as a compact **two-line row** — line 1 is the shortcut/spinner, the agent name (in its accent color), and a right-aligned thinking **gauge**; line 2 is the indented full `provider/model` — so a large team stays scannable while still showing each model. Agents are separated by a blank line so the two-line rows stay visually distinct. The effort **gauge** is the only visual language for thinking; the focus card and the Agent Inspector spell out the exact level alongside it. Left-click any agent to switch to it.
+The sidebar's **Agents** section lists every agent in the team. The current agent is shown as a focus **card** (rendered in place at its position in the list) with its name, a wrapped description, its full `provider/model`, and a thinking line. Every other agent is shown as a compact **two-line row** — line 1 is the shortcut/spinner, the agent name (in its accent color), and a right-aligned thinking **gauge**; line 2 is the indented full `provider/model` — so a large team stays scannable while still showing each model. Once an agent has run (in the main session, as a delegated sub-agent, or as a background agent task), line 2 also carries its latest **context usage** as a right-aligned percentage of its context window, so per-agent context accounting is visible at a glance across the whole team. Agents are separated by a blank line so the two-line rows stay visually distinct. The effort **gauge** is the only visual language for thinking; the focus card and the Agent Inspector spell out the exact level alongside it. Left-click any agent to switch to it.
 
 #### Agent inspector
 
@@ -111,6 +116,7 @@ The title is rendered in the agent's accent color. Sections appear in this order
 - **Description** — the agent's wrapped description.
 - **Live state** — a `● current agent` line when the inspected agent is the one currently running.
 - **Model / Fallback / Thinking** — the `provider/model`, any fallback models, and the gauge + value thinking line (omitted for models with no selectable thinking, e.g. harness-backed agents).
+- **Context** — the agent's latest known context usage, e.g. `Context: 12.8K of 128.0K tokens (10%)` (a bare token count when the context limit is unknown; omitted until the agent has run). Sub-agent and background-agent runs are accounted for.
 - **Sub-agents (N) / Handoffs (N) / Skills (N)** — compact, inline, comma-separated lists wrapped to the dialog width.
 - **Limits** — the configured per-agent limits that are set, e.g. `Limits: max-iter 50 · history 40 · max-tool-calls 5`.
 - **Options** — the enabled option flags, e.g. `Options: add-date · add-environment-info · redact-secrets`.
@@ -167,7 +173,7 @@ When enabled, docker-agent records filesystem snapshots at turn boundaries. The 
 
 Neither command removes messages from the session transcript — they only touch files on disk. Both commands (and the matching command-palette entries) are hidden when snapshots are turned off. Omit `snapshot` or set it to `false` to leave automatic snapshots off; agents can still configure snapshot hooks manually.
 
-See [Snapshots]({{ '/features/snapshots/' | relative_url }}) for how the shadow-git machinery works and how to wire it per-agent.
+See [Snapshots](../snapshots/index.md) for how the shadow-git machinery works and how to wire it per-agent.
 
 ## File Attachments
 
@@ -182,7 +188,9 @@ Attach file contents to your messages using the `@` trigger:
 Explain what the code in @pkg/agent/agent.go does
 ```
 
-The agent receives the full file contents in a structured `&lt;attachments&gt;` block, while the UI shows just the reference.
+The agent receives the full file contents in a structured `<attachments>` block, while the UI shows just the reference.
+
+Attached files are also recorded on the session so sub-agents spawned by task transfer can read them. To review what is attached, open `/context`: the dialog lists every attached file (and resolved prompt file) with a per-file token estimate. Use <kbd>↑</kbd>/<kbd>↓</kbd> to select an attached file and press <kbd>d</kbd> (or <kbd>x</kbd>/<kbd>Del</kbd>) to drop it, or run `/drop <path>` directly. Dropping stops sharing the file with sub-agents and skills; content already inlined in earlier messages stays in the conversation until compaction, and the file can always be re-attached with `@` or `/attach`.
 
 ## Runtime Model Switching
 
@@ -194,25 +202,28 @@ Change the AI model during a session with `/model` or <kbd>Ctrl</kbd>+<kbd>M</kb
 
 When a models gateway is configured (`--models-gateway`) and it exposes an OpenAI-style `/v1/models` endpoint, the picker lists the models actually served by the gateway (merged with the models defined in the agent config). When the gateway doesn't expose `/v1/models`, the picker falls back to the regular catalog.
 
-<div class="callout callout-tip" markdown="1">
-<div class="callout-title">Tip
-</div>
-  <p>Use model switching to try a more capable model for complex tasks, or a cheaper one for simple queries — without modifying your YAML config.</p>
-
-</div>
+> [!TIP]
+> Use model switching to try a more capable model for complex tasks, or a cheaper one for simple queries — without modifying your YAML config.
 
 ## Editable Messages
 
 Edit any previous user message to branch the conversation. Click on a past message to modify it — the agent will re-process from that point, while the original session history is preserved. This is great for exploring alternative approaches without losing your work.
+
+## Error Recovery
+
+When an agent turn fails (fatal model error, hook block, loop detection, tool-setup failure), the TUI displays the error in the message stream and persists it to the session store. Errors survive a reload and are shown exactly where they occurred, making them visible in shared or remote sessions.
+
+Each error message includes a clickable **↻ retry** button. Clicking it resumes the conversation from the point of failure — without retyping your last message. This lets you recover from transient failures (rate limits, network blips, model API errors) in one click.
 
 ## Session Management
 
 docker-agent automatically saves your sessions. Use `/sessions` to browse past conversations:
 
 - **Browse** past sessions with search and filtering
+- **Workspace grouping**: sessions started in the current directory are listed first under "This workspace", everything else under "Other locations" with its originating directory shown next to each entry; press <kbd>Ctrl</kbd>+<kbd>G</kbd> in the browser to cycle between all, current-directory only, and other-directory views. Restoring a session reopens it in its original directory, so the label always matches where a restore will land
 - **Star** important sessions with `/star`
 - **Branch** conversations by editing any previous user message — preserving the original session history
-- **Resume** sessions with `docker agent run config.yaml --session &lt;id&gt;`
+- **Resume** sessions with `docker agent run config.yaml --session <id>`
 - **Relative refs**: `--session -1` for the last session, `-2` for the one before
 
 ### Session Title Editing
@@ -232,12 +243,8 @@ Customize session titles to make them more meaningful and easier to find. By def
 2. Type your new title
 3. Press <kbd>Enter</kbd> to save, or <kbd>Escape</kbd> to cancel
 
-<div class="callout callout-info" markdown="1">
-<div class="callout-title">Note
-</div>
-  <p>Manually set titles are preserved and won’t be overwritten by auto-generation. Title changes are persisted immediately to the session.</p>
-
-</div>
+> [!NOTE]
+> Manually set titles are preserved and won’t be overwritten by auto-generation. Title changes are persisted immediately to the session.
 
 ## Keyboard Shortcuts
 
@@ -313,6 +320,28 @@ Invalid entries are ignored with a warning (visible with `--debug`) so a bad con
 
 Press <kbd>Ctrl</kbd>+<kbd>R</kbd> to enter incremental history search mode. Start typing to filter through your previous inputs. Press <kbd>Enter</kbd> to select a match, or <kbd>Escape</kbd> to cancel.
 
+## Layout Customization
+
+Run `/custom` to open the layout dialog. It shows a live schematic preview of the resulting layout and applies every change immediately to the UI behind the dialog:
+
+- **Sidebar position**: `Right` (default), `Left`, `Top`, or `Bottom`. Left/right keep the full vertical sidebar next to the chat; top/bottom render it as a compact horizontal band above or below the chat (session title, working directory, usage, plus a one-line summary of the current agent, tools, and todos).
+- **Section spacing**: `Compact`, `Normal` (default), or `Relaxed`, the number of blank lines between the sidebar sections (1, 2, or 3).
+- **Sidebar sections**: toggle the visibility of the **Token usage**, **Agents**, **Tools**, and **Todos** sections. The session block (title and working directory) is always shown.
+
+Press <kbd>Enter</kbd> to apply and persist, or <kbd>Escape</kbd> to cancel and restore the previous layout. The settings are saved globally in `~/.config/cagent/config.yaml`:
+
+```yaml
+# ~/.config/cagent/config.yaml
+settings:
+  layout:
+    sidebar_position: left # right (default), left, top, bottom
+    section_spacing: compact # normal (default), compact, relaxed
+    hide_usage: true
+    hide_agents: false
+    hide_tools: false
+    hide_todos: false
+```
+
 ## Theming
 
 Customize the TUI appearance with built-in or custom themes:
@@ -324,7 +353,20 @@ Customize the TUI appearance with built-in or custom themes:
 
 ### Built-in Themes
 
-`default`, `catppuccin-latte`, `catppuccin-mocha`, `dracula`, `gruvbox-dark`, `gruvbox-light`, `nord`, `one-dark`, `solarized-dark`, `tokyo-night`
+`default`, `default-light`, `catppuccin-latte`, `catppuccin-mocha`, `dracula`, `gruvbox-dark`, `gruvbox-light`, `nord`, `one-dark`, `solarized-dark`, `tokyo-night`
+
+### Auto Theme (match the terminal)
+
+The special theme `auto` follows the terminal's light/dark background instead of naming a fixed theme. Select **Auto (match terminal)** in the `/theme` picker, pass `--theme auto`, or set it in your user config:
+
+```yaml
+settings:
+  theme: auto
+  theme_dark: default # optional, theme used on dark backgrounds (default: default)
+  theme_light: default-light # optional, theme used on light backgrounds (default: default-light)
+```
+
+At startup the terminal background is queried (OSC 11) to pick the dark or light theme of the pair; non-interactive runs (pipes, CI) fall back to the dark theme. In terminals that report appearance changes (DEC mode 2031 — Ghostty, kitty, contour, …), flipping the OS or terminal appearance while docker-agent is running switches the theme live. Terminals without that mode re-sync when the window regains focus.
 
 ### Custom Themes
 
@@ -377,23 +419,19 @@ settings:
   theme: my-theme # References ~/.cagent/themes/my-theme.yaml
 ```
 
-**At launch:** Pass `--theme <name>` to `docker agent run` to preselect a theme for that session. This overrides `settings.theme` in your config but is not saved. Invalid theme names print an error at startup listing the available options. Has no effect in `--exec` mode.
+**At launch:** Pass `--theme <name>` to `docker agent run` to preselect a theme for that session. This overrides `settings.theme` in your config but is not saved. Invalid theme names print an error at startup listing the available options. Has no effect in `--exec` mode. `--theme auto` enables the [auto theme](#auto-theme-match-the-terminal) for the session.
 
 **At runtime:** Use the `/theme` command to open the theme picker and select from available themes. Your selection is saved globally in `~/.config/cagent/config.yaml` under `settings.theme` and persists across sessions.
 
-<div class="callout callout-tip" markdown="1">
-<div class="callout-title">Hot Reload
-</div>
-  <p>Custom themes auto-reload when you save changes to the file — no restart needed. This makes it easy to tweak colors in real-time.</p>
+> [!TIP]
+> **Hot Reload**
+>
+> Custom themes auto-reload when you save changes to the file — no restart needed. This makes it easy to tweak colors in real-time.
 
-</div>
-
-<div class="callout callout-warning" markdown="1">
-<div class="callout-title">Partial overrides
-</div>
-  <p>All user themes are applied on top of the <code>default</code> theme. If you want to customize a built-in theme (e.g., <code>dracula</code>), copy its full YAML from the <a href="https://github.com/docker/docker-agent/tree/main/pkg/tui/styles/themes">built-in themes on GitHub</a> into <code>~/.cagent/themes/</code> and edit the copy. Otherwise, omitted values will use <code>default</code> colors, not the original theme's colors.</p>
-
-</div>
+> [!WARNING]
+> **Partial overrides**
+>
+> All user themes are applied on top of the `default` theme. If you want to customize a built-in theme (e.g., `dracula`), copy its full YAML from the [built-in themes on GitHub](https://github.com/docker/docker-agent/tree/main/pkg/tui/styles/themes) into `~/.cagent/themes/` and edit the copy. Otherwise, omitted values will use `default` colors, not the original theme's colors.
 
 ## Tool Permissions
 
@@ -405,12 +443,10 @@ When an agent calls a tool, docker-agent shows a confirmation dialog by default.
 
 **Granular permissions:** The permission system supports pattern-based matching. When you “Always allow” a specific tool command, only that exact pattern is auto-approved — other commands from the same tool still require confirmation. This lets you auto-approve safe, read-only operations while maintaining control over destructive ones.
 
-<div class="callout callout-tip" markdown="1">
-<div class="callout-title">YOLO mode
-</div>
-  <p>Use <code>--yolo</code> or the <code>/yolo</code> command to auto-approve all tool calls. You can also toggle this mid-session. For aliases, set <code>--yolo</code> when creating the alias: <code>docker agent alias add fast agentcatalog/coder --yolo</code>.</p>
-
-</div>
+> [!TIP]
+> **YOLO mode**
+>
+> Use `--yolo` or the `/yolo` command to auto-approve all tool calls. You can also toggle this mid-session. For aliases, set `--yolo` when creating the alias: `docker agent alias add fast agentcatalog/coder --yolo`.
 
 ## Notifications
 

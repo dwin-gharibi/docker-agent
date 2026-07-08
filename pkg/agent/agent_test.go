@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -45,6 +44,22 @@ func (s *stubToolSet) Tools(context.Context) ([]tools.Tool, error) {
 		return nil, s.listErr
 	}
 	return s.tools, nil
+}
+
+// describedToolSet is a stubToolSet with a stable user-visible description,
+// so tests can assert which toolset a warning attributes a tool to.
+type describedToolSet struct {
+	stubToolSet
+
+	desc string
+}
+
+var _ tools.Describer = (*describedToolSet)(nil)
+
+func (d *describedToolSet) Describe() string { return d.desc }
+
+func newDescribedToolSet(desc string, toolsList []tools.Tool) *describedToolSet {
+	return &describedToolSet{stubToolSet: stubToolSet{tools: toolsList}, desc: desc}
 }
 
 // flappyToolSet is a ToolSet+Startable that returns a scripted sequence of
@@ -119,6 +134,7 @@ func (r *reconnectingToolSet) Tools(context.Context) ([]tools.Tool, error) {
 }
 
 func TestAgentTools(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name          string
 		toolsets      []tools.ToolSet
@@ -148,6 +164,19 @@ func TestAgentTools(t *testing.T) {
 			toolsets:      nil,
 			wantToolCount: 0,
 			wantWarnings:  0,
+		},
+		{
+			// #2251: two toolsets emitting the same names (e.g. the same
+			// built-in type configured twice) must collapse to a unique set,
+			// otherwise providers reject the request with "Tool names must
+			// be unique." Each dropped duplicate surfaces one warning.
+			name: "duplicate names across toolsets are deduped",
+			toolsets: []tools.ToolSet{
+				newStubToolSet(nil, []tools.Tool{{Name: "read_file", Parameters: map[string]any{}}, {Name: "write_file", Parameters: map[string]any{}}}, nil),
+				newStubToolSet(nil, []tools.Tool{{Name: "read_file", Parameters: map[string]any{}}, {Name: "write_file", Parameters: map[string]any{}}}, nil),
+			},
+			wantToolCount: 2,
+			wantWarnings:  2,
 		},
 	}
 
@@ -195,6 +224,111 @@ func TestAgentNoDuplicateListWarnings(t *testing.T) {
 	_, err = a.Tools(t.Context())
 	require.NoError(t, err)
 	assert.Empty(t, a.DrainWarnings(), "turn 3: no duplicate warning on repeated list failure")
+}
+
+// TestAgentToolsDedupeKeepsFirstInOrder pins the deduplication contract from
+// #2251 (and documented in the MCP toolset docs): when several toolsets emit
+// the same tool name, Tools() keeps the occurrence from the first toolset in
+// configuration order, preserves the first-seen order of distinct names, and
+// never returns a duplicate name.
+func TestAgentToolsDedupeKeepsFirstInOrder(t *testing.T) {
+	t.Parallel()
+
+	first := newStubToolSet(nil, []tools.Tool{
+		{Name: "read_file", Description: "from first", Parameters: map[string]any{}},
+		{Name: "fetch", Description: "from first", Parameters: map[string]any{}},
+	}, nil)
+	second := newStubToolSet(nil, []tools.Tool{
+		{Name: "read_file", Description: "from second", Parameters: map[string]any{}},
+		{Name: "write_file", Description: "from second", Parameters: map[string]any{}},
+	}, nil)
+
+	a := New("root", "test", WithToolSets(first, second))
+	got, err := a.Tools(t.Context())
+	require.NoError(t, err)
+	require.Len(t, got, 3)
+
+	names := make([]string, len(got))
+	for i, tool := range got {
+		names[i] = tool.Name
+	}
+	assert.Equal(t, []string{"read_file", "fetch", "write_file"}, names,
+		"distinct names in first-seen order, no duplicates")
+	assert.Equal(t, "from first", got[0].Description,
+		"the first occurrence of read_file must win")
+}
+
+// TestAgentToolsCollisionWarningIdentifiesOrigins verifies the duplicate-tool
+// warning names both the toolset that won and the toolset whose tool was
+// ignored, and points the user at the config-level remedies.
+func TestAgentToolsCollisionWarningIdentifiesOrigins(t *testing.T) {
+	t.Parallel()
+
+	builtin := newDescribedToolSet("fetch built-in", []tools.Tool{{Name: "fetch", Parameters: map[string]any{}}})
+	jira := newDescribedToolSet("mcp(ref=jira)", []tools.Tool{{Name: "fetch", Parameters: map[string]any{}}})
+
+	a := New("root", "test", WithToolSets(builtin, jira))
+	_, err := a.Tools(t.Context())
+	require.NoError(t, err)
+
+	warnings := a.DrainWarnings()
+	require.Len(t, warnings, 1)
+	assert.Contains(t, warnings[0], `duplicate tool "fetch"`)
+	assert.Contains(t, warnings[0], "kept from fetch built-in")
+	assert.Contains(t, warnings[0], "ignored from mcp(ref=jira)")
+	assert.Contains(t, warnings[0], "'name:'", "warning must point at the config remedy")
+}
+
+// TestAgentToolsCollisionWarningOncePerStreak verifies once-per-streak
+// semantics for duplicate-tool warnings: a persistent collision warns only on
+// the first turn, a collision that disappears resets the streak, and a new
+// collision (e.g. introduced by an MCP ToolListChanged notification) is
+// reported as fresh.
+func TestAgentToolsCollisionWarningOncePerStreak(t *testing.T) {
+	t.Parallel()
+
+	static := newDescribedToolSet("static", []tools.Tool{{Name: "fetch", Parameters: map[string]any{}}})
+	dynamic := newDescribedToolSet("dynamic", []tools.Tool{{Name: "fetch", Parameters: map[string]any{}}})
+	a := New("root", "test", WithToolSets(static, dynamic))
+
+	// Turn 1: collision on "fetch" → one warning.
+	_, err := a.Tools(t.Context())
+	require.NoError(t, err)
+	require.Len(t, a.DrainWarnings(), 1, "turn 1: one warning on first collision")
+
+	// Turn 2: same collision persists → no new warning.
+	_, err = a.Tools(t.Context())
+	require.NoError(t, err)
+	assert.Empty(t, a.DrainWarnings(), "turn 2: persistent collision must not re-warn")
+
+	// Turn 3: the dynamic toolset changes its list (ToolListChanged) and now
+	// also collides on "search" → exactly one warning, for the new collision.
+	dynamic.tools = []tools.Tool{
+		{Name: "fetch", Parameters: map[string]any{}},
+		{Name: "search", Parameters: map[string]any{}},
+	}
+	static.tools = []tools.Tool{
+		{Name: "fetch", Parameters: map[string]any{}},
+		{Name: "search", Parameters: map[string]any{}},
+	}
+	_, err = a.Tools(t.Context())
+	require.NoError(t, err)
+	warnings := a.DrainWarnings()
+	require.Len(t, warnings, 1, "turn 3: only the new collision warns")
+	assert.Contains(t, warnings[0], `duplicate tool "search"`)
+
+	// Turn 4: all collisions resolved → streak resets, no warning.
+	dynamic.tools = nil
+	static.tools = []tools.Tool{{Name: "fetch", Parameters: map[string]any{}}, {Name: "search", Parameters: map[string]any{}}}
+	_, err = a.Tools(t.Context())
+	require.NoError(t, err)
+	assert.Empty(t, a.DrainWarnings(), "turn 4: no collision, no warning")
+
+	// Turn 5: the same collision reappears → reported as a fresh streak.
+	dynamic.tools = []tools.Tool{{Name: "fetch", Parameters: map[string]any{}}}
+	_, err = a.Tools(t.Context())
+	require.NoError(t, err)
+	require.Len(t, a.DrainWarnings(), 1, "turn 5: reappearing collision starts a new streak")
 }
 
 // mockProvider implements provider.Provider for testing
@@ -361,8 +495,7 @@ func TestSnapshotAndRestoreModelOverride(t *testing.T) {
 }
 
 func TestModel_LogsSelection(t *testing.T) {
-	t.Parallel()
-
+	// Not parallel: it swaps the process-global default logger via slog.SetDefault.
 	var buf concurrent.Buffer
 	handler := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})
 	prev := slog.Default()
@@ -501,12 +634,13 @@ func TestAgentWarningsConcurrentAccess(t *testing.T) {
 	const drainers = 4
 	const perWriter = 200
 
-	var wg sync.WaitGroup
-	wg.Add(writers + drainers)
+	var writersWg, drainersWg sync.WaitGroup
+	writersWg.Add(writers)
+	drainersWg.Add(drainers)
 
 	for range writers {
 		go func() {
-			defer wg.Done()
+			defer writersWg.Done()
 			for range perWriter {
 				a.AddToolWarning("boom")
 			}
@@ -516,7 +650,7 @@ func TestAgentWarningsConcurrentAccess(t *testing.T) {
 	stop := make(chan struct{})
 	for range drainers {
 		go func() {
-			defer wg.Done()
+			defer drainersWg.Done()
 			for {
 				select {
 				case <-stop:
@@ -530,10 +664,10 @@ func TestAgentWarningsConcurrentAccess(t *testing.T) {
 		}()
 	}
 
-	// Give writers a little time to finish, then signal drainers to stop.
-	time.Sleep(20 * time.Millisecond)
+	// Keep drainers racing until every writer has finished, then stop them.
+	writersWg.Wait()
 	close(stop)
-	wg.Wait()
+	drainersWg.Wait()
 
 	// A successful run means no data race and no panic; we don't assert a
 	// specific number of warnings drained because drainers run concurrently

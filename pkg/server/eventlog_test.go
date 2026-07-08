@@ -24,8 +24,8 @@ func collect(t *testing.T, log *eventLog, since *uint64) (stop func(), got func(
 		defer close(done)
 		log.stream(ctx, since, func(seq uint64, event any) {
 			mu.Lock()
+			defer mu.Unlock()
 			events = append(events, seqEvent{seq: seq, event: event})
-			mu.Unlock()
 		})
 	}()
 
@@ -191,8 +191,8 @@ func TestEventLog_CloseEmitsTerminalEventThenEndsStream(t *testing.T) {
 		defer close(done)
 		log.stream(ctx, nil, func(seq uint64, event any) {
 			mu.Lock()
+			defer mu.Unlock()
 			got = append(got, seqEvent{seq: seq, event: event})
-			mu.Unlock()
 		})
 	}()
 

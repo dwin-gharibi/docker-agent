@@ -33,6 +33,17 @@ func (r *Registry) New(ctx context.Context, cfg *latest.ModelConfig, env environ
 func (r *Registry) NewWithModels(ctx context.Context, cfg *latest.ModelConfig, models map[string]latest.ModelConfig, env environment.Provider, opts ...options.Opt) (Provider, error) {
 	slog.DebugContext(ctx, "Creating model provider", "type", cfg.Provider, "model", cfg.Model)
 	if len(cfg.Routing) > 0 {
+		// A router makes no HTTP calls itself; its fallback and routed targets
+		// do. When the router model opts out of the gateway, propagate the
+		// bypass to every child so the whole routing subtree dials directly.
+		// Routed targets that are named models can still set their own flag.
+		if cfg.BypassModelsGateway {
+			globalOptions := options.Apply(opts...)
+			if globalOptions.Gateway() != "" {
+				slog.DebugContext(ctx, "Bypassing models gateway for routing model", "provider", cfg.Provider, "model", cfg.Model)
+				opts = append(opts, options.WithGateway(""))
+			}
+		}
 		p, err := r.createRuleBasedRouter(ctx, cfg, models, env, opts...)
 		if err != nil {
 			return nil, err
@@ -67,11 +78,18 @@ func (r *Registry) createDirectProvider(ctx context.Context, cfg *latest.ModelCo
 	if r == nil {
 		r = DefaultRegistry()
 	}
-	var globalOptions options.ModelOptions
-	for _, opt := range opts {
-		opt(&globalOptions)
-	}
+	globalOptions := options.Apply(opts...)
 	enhancedCfg := applyProviderDefaults(cfg, globalOptions.Providers())
+	if err := expandModelConfigEnv(ctx, enhancedCfg, env); err != nil {
+		return nil, err
+	}
+	// A model may opt out of the models gateway and dial its provider directly.
+	// Clearing the gateway option makes the leaf provider take its direct-auth
+	// path (provider API key / token_key) instead of the gateway path.
+	if enhancedCfg.BypassModelsGateway && globalOptions.Gateway() != "" {
+		slog.DebugContext(ctx, "Bypassing models gateway for model", "provider", enhancedCfg.Provider, "model", enhancedCfg.Model)
+		opts = append(opts, options.WithGateway(""))
+	}
 	providerType := resolveProviderType(enhancedCfg)
 	factory, ok := r.factories[providerType]
 	if !ok {

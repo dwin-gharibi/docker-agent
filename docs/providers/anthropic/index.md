@@ -1,10 +1,10 @@
 ---
 title: "Anthropic"
 description: "Use Claude Sonnet 4, Claude Sonnet 4.5, and other Anthropic models with docker-agent."
-permalink: /providers/anthropic/
+keywords: docker agent, ai agents, model providers, llm, anthropic
+weight: 20
+canonical: https://docs.docker.com/ai/docker-agent/providers/anthropic/
 ---
-
-# Anthropic
 
 _Use Claude Sonnet 4, Claude Sonnet 4.5, and other Anthropic models with docker-agent._
 
@@ -53,15 +53,16 @@ models:
 | `command` | Shell out to a CLI on every refresh (`gcloud auth print-identity-token`, `az account get-access-token`, ...)              |
 | `url`     | Fetch from an HTTP(S) endpoint (cloud metadata servers, GitHub Actions OIDC token URL, ...)                              |
 
-For `url`, both the URL and any header values support `${VAR}` expansion
-against the runtime environment, which lets you wire the GitHub Actions OIDC
+For `url`, both the URL and any header values support `${env.VAR}` expansion
+against the runtime environment (the legacy `${VAR}` form is also accepted),
+which lets you wire the GitHub Actions OIDC
 token endpoint without putting secrets in YAML:
 
 ```yaml
 identity_token:
-  url: ${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://api.anthropic.com
+  url: ${env.ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https://api.anthropic.com
   headers:
-    Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}
+    Authorization: bearer ${env.ACTIONS_ID_TOKEN_REQUEST_TOKEN}
   response_field: value
 ```
 
@@ -71,7 +72,7 @@ identity federation: failed to refresh identity token from <kind> source
 (federation_rule=fdrl_…): ...` message in the TUI.
 
 A complete walkthrough of all four sources lives in
-[`examples/anthropic_wif.yaml`]({{ site.examples_url }}/anthropic_wif.yaml).
+[`examples/anthropic_wif.yaml`](https://github.com/docker/docker-agent/blob/main/examples/anthropic_wif.yaml).
 
 ## Configuration
 
@@ -131,7 +132,7 @@ models:
     thinking_budget: high # low | medium | high | xhigh | max (same as adaptive/<effort>)
 ```
 
-On models that reject token-based thinking (Opus 4.6, 4.7, 4.8, Sonnet 4.6), an integer budget is automatically coerced to `adaptive` with a logged warning. See the [Thinking / Reasoning guide]({{ '/guides/thinking/' | relative_url }}) for the full cross-provider reference.
+On models that reject token-based thinking (Opus 4.6, 4.7, 4.8, Sonnet 4.6), an integer budget is automatically coerced to `adaptive` with a logged warning. See the [Thinking / Reasoning guide](../../guides/thinking/index.md) for the full cross-provider reference.
 
 ## Interleaved Thinking
 
@@ -183,7 +184,7 @@ Object form (forward-compatible with future budget types):
       total: 128000
 ```
 
-See the full schema on the [Model Configuration]({{ '/configuration/models/#task-budget' | relative_url }}) page.
+See the full schema on the [Model Configuration](../../configuration/models/index.md#task-budget) page.
 
 ## Server-Side Fallbacks
 
@@ -215,7 +216,7 @@ AI, or the Message Batches API.
 
 ## Thinking Display
 
-Controls whether thinking blocks are returned in responses when thinking is enabled. Claude Opus 4.7 hides thinking content by default (`omitted`); earlier Claude 4 models default to `summarized`. Set `thinking_display` in `provider_opts` to override:
+Controls whether thinking blocks are returned in responses when thinking is enabled. Newer Claude models (Opus 4.7+, Fable 5) hide thinking content by default (`omitted`); docker-agent counters this by requesting `summarized` thinking whenever an adaptive/effort-based budget is used without an explicit `thinking_display`, so reasoning stays visible in the UI. Set `thinking_display` in `provider_opts` to override:
 
 ```yaml
 models:
@@ -224,20 +225,16 @@ models:
     model: claude-opus-4-7
     thinking_budget: adaptive
     provider_opts:
-      thinking_display: summarized # "summarized", "display", or "omitted"
+      thinking_display: omitted # "summarized", "display", or "omitted"
 ```
 
 Valid values:
 
-- `summarized`: thinking blocks are returned with summarized thinking text (default for Claude 4 models prior to Opus 4.7).
-- `display`: thinking blocks are returned for display (use this to re-enable thinking output on Opus 4.7).
-- `omitted`: thinking blocks are returned with an empty thinking field; the signature is still returned for multi-turn continuity (default for Opus 4.7). Useful to reduce time-to-first-text-token when streaming.
+- `summarized`: thinking blocks are returned with summarized thinking text (docker-agent's default for adaptive/effort-based budgets).
+- `display`: thinking blocks are returned for display.
+- `omitted`: thinking blocks are returned with an empty thinking field; the signature is still returned for multi-turn continuity. Useful to reduce time-to-first-text-token when streaming.
 
-Note: `thinking_display` applies to both `thinking_budget` with token counts and adaptive/effort-based budgets. Full thinking tokens are billed regardless of the `thinking_display` value.
+Note: `thinking_display` applies to both `thinking_budget` with token counts and adaptive/effort-based budgets. For token-count budgets no default is applied (the API already defaults to `summarized`). Full thinking tokens are billed regardless of the `thinking_display` value.
 
-<div class="callout callout-info" markdown="1">
-<div class="callout-title">Note
-</div>
-  <p>Anthropic thinking budget values below 1024 or greater than or equal to <code>max_tokens</code> are ignored (a warning is logged).</p>
-
-</div>
+> [!NOTE]
+> Anthropic thinking budget values below 1024 or greater than or equal to `max_tokens` are ignored (a warning is logged).

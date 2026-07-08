@@ -36,6 +36,7 @@ var (
 	_ tools.ToolSet      = (*ToolSet)(nil)
 	_ tools.Startable    = (*ToolSet)(nil)
 	_ tools.Instructable = (*ToolSet)(nil)
+	_ tools.Named        = (*ToolSet)(nil)
 )
 
 type deferredSource struct {
@@ -49,6 +50,11 @@ func New() *ToolSet {
 		deferredTools:  make(map[string]deferredToolEntry),
 		activatedTools: make(map[string]tools.Tool),
 	}
+}
+
+// Name implements tools.Named; loader-created, so no registry WithName wrapper.
+func (d *ToolSet) Name() string {
+	return "deferred"
 }
 
 func (d *ToolSet) AddSource(toolset tools.ToolSet, deferAll bool, toolNames []string) {

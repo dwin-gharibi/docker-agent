@@ -1,10 +1,10 @@
 ---
 title: "OpenAI"
 description: "Use GPT-4o, GPT-5, GPT-5-mini, and other OpenAI models with docker-agent."
-permalink: /providers/openai/
+keywords: docker agent, ai agents, model providers, llm, openai
+weight: 200
+canonical: https://docs.docker.com/ai/docker-agent/providers/openai/
 ---
-
-# OpenAI
 
 _Use GPT-4o, GPT-5, GPT-5-mini, and other OpenAI models with docker-agent._
 
@@ -14,6 +14,11 @@ _Use GPT-4o, GPT-5, GPT-5-mini, and other OpenAI models with docker-agent._
 # Set your API key
 export OPENAI_API_KEY="sk-..."
 ```
+
+> [!TIP]
+> No API key? A ChatGPT Plus/Pro/Business subscription can be used instead
+> through the [`chatgpt` provider](../chatgpt/index.md): sign in once with
+> `docker agent setup` (pick chatgpt).
 
 ## Configuration
 
@@ -72,20 +77,17 @@ models:
 
 These are the **only** values OpenAI accepts — token counts, `max`, `adaptive`, and `adaptive/<effort>` are rejected with a configuration error at request time. Older models (o1, o3-mini) only accept `low`/`medium`/`high`.
 
-<div class="callout callout-warning" markdown="1">
-<div class="callout-title">Hidden reasoning tokens
-</div>
-  <p>OpenAI reasoning models always produce hidden reasoning tokens that count against <code>max_tokens</code> — even with <code>thinking_budget: none</code>. docker-agent automatically raises the output-token floor for its internal low-effort calls so reasoning cannot starve visible text output.</p>
-</div>
+> [!WARNING]
+> **Hidden reasoning tokens**
+>
+> OpenAI reasoning models always produce hidden reasoning tokens that count against `max_tokens` — even with `thinking_budget: none`. docker-agent automatically raises the output-token floor for its internal low-effort calls so reasoning cannot starve visible text output.
 
-See the [Thinking / Reasoning guide]({{ '/guides/thinking/' | relative_url }}) for a cross-provider overview.
+See the [Thinking / Reasoning guide](../../guides/thinking/index.md) for a cross-provider overview.
 
-<div class="callout callout-tip" markdown="1">
-<div class="callout-title">Custom endpoints
-</div>
-  <p>Use <code>base_url</code> for proxies and OpenAI-compatible services. See <a href="{{ '/providers/custom/' | relative_url }}">Custom Providers</a> for full setup.</p>
-
-</div>
+> [!TIP]
+> **Custom endpoints**
+>
+> Use `base_url` for proxies and OpenAI-compatible services. See [Custom Providers](../custom/index.md) for full setup.
 
 ## Custom Endpoint
 

@@ -12,6 +12,8 @@ func newTestRegistry() *pendingOAuthRegistry {
 }
 
 func TestPendingOAuthRegistry_RegisterAndDeliver(t *testing.T) {
+	t.Parallel()
+
 	r := newTestRegistry()
 	ch := make(chan PendingOAuthCallback, 1)
 
@@ -24,6 +26,8 @@ func TestPendingOAuthRegistry_RegisterAndDeliver(t *testing.T) {
 }
 
 func TestPendingOAuthRegistry_DeliverUnknownState(t *testing.T) {
+	t.Parallel()
+
 	r := newTestRegistry()
 	err := r.deliver("state-nope", PendingOAuthCallback{Code: "abc"})
 	require.Error(t, err)
@@ -31,6 +35,8 @@ func TestPendingOAuthRegistry_DeliverUnknownState(t *testing.T) {
 }
 
 func TestPendingOAuthRegistry_RegisterEmptyState(t *testing.T) {
+	t.Parallel()
+
 	r := newTestRegistry()
 	err := r.register("", make(chan PendingOAuthCallback, 1))
 	require.Error(t, err)
@@ -38,6 +44,8 @@ func TestPendingOAuthRegistry_RegisterEmptyState(t *testing.T) {
 }
 
 func TestPendingOAuthRegistry_RegisterDuplicate(t *testing.T) {
+	t.Parallel()
+
 	r := newTestRegistry()
 	require.NoError(t, r.register("state-1", make(chan PendingOAuthCallback, 1)))
 	err := r.register("state-1", make(chan PendingOAuthCallback, 1))
@@ -46,6 +54,8 @@ func TestPendingOAuthRegistry_RegisterDuplicate(t *testing.T) {
 }
 
 func TestPendingOAuthRegistry_DeliverIsOneShot(t *testing.T) {
+	t.Parallel()
+
 	r := newTestRegistry()
 	ch := make(chan PendingOAuthCallback, 1)
 	require.NoError(t, r.register("state-1", ch))
@@ -58,6 +68,8 @@ func TestPendingOAuthRegistry_DeliverIsOneShot(t *testing.T) {
 }
 
 func TestPendingOAuthRegistry_UnregisterRemovesEntry(t *testing.T) {
+	t.Parallel()
+
 	r := newTestRegistry()
 	require.NoError(t, r.register("state-1", make(chan PendingOAuthCallback, 1)))
 	r.unregister("state-1")

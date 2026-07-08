@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://github.com/docker/docker-agent/blob/main/agent-schema.json",
   "title": "Docker Agent Configuration",
-  "description": "Configuration schema for Docker Agent v11",
+  "description": "Configuration schema for Docker Agent v12",
   "type": "object",
   "properties": {
     "version": {
@@ -20,7 +20,8 @@
         "8",
         "9",
         "10",
-        "11"
+        "11",
+        "12"
       ],
       "examples": [
         "0",
@@ -34,7 +35,8 @@
         "8",
         "9",
         "10",
-        "11"
+        "11",
+        "12"
       ]
     },
     "providers": {
@@ -182,7 +184,7 @@
       "properties": {
         "provider": {
           "type": "string",
-          "description": "The underlying provider type. Defaults to \"openai\" when not set. Supported values: openai, anthropic, google, amazon-bedrock, dmr, and any built-in alias (requesty, azure, xai, ollama, mistral, etc.).",
+          "description": "The underlying provider type. Defaults to \"openai\" when not set. Supported values: openai, anthropic, google, amazon-bedrock, dmr, and any built-in alias (requesty, openrouter, azure, xai, ollama, mistral, baseten, ovhcloud, groq, fireworks, deepseek, cerebras, together, huggingface, moonshot, vercel, cloudflare-workers-ai, cloudflare-ai-gateway, nvidia, github-copilot, chatgpt, etc.).",
           "examples": [
             "openai",
             "anthropic",
@@ -204,9 +206,17 @@
           ]
         },
         "base_url": {
-          "type": "string",
-          "description": "Base URL for the provider's API endpoint. Required for OpenAI-compatible providers, optional for native providers.",
-          "format": "uri",
+          "description": "Base URL for the provider's API endpoint. Required for OpenAI-compatible providers, optional for native providers. Accepts ${env.VAR} / ${VAR} references, substituted from the environment when a model using this provider is loaded.",
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uri"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\S*\\$\\{?[A-Za-z_]\\S*$"
+            }
+          ],
           "examples": [
             "https://router.example.com/v1"
           ]
@@ -236,7 +246,7 @@
         },
         "max_tokens": {
           "type": "integer",
-          "description": "Default maximum number of tokens for models using this provider."
+          "description": "Default maximum output tokens per response for models using this provider. This is the completion budget, NOT the context window: OpenAI-compatible servers require prompt_tokens + max_tokens to fit the context window, so a value close to the window leaves no room for the prompt. Set provider_opts.context_size to declare the window."
         },
         "top_p": {
           "type": "number",
@@ -562,8 +572,18 @@
           "description": "Instructions for the agent"
         },
         "instruction_file": {
-          "type": "string",
-          "description": "Path to a file, relative to the config file's directory, whose contents become the agent's instruction. Loaded at startup. Mutually exclusive with 'instruction'. Must be a local relative path inside the config directory (absolute paths and '..' traversal are rejected). Only supported for local file-based configs, not OCI/URL sources."
+          "description": "Path(s) to a file or files, relative to the config file's directory, whose contents become the agent's instruction. Accepts a single string or a list of strings; when several files are given their contents are concatenated in order, separated by a blank line. Loaded at startup. Mutually exclusive with 'instruction'. Each path must be a local relative path inside the config directory (absolute paths and '..' traversal are rejected). Only supported for local file-based configs, not OCI/URL sources.",
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ]
         },
         "harness": {
           "$ref": "#/definitions/HarnessConfig",
@@ -627,6 +647,22 @@
           "type": "integer",
           "description": "Number of history items to keep",
           "minimum": 0
+        },
+        "session_compaction": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enabled by default. When true (the default), the runtime automatically compacts the session: proactively when the estimated context usage crosses the compaction threshold, and reactively to recover from a context-overflow error. Set to false to disable both automatic triggers for this agent; the manual /compact command remains available."
+        },
+        "compaction_threshold": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1,
+          "default": 0.9,
+          "description": "Fraction of the model's context window at which proactive auto-compaction triggers for this agent. Must be greater than 0 and at most 1. Defaults to 0.9 (90% of the context window). A compaction_threshold set on the agent's model takes precedence over this value.",
+          "examples": [
+            0.75,
+            0.9
+          ]
         },
         "add_prompt_files": {
           "type": "array",
@@ -1260,6 +1296,10 @@
           "items": {
             "$ref": "#/definitions/HookDefinition"
           }
+        },
+        "preempt_yolo": {
+          "type": "boolean",
+          "description": "Opt a pre_tool_use entry into firing BEFORE the deterministic approval pipeline (--yolo, permission allow/deny patterns). A deny/ask verdict from a preempting hook cannot be bypassed by --yolo or permission allow-rules; an allow verdict is advisory (the pipeline still runs Decide() and the rest of pre_tool_use). Default pre_tool_use entries fire AFTER Decide(). Only meaningful on pre_tool_use; ignored on other events. Used by the safer_shell builtin (auto-registered with this flag when a shell toolset has `safer: true`)."
         }
       },
       "required": [
@@ -1303,14 +1343,14 @@
         },
         "env": {
           "type": "object",
-          "description": "Environment variables to add or override for this hook only.",
+          "description": "Environment variables to add or override for this hook only. Values expand the plain ${env.VAR} form from the OS environment; any other $ is kept literal.",
           "additionalProperties": {
             "type": "string"
           }
         },
         "working_dir": {
           "type": "string",
-          "description": "Working directory for this hook. Relative paths are resolved from the agent working directory."
+          "description": "Working directory for this hook. Accepts ~, $VAR, ${VAR} and ${env.VAR}. Relative paths are resolved from the agent working directory."
         },
         "on_error": {
           "type": "string",
@@ -1406,7 +1446,8 @@
             "anthropic",
             "dmr",
             "ollama",
-            "github-copilot"
+            "github-copilot",
+            "chatgpt"
           ]
         },
         "model": {
@@ -1421,7 +1462,7 @@
         },
         "max_tokens": {
           "type": "integer",
-          "description": "Maximum number of tokens",
+          "description": "Maximum output tokens per response (the completion budget), NOT the context window. OpenAI-compatible servers require prompt_tokens + max_tokens to fit the context window, so a value close to the window leaves no room for the prompt. Set provider_opts.context_size to declare the window.",
           "minimum": 1
         },
         "top_p": {
@@ -1443,9 +1484,17 @@
           "maximum": 2
         },
         "base_url": {
-          "type": "string",
-          "description": "Base URL for the model API",
-          "format": "uri"
+          "description": "Base URL for the model API. Accepts ${env.VAR} / ${VAR} references, substituted from the environment when the model is loaded.",
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uri"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\S*\\$\\{?[A-Za-z_]\\S*$"
+            }
+          ]
         },
         "parallel_tool_calls": {
           "type": "boolean",
@@ -1454,6 +1503,10 @@
         "token_key": {
           "type": "string",
           "description": "Token key for authentication"
+        },
+        "bypass_models_gateway": {
+          "type": "boolean",
+          "description": "When true, this model connects directly to its provider, ignoring any configured models gateway (--models-gateway / CAGENT_MODELS_GATEWAY). The model then authenticates with the provider's own credentials (e.g. OPENAI_API_KEY, ANTHROPIC_API_KEY, or token_key) instead of routing through the gateway."
         },
         "provider_opts": {
           "type": "object",
@@ -1575,6 +1628,25 @@
             "fast"
           ]
         },
+        "compaction_model": {
+          "type": "string",
+          "description": "Model used to summarize the conversation when this model's session is compacted (manual /compact, the proactive threshold trigger, or post-overflow recovery). The summary call ingests the whole conversation and is the slowest, most expensive call in a session; pointing this at a smaller/faster model makes compaction cheaper and more reliable without changing the model that runs the conversation. Value can be a model name from the models section or an inline 'provider/model' spec. When omitted, compaction reuses the agent's own model. If the compaction model has a smaller context window than the primary, compaction is triggered against the smaller window so the summary call can always ingest the conversation it must compact.",
+          "examples": [
+            "openai/gpt-4o-mini",
+            "fast"
+          ]
+        },
+        "compaction_threshold": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1,
+          "default": 0.9,
+          "description": "Fraction of the context window at which proactive auto-compaction triggers for agents running this model. Must be greater than 0 and at most 1. Defaults to 0.9 (90% of the context window). Takes precedence over the agent-level compaction_threshold. Cannot be combined with first_available.",
+          "examples": [
+            0.75,
+            0.9
+          ]
+        },
         "capabilities": {
           "$ref": "#/definitions/CapabilitiesConfig",
           "description": "Explicit attachment capability override for models the models.dev catalogue does not describe correctly (custom OpenAI-compatible providers, local models like Ollama, or dropped model versions). When set, the declared flags are authoritative and no models.dev lookup is performed; when omitted, capabilities are detected automatically. Without it, such models fall back to text-only and their image/PDF attachments are silently dropped."
@@ -1642,6 +1714,13 @@
         "version": {
           "type": "string",
           "description": "Version of the agent configuration (used for OCI registry publishing)"
+        },
+        "tags": {
+          "type": "array",
+          "description": "Tags describing the agent configuration (e.g. for categorization and discovery)",
+          "items": {
+            "type": "string"
+          }
         }
       },
       "additionalProperties": false
@@ -1885,8 +1964,11 @@
             "memory",
             "filesystem",
             "shell",
+            "background_jobs",
             "tasks",
             "plan",
+            "session_plan",
+            "session_context",
             "todo",
             "fetch",
             "api",
@@ -2102,6 +2184,14 @@
           "type": "boolean",
           "description": "Opt in to a sudo privilege escalation flow for the shell toolset (only valid for type 'shell'). When enabled, sudo commands prompt the user for their password through the host UI via SUDO_ASKPASS; in non-interactive runs the prompt is declined automatically. Only a bare 'sudo ...' invocation in a POSIX shell is handled. No effect on Windows. Default false."
         },
+        "recall": {
+          "type": "boolean",
+          "description": "Opt in to background-job recall for the background_jobs toolset (only valid for type 'background_jobs'). When enabled, run_background_job exposes a recall boolean parameter. If the agent sets recall=true for a background job, the runtime injects a steering message with a short completion sentence and the job output when the job finishes. Default false."
+        },
+        "safer": {
+          "type": "boolean",
+          "description": "Opt in to destructive-command detection for the shell toolset (only valid for type 'shell'). When enabled, the agent auto-registers the safer_shell builtin under the pre_tool_use hook event with preempt_yolo:true. Destructive commands (rm -rf, docker volume rm, mkfs, ...) get an Ask verdict with a blast-radius classification; known-safe reads (ls, git status, docker ps, ...) flow through silently; everything else asks with blast_radius=unknown so the user sees the prompt before --yolo or permission allow-rules can auto-approve it. Default false."
+        },
         "url": {
           "type": "string",
           "description": "URL for the a2a, openapi or open_url tool",
@@ -2212,8 +2302,11 @@
                 "memory",
                 "filesystem",
                 "shell",
+                "background_jobs",
                 "tasks",
                 "plan",
+                "session_plan",
+                "session_context",
                 "todo",
                 "fetch",
                 "api",
@@ -2394,14 +2487,14 @@
         },
         "env": {
           "type": "object",
-          "description": "Environment variables for the command",
+          "description": "Environment variables for the command, layered over the toolset-level env. Values expand the plain ${env.VAR} form from the OS environment; any other $ is kept literal. Keys must not collide with args.",
           "additionalProperties": {
             "type": "string"
           }
         },
         "working_dir": {
           "type": "string",
-          "description": "Working directory for the command"
+          "description": "Working directory for the command. Accepts ~, $VAR, ${VAR} and ${env.VAR}."
         }
       },
       "additionalProperties": false

@@ -10,12 +10,15 @@ import (
 	"os/exec"
 	goruntime "runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"charm.land/bubbles/v2/help"
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	uv "github.com/charmbracelet/ultraviolet"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/docker/docker-agent/pkg/app"
 	"github.com/docker/docker-agent/pkg/audio/transcribe"
@@ -32,6 +35,7 @@ import (
 	"github.com/docker/docker-agent/pkg/tui/components/statusbar"
 	"github.com/docker/docker-agent/pkg/tui/components/tabbar"
 	"github.com/docker/docker-agent/pkg/tui/components/tool"
+	"github.com/docker/docker-agent/pkg/tui/components/tour"
 	"github.com/docker/docker-agent/pkg/tui/core"
 	"github.com/docker/docker-agent/pkg/tui/dialog"
 	"github.com/docker/docker-agent/pkg/tui/internal/editorname"
@@ -65,6 +69,23 @@ const (
 
 // Model is the top-level TUI model that wraps the chat page.
 type appModel struct {
+	shutdownDone <-chan struct{}
+	cleanupOnce  sync.Once
+
+	// cleanupAllOnce guards the full cleanupAll shutdown sequence so repeat
+	// invocations (ExitSessionMsg followed by ExitConfirmedMsg, …) are no-ops:
+	// they must not stack goroutines behind a wedged cleanup or arm parallel
+	// safety nets that would each call exit.
+	cleanupAllOnce sync.Once
+
+	// exitFunc and shutdownTimeout override the shutdown safety net's
+	// behaviour. Both are zero by default and resolved through
+	// exitFn()/shutdownTimeoutOrDefault(), which fall back to the package
+	// defaults (os.Exit / 5s). Tests set them per-model so they can run in
+	// parallel without mutating package globals.
+	exitFunc        func(int)
+	shutdownTimeout time.Duration
+
 	supervisor *supervisor.Supervisor
 	tabBar     *tabbar.TabBar
 	tuiStore   *tuistate.Store
@@ -81,6 +102,12 @@ type appModel struct {
 	sessionState *service.SessionState
 	chatPage     chat.Page
 	editor       editor.Editor
+
+	// ctx preserves values from the root TUI context (trace context,
+	// baggage, log attrs) without inheriting cancellation. Bubble Tea
+	// handlers have no ctx parameter and many calls are persistence/cleanup
+	// work that must survive shutdown cancellation.
+	ctx func() context.Context
 
 	// Shared history for command history across all editors
 	history *history.History
@@ -127,6 +154,13 @@ type appModel struct {
 	// perform a full terminal release/restore cycle on focus events.
 	program *tea.Program
 
+	// themeWatcher hot-reloads the active custom theme: it watches the
+	// current theme's backing file and reports edits as ThemeFileChangedMsg.
+	// Created in SetProgram (the callback needs the program to inject
+	// messages into the event loop) and re-targeted after every theme
+	// change via watchCurrentTheme.
+	themeWatcher themeFileWatcher
+
 	// dockerDesktop is true when running inside Docker Desktop's terminal
 	// (TERM_PROGRAM=docker_desktop). Focus reporting and the terminal
 	// release/restore cycle on tab switch are only enabled in this
@@ -147,6 +181,11 @@ type appModel struct {
 	// keep flowing at startup even before any focus event arrives — some
 	// terminals never send FocusMsg.
 	tickPaused bool
+
+	// lightDarkModeSet is true while DEC mode 2031 (terminal color-scheme
+	// reports) is enabled. Set when the auto theme turns the mode on, so the
+	// quit path knows to reset it and leave no stray reports in the shell.
+	lightDarkModeSet bool
 
 	// pendingRestores maps runtime tab IDs (supervisor routing keys) to
 	// persisted session-store IDs. When a tab with a pending restore is first
@@ -184,8 +223,25 @@ type appModel struct {
 	// leanMode enables a simplified TUI with minimal chrome.
 	leanMode bool
 
+	// tour is the interactive getting-started overlay. Always non-nil;
+	// inactive until started via an option, /getting-started, or the
+	// first-run offer.
+	tour *tour.Model
+
+	// tourMode selects what happens at startup: nothing, offer the tour,
+	// or start it immediately.
+	tourMode tourMode
+
+	// tourShowTelemetryNotice folds the telemetry notice into the tour
+	// offer dialog when telemetry is enabled.
+	tourShowTelemetryNotice bool
+
 	// hideSidebar hides the sidebar and disables the ctrl+b toggle.
 	hideSidebar bool
+
+	// layoutSettings is the active TUI layout customization (sidebar position
+	// and section visibility). Shared by every tab and managed via /custom.
+	layoutSettings messages.LayoutSettings
 
 	// buildCommandCategories is a function that returns the list of command categories.
 	buildCommandCategories func(context.Context, tea.Model) []commands.Category
@@ -196,6 +252,13 @@ type appModel struct {
 	// disabledCommands holds slash commands to hide and disable.
 	// Normalized to start with "/".
 	disabledCommands map[string]bool
+}
+
+// themeFileWatcher is the subset of *styles.ThemeWatcher the model drives.
+// It is an interface so tests can record Watch/Stop calls.
+type themeFileWatcher interface {
+	Watch(themeRef string) error
+	Stop()
 }
 
 // Transcriber is the speech-to-text interface used by the TUI. It is an
@@ -226,6 +289,34 @@ func WithLeanMode() Option {
 func WithHideSidebar() Option {
 	return func(m *appModel) {
 		m.hideSidebar = true
+	}
+}
+
+// tourMode selects the getting-started tour behavior at startup.
+type tourMode int
+
+const (
+	tourModeNone tourMode = iota
+	tourModeOffer
+	tourModeStart
+)
+
+// WithTourStart starts the interactive getting-started tour as soon as the
+// TUI launches. Ignored in lean mode, which has no overlay support.
+func WithTourStart() Option {
+	return func(m *appModel) {
+		m.tourMode = tourModeStart
+	}
+}
+
+// WithTourOffer shows the first-run dialog offering the getting-started
+// tour when the TUI launches. showTelemetryNotice folds the telemetry
+// notice into the offer so it never stacks with the stderr banner. Ignored
+// in lean mode, which has no overlay support.
+func WithTourOffer(showTelemetryNotice bool) Option {
+	return func(m *appModel) {
+		m.tourMode = tourModeOffer
+		m.tourShowTelemetryNotice = showTelemetryNotice
 	}
 }
 
@@ -319,17 +410,19 @@ func WithToolRenderers(renderers map[string]tool.Builder) Option {
 
 // New creates a new Model.
 func New(ctx context.Context, spawner SessionSpawner, initialApp *app.App, initialWorkingDir string, cleanup func(), opts ...Option) tea.Model {
+	tuiCtx := func() context.Context { return context.WithoutCancel(ctx) }
+
 	// Initialize supervisor
 	sv := supervisor.New(spawner)
 
 	// Initialize tab bar with configurable title length from user settings
-	tabTitleMaxLen := userconfig.Get().GetTabTitleMaxLength()
-	tb := tabbar.New(tabTitleMaxLen)
+	userSettings := userconfig.Get()
+	tb := tabbar.New(userSettings.GetTabTitleMaxLength())
 
 	// Initialize tab store
 	var ts *tuistate.Store
 	var tsErr error
-	ts, tsErr = tuistate.New()
+	ts, tsErr = tuistate.New(tuiCtx())
 	if tsErr != nil {
 		slog.WarnContext(ctx, "Failed to open TUI state store, tabs won't persist", "error", tsErr)
 	}
@@ -344,6 +437,7 @@ func New(ctx context.Context, spawner SessionSpawner, initialApp *app.App, initi
 	sessID := initialApp.Session().ID
 
 	m := &appModel{
+		shutdownDone: ctx.Done(),
 		buildCommandCategories: func(ctx context.Context, _ tea.Model) []commands.Category {
 			return commands.BuildCommandCategories(ctx, initialApp)
 		},
@@ -354,6 +448,7 @@ func New(ctx context.Context, spawner SessionSpawner, initialApp *app.App, initi
 		editors:                       map[string]editor.Editor{},
 		sessionStates:                 map[string]*service.SessionState{sessID: initialSessionState},
 		application:                   initialApp,
+		ctx:                           tuiCtx,
 		sessionState:                  initialSessionState,
 		history:                       historyStore,
 		pendingRestores:               make(map[string]string),
@@ -362,10 +457,12 @@ func New(ctx context.Context, spawner SessionSpawner, initialApp *app.App, initi
 		notification:                  notification.New(),
 		dialogMgr:                     dialog.New(),
 		completions:                   completion.New(),
+		tour:                          tour.New(),
 		transcriber:                   transcribe.New(os.Getenv("OPENAI_API_KEY")),
 		workingSpinner:                spinner.New(spinner.ModeSpinnerOnly, styles.SpinnerDotsHighlightStyle),
 		focusedPanel:                  PanelEditor,
 		editorLines:                   3,
+		layoutSettings:                layoutSettingsFromConfig(userSettings.GetLayout()),
 		keyboardEnhancementsSupported: termfeatures.SupportsModifiedEnter(os.Getenv),
 		dockerDesktop:                 os.Getenv("TERM_PROGRAM") == "docker_desktop",
 		appName:                       "docker agent",
@@ -383,7 +480,7 @@ func New(ctx context.Context, spawner SessionSpawner, initialApp *app.App, initi
 	m.editor = initialEditor
 
 	// Create initial chat page (after options are applied so leanMode is set)
-	initialChatPage := chat.New(initialApp, initialSessionState, m.chatPageOpts()...)
+	initialChatPage := chat.New(m.ctx(), initialApp, initialSessionState, m.chatPageOpts()...)
 	m.chatPages[sessID] = initialChatPage
 	m.chatPage = initialChatPage
 
@@ -400,18 +497,6 @@ func New(ctx context.Context, spawner SessionSpawner, initialApp *app.App, initi
 	tabs, activeIdx := sv.GetTabs()
 	tb.SetTabs(tabs, activeIdx)
 	m.statusBar.SetShowNewTab(tb.Height() == 0)
-
-	// Make sure to stop on context cancellation.
-	// Note: chatPages/editors cleanup is handled by cleanupAll() on the
-	// normal exit path (ExitConfirmedMsg). We don't iterate those maps
-	// here to avoid racing with the Bubble Tea event loop.
-	go func() {
-		<-ctx.Done()
-		if ts != nil {
-			_ = ts.Close()
-		}
-		sv.Shutdown()
-	}()
 
 	return m
 }
@@ -434,9 +519,35 @@ func (m *appModel) Resolve(v any) any {
 }
 
 // SetProgram sets the tea.Program for the supervisor to send routed messages.
+// It also starts the theme file watcher, whose callback needs the program to
+// inject hot-reload messages into the event loop.
 func (m *appModel) SetProgram(p *tea.Program) {
 	m.program = p
 	m.supervisor.SetProgram(p)
+
+	if m.themeWatcher != nil {
+		m.themeWatcher.Stop()
+	}
+	m.themeWatcher = styles.NewThemeWatcher(func(themeRef string) {
+		p.Send(messages.ThemeFileChangedMsg{ThemeRef: themeRef})
+	})
+	m.watchCurrentTheme()
+}
+
+// watchCurrentTheme points the theme watcher at the currently applied theme
+// so edits to its backing file hot-reload it. The watcher no-ops for themes
+// without a user theme file (e.g. built-ins).
+func (m *appModel) watchCurrentTheme() {
+	if m.themeWatcher == nil {
+		return
+	}
+	theme := styles.CurrentTheme()
+	if theme.Ref == "" {
+		return
+	}
+	if err := m.themeWatcher.Watch(theme.Ref); err != nil {
+		slog.Warn("Failed to watch theme file", "theme", theme.Ref, "error", err)
+	}
 }
 
 // reapplyKeyboardEnhancements forwards the cached keyboard enhancements message
@@ -451,7 +562,7 @@ func (m *appModel) reapplyKeyboardEnhancements() {
 }
 
 func (m *appModel) commandCategories() []commands.Category {
-	categories := m.buildCommandCategories(context.Background(), m)
+	categories := m.buildCommandCategories(m.ctx(), m)
 	if len(m.disabledCommands) == 0 {
 		return categories
 	}
@@ -478,6 +589,7 @@ func (m *appModel) commandCategories() []commands.Category {
 func (m *appModel) chatPageOpts() []chat.PageOption {
 	opts := []chat.PageOption{
 		chat.WithCommandParser(commands.NewParser(m.commandCategories()...)),
+		chat.WithLayoutSettings(m.layoutSettings),
 	}
 
 	if m.leanMode {
@@ -494,7 +606,7 @@ func (m *appModel) editorOpts() []editor.Option {
 	opts := []editor.Option{
 		editor.WithCompletions(
 			completions.NewCommandCompletion(m.commandCategories()),
-			completions.NewFileCompletion(),
+			completions.NewFileCompletion(m.ctx()),
 		),
 	}
 	if m.application.IsReadOnly() {
@@ -508,7 +620,7 @@ func (m *appModel) editorOpts() []editor.Option {
 // convenience pointers (m.chatPage, m.sessionState, m.editor) are also updated.
 func (m *appModel) initSessionComponents(tabID string, a *app.App, sess *session.Session) {
 	ss := service.NewSessionState(sess)
-	cp := chat.New(a, ss, m.chatPageOpts()...)
+	cp := chat.New(m.ctx(), a, ss, m.chatPageOpts()...)
 	ed := editor.New(m.history, m.editorOpts()...)
 
 	m.chatPages[tabID] = cp
@@ -533,8 +645,65 @@ func (m *appModel) initAndFocusComponents() tea.Cmd {
 	)
 }
 
+func (m *appModel) contextShutdownCmd() tea.Cmd {
+	return func() tea.Msg {
+		go func() {
+			<-m.shutdownDone
+			m.cleanupManagedResources()
+		}()
+		return nil
+	}
+}
+
 // Init initializes the model.
 func (m *appModel) Init() tea.Cmd {
+	return tea.Batch(m.init(), m.tourStartupCmd(), m.autoThemeInitCmd())
+}
+
+// autoThemeInitCmd enables DEC mode 2031 (terminal color-scheme reports) so
+// terminals that support it push light/dark changes live while the auto
+// theme is active. Terminals without the mode ignore the sequence. When the
+// auto theme is off nothing is emitted, keeping default runs byte-identical.
+func (m *appModel) autoThemeInitCmd() tea.Cmd {
+	if !styles.AutoThemeEnabled() {
+		return nil
+	}
+	m.lightDarkModeSet = true
+	return tea.Raw(ansi.SetModeLightDark)
+}
+
+// quitCmd returns tea.Quit, first resetting DEC mode 2031 when the auto
+// theme enabled it, so the terminal stops sending color-scheme reports
+// after exit.
+func (m *appModel) quitCmd() tea.Cmd {
+	if !m.lightDarkModeSet {
+		return tea.Quit
+	}
+	m.lightDarkModeSet = false
+	return tea.Sequence(tea.Raw(ansi.ResetModeLightDark), tea.Quit)
+}
+
+// tourStartupCmd applies the configured startup tour mode: start the tour
+// right away or open the first-run offer dialog. Lean mode has no overlay
+// support, so the tour is disabled there.
+func (m *appModel) tourStartupCmd() tea.Cmd {
+	if m.leanMode {
+		return nil
+	}
+	switch m.tourMode {
+	case tourModeStart:
+		return core.CmdHandler(messages.StartTourMsg{})
+	case tourModeOffer:
+		return core.CmdHandler(dialog.OpenDialogMsg{
+			Model: dialog.NewTourOfferDialog(m.tourShowTelemetryNotice),
+		})
+	default:
+		return nil
+	}
+}
+
+func (m *appModel) init() tea.Cmd {
+	shutdownCmd := m.contextShutdownCmd()
 	// If a different tab should be active on startup, switch to it directly.
 	// The initial tab's pending restore stays lazy — it will be loaded via
 	// handleSwitchTab when the user eventually opens it, just like every
@@ -543,7 +712,7 @@ func (m *appModel) Init() tea.Cmd {
 		tabID := m.pendingActiveTab
 		m.pendingActiveTab = ""
 		_, switchCmd := m.handleSwitchTab(tabID)
-		return tea.Batch(m.dialogMgr.Init(), switchCmd)
+		return tea.Batch(m.dialogMgr.Init(), switchCmd, shutdownCmd)
 	}
 
 	// If the initial tab has a pending session restore, go through
@@ -552,11 +721,11 @@ func (m *appModel) Init() tea.Cmd {
 	if oldSessionID, ok := m.pendingRestores[activeID]; ok {
 		delete(m.pendingRestores, activeID)
 		if store := m.application.SessionStore(); store != nil {
-			if sess, err := store.GetSession(context.Background(), oldSessionID); err == nil {
-				_, cmd := m.replaceActiveSession(context.Background(), sess)
+			if sess, err := store.GetSession(m.ctx(), oldSessionID); err == nil {
+				_, cmd := m.replaceActiveSession(m.ctx(), sess)
 
 				if m.tuiStore != nil && sess.WorkingDir != "" {
-					if err := m.tuiStore.UpdateTabWorkingDir(context.Background(), oldSessionID, sess.WorkingDir); err != nil {
+					if err := m.tuiStore.UpdateTabWorkingDir(m.ctx(), oldSessionID, sess.WorkingDir); err != nil {
 						slog.Warn("Failed to update persisted working dir", "error", err)
 					}
 				}
@@ -564,12 +733,13 @@ func (m *appModel) Init() tea.Cmd {
 				cmd = tea.Batch(cmd, m.applySidebarCollapsed(activeID))
 				m.persistActiveTab(sess.ID)
 
-				return tea.Batch(m.dialogMgr.Init(), cmd)
+				return tea.Batch(m.dialogMgr.Init(), cmd, shutdownCmd)
 			}
 		}
 	}
 
 	return tea.Batch(
+		shutdownCmd,
 		m.dialogMgr.Init(),
 		m.chatPage.Init(),
 		m.editor.Init(),
@@ -578,14 +748,24 @@ func (m *appModel) Init() tea.Cmd {
 	)
 }
 
-// Update handles messages.
+// Update handles messages. It wraps update so the getting-started tour can
+// observe every message that flows through the TUI (to detect completed
+// steps) without ever consuming it.
 func (m *appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	model, cmd := m.update(msg)
+	if obs := m.tour.Observe(msg); obs != nil {
+		cmd = tea.Batch(cmd, obs)
+	}
+	return model, cmd
+}
+
+func (m *appModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// In lean mode, silently drop messages for features that don't exist.
 	if m.leanMode {
 		switch msg.(type) {
 		case messages.SpawnSessionMsg, messages.SwitchTabMsg,
 			messages.CloseTabMsg, messages.ReorderTabMsg,
-			messages.ToggleSidebarMsg:
+			messages.ToggleSidebarMsg, messages.OpenCustomizeDialogMsg:
 			return m, nil
 		}
 	}
@@ -649,7 +829,7 @@ func (m *appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.tuiStore != nil {
 			persistedID := m.persistedSessionID(m.supervisor.ActiveID())
-			if err := m.tuiStore.ToggleSidebarCollapsed(context.Background(), persistedID); err != nil {
+			if err := m.tuiStore.ToggleSidebarCollapsed(m.ctx(), persistedID); err != nil {
 				slog.Warn("Failed to persist sidebar collapsed state", "error", err)
 			}
 		}
@@ -726,6 +906,12 @@ func (m *appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, animation.StartTick())
 			}
 		}
+		if styles.AutoThemeEnabled() {
+			// Terminals without mode 2031 can still flip their appearance
+			// while we're in the background; re-query on focus so the auto
+			// theme catches up.
+			cmds = append(cmds, tea.RequestBackgroundColor)
+		}
 		if m.dockerDesktop && m.program != nil {
 			// Docker Desktop: the terminal may have lost all mode state (alt
 			// screen, mouse tracking, keyboard enhancements, background
@@ -738,6 +924,17 @@ func (m *appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			})
 		}
 		return m, tea.Batch(cmds...)
+
+	case tea.BackgroundColorMsg:
+		return m.handleColorSchemeChange(msg.IsDark())
+
+	// DEC mode 2031 color-scheme reports. bubbletea passes these ultraviolet
+	// events through untyped, so they are matched here directly.
+	case uv.DarkColorSchemeEvent:
+		return m.handleColorSchemeChange(true)
+
+	case uv.LightColorSchemeEvent:
+		return m.handleColorSchemeChange(false)
 
 	case tea.KeyboardEnhancementsMsg:
 		m.keyboardEnhancements = &msg
@@ -783,7 +980,8 @@ func (m *appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case dialog.ExitConfirmedMsg:
 		m.cleanupAll()
-		return m, tea.Quit
+		quit := m.quitCmd()
+		return m, quit
 
 	case dialog.RuntimeResumeMsg:
 		m.application.Resume(msg.Request)
@@ -803,6 +1001,17 @@ func (m *appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
+
+	// --- Getting-started tour ---
+
+	case messages.StartTourMsg:
+		return m.handleStartTour()
+
+	case messages.TourFinishedMsg:
+		return m.handleTourFinished(msg.Completed)
+
+	case dialog.TourOfferResultMsg:
+		return m.handleTourOfferResult(msg.Choice)
 
 	// --- Terminal bell ---
 
@@ -858,11 +1067,13 @@ func (m *appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleCloseTab(m.supervisor.ActiveID())
 		}
 		m.cleanupAll()
-		return m, tea.Quit
+		quit := m.quitCmd()
+		return m, quit
 
 	case messages.ExitAfterFirstResponseMsg:
 		m.cleanupAll()
-		return m, tea.Quit
+		quit := m.quitCmd()
+		return m, quit
 
 	// --- SendMsg from editor ---
 
@@ -968,6 +1179,12 @@ func (m *appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case messages.ShowCostDialogMsg:
 		return m.handleShowCostDialog()
 
+	case messages.ShowContextDialogMsg:
+		return m.handleShowContextDialog()
+
+	case messages.DropAttachedFileMsg:
+		return m.handleDropAttachedFile(msg.Path)
+
 	case messages.ShowPermissionsDialogMsg:
 		return m.handleShowPermissionsDialog()
 
@@ -994,6 +1211,9 @@ func (m *appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case messages.ChangeModelMsg:
 		return m.handleChangeModel(msg.ModelRef)
 
+	case messages.SetThinkingLevelMsg:
+		return m.handleSetThinkingLevel(msg.Level)
+
 	// --- Theme picker ---
 
 	case messages.OpenThemePickerMsg:
@@ -1013,6 +1233,20 @@ func (m *appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case messages.ThemeFileChangedMsg:
 		return m.handleThemeFileChanged(msg.ThemeRef)
+
+	// --- Layout customization ---
+
+	case messages.OpenCustomizeDialogMsg:
+		return m.handleOpenCustomizeDialog()
+
+	case messages.PreviewLayoutMsg:
+		return m.applyLayoutSettings(msg.Layout, false)
+
+	case messages.ApplyLayoutMsg:
+		return m.applyLayoutSettings(msg.Layout, true)
+
+	case messages.CancelLayoutPreviewMsg:
+		return m.applyLayoutSettings(msg.Original, false)
 
 	// --- Speech-to-text ---
 
@@ -1047,7 +1281,7 @@ func (m *appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.application.IsReadOnly() {
 			return m, notification.WarningCmd("Session is read-only. No new messages can be sent.")
 		}
-		m.application.RunWithMessage(context.Background(), nil, msg.Content)
+		m.application.RunWithMessage(m.ctx(), nil, msg.Content)
 		return m, nil
 
 	// --- URL opening ---
@@ -1105,8 +1339,13 @@ func (m *appModel) handleRoutedMsg(msg messages.RoutedMsg) (tea.Model, tea.Cmd) 
 	// Update session state for inactive sessions
 	if event, isRuntimeEvent := msg.Inner.(runtime.Event); isRuntimeEvent {
 		if sessionState, ok := m.sessionStates[msg.SessionID]; ok {
-			if agentName := event.GetAgentName(); agentName != "" {
-				sessionState.SetCurrentAgentName(agentName)
+			// Token-usage events are accounting, not agent-switch signals: a
+			// background agent task's usage can arrive while the tab is idle
+			// and must not move the current-agent marker to that agent.
+			if _, isUsage := msg.Inner.(*runtime.TokenUsageEvent); !isUsage {
+				if agentName := event.GetAgentName(); agentName != "" {
+					sessionState.SetCurrentAgentName(agentName)
+				}
 			}
 			m.applyPauseEvent(sessionState, msg.Inner)
 		}
@@ -1164,8 +1403,7 @@ func (m *appModel) handleOpenSessionBrowser() (tea.Model, tea.Cmd) {
 	if store == nil {
 		return m, notification.InfoCmd("No session store configured")
 	}
-
-	sessions, err := store.GetSessionSummaries(context.Background())
+	sessions, err := store.GetSessionSummaries(m.ctx())
 	if err != nil {
 		return m, notification.ErrorCmd(fmt.Sprintf("Failed to load sessions: %v", err))
 	}
@@ -1173,8 +1411,19 @@ func (m *appModel) handleOpenSessionBrowser() (tea.Model, tea.Cmd) {
 		return m, notification.InfoCmd("No previous sessions found")
 	}
 
+	// Resolve the active workspace so the browser can group sessions started
+	// in the current directory. This mirrors where a restore would land: the
+	// same WorkingDir field drives replaceActiveSession.
+	var workspaceDir string
+	if runner := m.supervisor.GetRunner(m.supervisor.ActiveID()); runner != nil {
+		workspaceDir = runner.WorkingDir
+	}
+	if workspaceDir == "" {
+		workspaceDir, _ = os.Getwd()
+	}
+
 	return m, core.CmdHandler(dialog.OpenDialogMsg{
-		Model: dialog.NewSessionBrowserDialog(sessions),
+		Model: dialog.NewSessionBrowserDialog(sessions, workspaceDir),
 	})
 }
 
@@ -1184,8 +1433,7 @@ func (m *appModel) handleLoadSession(sessionID string) (tea.Model, tea.Cmd) {
 	if store == nil {
 		return m, notification.ErrorCmd("No session store configured")
 	}
-
-	sess, err := store.GetSession(context.Background(), sessionID)
+	sess, err := store.GetSession(m.ctx(), sessionID)
 	if err != nil {
 		return m, notification.ErrorCmd(fmt.Sprintf("Failed to load session: %v", err))
 	}
@@ -1200,7 +1448,7 @@ func (m *appModel) handleLoadSession(sessionID string) (tea.Model, tea.Cmd) {
 	if workingDir == "" {
 		workingDir = m.application.Session().WorkingDir
 	}
-	ctx := context.Background()
+	ctx := m.ctx()
 
 	// If the current session is empty (no messages, no title — the default state
 	// when opening the TUI or creating a new tab), replace it in-place instead of
@@ -1328,7 +1576,7 @@ func (m *appModel) handleClearSession() (tea.Model, tea.Cmd) {
 
 	// Update persisted tab to point to the new session.
 	if m.tuiStore != nil {
-		ctx := context.Background()
+		ctx := m.ctx()
 		oldPersistedID := m.persistedSessionID(activeID)
 		if err := m.tuiStore.UpdateTabSessionID(ctx, oldPersistedID, newSess.ID); err != nil {
 			slog.WarnContext(ctx, "Failed to update tab session ID after clear", "error", err)
@@ -1353,7 +1601,7 @@ func (m *appModel) handleSpawnSession(workingDir string) (tea.Model, tea.Cmd) {
 	}
 
 	// Spawn the new session
-	ctx := context.Background()
+	ctx := m.ctx()
 	sessionID, err := m.supervisor.SpawnSession(ctx, workingDir)
 	if err != nil {
 		return m, notification.ErrorCmd("Failed to spawn session: " + err.Error())
@@ -1374,8 +1622,8 @@ func (m *appModel) handleSpawnSession(workingDir string) (tea.Model, tea.Cmd) {
 func (m *appModel) openWorkingDirPicker() (tea.Model, tea.Cmd) {
 	var recentDirs, favoriteDirs []string
 	if m.tuiStore != nil {
-		recentDirs, _ = m.tuiStore.GetRecentDirs(context.Background(), 10)
-		favoriteDirs, _ = m.tuiStore.GetFavoriteDirs(context.Background())
+		recentDirs, _ = m.tuiStore.GetRecentDirs(m.ctx(), 10)
+		favoriteDirs, _ = m.tuiStore.GetFavoriteDirs(m.ctx())
 	}
 
 	// Use the active session's working directory so the picker reflects it
@@ -1386,7 +1634,7 @@ func (m *appModel) openWorkingDirPicker() (tea.Model, tea.Cmd) {
 	}
 
 	return m, core.CmdHandler(dialog.OpenDialogMsg{
-		Model: dialog.NewWorkingDirPickerDialog(recentDirs, favoriteDirs, m.tuiStore, sessionWorkingDir),
+		Model: dialog.NewWorkingDirPickerDialog(m.ctx(), recentDirs, favoriteDirs, m.tuiStore, sessionWorkingDir),
 	})
 }
 
@@ -1453,12 +1701,12 @@ func (m *appModel) handleSwitchTab(sessionID string) (tea.Model, tea.Cmd) {
 		delete(m.pendingRestores, sessionID)
 		m.application = runner.App
 		if store := runner.App.SessionStore(); store != nil {
-			if sess, err := store.GetSession(context.Background(), oldSessionID); err == nil {
+			if sess, err := store.GetSession(m.ctx(), oldSessionID); err == nil {
 				m.persistActiveTab(sess.ID)
-				model, cmd := m.replaceActiveSession(context.Background(), sess)
+				model, cmd := m.replaceActiveSession(m.ctx(), sess)
 
 				if m.tuiStore != nil && sess.WorkingDir != "" {
-					if err := m.tuiStore.UpdateTabWorkingDir(context.Background(), oldSessionID, sess.WorkingDir); err != nil {
+					if err := m.tuiStore.UpdateTabWorkingDir(m.ctx(), oldSessionID, sess.WorkingDir); err != nil {
 						slog.Warn("Failed to update persisted working dir", "error", err)
 					}
 				}
@@ -1599,7 +1847,7 @@ func (m *appModel) replayElicitationEvent(ev *runtime.ElicitationRequestEvent) t
 				serverURL = url
 			}
 			return core.CmdHandler(dialog.OpenDialogMsg{
-				Model:            dialog.NewOAuthAuthorizationDialog(serverURL, m.application),
+				Model:            dialog.NewOAuthAuthorizationDialog(m.ctx(), serverURL, m.application),
 				OriginatingEvent: ev,
 			})
 		}
@@ -1608,7 +1856,7 @@ func (m *appModel) replayElicitationEvent(ev *runtime.ElicitationRequestEvent) t
 	switch ev.Mode {
 	case "url":
 		return core.CmdHandler(dialog.OpenDialogMsg{
-			Model:            dialog.NewURLElicitationDialog(ev.Message, ev.URL),
+			Model:            dialog.NewURLElicitationDialog(m.ctx(), ev.Message, ev.URL),
 			OriginatingEvent: ev,
 		})
 	default:
@@ -1629,7 +1877,7 @@ func (m *appModel) handleReorderTab(msg messages.ReorderTabMsg) (tea.Model, tea.
 		for i, tab := range tabs {
 			ids[i] = m.persistedSessionID(tab.SessionID)
 		}
-		if err := m.tuiStore.ReorderTab(context.Background(), ids); err != nil {
+		if err := m.tuiStore.ReorderTab(m.ctx(), ids); err != nil {
 			slog.Warn("Failed to persist tab reorder", "error", err)
 		}
 	}
@@ -1666,7 +1914,7 @@ func (m *appModel) handleCloseTab(sessionID string) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 	// Remove from persistent store using the persisted session-store ID.
 	if m.tuiStore != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+		ctx, cancel := context.WithTimeout(m.ctx(), 1*time.Second)
 		defer cancel()
 		if err := m.tuiStore.RemoveTab(ctx, persistedID); err != nil {
 			slog.ErrorContext(ctx, "Failed to remove tab from store", "error", err)
@@ -1752,6 +2000,8 @@ func (m *appModel) resizeAll() tea.Cmd {
 
 	// Full mode: update overlay components
 	cmds = append(cmds, m.updateDialogCmd(tea.WindowSizeMsg{Width: width, Height: height}))
+
+	m.tour.SetSize(width, height, m.contentHeight)
 
 	m.completions.SetEditorBottom(editorHeight + m.tabBar.Height())
 	m.completions.Update(tea.WindowSizeMsg{Width: width, Height: height})
@@ -1976,6 +2226,12 @@ func (m *appModel) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// History search is a modal state — capture all remaining keys before normal routing
 	if m.focusedPanel == PanelEditor && m.editor.IsHistorySearchActive() {
 		return m.forwardEditor(msg)
+	}
+
+	// Getting-started tour controls (Esc to quit, Enter on an empty editor
+	// to advance) sit below dialogs and completions but above normal routing.
+	if cmd, handled := m.handleTourKey(msg); handled {
+		return m, cmd
 	}
 
 	switch {
@@ -2484,12 +2740,18 @@ func (m *appModel) View() tea.View {
 	baseView := lipgloss.JoinVertical(lipgloss.Top, viewParts...)
 
 	// Handle overlays
-	hasOverlays := m.dialogMgr.Open() || m.notification.Open() || m.completions.Open()
+	hasOverlays := m.dialogMgr.Open() || m.notification.Open() || m.completions.Open() || m.tour.Active()
 
 	if hasOverlays {
 		baseLayer := lipgloss.NewLayer(baseView)
 		var allLayers []*lipgloss.Layer
 		allLayers = append(allLayers, baseLayer)
+
+		// The tour card sits above the base UI but below dialogs, so the
+		// step it teaches (palette, tool approval…) is never hidden by it.
+		if tourLayer := m.tour.Layer(); tourLayer != nil {
+			allLayers = append(allLayers, tourLayer)
+		}
 
 		if m.dialogMgr.Open() {
 			dialogLayers := m.dialogMgr.GetLayers()
@@ -2533,52 +2795,111 @@ func formatWindowTitle(appName, sessionTitle string, working bool, animFrame int
 	return title
 }
 
-// exitFunc is the function called by the shutdown safety net when the
-// graceful exit times out. It defaults to os.Exit but can be replaced
-// in tests.
-var exitFunc = os.Exit
+// defaultExitFunc is the process-exit function used by the shutdown safety
+// net when the graceful exit times out. It is a package var (not a const)
+// only so the os.Exit indirection is testable at the package level; per-model
+// overrides go through appModel.exitFunc.
+var defaultExitFunc = os.Exit
 
-var shutdownTimeout = 5 * time.Second
+const defaultShutdownTimeout = 5 * time.Second
 
-// cleanupAll cleans up all sessions, editors, and resources.
+// exitFn returns the exit function for this model, falling back to the
+// package default when unset.
+func (m *appModel) exitFn() func(int) {
+	if m.exitFunc != nil {
+		return m.exitFunc
+	}
+	return defaultExitFunc
+}
+
+// shutdownTimeoutOrDefault returns the shutdown grace period for this model,
+// falling back to the package default when unset.
+func (m *appModel) shutdownTimeoutOrDefault() time.Duration {
+	if m.shutdownTimeout > 0 {
+		return m.shutdownTimeout
+	}
+	return defaultShutdownTimeout
+}
+
+// cleanupManagedResources shuts down resources owned by the top-level TUI
+// lifecycle. It is safe to call from both the Bubble Tea event loop (normal
+// exit) and the context watcher (external cancellation).
+func (m *appModel) cleanupManagedResources() {
+	m.cleanupOnce.Do(func() {
+		if m.themeWatcher != nil {
+			m.themeWatcher.Stop()
+		}
+		if m.tuiStore != nil {
+			_ = m.tuiStore.Close()
+		}
+		if m.supervisor != nil {
+			m.supervisor.Shutdown()
+		}
+	})
+}
+
+// cleanupAll cleans up all sessions, editors, and resources. It is invoked
+// from several message handlers (ExitSessionMsg, ExitConfirmedMsg, …) and may
+// be called more than once on the same model; the entire shutdown sequence is
+// once-guarded so repeat calls are no-ops and cannot pile up goroutines on a
+// wedged cleanup or arm parallel safety nets.
 func (m *appModel) cleanupAll() {
-	m.transcriber.Stop()
-	m.closeTranscriptCh()
-	for _, ed := range m.editors {
-		ed.Cleanup()
-	}
+	m.cleanupAllOnce.Do(func() {
+		m.transcriber.Stop()
+		m.closeTranscriptCh()
+		for _, ed := range m.editors {
+			ed.Cleanup()
+		}
 
-	// Safety net: bubbletea's renderer can deadlock on shutdown if stdout
-	// is wedged — the final flush re-acquires the mutex that the still
-	// blocked previous flush is holding. Race Wait() against a deadline
-	// and force-exit if shutdown stalls. Snapshot the package globals so
-	// they can't race with t.Cleanup. Clear m.program so subsequent calls
-	// to cleanupAll (e.g. ExitSessionMsg followed by ExitConfirmedMsg) are
-	// no-ops and don't spawn parallel safety nets that would each call exit.
-	program := m.program
-	if program == nil {
-		return
-	}
-	m.program = nil
-	timeout := shutdownTimeout
-	exit := exitFunc
-	go func() {
-		done := make(chan struct{})
+		// Shut down managed resources (supervisor, TUI state store) in the
+		// background: supervisor.Shutdown stops every session's toolsets, which
+		// can block indefinitely (e.g. an MCP toolset wedged behind a broken
+		// Docker daemon). Running it synchronously here would freeze the Update
+		// loop before tea.Quit is ever returned, leaving the exit confirmation
+		// apparently ignored.
+		cleanupDone := make(chan struct{})
 		go func() {
-			program.Wait()
-			close(done)
+			defer close(cleanupDone)
+			m.cleanupManagedResources()
 		}()
 
-		select {
-		case <-done:
-		case <-time.After(timeout):
-			slog.Warn("Graceful shutdown timed out, forcing exit")
-			// ReleaseTerminal grabs the same mutex that's stuck, so
-			// fire-and-forget; exit either way.
-			go func() { _ = program.ReleaseTerminal() }()
-			exit(0)
+		// Safety net: bubbletea's renderer can deadlock on shutdown if stdout
+		// is wedged — the final flush re-acquires the mutex that the still
+		// blocked previous flush is holding — and the resource cleanup above can
+		// likewise stall forever. Race both against a deadline and force-exit if
+		// shutdown stalls. Snapshot the program and package globals so they
+		// can't race with t.Cleanup. Without a program (tests, exit before
+		// SetProgram) there is no renderer to deadlock and no UI left to
+		// unblock, so no safety net is armed; the background cleanup still runs.
+		program := m.program
+		if program == nil {
+			return
 		}
-	}()
+		m.program = nil
+		timeout := m.shutdownTimeoutOrDefault()
+		exit := m.exitFn()
+		go func() {
+			done := make(chan struct{})
+			go func() {
+				program.Wait()
+				close(done)
+			}()
+
+			deadline := time.After(timeout)
+			for _, ch := range []<-chan struct{}{done, cleanupDone} {
+				select {
+				case <-ch:
+				case <-deadline:
+					slog.Warn("Graceful shutdown timed out, forcing exit")
+					// ReleaseTerminal grabs the same mutex that's stuck, so
+					// fire-and-forget; exit either way.
+					go func() { _ = program.ReleaseTerminal() }()
+					exit(0)
+					return
+				}
+			}
+		}()
+	})
 }
 
 // openExternalEditor opens the current editor content in an external editor.

@@ -26,8 +26,8 @@ func TestInstructions_Concurrent(t *testing.T) {
 			// Simulate a concurrent writer (the supervisor's Connect updates
 			// instructions under ts.mu after a successful Initialize).
 			ts.mu.Lock()
+			defer ts.mu.Unlock()
 			ts.instructions = "updated"
-			ts.mu.Unlock()
 		}()
 		go func() {
 			defer wg.Done()
@@ -64,10 +64,11 @@ func TestSupervisorRespectsContextCancellation(t *testing.T) {
 	require.Error(t, err, "Start must propagate connector error")
 
 	// Now exercise RestartAndWait + cancel: it should return promptly.
+	// Whether the cancellation lands before or after RestartAndWait parks
+	// in its select, the ctx path must win over the 10s timeout.
 	done := make(chan error, 1)
 	go func() { done <- s.RestartAndWait(ctx, 10*time.Second) }()
 
-	time.Sleep(50 * time.Millisecond)
 	cancel()
 
 	select {

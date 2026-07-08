@@ -91,6 +91,7 @@ func (m *failingInitClient) Wait() error {
 
 func (m *failingInitClient) Close(context.Context) error {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.waitCh != nil {
 		select {
 		case <-m.waitCh:
@@ -98,7 +99,6 @@ func (m *failingInitClient) Close(context.Context) error {
 			close(m.waitCh)
 		}
 	}
-	m.mu.Unlock()
 	return nil
 }
 

@@ -58,10 +58,7 @@ func NewClient(ctx context.Context, cfg *latest.ModelConfig, env environment.Pro
 		return nil, errors.New("model type must be 'amazon-bedrock'")
 	}
 
-	var globalOptions options.ModelOptions
-	for _, opt := range opts {
-		opt(&globalOptions)
-	}
+	globalOptions := options.Apply(opts...)
 
 	// Check for bearer token
 	// Bearer token is optional: if not provided, falls back to standard AWS credential chain (SigV4).
@@ -94,13 +91,7 @@ func NewClient(ctx context.Context, cfg *latest.ModelConfig, env environment.Pro
 	}
 
 	// Apply the transport wrapper, if registered, over the full chain.
-	if w := globalOptions.TransportWrapper(); w != nil {
-		if wrapped := w(httpClient.Transport); wrapped != nil {
-			httpClient.Transport = wrapped
-		} else {
-			slog.WarnContext(ctx, "HTTP transport wrapper returned nil; using original transport")
-		}
-	}
+	globalOptions.WrapTransport(ctx, httpClient)
 
 	// Build AWS config using default credential chain
 	awsCfg, err := buildAWSConfig(ctx, cfg, env)
@@ -246,7 +237,7 @@ func (c *Client) CreateChatCompletionStream(
 		return nil, wrapBedrockError(fmt.Errorf("bedrock converse stream failed: %w", err))
 	}
 
-	trackUsage := c.ModelConfig.TrackUsage == nil || *c.ModelConfig.TrackUsage
+	trackUsage := c.TrackUsageEnabled()
 	return newStreamAdapter(output.GetStream(), c.ModelConfig.Model, trackUsage), nil
 }
 

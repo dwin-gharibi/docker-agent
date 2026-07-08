@@ -126,6 +126,11 @@ func New(ctx context.Context, cfg Config) (*Session, error) {
 		ProviderRegistry:   loaded.ProviderRegistry,
 		AgentDefaultModels: loaded.AgentDefaultModels,
 	}
+	// Reuse the models.dev store the team loader already warmed so model-
+	// metadata lookups don't re-pay the cold catalog parse.
+	if store, storeErr := runConfig.ModelsDevStore(); storeErr == nil {
+		modelSwitcher.ModelsStore = store
+	}
 
 	runtimeOpts := []dagentruntime.Opt{
 		dagentruntime.WithModelSwitcherConfig(modelSwitcher),
@@ -133,7 +138,7 @@ func New(ctx context.Context, cfg Config) (*Session, error) {
 		dagentruntime.WithSessionStore(session.NewInMemorySessionStore()),
 	}
 	runtimeOpts = append(runtimeOpts, cfg.RuntimeOptions...)
-	rt, err := dagentruntime.New(loaded.Team, runtimeOpts...)
+	rt, err := dagentruntime.New(ctx, loaded.Team, runtimeOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("embeddedchat: create runtime: %w", err)
 	}
@@ -264,10 +269,10 @@ func (s *Session) forwardEvents(ctx context.Context, events <-chan dagentruntime
 	defer cancel()
 	defer func() {
 		s.mu.Lock()
+		defer s.mu.Unlock()
 		if s.activeRun == runID {
 			s.activeCancel = nil
 		}
-		s.mu.Unlock()
 	}()
 
 	emit := func(e Event) bool {

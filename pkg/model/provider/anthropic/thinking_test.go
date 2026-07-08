@@ -15,6 +15,7 @@ import (
 )
 
 func TestAnthropicThinkingDisplay(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		opts   map[string]any
@@ -98,10 +99,15 @@ func TestAnthropicThinkingDisplay(t *testing.T) {
 	}
 }
 
-// defaultTestModel is an Anthropic model that does NOT require the
-// adaptive-thinking workaround, so token-based thinking budgets are
-// preserved as-is.
-const defaultTestModel = "claude-sonnet-4-5"
+// defaultTestModel is an Anthropic model that supports adaptive thinking but is
+// NOT in the token-rejecting set (Opus 4.6+), so effort/adaptive budgets use the
+// adaptive-thinking API while token-based budgets are preserved as-is.
+const defaultTestModel = "claude-sonnet-4-6"
+
+// nonAdaptiveTestModel is an Anthropic model that does NOT support adaptive
+// thinking (issue #3362), so effort/adaptive budgets must fall back to
+// token-based extended thinking.
+const nonAdaptiveTestModel = "claude-haiku-4-5"
 
 // clientWith builds a minimal Client with the given ThinkingBudget and
 // provider_opts on defaultTestModel.
@@ -125,6 +131,7 @@ func clientWithModel(model string, budget *latest.ThinkingBudget, opts map[strin
 }
 
 func TestApplyThinkingConfig(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name            string
 		model           string // optional; defaults to a non-Opus-4-6/4-7 model.
@@ -156,12 +163,13 @@ func TestApplyThinkingConfig(t *testing.T) {
 			wantEnabled: false,
 		},
 		{
-			name:         "adaptive high effort without display",
-			budget:       &latest.ThinkingBudget{Effort: "adaptive"},
-			maxTokens:    8192,
-			wantEnabled:  true,
-			wantAdaptive: true,
-			wantEffort:   "high",
+			name:            "adaptive high effort without display defaults to summarized",
+			budget:          &latest.ThinkingBudget{Effort: "adaptive"},
+			maxTokens:       8192,
+			wantEnabled:     true,
+			wantAdaptive:    true,
+			wantEffort:      "high",
+			wantDisplayJSON: "summarized",
 		},
 		{
 			name:            "adaptive with display=summarized",
@@ -208,22 +216,24 @@ func TestApplyThinkingConfig(t *testing.T) {
 			wantTokens:  2048,
 		},
 		{
-			name:         "opus-4-6 token budget auto-switches to adaptive",
-			model:        "claude-opus-4-6",
-			budget:       &latest.ThinkingBudget{Tokens: 4096},
-			maxTokens:    8192,
-			wantEnabled:  true,
-			wantAdaptive: true,
-			wantEffort:   "high",
+			name:            "opus-4-6 token budget auto-switches to adaptive",
+			model:           "claude-opus-4-6",
+			budget:          &latest.ThinkingBudget{Tokens: 4096},
+			maxTokens:       8192,
+			wantEnabled:     true,
+			wantAdaptive:    true,
+			wantEffort:      "high",
+			wantDisplayJSON: "summarized",
 		},
 		{
-			name:         "opus-4-7 token budget auto-switches to adaptive",
-			model:        "claude-opus-4-7",
-			budget:       &latest.ThinkingBudget{Tokens: 4096},
-			maxTokens:    8192,
-			wantEnabled:  true,
-			wantAdaptive: true,
-			wantEffort:   "high",
+			name:            "opus-4-7 token budget auto-switches to adaptive",
+			model:           "claude-opus-4-7",
+			budget:          &latest.ThinkingBudget{Tokens: 4096},
+			maxTokens:       8192,
+			wantEnabled:     true,
+			wantAdaptive:    true,
+			wantEffort:      "high",
+			wantDisplayJSON: "summarized",
 		},
 		{
 			name:            "opus-4-6 dated variant token budget auto-switches to adaptive",
@@ -237,13 +247,99 @@ func TestApplyThinkingConfig(t *testing.T) {
 			wantDisplayJSON: "summarized",
 		},
 		{
-			name:         "opus-4-6 explicit adaptive budget is preserved",
-			model:        "claude-opus-4-6",
-			budget:       &latest.ThinkingBudget{Effort: "adaptive/low"},
-			maxTokens:    8192,
-			wantEnabled:  true,
-			wantAdaptive: true,
-			wantEffort:   "low",
+			name:            "opus-4-6 explicit adaptive budget is preserved",
+			model:           "claude-opus-4-6",
+			budget:          &latest.ThinkingBudget{Effort: "adaptive/low"},
+			maxTokens:       8192,
+			wantEnabled:     true,
+			wantAdaptive:    true,
+			wantEffort:      "low",
+			wantDisplayJSON: "summarized",
+		},
+		// Issue #3362: an effort level (as set via the TUI Shift+Tab cycle) uses
+		// adaptive thinking only on models that support it, and falls back to a
+		// token budget everywhere else.
+		{
+			name:            "plain effort level on adaptive model uses adaptive",
+			budget:          &latest.ThinkingBudget{Effort: "high"},
+			maxTokens:       8192,
+			wantEnabled:     true,
+			wantAdaptive:    true,
+			wantEffort:      "high",
+			wantDisplayJSON: "summarized",
+		},
+		// Fable 5 omits thinking content server-side by default; the effort
+		// levels set via /effort or Shift+Tab must request summarized thinking
+		// so reasoning stays visible in the TUI.
+		{
+			name:            "fable-5 effort level defaults display to summarized",
+			model:           "claude-fable-5",
+			budget:          &latest.ThinkingBudget{Effort: "max"},
+			maxTokens:       8192,
+			wantEnabled:     true,
+			wantAdaptive:    true,
+			wantEffort:      "max",
+			wantDisplayJSON: "summarized",
+		},
+		{
+			name:            "fable-5 explicit omitted display is preserved",
+			model:           "claude-fable-5",
+			budget:          &latest.ThinkingBudget{Effort: "high"},
+			opts:            map[string]any{"thinking_display": "omitted"},
+			maxTokens:       8192,
+			wantEnabled:     true,
+			wantAdaptive:    true,
+			wantEffort:      "high",
+			wantDisplayJSON: "omitted",
+		},
+		{
+			name:        "effort level on non-adaptive model falls back to token budget",
+			model:       "claude-haiku-4-5",
+			budget:      &latest.ThinkingBudget{Effort: "medium"},
+			maxTokens:   16384,
+			wantEnabled: true,
+			wantTokens:  8192,
+		},
+		{
+			name:        "effort high on non-adaptive model maps to 16384 tokens",
+			model:       "claude-haiku-4-5",
+			budget:      &latest.ThinkingBudget{Effort: "high"},
+			maxTokens:   32768,
+			wantEnabled: true,
+			wantTokens:  16384,
+		},
+		{
+			name:        "adaptive budget on non-adaptive model falls back to token budget",
+			model:       "claude-haiku-4-5",
+			budget:      &latest.ThinkingBudget{Effort: "adaptive"},
+			maxTokens:   32768,
+			wantEnabled: true,
+			wantTokens:  16384,
+		},
+		{
+			name:            "non-adaptive token fallback keeps display",
+			model:           "claude-haiku-4-5",
+			budget:          &latest.ThinkingBudget{Effort: "low"},
+			opts:            map[string]any{"thinking_display": "omitted"},
+			maxTokens:       8192,
+			wantEnabled:     true,
+			wantTokens:      2048,
+			wantDisplayJSON: "omitted",
+		},
+		{
+			name:        "non-adaptive token fallback dropped when exceeding max_tokens",
+			model:       "claude-haiku-4-5",
+			budget:      &latest.ThinkingBudget{Effort: "high"}, // 16384 > maxTokens
+			maxTokens:   8192,
+			wantEnabled: false,
+		},
+		{
+			name:        "sonnet-4-5 effort falls back to token budget",
+			model:       "claude-sonnet-4-5",
+			budget:      &latest.ThinkingBudget{Effort: "high"},
+			maxTokens:   32768,
+			wantEnabled: true,
+			wantTokens:  16384,
 		},
 	}
 
@@ -285,6 +381,7 @@ func TestApplyThinkingConfig(t *testing.T) {
 }
 
 func TestApplyBetaThinkingConfig(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name            string
 		model           string // optional; defaults to a non-Opus-4-6/4-7 model.
@@ -326,12 +423,13 @@ func TestApplyBetaThinkingConfig(t *testing.T) {
 			maxTokens: 8192,
 		},
 		{
-			name:         "opus-4-6 token budget auto-switches to adaptive",
-			model:        "claude-opus-4-6",
-			budget:       &latest.ThinkingBudget{Tokens: 4096},
-			maxTokens:    8192,
-			wantAdaptive: true,
-			wantEffort:   "high",
+			name:            "opus-4-6 token budget auto-switches to adaptive",
+			model:           "claude-opus-4-6",
+			budget:          &latest.ThinkingBudget{Tokens: 4096},
+			maxTokens:       8192,
+			wantAdaptive:    true,
+			wantEffort:      "high",
+			wantDisplayJSON: "summarized",
 		},
 		{
 			name:            "opus-4-7 token budget auto-switches to adaptive with display",
@@ -341,6 +439,43 @@ func TestApplyBetaThinkingConfig(t *testing.T) {
 			maxTokens:       8192,
 			wantAdaptive:    true,
 			wantEffort:      "high",
+			wantDisplayJSON: "omitted",
+		},
+		// Issue #3362: effort/adaptive budgets fall back to token thinking on
+		// models without adaptive support.
+		{
+			name:            "plain effort on adaptive model uses adaptive",
+			budget:          &latest.ThinkingBudget{Effort: "high"},
+			maxTokens:       8192,
+			wantAdaptive:    true,
+			wantEffort:      "high",
+			wantDisplayJSON: "summarized",
+		},
+		{
+			name:            "fable-5 effort level defaults display to summarized",
+			model:           "claude-fable-5",
+			budget:          &latest.ThinkingBudget{Effort: "xhigh"},
+			maxTokens:       8192,
+			wantAdaptive:    true,
+			wantEffort:      "xhigh",
+			wantDisplayJSON: "summarized",
+		},
+		{
+			name:        "effort on non-adaptive model falls back to token budget",
+			model:       "claude-haiku-4-5",
+			budget:      &latest.ThinkingBudget{Effort: "medium"},
+			maxTokens:   16384,
+			wantEnabled: true,
+			wantTokens:  8192,
+		},
+		{
+			name:            "adaptive on non-adaptive model falls back to token budget with display",
+			model:           "claude-haiku-4-5",
+			budget:          &latest.ThinkingBudget{Effort: "adaptive"},
+			opts:            map[string]any{"thinking_display": "omitted"},
+			maxTokens:       32768,
+			wantEnabled:     true,
+			wantTokens:      16384,
 			wantDisplayJSON: "omitted",
 		},
 	}
@@ -370,6 +505,7 @@ func TestApplyBetaThinkingConfig(t *testing.T) {
 }
 
 func TestAdjustMaxTokensForThinking(t *testing.T) {
+	t.Parallel()
 	t.Run("no budget returns input unchanged", func(t *testing.T) {
 		c := clientWith(nil, nil)
 		got, err := c.adjustMaxTokensForThinking(8192)
@@ -424,22 +560,29 @@ func TestAdjustMaxTokensForThinking(t *testing.T) {
 	})
 }
 
-func TestCoerceAdaptiveThinking(t *testing.T) {
+func TestResolveThinkingBudget(t *testing.T) {
+	t.Parallel()
 	t.Run("nil budget stays nil", func(t *testing.T) {
 		c := clientWithModel("claude-opus-4-7", nil, nil)
-		assert.Nil(t, c.coerceAdaptiveThinking())
+		assert.Nil(t, c.resolveThinkingBudget())
 	})
 
 	t.Run("non-affected model preserves token budget", func(t *testing.T) {
 		in := &latest.ThinkingBudget{Tokens: 4096}
 		c := clientWithModel(defaultTestModel, in, nil)
-		assert.Same(t, in, c.coerceAdaptiveThinking(), "budget pointer must not be replaced")
+		assert.Same(t, in, c.resolveThinkingBudget(), "budget pointer must not be replaced")
+	})
+
+	t.Run("adaptive-capable model preserves effort budget", func(t *testing.T) {
+		in := &latest.ThinkingBudget{Effort: "high"}
+		c := clientWithModel(defaultTestModel, in, nil)
+		assert.Same(t, in, c.resolveThinkingBudget())
 	})
 
 	t.Run("opus-4-6 token budget is coerced to adaptive", func(t *testing.T) {
 		in := &latest.ThinkingBudget{Tokens: 4096}
 		c := clientWithModel("claude-opus-4-6", in, nil)
-		got := c.coerceAdaptiveThinking()
+		got := c.resolveThinkingBudget()
 		require.NotNil(t, got)
 		assert.Equal(t, "adaptive", got.Effort)
 		assert.Equal(t, 0, got.Tokens)
@@ -451,8 +594,32 @@ func TestCoerceAdaptiveThinking(t *testing.T) {
 	t.Run("opus-4-7 adaptive budget is preserved as-is", func(t *testing.T) {
 		in := &latest.ThinkingBudget{Effort: "adaptive/low"}
 		c := clientWithModel("claude-opus-4-7", in, nil)
-		assert.Same(t, in, c.coerceAdaptiveThinking())
+		assert.Same(t, in, c.resolveThinkingBudget())
 	})
+
+	// Issue #3362: effort/adaptive budgets on models without adaptive-thinking
+	// support fall back to a token budget instead of a 400.
+	effortFallbackCases := map[string]struct {
+		budget     *latest.ThinkingBudget
+		wantTokens int
+	}{
+		"effort high -> 16384":     {&latest.ThinkingBudget{Effort: "high"}, 16384},
+		"effort medium -> 8192":    {&latest.ThinkingBudget{Effort: "medium"}, 8192},
+		"effort low -> 2048":       {&latest.ThinkingBudget{Effort: "low"}, 2048},
+		"adaptive -> 16384 (high)": {&latest.ThinkingBudget{Effort: "adaptive"}, 16384},
+		"adaptive/low -> 2048":     {&latest.ThinkingBudget{Effort: "adaptive/low"}, 2048},
+	}
+	for name, tc := range effortFallbackCases {
+		t.Run("haiku-4-5 "+name, func(t *testing.T) {
+			c := clientWithModel(nonAdaptiveTestModel, tc.budget, nil)
+			got := c.resolveThinkingBudget()
+			require.NotNil(t, got)
+			assert.Equal(t, tc.wantTokens, got.Tokens)
+			assert.Empty(t, got.Effort)
+			// Original must not be mutated.
+			assert.Empty(t, tc.budget.Tokens)
+		})
+	}
 
 	// Disabled or non-positive token budgets must NOT be silently coerced to
 	// adaptive thinking on Opus 4.6/4.7 — the user has either explicitly
@@ -466,12 +633,13 @@ func TestCoerceAdaptiveThinking(t *testing.T) {
 	for name, in := range disabledCases {
 		t.Run("opus-4-7 "+name+" passes through", func(t *testing.T) {
 			c := clientWithModel("claude-opus-4-7", in, nil)
-			assert.Same(t, in, c.coerceAdaptiveThinking())
+			assert.Same(t, in, c.resolveThinkingBudget())
 		})
 	}
 }
 
 func TestFloorMaxTokensForNoThinking(t *testing.T) {
+	t.Parallel()
 	buildOpts := func(opts ...options.Opt) options.ModelOptions {
 		var mo options.ModelOptions
 		for _, opt := range opts {
@@ -521,6 +689,7 @@ func TestFloorMaxTokensForNoThinking(t *testing.T) {
 }
 
 func TestInterleavedThinkingEnabled(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		opts map[string]any

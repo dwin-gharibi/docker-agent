@@ -13,6 +13,7 @@ import (
 )
 
 func TestMemoizeCachesValue(t *testing.T) {
+	t.Parallel()
 	m := New[int](NoExpiration)
 
 	var calls atomic.Int32
@@ -30,6 +31,7 @@ func TestMemoizeCachesValue(t *testing.T) {
 }
 
 func TestMemoizeCachesZeroValue(t *testing.T) {
+	t.Parallel()
 	m := New[int](NoExpiration)
 
 	var calls atomic.Int32
@@ -47,6 +49,7 @@ func TestMemoizeCachesZeroValue(t *testing.T) {
 }
 
 func TestMemoizeIsolatesKeys(t *testing.T) {
+	t.Parallel()
 	m := New[string](NoExpiration)
 
 	a, err := m.Memoize("a", func() (string, error) { return "value-a", nil })
@@ -59,6 +62,7 @@ func TestMemoizeIsolatesKeys(t *testing.T) {
 }
 
 func TestMemoizeDoesNotCacheErrors(t *testing.T) {
+	t.Parallel()
 	m := New[int](NoExpiration)
 
 	var calls atomic.Int32
@@ -76,6 +80,7 @@ func TestMemoizeDoesNotCacheErrors(t *testing.T) {
 }
 
 func TestMemoizeRetriesAfterErrorThenCaches(t *testing.T) {
+	t.Parallel()
 	m := New[int](NoExpiration)
 
 	var calls atomic.Int32
@@ -100,6 +105,7 @@ func TestMemoizeRetriesAfterErrorThenCaches(t *testing.T) {
 }
 
 func TestMemoizeExpires(t *testing.T) {
+	t.Parallel()
 	m := New[int](10 * time.Millisecond)
 
 	var calls atomic.Int32
@@ -112,16 +118,27 @@ func TestMemoizeExpires(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, v)
 
-	time.Sleep(20 * time.Millisecond)
+	expireEntry(m, "key")
 
 	v, err = m.Memoize("key", compute)
 	require.NoError(t, err)
 	assert.Equal(t, 2, v)
 }
 
+// expireEntry backdates the cached entry for key so it is already expired,
+// which lets TTL tests run without sleeping.
+func expireEntry[T any](m *Memoizer[T], key string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	e := m.entries[key]
+	e.expires = time.Now().Add(-time.Nanosecond)
+	m.entries[key] = e
+}
+
 // TestMemoizeZeroTTLNeverExpires verifies the go-cache compatible behavior that
 // a non-positive ttl caches forever rather than expiring immediately.
 func TestMemoizeZeroTTLNeverExpires(t *testing.T) {
+	t.Parallel()
 	for _, ttl := range []time.Duration{0, NoExpiration, -time.Hour} {
 		m := New[int](ttl)
 
@@ -135,8 +152,6 @@ func TestMemoizeZeroTTLNeverExpires(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, 7, v)
 
-		time.Sleep(5 * time.Millisecond)
-
 		v, err = m.Memoize("key", compute)
 		require.NoError(t, err)
 		assert.Equal(t, 7, v)
@@ -147,13 +162,14 @@ func TestMemoizeZeroTTLNeverExpires(t *testing.T) {
 // TestMemoizeEvictsExpiredEntry ensures expired entries are removed on access,
 // so memory does not grow without bound for keys that stop being requested.
 func TestMemoizeEvictsExpiredEntry(t *testing.T) {
+	t.Parallel()
 	m := New[int](5 * time.Millisecond)
 
 	_, err := m.Memoize("key", func() (int, error) { return 1, nil })
 	require.NoError(t, err)
 	assert.Len(t, m.entries, 1)
 
-	time.Sleep(10 * time.Millisecond)
+	expireEntry(m, "key")
 
 	_, ok := m.load("key")
 	assert.False(t, ok)
@@ -161,6 +177,7 @@ func TestMemoizeEvictsExpiredEntry(t *testing.T) {
 }
 
 func TestMemoizePanicPropagates(t *testing.T) {
+	t.Parallel()
 	m := New[int](NoExpiration)
 
 	// singleflight wraps the panic value and re-raises it, so we assert that a
@@ -181,6 +198,7 @@ func TestMemoizePanicPropagates(t *testing.T) {
 // TestMemoizeNilInterfaceValue guards the type assertion: when T is an
 // interface and fn returns nil, Memoize must return nil without panicking.
 func TestMemoizeNilInterfaceValue(t *testing.T) {
+	t.Parallel()
 	m := New[fmt.Stringer](NoExpiration)
 
 	v, err := m.Memoize("key", func() (fmt.Stringer, error) {
@@ -191,16 +209,23 @@ func TestMemoizeNilInterfaceValue(t *testing.T) {
 }
 
 func TestMemoizeConcurrentSingleFlight(t *testing.T) {
+	t.Parallel()
 	m := New[int](NoExpiration)
 
 	var calls atomic.Int32
 
+	// Hold the in-flight compute open until every caller has launched, so
+	// they all pile onto the same flight (or hit the cache afterwards).
+	var started sync.WaitGroup
+	started.Add(50)
+
 	var wg sync.WaitGroup
 	for range 50 {
 		wg.Go(func() {
+			started.Done()
 			v, err := m.Memoize("key", func() (int, error) {
 				calls.Add(1)
-				time.Sleep(20 * time.Millisecond)
+				started.Wait()
 				return 7, nil
 			})
 			require.NoError(t, err)
@@ -215,6 +240,7 @@ func TestMemoizeConcurrentSingleFlight(t *testing.T) {
 // TestMemoizeConcurrentDistinctKeys exercises the lock under contention across
 // many keys to catch data races (run with -race).
 func TestMemoizeConcurrentDistinctKeys(t *testing.T) {
+	t.Parallel()
 	m := New[int](time.Millisecond)
 
 	var wg sync.WaitGroup

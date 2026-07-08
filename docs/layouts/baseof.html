@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ if .IsHome }}Docker Agent — Run AI agents from YAML, like containers{{ else }}{{ .Title }} – Docker Agent Docs{{ end }}</title>
+  <meta name="description" content="{{ .Description | default site.Params.description }}">
+
+  {{/* Source path of the current page on disk, used by the right-column
+       "Edit this page" link in js/app.js. We point at GitHub's web editor
+       on the configured repo + branch. The homepage is mounted as
+       _index.md but lives in index.md on disk. */}}
+  {{ $editPath := "index.md" }}
+  {{ if not .IsHome }}{{ with .File }}{{ $editPath = .Path }}{{ end }}{{ end }}
+  <meta name="docs-edit-url" content="https://github.com/docker/docker-agent/edit/main/docs/{{ $editPath }}">
+
+  {{/* Pages mirrored on docs.docker.com set `canonical:` in their front
+       matter so search engines treat the stable docs as authoritative. */}}
+  {{ with .Params.canonical }}<link rel="canonical" href="{{ . }}">{{ end }}
+
+  <meta property="og:title" content="{{ if .IsHome }}Docker Agent — Run AI agents from YAML, like containers{{ else }}{{ .Title }} – Docker Agent Docs{{ end }}">
+  <meta property="og:description" content="{{ .Description | default site.Params.description }}">
+  <meta property="og:type" content="{{ if .IsHome }}website{{ else }}article{{ end }}">
+  <meta property="og:url" content="{{ .Permalink }}">
+  <meta property="og:site_name" content="Docker Agent Docs">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:site" content="@docker">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Roboto+Flex:opsz,wght@8..144,100..900&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ "css/style.css" | relURL }}">
+  <link rel="icon" type="image/svg+xml" href="{{ "assets/docker-mark.svg" | relURL }}">
+</head>
+<body>
+  <a href="#page-content" class="skip-link">Skip to content</a>
+
+  {{ partial "header.html" . }}
+
+  {{ $currentURL := .RelPermalink }}
+  <nav class="sidebar" id="sidebar" role="navigation" aria-label="Documentation navigation">
+    <div class="sidebar-tagline">{{ site.Params.tagline }}</div>
+    {{ range hugo.Data.nav }}
+      {{/* Determine whether this section contains the current page */}}
+      {{ $sectionActive := false }}
+      {{ range .items }}
+        {{ if eq $currentURL (relURL (strings.TrimPrefix "/" .url)) }}{{ $sectionActive = true }}{{ end }}
+      {{ end }}
+      {{ range .groups }}
+        {{ range .items }}
+          {{ if eq $currentURL (relURL (strings.TrimPrefix "/" .url)) }}{{ $sectionActive = true }}{{ end }}
+        {{ end }}
+      {{ end }}
+    <details class="sidebar-section"{{ if $sectionActive }} open{{ end }} title="{{ .section }}">
+      <summary class="sidebar-heading">{{ .section }}</summary>
+      {{ range .items }}
+        <a class="sidebar-link{{ if eq $currentURL (relURL (strings.TrimPrefix "/" .url)) }} active{{ end }}" href="{{ relURL (strings.TrimPrefix "/" .url) }}">{{ .title }}</a>
+      {{ end }}
+      {{ range .groups }}
+        <div class="sidebar-subheading">{{ .label }}</div>
+        {{ range .items }}
+        <a class="sidebar-link sidebar-link--sub{{ if eq $currentURL (relURL (strings.TrimPrefix "/" .url)) }} active{{ end }}" href="{{ relURL (strings.TrimPrefix "/" .url) }}">{{ .title }}</a>
+        {{ end }}
+      {{ end }}
+    </details>
+    {{ end }}
+  </nav>
+
+  <button class="sidebar-toggle" aria-label="Toggle navigation menu">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+  </button>
+
+  <main class="main" id="main-content" role="main">
+    <div class="content" id="page-content">
+      <div class="preview-banner" role="note">
+        These docs track the <code>main</code> branch and may describe unreleased features.
+        The stable documentation lives at
+        <a href="https://docs.docker.com/ai/docker-agent/">docs.docker.com</a>.
+      </div>
+      {{ block "main" . }}{{ end }}
+    </div>
+  </main>
+
+  {{ partial "footer.html" . }}
+
+  <div class="search-overlay" id="search-overlay" role="dialog" aria-label="Search documentation" aria-modal="true">
+    <div class="search-modal">
+      <input type="text" id="search-modal-input" placeholder="Search documentation…" aria-label="Search query">
+      <div class="search-results" id="search-results" role="listbox" aria-label="Search results"></div>
+    </div>
+  </div>
+
+  <script src="{{ "js/app.js" | relURL }}"></script>
+</body>
+</html>

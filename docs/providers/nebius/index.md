@@ -1,10 +1,10 @@
 ---
 title: "Nebius"
 description: "Use Nebius AI models with docker-agent."
-permalink: /providers/nebius/
+keywords: docker agent, ai agents, model providers, llm, nebius
+weight: 190
+canonical: https://docs.docker.com/ai/docker-agent/providers/nebius/
 ---
-
-# Nebius
 
 _Use Nebius AI models with docker-agent._
 

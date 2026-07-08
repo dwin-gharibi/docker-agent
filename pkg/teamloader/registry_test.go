@@ -13,6 +13,7 @@ import (
 	"github.com/docker/docker-agent/pkg/config/latest"
 	"github.com/docker/docker-agent/pkg/environment"
 	"github.com/docker/docker-agent/pkg/tools"
+	"github.com/docker/docker-agent/pkg/tools/builtin/backgroundjobs"
 	"github.com/docker/docker-agent/pkg/tools/builtin/fetch"
 	"github.com/docker/docker-agent/pkg/tools/builtin/lsp"
 	"github.com/docker/docker-agent/pkg/tools/builtin/shell"
@@ -23,6 +24,9 @@ func testToolsetRegistry() ToolsetRegistry {
 	return NewToolsetRegistry(map[string]ToolsetCreator{
 		"shell": func(ctx context.Context, toolset latest.Toolset, _ string, runConfig *config.RuntimeConfig, _ string) (tools.ToolSet, error) {
 			return shell.CreateToolSet(ctx, toolset, runConfig)
+		},
+		"background_jobs": func(ctx context.Context, toolset latest.Toolset, _ string, runConfig *config.RuntimeConfig, _ string) (tools.ToolSet, error) {
+			return backgroundjobs.CreateToolSet(ctx, toolset, runConfig)
 		},
 		"mcp": func(ctx context.Context, toolset latest.Toolset, _ string, runConfig *config.RuntimeConfig, _ string) (tools.ToolSet, error) {
 			return mcptool.CreateToolSet(ctx, toolset, runConfig)
@@ -37,8 +41,27 @@ func testToolsetRegistry() ToolsetRegistry {
 }
 
 func TestCreateShellTool(t *testing.T) {
+	t.Parallel()
 	toolset := latest.Toolset{
 		Type: "shell",
+	}
+
+	registry := testToolsetRegistry()
+
+	runConfig := &config.RuntimeConfig{
+		Config:              config.Config{WorkingDir: t.TempDir()},
+		EnvProviderForTests: environment.NewOsEnvProvider(),
+	}
+
+	tool, err := registry.CreateTool(t.Context(), toolset, ".", runConfig, "test-agent")
+	require.NoError(t, err)
+	require.NotNil(t, tool)
+}
+
+func TestCreateBackgroundJobsTool(t *testing.T) {
+	t.Parallel()
+	toolset := latest.Toolset{
+		Type: "background_jobs",
 	}
 
 	registry := testToolsetRegistry()
@@ -186,6 +209,7 @@ func TestCreateMCPTool_NonexistentWorkingDir_ReturnsError(t *testing.T) {
 // TestCreateLSPTool_WorkingDir_ReachesHandler verifies that working_dir is
 // wired all the way through createLSPTool to the LSP handler (N5).
 func TestCreateLSPTool_WorkingDir_ReachesHandler(t *testing.T) {
+	t.Parallel()
 	// Create a real temporary directory so the existence check passes.
 	customDir := t.TempDir()
 	agentDir := t.TempDir()
@@ -215,7 +239,8 @@ func TestCreateLSPTool_WorkingDir_ReachesHandler(t *testing.T) {
 // ref-based MCP resolves to a remote server at runtime, setting working_dir
 // returns a clear error rather than silently discarding the field.
 func TestCreateMCPTool_RefRemote_WorkingDir_ReturnsError(t *testing.T) {
-	// The "docker:remote-server" ref is seeded as type "remote" in TestMain.
+	t.Parallel()
+	// The "docker:remote-server" ref is seeded as type "remote" in testCatalog.
 	toolset := latest.Toolset{
 		Type:       "mcp",
 		Ref:        "docker:remote-server",
@@ -228,7 +253,7 @@ func TestCreateMCPTool_RefRemote_WorkingDir_ReturnsError(t *testing.T) {
 		EnvProviderForTests: environment.NewOsEnvProvider(),
 	}
 
-	_, err := registry.CreateTool(t.Context(), toolset, ".", runConfig, "test-agent")
+	_, err := registry.CreateTool(catalogContext(t), toolset, ".", runConfig, "test-agent")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "working_dir is not supported")
 	assert.Contains(t, err.Error(), "remote server")
@@ -238,7 +263,8 @@ func TestCreateMCPTool_RefRemote_WorkingDir_ReturnsError(t *testing.T) {
 // MCP that resolves to a remote server still works fine when working_dir is
 // not set (the common case — regression guard).
 func TestCreateMCPTool_RefRemote_NoWorkingDir_Succeeds(t *testing.T) {
-	// The "docker:remote-server" ref is seeded as type "remote" in TestMain.
+	t.Parallel()
+	// The "docker:remote-server" ref is seeded as type "remote" in testCatalog.
 	toolset := latest.Toolset{
 		Type: "mcp",
 		Ref:  "docker:remote-server",
@@ -250,7 +276,7 @@ func TestCreateMCPTool_RefRemote_NoWorkingDir_Succeeds(t *testing.T) {
 		EnvProviderForTests: environment.NewOsEnvProvider(),
 	}
 
-	tool, err := registry.CreateTool(t.Context(), toolset, ".", runConfig, "test-agent")
+	tool, err := registry.CreateTool(catalogContext(t), toolset, ".", runConfig, "test-agent")
 	require.NoError(t, err)
 	require.NotNil(t, tool)
 }

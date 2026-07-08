@@ -63,6 +63,16 @@ func (c *SidebarComponent) InvalidateCache() {
 	c.renderCache = nil
 }
 
+// Counts returns how many todos are completed and the total count.
+func (c *SidebarComponent) Counts() (completed, total int) {
+	for _, t := range c.todos {
+		if t.Status == "completed" {
+			completed++
+		}
+	}
+	return completed, len(c.todos)
+}
+
 func (c *SidebarComponent) Render() string {
 	if len(c.todos) == 0 {
 		return ""

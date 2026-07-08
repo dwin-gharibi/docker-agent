@@ -1,10 +1,11 @@
 ---
 title: "Open URL Tool"
 description: "Open a fixed URL in the user's default browser."
-permalink: /tools/open-url/
+keywords: docker agent, ai agents, tools, toolsets, open url tool
+linkTitle: "Open URL"
+weight: 40
+canonical: https://docs.docker.com/ai/docker-agent/tools/open-url/
 ---
-
-# Open URL Tool
 
 _Open a fixed URL in the user's default browser._
 
@@ -16,15 +17,12 @@ never supplies the URL — it just calls the tool by name. Launching the browser
 is cross-platform: docker-agent uses `open` on macOS, `xdg-open` on Linux, and
 `rundll32` on Windows.
 
-<div class="callout callout-info" markdown="1">
-<div class="callout-title">When to Use
-</div>
-
-- Letting an agent open a dashboard, documentation page, or deep link on demand
-- Deep-linking into a desktop app via a custom URI scheme (e.g. `docker-desktop://`)
-- Any "take me there" action where the destination is fixed and known up front
-
-</div>
+> [!NOTE]
+> **When to Use**
+>
+> - Letting an agent open a dashboard, documentation page, or deep link on demand
+> - Deep-linking into a desktop app via a custom URI scheme (e.g. `docker-desktop://`)
+> - Any "take me there" action where the destination is fixed and known up front
 
 ## Configuration
 

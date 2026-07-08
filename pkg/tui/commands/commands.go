@@ -118,6 +118,33 @@ func builtInSessionCommands() []Item {
 			},
 		},
 		{
+			ID:           "session.context",
+			Label:        "Context",
+			SlashCommand: "/context",
+			Description:  "Show what is consuming the context window, by category",
+			Category:     "Session",
+			Immediate:    true,
+			Execute: func(string) tea.Cmd {
+				return core.CmdHandler(messages.ShowContextDialogMsg{})
+			},
+		},
+		{
+			ID:           "session.drop",
+			Label:        "Drop",
+			SlashCommand: "/drop",
+			Description:  "Remove an attached file from the session context (usage: /drop [path])",
+			Category:     "Session",
+			Immediate:    true,
+			Execute: func(arg string) tea.Cmd {
+				if arg = strings.TrimSpace(arg); arg != "" {
+					return core.CmdHandler(messages.DropAttachedFileMsg{Path: arg})
+				}
+				// Without an argument, the /context dialog is the inventory
+				// from which attachments can be reviewed and dropped.
+				return core.CmdHandler(messages.ShowContextDialogMsg{})
+			},
+		},
+		{
 			ID:           "session.cost",
 			Label:        "Cost",
 			SlashCommand: "/cost",
@@ -126,6 +153,17 @@ func builtInSessionCommands() []Item {
 			Immediate:    true,
 			Execute: func(string) tea.Cmd {
 				return core.CmdHandler(messages.ShowCostDialogMsg{})
+			},
+		},
+		{
+			ID:           "session.effort",
+			Label:        "Effort",
+			SlashCommand: "/effort",
+			Description:  "Set the reasoning effort of the current model (usage: /effort [level])",
+			Category:     "Session",
+			Immediate:    true,
+			Execute: func(arg string) tea.Cmd {
+				return core.CmdHandler(messages.SetThinkingLevelMsg{Level: strings.TrimSpace(arg)})
 			},
 		},
 		{
@@ -348,6 +386,17 @@ func builtInSessionCommands() []Item {
 func builtInSettingsCommands() []Item {
 	return []Item{
 		{
+			ID:           "settings.customize",
+			Label:        "Customize Layout",
+			SlashCommand: "/custom",
+			Description:  "Customize the layout: sidebar position, section spacing, and visible sections",
+			Category:     "Settings",
+			Immediate:    true,
+			Execute: func(string) tea.Cmd {
+				return core.CmdHandler(messages.OpenCustomizeDialogMsg{})
+			},
+		},
+		{
 			ID:           "settings.split-diff",
 			Label:        "Split Diff",
 			SlashCommand: "/split-diff",
@@ -367,6 +416,22 @@ func builtInSettingsCommands() []Item {
 			Immediate:    true,
 			Execute: func(string) tea.Cmd {
 				return core.CmdHandler(messages.OpenThemePickerMsg{})
+			},
+		},
+	}
+}
+
+func builtInHelpCommands() []Item {
+	return []Item{
+		{
+			ID:           "help.getting-started",
+			Label:        "Getting Started Tour",
+			SlashCommand: "/getting-started",
+			Description:  "Learn docker agent by doing, a 2-minute interactive tour",
+			Category:     "Help",
+			Immediate:    true,
+			Execute: func(string) tea.Cmd {
+				return core.CmdHandler(messages.StartTourMsg{})
 			},
 		},
 	}
@@ -579,11 +644,15 @@ func BuildCommandCategories(ctx context.Context, application *app.App) []Categor
 		})
 	}
 
-	// Settings and Feedback are always last, in that order.
+	// Settings, Help, and Feedback are always last, in that order.
 	categories = append(categories,
 		Category{
 			Name:     "Settings",
 			Commands: builtInSettingsCommands(),
+		},
+		Category{
+			Name:     "Help",
+			Commands: builtInHelpCommands(),
 		},
 		Category{
 			Name:     "Feedback",

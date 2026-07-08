@@ -1,6 +1,7 @@
 package gemini
 
 import (
+	"io"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -9,7 +10,22 @@ import (
 	"github.com/docker/docker-agent/pkg/chat"
 )
 
+func TestStreamAdapter_CloseBeforeRecv(t *testing.T) {
+	t.Parallel()
+	called := false
+	adapter := NewStreamAdapter(func(func(*genai.GenerateContentResponse, error) bool) {
+		called = true
+	}, "test-model", true)
+
+	adapter.Close()
+	_, err := adapter.Recv()
+
+	require.ErrorIs(t, err, io.EOF)
+	require.False(t, called, "Recv after Close must not start the upstream iterator")
+}
+
 func TestStreamAdapter_GeminiUsageMetadata(t *testing.T) {
+	t.Parallel()
 	// Gemini 3 (and any future model that emits usage metadata on its own chunk
 	// without accompanying text/tool calls) was previously losing token counts
 	// because the stream adapter dropped chunks that lacked text/function calls.
@@ -122,6 +138,7 @@ func TestStreamAdapter_GeminiUsageMetadata(t *testing.T) {
 }
 
 func TestStreamAdapter_FunctionCalls(t *testing.T) {
+	t.Parallel()
 	t.Run("function calls in final message", func(t *testing.T) {
 		mockResp := &genai.GenerateContentResponse{
 			Candidates: []*genai.Candidate{

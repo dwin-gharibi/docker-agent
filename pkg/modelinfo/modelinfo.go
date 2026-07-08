@@ -84,10 +84,11 @@ func AlwaysReasons(modelID string) bool {
 	return isOSeries(normalize(modelID))
 }
 
-// claudeOpus46To48Prefixes lists the bare Claude Opus model families that share
-// two behaviors: they reject token-based thinking ([RejectsTokenThinking]) and
-// expose a 1M-token context window ([DefaultClaudeContextLimit]). Kept in one
-// place so a new affected Opus version is added to both predicates at once.
+// claudeOpus46To48Prefixes lists the bare Claude Opus model families that
+// reject token-based thinking ([RejectsTokenThinking]) and instead require
+// adaptive thinking. This is an API behavior quirk that models.dev does not
+// describe, so it stays hard-coded here (unlike context windows, which come
+// from the catalogue).
 var claudeOpus46To48Prefixes = []string{"claude-opus-4-6", "claude-opus-4-7", "claude-opus-4-8"}
 
 // isClaudeOpus46To48 reports whether modelID names a Claude Opus 4.6, 4.7 or
@@ -120,6 +121,74 @@ func isClaudeOpus46To48(modelID string) bool {
 // See https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking
 func RejectsTokenThinking(modelID string) bool {
 	return isClaudeOpus46To48(modelID)
+}
+
+// SupportsAdaptiveThinking reports whether an Anthropic Claude model accepts
+// adaptive extended thinking (`thinking.type=adaptive`) together with the
+// `output_config.effort` parameter.
+//
+// Adaptive thinking and effort levels arrived with the Claude 4.6 generation.
+// Earlier models (Sonnet 4.5 and older, Haiku 4.5, Opus 4.5 and older, and all
+// Claude 3.x) reject `thinking.type=adaptive`/`output_config.effort` with a 400
+// and must use token-based extended thinking (`thinking.type=enabled`) instead.
+//
+// Supported: Opus 4.6/4.7/4.8 (which additionally reject token budgets, see
+// [RejectsTokenThinking]), Sonnet 4.6, the Claude 5 families (e.g. Sonnet 5),
+// and the codenamed frontier models (Fable, Mythos). Bedrock-style identifiers
+// such as "global.anthropic.claude-sonnet-4-6" are recognised too.
+//
+// The set is a superset of [RejectsTokenThinking]: a model that rejects token
+// budgets must accept adaptive thinking.
+//
+// See https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking
+func SupportsAdaptiveThinking(modelID string) bool {
+	m := normalize(modelID)
+	if bare, ok := bedrockClaudeModelName(m); ok {
+		m = bare
+	}
+	// Codenamed frontier models ship with adaptive thinking.
+	if strings.Contains(m, "fable") || strings.Contains(m, "mythos") {
+		return true
+	}
+	// Only Opus and Sonnet gained adaptive thinking; Haiku, Claude 3.x, and
+	// non-Claude models do not parse and fall through to false.
+	major, minor, ok := claudeOpusSonnetVersion(m)
+	if !ok {
+		return false
+	}
+	// Claude 5+ (Sonnet 5, ...) always support it; within the 4.x line only
+	// 4.6 and later do.
+	return major >= 5 || (major == 4 && minor >= 6)
+}
+
+// claudeOpusSonnetVersion extracts the major and minor version of a normalized
+// bare Opus/Sonnet id such as "claude-opus-4-6", "claude-sonnet-4.5", or
+// "claude-sonnet-5". It reports ok=false for other families (Haiku, Claude 3.x
+// like "claude-3-opus-20240229", non-Claude), so only Opus/Sonnet parse.
+//
+// The major must be one or two digits; a longer run is a date stamp, not a
+// version, which excludes Claude 3.x ids where the family precedes the number
+// ("claude-3-opus-..."). A minor after '-' or '.' is likewise capped at two
+// digits so date-stamped 4.0 ids ("claude-opus-4-20250514") yield minor 0.
+func claudeOpusSonnetVersion(m string) (major, minor int, ok bool) {
+	for _, fam := range []string{"opus", "sonnet"} {
+		_, rest, found := strings.Cut(m, fam+"-")
+		if !found {
+			continue
+		}
+		maj, w := leadingInt(rest)
+		if w == 0 || w > 2 {
+			return 0, 0, false
+		}
+		rest = rest[w:]
+		if rest != "" && (rest[0] == '-' || rest[0] == '.') {
+			if n, mw := leadingInt(rest[1:]); mw > 0 && mw <= 2 {
+				minor = n
+			}
+		}
+		return maj, minor, true
+	}
+	return 0, 0, false
 }
 
 // UsesThinkingLevel reports whether a Google Gemini model uses level-based
@@ -274,36 +343,16 @@ func (mc ModelCapabilities) Supports(mimeType string) bool {
 // loadCapsTimeout is the maximum time allowed for a models.dev capability lookup.
 const loadCapsTimeout = 10 * time.Second
 
-// DefaultAnthropicContextLimit is the context window assumed for most Claude
-// models when models.dev has no entry for them. Claude 3.5 through 4.x all
-// expose a 200k-token window, so it is a safe floor for clamping retries.
-// Prefer [DefaultClaudeContextLimit], which special-cases newer families with
-// larger windows.
-const DefaultAnthropicContextLimit = 200000
-
-// DefaultClaudeContextLimit returns the context window assumed for a Claude
-// model when models.dev has no entry for it — typically a model released
-// before the catalogue caught up. The Claude Fable family and the Claude
-// Opus 4.6, 4.7 and 4.8 families expose a 1M-token window; everything else
-// falls back to the standard 200k floor.
+// DefaultAnthropicContextLimit is the context window assumed for a Claude
+// model only when models.dev has no entry for it AND no store is available —
+// a degenerate, last-resort case. Claude 3.5 through 4.x all expose at least a
+// 200k-token window, so it is a safe conservative floor for clamping retries.
 //
-// Bedrock-style identifiers such as "global.anthropic.claude-opus-4-8" are
-// recognised too.
-func DefaultClaudeContextLimit(modelID string) int64 {
-	m := normalize(modelID)
-	if bare, ok := bedrockClaudeModelName(m); ok {
-		m = bare
-	}
-	if m == "claude-fable" || strings.HasPrefix(m, "claude-fable-") {
-		return 1_000_000
-	}
-	// Claude Opus 4.6, 4.7 and 4.8 ship with a 1M-token window across the
-	// API, Bedrock and Vertex AI; only older Opus families use the 200k floor.
-	if isClaudeOpus46To48(m) {
-		return 1_000_000
-	}
-	return DefaultAnthropicContextLimit
-}
+// Model-specific windows (e.g. the 1M window of Claude Fable and Opus 4.6+)
+// are NOT special-cased here: they come from the embedded models.dev snapshot,
+// which is always available (even offline) and refreshed at build time. See
+// [ContextLimit].
+const DefaultAnthropicContextLimit = 200000
 
 // ContextLimit returns the context-window size (in tokens) for a model.
 //

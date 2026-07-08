@@ -28,6 +28,9 @@ func (t *Config) Validate() error {
 		if err := m.validateFirstAvailable(); err != nil {
 			return fmt.Errorf("models.%s: %w", name, err)
 		}
+		if err := validateCompactionThreshold(m.CompactionThreshold); err != nil {
+			return fmt.Errorf("models.%s: %w", name, err)
+		}
 		if err := m.Auth.Validate(EffectiveProviderType(m, t.Providers)); err != nil {
 			return fmt.Errorf("models.%s: %w", name, err)
 		}
@@ -54,6 +57,9 @@ func (t *Config) Validate() error {
 		}
 		if err := agent.validateHarness(); err != nil {
 			return err
+		}
+		if err := validateCompactionThreshold(agent.CompactionThreshold); err != nil {
+			return fmt.Errorf("agents.%s: %w", agent.Name, err)
 		}
 
 		for j := range agent.Toolsets {
@@ -105,6 +111,9 @@ func (m *ModelConfig) validateFirstAvailable() error {
 	if m.TokenKey != "" {
 		return errors.New("first_available cannot be combined with token_key")
 	}
+	if m.BypassModelsGateway {
+		return errors.New("first_available cannot be combined with bypass_models_gateway (set it on the candidate models instead)")
+	}
 	if len(m.ProviderOpts) > 0 {
 		return errors.New("first_available cannot be combined with provider_opts")
 	}
@@ -126,10 +135,28 @@ func (m *ModelConfig) validateFirstAvailable() error {
 	if m.TitleModel != "" {
 		return errors.New("first_available cannot be combined with title_model")
 	}
+	if m.CompactionModel != "" {
+		return errors.New("first_available cannot be combined with compaction_model")
+	}
+	if m.CompactionThreshold != nil {
+		return errors.New("first_available cannot be combined with compaction_threshold")
+	}
 	for i, ref := range m.FirstAvailable {
 		if strings.TrimSpace(ref) == "" {
 			return fmt.Errorf("first_available[%d] must not be empty", i)
 		}
+	}
+	return nil
+}
+
+// validateCompactionThreshold rejects a compaction_threshold outside (0, 1].
+// nil (unset) is valid and means "use the default".
+func validateCompactionThreshold(v *float64) error {
+	if v == nil {
+		return nil
+	}
+	if *v <= 0 || *v > 1 {
+		return fmt.Errorf("compaction_threshold must be greater than 0 and at most 1, got %v", *v)
 	}
 	return nil
 }
@@ -211,8 +238,8 @@ func (t *Toolset) validate() error {
 	if err := validatePathRootEntries("deny_list", t.DenyList); err != nil {
 		return err
 	}
-	if len(t.Env) > 0 && (t.Type != "shell" && t.Type != "script" && t.Type != "mcp" && t.Type != "lsp") {
-		return errors.New("env can only be used with type 'shell', 'script', 'mcp' or 'lsp'")
+	if len(t.Env) > 0 && (t.Type != "shell" && t.Type != "background_jobs" && t.Type != "script" && t.Type != "mcp" && t.Type != "lsp") {
+		return errors.New("env can only be used with type 'shell', 'background_jobs', 'script', 'mcp' or 'lsp'")
 	}
 	if len(t.FileTypes) > 0 && t.Type != "lsp" {
 		return errors.New("file_types can only be used with type 'lsp'")
@@ -240,6 +267,12 @@ func (t *Toolset) validate() error {
 	}
 	if t.SudoAskpass != nil && t.Type != "shell" {
 		return errors.New("sudo_askpass can only be used with type 'shell'")
+	}
+	if t.Recall != nil && t.Type != "background_jobs" {
+		return errors.New("recall can only be used with type 'background_jobs'")
+	}
+	if t.Safer != nil && t.Type != "shell" {
+		return errors.New("safer can only be used with type 'shell'")
 	}
 	if len(t.AllowedDomains) > 0 && len(t.BlockedDomains) > 0 {
 		return errors.New("allowed_domains and blocked_domains are mutually exclusive")
@@ -305,6 +338,8 @@ func (t *Toolset) validate() error {
 
 	switch t.Type {
 	case "shell":
+		// no additional validation needed
+	case "background_jobs":
 		// no additional validation needed
 	case "memory":
 		// path is optional; defaults to ~/.cagent/memory/<agent-name>/memory.db

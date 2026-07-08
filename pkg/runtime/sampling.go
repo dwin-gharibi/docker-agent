@@ -539,7 +539,7 @@ func samplingToolsToChat(mcpTools []*mcp.Tool) []tools.Tool {
 	return out
 }
 
-func noOpSamplingToolHandler(_ context.Context, _ tools.ToolCall) (*tools.ToolCallResult, error) {
+func noOpSamplingToolHandler(_ context.Context, _ tools.ToolCall, _ tools.Runtime) (*tools.ToolCallResult, error) {
 	return tools.ResultError("sampling tool execution belongs to the requesting MCP server"), nil
 }
 

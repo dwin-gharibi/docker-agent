@@ -65,6 +65,8 @@ func startServerBare(t *testing.T, ctx context.Context) string {
 // includes t.TempDir() which embeds the test name.
 
 func TestMcpOAuthCb_Unknown(t *testing.T) {
+	t.Parallel()
+
 	ctx := t.Context()
 	lnPath := startServerBare(t, ctx)
 
@@ -74,6 +76,8 @@ func TestMcpOAuthCb_Unknown(t *testing.T) {
 }
 
 func TestMcpOAuthCb_NoState(t *testing.T) {
+	t.Parallel()
+
 	ctx := t.Context()
 	lnPath := startServerBare(t, ctx)
 
@@ -83,6 +87,8 @@ func TestMcpOAuthCb_NoState(t *testing.T) {
 }
 
 func TestMcpOAuthCb_NoCode(t *testing.T) {
+	t.Parallel()
+
 	ctx := t.Context()
 	lnPath := startServerBare(t, ctx)
 

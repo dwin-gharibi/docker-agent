@@ -333,13 +333,19 @@ func TestCompleteTheme(t *testing.T) {
 		{
 			name:       "empty prefix lists default and built-ins",
 			toComplete: "",
-			wantSome:   []string{"default", "nord", "dracula"},
+			wantSome:   []string{"auto", "default", "nord", "dracula"},
+		},
+		{
+			name:       "auto sentinel completes",
+			toComplete: "au",
+			wantSome:   []string{"auto"},
+			wantNone:   []string{"default", "nord"},
 		},
 		{
 			name:       "prefix filters to matching themes",
 			toComplete: "gruvbox",
 			wantSome:   []string{"gruvbox-dark", "gruvbox-light"},
-			wantNone:   []string{"default", "nord"},
+			wantNone:   []string{"auto", "default", "nord"},
 		},
 		{
 			name:       "non-matching prefix yields no themes",

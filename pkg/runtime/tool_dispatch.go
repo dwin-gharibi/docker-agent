@@ -35,7 +35,7 @@ func (r *LocalRuntime) processToolCalls(ctx context.Context, sess *session.Sessi
 	// toolexec.ToolHandler doesn't.
 	handlers := make(map[string]toolexec.ToolHandler, len(r.toolMap))
 	for name, h := range r.toolMap {
-		handlers[name] = func(ctx context.Context, sess *session.Session, tc tools.ToolCall) (*tools.ToolCallResult, error) {
+		handlers[name] = func(ctx context.Context, sess *session.Session, tc tools.ToolCall, _ tools.Runtime) (*tools.ToolCallResult, error) {
 			return h(ctx, sess, tc, events)
 		}
 	}
@@ -47,6 +47,9 @@ func (r *LocalRuntime) processToolCalls(ctx context.Context, sess *session.Sessi
 		AgentFor:    r.resolveSessionAgent,
 		Permissions: r.permissionCheckers,
 		Handlers:    handlers,
+		Recall: func(ctx context.Context, _ *session.Session, _ *agent.Agent, message string) error {
+			return r.recall(ctx, QueuedMessage{Content: message})
+		},
 	}
 	return d.Process(ctx, sess, calls, agentTools, &sinkEmitter{events: events})
 }

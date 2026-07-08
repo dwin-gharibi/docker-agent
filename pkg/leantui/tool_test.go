@@ -4,41 +4,96 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
+	"github.com/docker/docker-agent/pkg/leantui/ui"
 	"github.com/docker/docker-agent/pkg/tools"
+	"github.com/docker/docker-agent/pkg/tools/builtin/filesystem"
 	builtinshell "github.com/docker/docker-agent/pkg/tools/builtin/shell"
 	"github.com/docker/docker-agent/pkg/tui/animation"
 	tuitypes "github.com/docker/docker-agent/pkg/tui/types"
 )
 
 func TestRenderToolOutputTruncatesOutput(t *testing.T) {
+	t.Parallel()
 	output := strings.Repeat("line\n", 50)
-	lines := renderToolOutput(output, 80)
+	lines := ui.RenderToolOutput(output, 80)
 
-	assert.LessOrEqual(t, len(lines), maxToolOutputLines+1)
+	assert.LessOrEqual(t, len(lines), ui.MaxToolOutputLines+1)
 	assert.Contains(t, strings.Join(lines, "\n"), "earlier lines")
 }
 
 func TestRenderToolUsesFullTUIRenderer(t *testing.T) {
+	t.Parallel()
 	tv := shellToolView(tuitypes.ToolStatusCompleted)
-	tv.message.Content = "hi\n"
+	tv.Message().Content = "hi\n"
 
-	joined := strings.Join(renderTool(*tv, 80), "\n")
+	joined := strings.Join(ui.RenderTool(*tv, 80), "\n")
 	assert.Contains(t, joined, builtinshell.ToolNameShell)
 	assert.Contains(t, joined, "echo hi")
 	assert.Contains(t, joined, "hi")
 	assert.NotContains(t, joined, "Took")
 }
 
+func TestRenderToolWrapsCallInBox(t *testing.T) {
+	t.Parallel()
+	width := 40
+	lines := ui.RenderTool(*shellToolView(tuitypes.ToolStatusCompleted), width)
+	require.GreaterOrEqual(t, len(lines), 3)
+
+	for _, line := range lines {
+		assert.LessOrEqual(t, ui.DisplayWidth(line), width)
+	}
+	assert.Empty(t, strings.TrimSpace(ansi.Strip(lines[0])))
+	assert.Equal(t, width, ui.DisplayWidth(lines[0]))
+	assert.True(t, strings.HasPrefix(ansi.Strip(lines[1]), " "))
+	assert.Contains(t, ansi.Strip(strings.Join(lines, "\n")), builtinshell.ToolNameShell)
+}
+
 func TestRenderToolDoesNotLeakAnimationSubscription(t *testing.T) {
 	assert.False(t, animation.HasActive())
-	renderToolWithState(*shellToolView(tuitypes.ToolStatusRunning), 80, 3, nil)
+	ui.RenderToolWithState(shellToolView(tuitypes.ToolStatusRunning), 80, 3, nil)
 	assert.False(t, animation.HasActive())
 }
 
-func shellToolView(status tuitypes.ToolStatus) *toolView {
-	return newToolView("root", tools.ToolCall{
+func TestRenderToolKeepsLastLinesWhenArgumentsTemporarilyInvalid(t *testing.T) {
+	tv := ui.NewToolView("root", tools.ToolCall{
+		ID: "call-1",
+		Function: tools.FunctionCall{
+			Name:      "Write",
+			Arguments: `{"path": "/tmp/file", "content": "hello"`,
+		},
+	}, tools.Tool{Name: "Write"}, tuitypes.ToolStatusPending)
+
+	first := ui.RenderToolWithState(tv, 80, 0, nil)
+	require.Contains(t, strings.Join(first, "\n"), "hello")
+
+	tv.Message().ToolCall.Function.Arguments += ","
+	second := ui.RenderToolWithState(tv, 80, 1, nil)
+	assert.Contains(t, strings.Join(second, "\n"), "hello")
+}
+
+func TestRenderWriteFileKeepsPathWhenArgumentsTemporarilyInvalid(t *testing.T) {
+	tv := ui.NewToolView("root", tools.ToolCall{
+		ID: "call-1",
+		Function: tools.FunctionCall{
+			Name:      filesystem.ToolNameWriteFile,
+			Arguments: `{"path": "/tmp/file"`,
+		},
+	}, tools.Tool{Name: filesystem.ToolNameWriteFile}, tuitypes.ToolStatusPending)
+
+	first := ui.RenderToolWithState(tv, 80, 0, nil)
+	require.Contains(t, strings.Join(first, "\n"), "/tmp/file")
+
+	tv.Message().ToolCall.Function.Arguments += ","
+	second := ui.RenderToolWithState(tv, 80, 1, nil)
+	assert.Contains(t, strings.Join(second, "\n"), "/tmp/file")
+}
+
+func shellToolView(status tuitypes.ToolStatus) *ui.ToolView {
+	return ui.NewToolView("root", tools.ToolCall{
 		ID: "call-1",
 		Function: tools.FunctionCall{
 			Name:      builtinshell.ToolNameShell,

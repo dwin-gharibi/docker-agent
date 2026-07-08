@@ -3,13 +3,17 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	gomcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -490,4 +494,45 @@ func TestNewRemoteToolsetWithAllowPrivateIPsPropagatesToClient(t *testing.T) {
 	client, ok := ts.mcpClient.(*remoteMCPClient)
 	require.True(t, ok, "remote toolset should use remoteMCPClient")
 	require.True(t, client.allowPrivateIPs, "allow_private_ips should be stored on remote client")
+}
+
+// shortTempDir returns a temp dir with a short path so unix socket paths
+// created under it stay within the platform limit (macOS caps sun_path at
+// ~104 bytes, which t.TempDir()'s long, test-name-derived paths can exceed).
+func shortTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "rc") //nolint:forbidigo,usetesting // need a short path for the unix sun_path limit (~104 bytes); t.TempDir() embeds the long test name and overflows it
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
+// TestRemoteClientUnixSocket verifies the remote client can connect to an MCP
+// server listening on a unix socket via a unix:// URL.
+func TestRemoteClientUnixSocket(t *testing.T) {
+	t.Parallel()
+
+	server := gomcp.NewServer(&gomcp.Implementation{Name: "test-server", Version: "1.0.0"}, nil)
+	gomcp.AddTool(server, &gomcp.Tool{Name: "ping", Description: "ping"}, func(context.Context, *gomcp.CallToolRequest, struct{}) (*gomcp.CallToolResult, struct{}, error) {
+		return &gomcp.CallToolResult{Content: []gomcp.Content{&gomcp.TextContent{Text: "pong"}}}, struct{}{}, nil
+	})
+
+	sockPath := filepath.Join(shortTempDir(t), "mcp.sock")
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "unix", sockPath)
+	require.NoError(t, err)
+	httpServer := &http.Server{Handler: gomcp.NewStreamableHTTPHandler(func(*http.Request) *gomcp.Server { return server }, nil)}
+	go func() { _ = httpServer.Serve(ln) }()
+	t.Cleanup(func() { _ = httpServer.Close() })
+
+	client := newRemoteClient("unix://"+sockPath, "streamable", nil, NewInMemoryTokenStore(), nil, false)
+	_, err = client.Initialize(t.Context(), nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = client.Close(context.WithoutCancel(t.Context())) })
+
+	var names []string
+	for tool, err := range client.ListTools(t.Context(), nil) {
+		require.NoError(t, err)
+		names = append(names, tool.Name)
+	}
+	assert.Equal(t, []string{"ping"}, names)
 }

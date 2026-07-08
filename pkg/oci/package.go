@@ -76,6 +76,9 @@ func PackageFileAsOCIToStore(ctx context.Context, agentSource config.Source, art
 	if revision := cfg.Metadata.Version; revision != "" {
 		annotations["org.opencontainers.image.revision"] = revision
 	}
+	if len(cfg.Metadata.Tags) > 0 {
+		annotations["io.docker.agent.tags"] = strings.Join(cfg.Metadata.Tags, ",")
+	}
 
 	layer := static.NewLayer(data, "application/yaml")
 	img, err := mutate.AppendLayers(empty.Image, layer)
@@ -97,9 +100,10 @@ func PackageFileAsOCIToStore(ctx context.Context, agentSource config.Source, art
 }
 
 // configUsesInstructionFile reports whether any agent in the raw config sets a
-// non-empty instruction_file. It is a best-effort, format-tolerant probe: a
-// parse failure (e.g. HCL) simply yields false, in which case the caller falls
-// back to its version-based decision.
+// non-empty instruction_file (either a single string or a non-empty list). It
+// is a best-effort, format-tolerant probe: a parse failure (e.g. HCL) simply
+// yields false, in which case the caller falls back to its version-based
+// decision.
 func configUsesInstructionFile(data []byte) bool {
 	var probe map[string]any
 	if err := yaml.Unmarshal(data, &probe); err != nil {
@@ -114,8 +118,17 @@ func configUsesInstructionFile(data []byte) bool {
 		if !ok {
 			continue
 		}
-		if path, ok := agent["instruction_file"].(string); ok && path != "" {
-			return true
+		switch ref := agent["instruction_file"].(type) {
+		case string:
+			if ref != "" {
+				return true
+			}
+		case []any:
+			for _, item := range ref {
+				if s, ok := item.(string); ok && s != "" {
+					return true
+				}
+			}
 		}
 	}
 	return false

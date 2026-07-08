@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -180,11 +181,19 @@ func RunLLM(ctx context.Context, args LLMArgs) (result *Result, err error) {
 	if args.ContextLimit <= 0 {
 		return nil, errors.New("compactor: ContextLimit must be > 0")
 	}
-	if args.Agent.Model(ctx) == nil {
+	// A dedicated compaction model (when configured) generates the summary;
+	// otherwise the summary runs on the agent's own model. ContextLimit was
+	// resolved against this same model by the runtime, so the token budgets
+	// below are scaled to the window that will actually serve the call.
+	baseModel := args.Agent.CompactionModel()
+	if baseModel == nil {
+		baseModel = args.Agent.Model(ctx)
+	}
+	if baseModel == nil {
 		return nil, errors.New("compactor: agent has no model")
 	}
 
-	summaryModel := provider.CloneWithOptions(ctx, args.Agent.Model(ctx),
+	summaryModel := provider.CloneWithOptions(ctx, baseModel,
 		options.WithStructuredOutput(nil),
 		options.WithMaxTokens(summaryTokenBudget(args.ContextLimit)),
 	)
@@ -208,13 +217,23 @@ func RunLLM(ctx context.Context, args LLMArgs) (result *Result, err error) {
 		session.WithTitle("Generating summary"),
 		session.WithMessages(toItems(messages)),
 	)
+	seedLen := len(compactionSession.Messages)
 
 	if err := args.RunAgent(ctx, compactionAgent, compactionSession); err != nil {
 		return nil, fmt.Errorf("run compaction agent: %w", err)
 	}
 
-	summary := compactionSession.GetLastAssistantMessageContent()
+	// Only assistant content produced by the summarization run counts as
+	// the summary. The session was seeded with the conversation being
+	// summarized, so GetLastAssistantMessageContent would fall back to the
+	// conversation's own last assistant reply when the model returned an
+	// empty response — and that bogus "summary" would then replace the
+	// real history. Scanning past the seed makes an empty model response
+	// a no-op instead.
+	summary := lastAssistantContentAfter(compactionSession, seedLen)
 	if summary == "" {
+		slog.WarnContext(ctx, "Compaction skipped: summarization model produced no summary",
+			"session_id", args.Session.ID, "model", summaryModel.ID().String())
 		return nil, nil
 	}
 
@@ -327,6 +346,24 @@ func firstKeptSessionIndex(sess *session.Session, sessIndices []int, splitIdx in
 		return len(sess.Messages)
 	}
 	return sessIndices[splitIdx]
+}
+
+// lastAssistantContentAfter returns the content of the last non-empty
+// assistant message appended to sess after the first seedLen items, or
+// "" when the run produced none. Whitespace-only replies are skipped
+// so a trailing blank token doesn't hide an earlier valid summary.
+// sess is the throwaway compaction sub-session, owned exclusively by
+// the caller once RunAgent has returned.
+func lastAssistantContentAfter(sess *session.Session, seedLen int) string {
+	for i := len(sess.Messages) - 1; i >= seedLen; i-- {
+		item := sess.Messages[i]
+		if item.IsMessage() && item.Message.Message.Role == chat.MessageRoleAssistant {
+			if trimmed := strings.TrimSpace(item.Message.Message.Content); trimmed != "" {
+				return trimmed
+			}
+		}
+	}
+	return ""
 }
 
 // toItems wraps a flat slice of chat messages into session items so a

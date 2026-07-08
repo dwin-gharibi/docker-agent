@@ -20,7 +20,7 @@ func TestSidebar_HandleClickType_Agent(t *testing.T) {
 	sess := session.New()
 	sessionState := service.NewSessionState(sess)
 	sessionState.SetCurrentAgentName("agent1")
-	sb := New(sessionState)
+	sb := New(t.Context(), sessionState)
 
 	m := sb.(*model)
 	m.sessionHasContent = true
@@ -67,7 +67,7 @@ func TestSidebar_AgentClickZones_EveryRenderedLineMapped(t *testing.T) {
 	sess := session.New()
 	sessionState := service.NewSessionState(sess)
 	sessionState.SetCurrentAgentName("agent1")
-	sb := New(sessionState)
+	sb := New(t.Context(), sessionState)
 
 	m := sb.(*model)
 	m.sessionHasContent = true
@@ -92,10 +92,10 @@ func TestSidebar_AgentClickZones_EveryRenderedLineMapped(t *testing.T) {
 	}
 	assert.Positive(t, counts["agent1"], "agent1 should own rendered lines")
 	assert.Positive(t, counts["agent2"], "agent2 should own rendered lines")
-	// agent2 is a non-current roster agent: its row spans two lines (name+badge
+	// agent2 is a non-current roster agent: its entry spans two lines (name+badge
 	// then the indented model), and BOTH must map to it so a click on either
 	// switches to the agent.
-	assert.Equal(t, 2, counts["agent2"], "a roster agent owns both of its two row lines")
+	assert.Equal(t, 2, counts["agent2"], "a roster agent owns both of its two entry lines")
 
 	// The number of click zones equals the number of owned (non-blank) lines:
 	// every owned line is clickable.
@@ -117,7 +117,7 @@ func TestSidebar_BuildAgentClickZones_NoBlankSeparators(t *testing.T) {
 
 	sess := session.New()
 	sessionState := service.NewSessionState(sess)
-	m := New(sessionState).(*model)
+	m := New(t.Context(), sessionState).(*model)
 
 	// Simulate a compact roster: three agents, one rendered line each, no
 	// blank separators (the future layout this refactor unblocks).
@@ -141,7 +141,7 @@ func TestSidebar_BuildAgentClickZones_SkipsBlankOwners(t *testing.T) {
 
 	sess := session.New()
 	sessionState := service.NewSessionState(sess)
-	m := New(sessionState).(*model)
+	m := New(t.Context(), sessionState).(*model)
 
 	// agent1 spans two lines, a blank separator follows, then agent2.
 	m.agentLineOwners = []string{"agent1", "agent1", "", "agent2"}

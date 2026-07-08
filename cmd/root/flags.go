@@ -13,6 +13,7 @@ import (
 
 	"github.com/docker/docker-agent/pkg/config"
 	"github.com/docker/docker-agent/pkg/config/latest"
+	"github.com/docker/docker-agent/pkg/paths"
 	"github.com/docker/docker-agent/pkg/server"
 	"github.com/docker/docker-agent/pkg/userconfig"
 )
@@ -26,7 +27,7 @@ const (
 )
 
 func addRuntimeConfigFlags(cmd *cobra.Command, runConfig *config.RuntimeConfig) {
-	addGatewayFlags(cmd, runConfig)
+	addGatewayFlags(cmd, runConfig, userconfig.Load)
 	cmd.PersistentFlags().StringSliceVar(&runConfig.EnvFiles, "env-from-file", nil, "Set environment variables from file")
 	cmd.PersistentFlags().BoolVar(&runConfig.GlobalCodeMode, "code-mode-tools", false, "Provide a single tool to call other tools via Javascript")
 	cmd.PersistentFlags().StringVar(&runConfig.WorkingDir, "working-dir", "", "Set the working directory for the session (applies to tools and relative paths)")
@@ -42,6 +43,18 @@ func addRuntimeConfigFlags(cmd *cobra.Command, runConfig *config.RuntimeConfig) 
 			"itself (PKCE + DCR + token exchange) and expects clients to return `{code, state}` "+
 			"via ResumeElicitation. When empty, the client is expected to perform the OAuth "+
 			"flow and return an access token (legacy behavior).")
+}
+
+// sessionDBPath resolves the session database path from the --session-db
+// flag. The default is resolved lazily, at command run time, because the
+// data dir must reflect a --data-dir override applied by the root
+// PersistentPreRunE; a default baked in at flag registration would always
+// point at ~/.cagent regardless of --data-dir.
+func sessionDBPath(flagValue string) string {
+	if flagValue != "" {
+		return flagValue
+	}
+	return filepath.Join(paths.GetDataDir(), "session.db")
 }
 
 func setupWorkingDirectory(workingDir string) error {
@@ -73,11 +86,12 @@ func canonize(endpoint string) string {
 	return strings.TrimSuffix(strings.TrimSpace(endpoint), "/")
 }
 
-// loadUserConfig is the function used to load user configuration.
-// It can be overridden in tests.
-var loadUserConfig = userconfig.Load
+// userConfigLoader loads the user configuration. Production passes
+// [userconfig.Load]; tests inject a stub so they neither touch the real
+// config file nor share a mutable package global (and can run in parallel).
+type userConfigLoader func() (*userconfig.Config, error)
 
-func addGatewayFlags(cmd *cobra.Command, runConfig *config.RuntimeConfig) {
+func addGatewayFlags(cmd *cobra.Command, runConfig *config.RuntimeConfig, loadUserConfig userConfigLoader) {
 	cmd.PersistentFlags().StringVar(&runConfig.ModelsGateway, flagModelsGateway, "", "Set the models gateway address")
 
 	persistentPreRunE := cmd.PersistentPreRunE
@@ -101,6 +115,13 @@ func addGatewayFlags(cmd *cobra.Command, runConfig *config.RuntimeConfig) {
 		}
 
 		env := runConfig.EnvProvider()
+
+		// A missing or malformed --env-from-file must abort the run: the flag
+		// is the documented way to supply credentials, so silently continuing
+		// without it leads to confusing "env var must be set" errors later.
+		if err := runConfig.EnvFilesError(); err != nil {
+			return fmt.Errorf("--env-from-file: %w", err)
+		}
 
 		// Precedence: CLI flag > environment variable > user config
 		if runConfig.ModelsGateway == "" {

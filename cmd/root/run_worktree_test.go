@@ -10,13 +10,14 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/docker/docker-agent/pkg/cli"
-	"github.com/docker/docker-agent/pkg/paths"
 	"github.com/docker/docker-agent/pkg/worktree"
 )
 
 // TestCleanupWorktreeAutoRemovesWhenClean verifies a pristine worktree is
 // removed without prompting.
 func TestCleanupWorktreeAutoRemovesWhenClean(t *testing.T) {
+	t.Parallel()
+
 	wt := createTestWorktree(t)
 
 	var f runExecFlags
@@ -79,10 +80,7 @@ func createTestWorktree(t *testing.T) *worktree.Worktree {
 	t.Helper()
 	dir := initTestRepo(t)
 
-	paths.SetDataDir(t.TempDir())
-	t.Cleanup(func() { paths.SetDataDir("") })
-
-	wt, err := worktree.Create(t.Context(), dir, "")
+	wt, err := worktree.Create(t.Context(), dir, "", worktree.WithRoot(t.TempDir()))
 	require.NoError(t, err)
 	return wt
 }

@@ -67,6 +67,13 @@ type instrumentedStream struct {
 	ended       bool
 	innerClosed bool
 
+	// finishReasonSeen is set to true the first time Recv delivers a
+	// terminal finish reason. After that, errors from the underlying
+	// transport (e.g. "http2: response body closed" when the consumer
+	// closes the body before draining to io.EOF) are benign teardown,
+	// not real failures, and should not be recorded on the span.
+	finishReasonSeen bool
+
 	// capture buffers the streamed deltas for emission as
 	// `gen_ai.output.messages` on Close. Filled only when content
 	// capture is opted in (`OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true`)
@@ -82,14 +89,29 @@ func (s *instrumentedStream) Recv() (chat.MessageStreamResponse, error) {
 	resp, err := s.inner.Recv()
 	if err != nil {
 		// io.EOF is the normal stream terminator and is not an error
-		// for the span's purposes — End handles closing.
-		// For non-EOF errors we end the span here too: callers that
-		// abandon the stream after an error (a common pattern for
-		// network failures) would otherwise leak the span and skip the
-		// duration metric. Close remains idempotent so the canonical
-		// `defer Close()` path still works.
+		// for the span's purposes — End handles closing. For other
+		// errors we end the span here too so callers that abandon the
+		// stream on failure don't leak the span or skip the duration
+		// metric; Close remains idempotent so the canonical
+		// `defer Close()` path still works. We skip RecordError when a
+		// terminal finish reason was already delivered: the completion
+		// succeeded, and the subsequent transport error (typically
+		// "http2: response body closed") is benign teardown from the
+		// consumer closing the body before draining to io.EOF.
+		//
+		// Some providers pack a finish reason and a transport error into
+		// the same Recv call. Scan resp before checking finishReasonSeen
+		// so that case is also treated as a successful completion.
+		for i := range resp.Choices {
+			if resp.Choices[i].FinishReason != "" {
+				s.span.AddFinishReason(string(resp.Choices[i].FinishReason))
+				s.finishReasonSeen = true
+			}
+		}
 		if !errors.Is(err, io.EOF) {
-			s.span.RecordError(err, ClassifyError(err))
+			if !s.finishReasonSeen {
+				s.span.RecordError(err, ClassifyError(err))
+			}
 			s.endOnce()
 		}
 		return resp, err
@@ -111,6 +133,7 @@ func (s *instrumentedStream) Recv() (chat.MessageStreamResponse, error) {
 	for i := range resp.Choices {
 		if resp.Choices[i].FinishReason != "" {
 			s.span.AddFinishReason(string(resp.Choices[i].FinishReason))
+			s.finishReasonSeen = true
 		}
 	}
 	if resp.Usage != nil {

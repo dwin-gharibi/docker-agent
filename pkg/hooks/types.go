@@ -207,6 +207,29 @@ const (
 	EventWorktreeCreate EventType = "worktree_create"
 )
 
+// EventPreToolUsePreYolo is the runtime-internal sentinel used to
+// dispatch the preempt-yolo lane of pre_tool_use. Entries declared
+// in YAML with `preempt_yolo: true` are bucketed here at
+// compileEvents time and dispatched BEFORE the deterministic
+// approval pipeline (--yolo, permission patterns) so a deny/ask
+// verdict cannot be bypassed by auto-approval rules. Default
+// pre_tool_use entries continue to fire under EventPreToolUse after
+// Decide(), as before.
+//
+// Hooks see [Input.HookEventName] = EventPreToolUse on this lane
+// (the executor normalises it before invoking handlers), so builtins
+// and external scripts don't need to know about the internal split.
+// Aggregation handles this sentinel specifically only for Metadata
+// collection — Decision/Allowed/UpdatedInput semantics are shared
+// with EventPreToolUse.
+//
+// Do NOT use this in YAML; HooksConfig has no matching field. It is
+// declared as a var (not a const) so the HookConfigSync linter — which
+// requires every EventXxx const to have a corresponding HooksConfig
+// field — does not flag it. The dispatcher in pkg/runtime/toolexec
+// references this name when consulting the preempt lane.
+var EventPreToolUsePreYolo EventType = "pre_tool_use_pre_yolo"
+
 // Input is the JSON-serializable payload passed to hooks via stdin.
 type Input struct {
 	SessionID     string    `json:"session_id"`
@@ -244,10 +267,18 @@ type Input struct {
 	LastUserMessage string `json:"last_user_message,omitempty"`
 
 	// Tool-related fields (PreToolUse, PostToolUse, PermissionRequest,
-	// ToolResponseTransform).
-	ToolName  string         `json:"tool_name,omitempty"`
-	ToolUseID string         `json:"tool_use_id,omitempty"`
-	ToolInput map[string]any `json:"tool_input,omitempty"`
+	// ToolResponseTransform). ToolCategory identifies the dispatching tool's
+	// category for builtins that target whole toolsets.
+	ToolCategory string         `json:"tool_category,omitempty"`
+	ToolName     string         `json:"tool_name,omitempty"`
+	ToolUseID    string         `json:"tool_use_id,omitempty"`
+	ToolInput    map[string]any `json:"tool_input,omitempty"`
+
+	// SafetyPolicy mirrors the session's safety preference (see
+	// [github.com/docker/docker-agent/pkg/session.SafetyPolicy]) on
+	// tool-call events. Empty ⇒ derive from ToolsApproved. Typed as
+	// string to avoid a session dep.
+	SafetyPolicy string `json:"safety_policy,omitempty"`
 
 	// PostToolUse / ToolResponseTransform: the tool's textual output.
 	// On post_tool_use it carries the (already-rewritten) response a

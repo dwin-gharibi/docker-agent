@@ -53,6 +53,13 @@ func (c *Config) BaseConfig() Config {
 	return *c
 }
 
+// TrackUsageEnabled reports whether token-usage tracking is enabled for this
+// model. Tracking defaults to on and is disabled only when the config
+// explicitly sets track_usage: false.
+func (c *Config) TrackUsageEnabled() bool {
+	return c.ModelConfig.TrackUsage == nil || *c.ModelConfig.TrackUsage
+}
+
 // CapsOverride returns the model's explicit attachment-capability override
 // derived from its config, or nil when the config declares none (the common
 // case, in which capabilities are detected from models.dev). Provider clients

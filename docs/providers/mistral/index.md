@@ -1,10 +1,10 @@
 ---
 title: "Mistral"
 description: "Use Mistral AI models with docker-agent."
-permalink: /providers/mistral/
+keywords: docker agent, ai agents, model providers, llm, mistral
+weight: 170
+canonical: https://docs.docker.com/ai/docker-agent/providers/mistral/
 ---
-
-# Mistral
 
 _Use Mistral AI models with docker-agent._
 
@@ -76,7 +76,7 @@ When you run `docker agent run` without specifying a config, docker-agent automa
 
 docker-agent's `thinking_budget` field is **not applied** to Mistral models: the underlying OpenAI-compatible client only sends `reasoning_effort` for OpenAI reasoning model names (o-series, gpt-5). Setting `thinking_budget` on a Mistral model passes config validation but has no effect on the request.
 
-Mistral reasoning models (e.g. `magistral`) reason on their own without configuration. For non-reasoning models, use the [think tool]({{ '/tools/think/' | relative_url }}) instead.
+Mistral reasoning models (e.g. `magistral`) reason on their own without configuration. For non-reasoning models, use the [think tool](../../tools/think/index.md) instead.
 
 ## How It Works
 

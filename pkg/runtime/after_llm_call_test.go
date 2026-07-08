@@ -3,7 +3,6 @@ package runtime
 import (
 	"context"
 	"encoding/json"
-	"os"
 	stdruntime "runtime"
 	"sync/atomic"
 	"testing"
@@ -67,7 +66,7 @@ func TestAfterLLMCallHook_PopulatesModelID(t *testing.T) {
 	)
 	tm := team.New(team.WithAgents(root))
 
-	rt, err := NewLocalRuntime(tm,
+	rt, err := NewLocalRuntime(t.Context(), tm,
 		WithSessionCompaction(false),
 		WithModelStore(mockModelStore{}),
 	)
@@ -123,7 +122,7 @@ func captureAfterLLMCall(t *testing.T, store ModelStore) (*hooks.Input, *session
 	)
 	tm := team.New(team.WithAgents(root))
 
-	rt, err := NewLocalRuntime(tm,
+	rt, err := NewLocalRuntime(t.Context(), tm,
 		WithSessionCompaction(false),
 		WithModelStore(store),
 	)
@@ -264,12 +263,9 @@ func TestAfterLLMCallHook_HarnessUsageWithoutCostIsUnpriced(t *testing.T) {
 
 	const hookName = "test-after-llm-harness-cost"
 
-	binDir := t.TempDir()
-	writeHarnessScript(t, binDir, "codex", `#!/bin/sh
-printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"harness done"}}'
-printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":120,"output_tokens":30}}'
+	useHarnessShim(t, "codex", `{"type":"item.completed","item":{"type":"agent_message","text":"harness done"}}
+{"type":"turn.completed","usage":{"input_tokens":120,"output_tokens":30}}
 `)
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	var captured atomic.Pointer[hooks.Input]
 
@@ -279,7 +275,7 @@ printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":120,"output_toke
 			AfterLLMCall: []latest.HookDefinition{{Type: "builtin", Command: hookName}},
 		}),
 	)
-	rt, err := NewLocalRuntime(team.New(team.WithAgents(root)),
+	rt, err := NewLocalRuntime(t.Context(), team.New(team.WithAgents(root)),
 		WithSessionCompaction(false), WithModelStore(mockModelStore{}))
 	require.NoError(t, err)
 

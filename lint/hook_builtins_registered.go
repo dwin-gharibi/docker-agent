@@ -77,22 +77,16 @@ var HookBuiltinsRegistered = &cop.Func{
 // declaration in pkg/hooks/builtins/, excluding builtins.go itself, snapshot.go
 // (which has its own RegisterSnapshot entry point), and any test files.
 func exportedBuiltinNames(p *cop.Pass) ([]string, error) {
-	files, err := p.ParseDir(".", cop.ParseDirOptions{
+	declared, err := p.DirStringConsts(".", cop.ParseDirOptions{
 		SkipTests: true,
 		SkipFiles: []string{"builtins.go", "snapshot.go"},
-	})
+	}, ast.IsExported)
 	if err != nil {
 		return nil, err
 	}
-	seen := map[string]struct{}{}
-	for _, f := range files {
-		for name := range cop.StringConstsIn(f, ast.IsExported) {
-			seen[name] = struct{}{}
-		}
-	}
-	names := make([]string, 0, len(seen))
-	for n := range seen {
-		names = append(names, n)
+	names := make([]string, 0, len(declared))
+	for name := range declared {
+		names = append(names, name)
 	}
 	return names, nil
 }

@@ -117,7 +117,7 @@ func TestLoadExamples(t *testing.T) {
 			runConfig := &config.RuntimeConfig{}
 			runConfig.WorkingDir = t.TempDir()
 
-			teams, err := Load(t.Context(), agentSource, runConfig, withTestProviderRegistry()...)
+			teams, err := Load(catalogContext(t), agentSource, runConfig, withTestProviderRegistry()...)
 			if errors.Is(err, dmr.ErrNotInstalled) {
 				t.Skipf("Skipping %s: Docker Model Runner not installed", agentFilename)
 			}
@@ -129,22 +129,25 @@ func TestLoadExamples(t *testing.T) {
 
 // gatherExampleEnvVars returns the union of env vars referenced by the given
 // example files (both for models and toolsets). The set is collected up-front
-// so t.Setenv can be called before any subtest starts.
+// so t.Setenv can be called before any subtest starts. It uses a static
+// gateway loader so MCP `ref:` toolsets in the examples don't trigger a live
+// catalog fetch.
 func gatherExampleEnvVars(t *testing.T, examples []string) map[string]bool {
 	t.Helper()
 
+	ctx := catalogContext(t)
 	envs := make(map[string]bool)
 	for _, agentFilename := range examples {
 		agentSource, err := config.Resolve(agentFilename, nil)
 		require.NoError(t, err)
 
-		cfg, err := config.Load(t.Context(), agentSource)
+		cfg, err := config.Load(ctx, agentSource)
 		require.NoError(t, err)
 
-		for _, env := range config.GatherEnvVarsForModels(t.Context(), cfg, environment.NewOsEnvProvider()) {
+		for _, env := range config.GatherEnvVarsForModels(ctx, cfg, environment.NewOsEnvProvider()) {
 			envs[env] = true
 		}
-		toolEnvs, _ := config.GatherEnvVarsForTools(t.Context(), cfg)
+		toolEnvs, _ := config.GatherEnvVarsForTools(ctx, cfg)
 		for _, env := range toolEnvs {
 			envs[env] = true
 		}
@@ -290,6 +293,214 @@ agents:
 		models := root.TitleModels(t.Context())
 		require.Len(t, models, 1)
 		assert.Equal(t, "openai/gpt-4o", models[0].ID().String())
+	})
+}
+
+func TestCompactionModelResolution(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "dummy")
+	t.Setenv("ANTHROPIC_API_KEY", "dummy")
+
+	t.Run("named compaction model", func(t *testing.T) {
+		data := []byte(`models:
+  primary:
+    provider: anthropic
+    model: claude-sonnet-4-5
+    compaction_model: fast
+  fast:
+    provider: openai
+    model: gpt-4o-mini
+agents:
+  root:
+    model: primary
+    instruction: test
+`)
+
+		team, err := Load(t.Context(), config.NewBytesSource("compaction.yaml", data), &config.RuntimeConfig{}, withTestProviderRegistry()...)
+		require.NoError(t, err)
+
+		root, err := team.Agent("root")
+		require.NoError(t, err)
+
+		require.NotNil(t, root.CompactionModel())
+		assert.Equal(t, "openai/gpt-4o-mini", root.CompactionModel().ID().String())
+		// The dedicated compaction model is independent of the primary model
+		// that runs the conversation.
+		assert.Equal(t, "anthropic/claude-sonnet-4-5", root.Model(t.Context()).ID().String())
+	})
+
+	t.Run("inline compaction model", func(t *testing.T) {
+		data := []byte(`models:
+  primary:
+    provider: anthropic
+    model: claude-sonnet-4-5
+    compaction_model: openai/gpt-4o-mini
+agents:
+  root:
+    model: primary
+    instruction: test
+`)
+
+		team, err := Load(t.Context(), config.NewBytesSource("compaction.yaml", data), &config.RuntimeConfig{}, withTestProviderRegistry()...)
+		require.NoError(t, err)
+
+		root, err := team.Agent("root")
+		require.NoError(t, err)
+
+		require.NotNil(t, root.CompactionModel())
+		assert.Equal(t, "openai/gpt-4o-mini", root.CompactionModel().ID().String())
+	})
+
+	t.Run("no compaction model", func(t *testing.T) {
+		data := []byte(`agents:
+  root:
+    model: openai/gpt-4o
+    instruction: test
+`)
+
+		team, err := Load(t.Context(), config.NewBytesSource("compaction.yaml", data), &config.RuntimeConfig{}, withTestProviderRegistry()...)
+		require.NoError(t, err)
+
+		root, err := team.Agent("root")
+		require.NoError(t, err)
+
+		// Without a dedicated compaction model, compaction reuses the agent's
+		// own model.
+		assert.Nil(t, root.CompactionModel())
+	})
+}
+
+func TestCompactionThresholdResolution(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "dummy")
+	t.Setenv("ANTHROPIC_API_KEY", "dummy")
+
+	t.Run("agent-level threshold", func(t *testing.T) {
+		data := []byte(`agents:
+  root:
+    model: openai/gpt-4o
+    compaction_threshold: 0.75
+    instruction: test
+`)
+
+		team, err := Load(t.Context(), config.NewBytesSource("threshold.yaml", data), &config.RuntimeConfig{}, withTestProviderRegistry()...)
+		require.NoError(t, err)
+
+		root, err := team.Agent("root")
+		require.NoError(t, err)
+
+		assert.InEpsilon(t, 0.75, root.CompactionThreshold(), 1e-9)
+	})
+
+	t.Run("model-level threshold", func(t *testing.T) {
+		data := []byte(`models:
+  primary:
+    provider: anthropic
+    model: claude-sonnet-4-5
+    compaction_threshold: 0.6
+agents:
+  root:
+    model: primary
+    instruction: test
+`)
+
+		team, err := Load(t.Context(), config.NewBytesSource("threshold.yaml", data), &config.RuntimeConfig{}, withTestProviderRegistry()...)
+		require.NoError(t, err)
+
+		root, err := team.Agent("root")
+		require.NoError(t, err)
+
+		assert.InEpsilon(t, 0.6, root.CompactionThreshold(), 1e-9)
+	})
+
+	t.Run("model-level threshold overrides agent-level", func(t *testing.T) {
+		data := []byte(`models:
+  primary:
+    provider: anthropic
+    model: claude-sonnet-4-5
+    compaction_threshold: 0.6
+agents:
+  root:
+    model: primary
+    compaction_threshold: 0.75
+    instruction: test
+`)
+
+		team, err := Load(t.Context(), config.NewBytesSource("threshold.yaml", data), &config.RuntimeConfig{}, withTestProviderRegistry()...)
+		require.NoError(t, err)
+
+		root, err := team.Agent("root")
+		require.NoError(t, err)
+
+		assert.InEpsilon(t, 0.6, root.CompactionThreshold(), 1e-9)
+	})
+
+	t.Run("unset threshold reports zero so the default applies", func(t *testing.T) {
+		data := []byte(`agents:
+  root:
+    model: openai/gpt-4o
+    instruction: test
+`)
+
+		team, err := Load(t.Context(), config.NewBytesSource("threshold.yaml", data), &config.RuntimeConfig{}, withTestProviderRegistry()...)
+		require.NoError(t, err)
+
+		root, err := team.Agent("root")
+		require.NoError(t, err)
+
+		assert.Zero(t, root.CompactionThreshold())
+	})
+}
+
+func TestSessionCompactionKnob(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "dummy")
+
+	t.Run("enabled by default", func(t *testing.T) {
+		data := []byte(`agents:
+  root:
+    model: openai/gpt-4o
+    instruction: test
+`)
+
+		team, err := Load(t.Context(), config.NewBytesSource("session_compaction.yaml", data), &config.RuntimeConfig{}, withTestProviderRegistry()...)
+		require.NoError(t, err)
+
+		root, err := team.Agent("root")
+		require.NoError(t, err)
+
+		assert.True(t, root.SessionCompaction())
+	})
+
+	t.Run("explicitly disabled", func(t *testing.T) {
+		data := []byte(`agents:
+  root:
+    model: openai/gpt-4o
+    session_compaction: false
+    instruction: test
+`)
+
+		team, err := Load(t.Context(), config.NewBytesSource("session_compaction.yaml", data), &config.RuntimeConfig{}, withTestProviderRegistry()...)
+		require.NoError(t, err)
+
+		root, err := team.Agent("root")
+		require.NoError(t, err)
+
+		assert.False(t, root.SessionCompaction())
+	})
+
+	t.Run("explicitly enabled", func(t *testing.T) {
+		data := []byte(`agents:
+  root:
+    model: openai/gpt-4o
+    session_compaction: true
+    instruction: test
+`)
+
+		team, err := Load(t.Context(), config.NewBytesSource("session_compaction.yaml", data), &config.RuntimeConfig{}, withTestProviderRegistry()...)
+		require.NoError(t, err)
+
+		root, err := team.Agent("root")
+		require.NoError(t, err)
+
+		assert.True(t, root.SessionCompaction())
 	})
 }
 
@@ -691,4 +902,83 @@ func TestLoadRetainsAgentConfig(t *testing.T) {
 
 	_, ok = team.AgentConfig("missing")
 	assert.False(t, ok, "unknown agent reports no retained config")
+}
+
+func TestLoadWithConfig_GlobalHooks(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "dummy")
+
+	data := []byte(`agents:
+  root:
+    model: openai/gpt-4o
+    instruction: test
+`)
+	runConfig := &config.RuntimeConfig{
+		Config: config.Config{
+			GlobalHooks: &latest.HooksConfig{
+				SessionStart: []latest.HookDefinition{{Type: "command", Command: "global"}},
+			},
+		},
+	}
+
+	team, err := Load(t.Context(), config.NewBytesSource("global-hooks.yaml", data), runConfig, withTestProviderRegistry()...)
+	require.NoError(t, err)
+
+	root, err := team.Agent("root")
+	require.NoError(t, err)
+	require.NotNil(t, root.Hooks())
+	require.Len(t, root.Hooks().SessionStart, 1)
+	assert.Equal(t, "global", root.Hooks().SessionStart[0].Command)
+}
+
+func TestLoadWithConfig_MergesAgentGlobalAndCLIHooks(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "dummy")
+
+	data := []byte(`agents:
+  root:
+    model: openai/gpt-4o
+    instruction: test
+    hooks:
+      session_start:
+        - type: command
+          command: agent
+      pre_tool_use:
+        - matcher: shell
+          hooks:
+            - type: command
+              command: agent-pre
+`)
+	runConfig := &config.RuntimeConfig{
+		Config: config.Config{
+			GlobalHooks: &latest.HooksConfig{
+				SessionStart: []latest.HookDefinition{{Type: "command", Command: "global"}},
+				PreToolUse: []latest.HookMatcherConfig{{
+					Matcher: "edit_file",
+					Hooks:   []latest.HookDefinition{{Type: "command", Command: "global-pre"}},
+				}},
+			},
+			HookSessionStart: []string{"cli"},
+			HookPreToolUse:   []string{"cli-pre"},
+		},
+	}
+
+	team, err := Load(t.Context(), config.NewBytesSource("global-hooks.yaml", data), runConfig, withTestProviderRegistry()...)
+	require.NoError(t, err)
+
+	root, err := team.Agent("root")
+	require.NoError(t, err)
+	hooks := root.Hooks()
+	require.NotNil(t, hooks)
+
+	require.Len(t, hooks.SessionStart, 3)
+	assert.Equal(t, "agent", hooks.SessionStart[0].Command)
+	assert.Equal(t, "global", hooks.SessionStart[1].Command)
+	assert.Equal(t, "cli", hooks.SessionStart[2].Command)
+
+	require.Len(t, hooks.PreToolUse, 3)
+	assert.Equal(t, "shell", hooks.PreToolUse[0].Matcher)
+	assert.Equal(t, "agent-pre", hooks.PreToolUse[0].Hooks[0].Command)
+	assert.Equal(t, "edit_file", hooks.PreToolUse[1].Matcher)
+	assert.Equal(t, "global-pre", hooks.PreToolUse[1].Hooks[0].Command)
+	assert.Empty(t, hooks.PreToolUse[2].Matcher)
+	assert.Equal(t, "cli-pre", hooks.PreToolUse[2].Hooks[0].Command)
 }

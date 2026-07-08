@@ -471,7 +471,7 @@ func TestSamplingToolsToChat(t *testing.T) {
 
 	t.Run("noOp handler returns error result", func(t *testing.T) {
 		t.Parallel()
-		res, err := noOpSamplingToolHandler(t.Context(), tools.ToolCall{})
+		res, err := noOpSamplingToolHandler(t.Context(), tools.ToolCall{}, tools.NopRuntime{})
 		require.NoError(t, err)
 		require.NotNil(t, res)
 		assert.True(t, res.IsError)

@@ -2,6 +2,10 @@ package sqlite
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,24 +25,27 @@ func setupTestDB(t *testing.T) database.Database {
 	require.NotNil(t, db)
 
 	t.Cleanup(func() {
-		// Close connection
 		memDB := db.(*MemoryDatabase)
-		memDB.db.Close()
+		require.NoError(t, memDB.Close())
 	})
 
 	return db
 }
 
 func TestNewMemoryDatabase(t *testing.T) {
+	t.Parallel()
 	db := setupTestDB(t)
 
 	assert.NotNil(t, db, "Database should be created successfully")
 
-	_, err := NewMemoryDatabase("/:invalid:path")
+	db, err := NewMemoryDatabase("/:invalid:path")
+	require.NoError(t, err, "constructor should not touch the filesystem")
+	err = db.AddMemory(t.Context(), database.UserMemory{ID: "1", CreatedAt: time.Now().Format(time.RFC3339), Memory: "x"})
 	require.Error(t, err, "Should fail with invalid database path")
 }
 
 func TestAddMemory(t *testing.T) {
+	t.Parallel()
 	db := setupTestDB(t)
 
 	ctx := t.Context()
@@ -66,6 +73,7 @@ func TestAddMemory(t *testing.T) {
 }
 
 func TestAddMemoryWithCategory(t *testing.T) {
+	t.Parallel()
 	db := setupTestDB(t)
 
 	memory := database.UserMemory{
@@ -85,6 +93,7 @@ func TestAddMemoryWithCategory(t *testing.T) {
 }
 
 func TestGetMemories(t *testing.T) {
+	t.Parallel()
 	db := setupTestDB(t)
 
 	memories, err := db.GetMemories(t.Context())
@@ -127,6 +136,7 @@ func TestGetMemories(t *testing.T) {
 }
 
 func TestDeleteMemory(t *testing.T) {
+	t.Parallel()
 	db := setupTestDB(t)
 
 	memory := database.UserMemory{
@@ -159,6 +169,7 @@ func TestDeleteMemory(t *testing.T) {
 }
 
 func TestSearchMemories(t *testing.T) {
+	t.Parallel()
 	db := setupTestDB(t)
 	ctx := t.Context()
 
@@ -224,6 +235,7 @@ func TestSearchMemories(t *testing.T) {
 }
 
 func TestUpdateMemory(t *testing.T) {
+	t.Parallel()
 	db := setupTestDB(t)
 	ctx := t.Context()
 
@@ -272,6 +284,7 @@ func TestUpdateMemory(t *testing.T) {
 }
 
 func TestMigrationAddsCategory(t *testing.T) {
+	t.Parallel()
 	tmpFile := t.TempDir() + "/migrate.db"
 
 	// Create a DB with the old schema (no category column)
@@ -286,13 +299,13 @@ func TestMigrationAddsCategory(t *testing.T) {
 		Memory:    "Old memory without category",
 	})
 	require.NoError(t, err)
-	memDB1.db.Close()
+	require.NoError(t, memDB1.Close())
 
 	// Reopen - migration should be idempotent
 	db2, err := NewMemoryDatabase(tmpFile)
 	require.NoError(t, err)
 	memDB2 := db2.(*MemoryDatabase)
-	defer memDB2.db.Close()
+	defer func() { require.NoError(t, memDB2.Close()) }()
 
 	memories, err := db2.GetMemories(t.Context())
 	require.NoError(t, err)
@@ -302,6 +315,7 @@ func TestMigrationAddsCategory(t *testing.T) {
 }
 
 func TestDatabaseOperationsWithCanceledContext(t *testing.T) {
+	t.Parallel()
 	db := setupTestDB(t)
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -329,13 +343,30 @@ func TestDatabaseOperationsWithCanceledContext(t *testing.T) {
 	require.Error(t, err, "UpdateMemory should fail with canceled context")
 }
 
+func TestMemoryDatabaseUsesWALAndBusyTimeout(t *testing.T) {
+	db := setupTestDB(t)
+	memDB := db.(*MemoryDatabase)
+
+	sqlDB, err := memDB.ensureDB(t.Context())
+	require.NoError(t, err)
+
+	var journalMode string
+	require.NoError(t, sqlDB.QueryRowContext(t.Context(), "PRAGMA journal_mode").Scan(&journalMode))
+	assert.Equal(t, "wal", journalMode)
+
+	var busyTimeout int
+	require.NoError(t, sqlDB.QueryRowContext(t.Context(), "PRAGMA busy_timeout").Scan(&busyTimeout))
+	assert.Equal(t, 5000, busyTimeout)
+}
+
 func TestDatabaseWithMultipleInstances(t *testing.T) {
+	t.Parallel()
 	tmpFile := t.TempDir() + "/shared.db"
 	db1, err := NewMemoryDatabase(tmpFile)
 	require.NoError(t, err)
 	defer func() {
 		memDB := db1.(*MemoryDatabase)
-		memDB.db.Close()
+		require.NoError(t, memDB.Close())
 	}()
 
 	memory := database.UserMemory{
@@ -351,7 +382,7 @@ func TestDatabaseWithMultipleInstances(t *testing.T) {
 	require.NoError(t, err)
 	defer func() {
 		memDB := db2.(*MemoryDatabase)
-		memDB.db.Close()
+		require.NoError(t, memDB.Close())
 	}()
 
 	memories, err := db2.GetMemories(t.Context())
@@ -359,4 +390,130 @@ func TestDatabaseWithMultipleInstances(t *testing.T) {
 	assert.Len(t, memories, 1, "Second instance should see memory added by first instance")
 	assert.Equal(t, "shared-id", memories[0].ID)
 	assert.Equal(t, "Shared memory", memories[0].Memory)
+}
+
+func TestConcurrentAddsPreserveAllRows(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "concurrent.db")
+	const workers = 8
+	const perWorker = 25
+
+	dbs := make([]database.Database, workers)
+	for i := range workers {
+		db, err := NewMemoryDatabase(dbPath)
+		require.NoError(t, err)
+		dbs[i] = db
+		memDB := db.(*MemoryDatabase)
+		t.Cleanup(func() { _ = memDB.Close() })
+	}
+
+	var wg sync.WaitGroup
+	for worker := range workers {
+		wg.Go(func() {
+			for i := range perWorker {
+				id := fmt.Sprintf("worker-%d-%d", worker, i)
+				require.NoError(t, dbs[worker].AddMemory(t.Context(), database.UserMemory{
+					ID:        id,
+					CreatedAt: time.Now().Format(time.RFC3339),
+					Memory:    "concurrent add",
+				}))
+			}
+		})
+	}
+	wg.Wait()
+
+	reader, err := NewMemoryDatabase(dbPath)
+	require.NoError(t, err)
+	readerDB := reader.(*MemoryDatabase)
+	defer func() { _ = readerDB.Close() }()
+
+	memories, err := reader.GetMemories(t.Context())
+	require.NoError(t, err)
+	require.Len(t, memories, workers*perWorker)
+
+	seen := make(map[string]bool, len(memories))
+	for _, memory := range memories {
+		seen[memory.ID] = true
+	}
+	for worker := range workers {
+		for i := range perWorker {
+			assert.True(t, seen[fmt.Sprintf("worker-%d-%d", worker, i)])
+		}
+	}
+}
+
+func TestConcurrentReadsDuringWrites(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "reads-writes.db")
+	db, err := NewMemoryDatabase(dbPath)
+	require.NoError(t, err)
+	memDB := db.(*MemoryDatabase)
+	defer func() { _ = memDB.Close() }()
+
+	ctx := t.Context()
+	done := make(chan struct{})
+	readErr := make(chan error, 1)
+
+	go func() {
+		defer close(readErr)
+		for {
+			select {
+			case <-done:
+				return
+			default:
+			}
+			memories, err := db.GetMemories(ctx)
+			if err != nil {
+				readErr <- err
+				return
+			}
+			for _, memory := range memories {
+				if memory.ID == "" {
+					readErr <- errors.New("read malformed memory with empty ID")
+					return
+				}
+			}
+		}
+	}()
+
+	for i := range 100 {
+		id := fmt.Sprintf("rw-%d", i)
+		require.NoError(t, db.AddMemory(ctx, database.UserMemory{
+			ID:        id,
+			CreatedAt: time.Now().Format(time.RFC3339),
+			Memory:    "initial",
+		}))
+		require.NoError(t, db.UpdateMemory(ctx, database.UserMemory{
+			ID:     id,
+			Memory: "updated",
+		}))
+		if i%3 == 0 {
+			require.NoError(t, db.DeleteMemory(ctx, database.UserMemory{ID: id}))
+		}
+	}
+	close(done)
+	if err := <-readErr; err != nil {
+		require.NoError(t, err)
+	}
+}
+
+func TestWriteCreatesPersistentLockFile(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "locked.db")
+	db, err := NewMemoryDatabase(dbPath)
+	require.NoError(t, err)
+	memDB := db.(*MemoryDatabase)
+	defer func() { _ = memDB.Close() }()
+
+	lockPath := database.LockPathForDatabase(dbPath)
+
+	require.NoError(t, db.AddMemory(t.Context(), database.UserMemory{
+		ID:        "lock-file",
+		CreatedAt: time.Now().Format(time.RFC3339),
+		Memory:    "creates lock",
+	}))
+	require.FileExists(t, lockPath)
+
+	require.NoError(t, db.UpdateMemory(t.Context(), database.UserMemory{
+		ID:     "lock-file",
+		Memory: "preserves lock",
+	}))
+	require.FileExists(t, lockPath)
 }

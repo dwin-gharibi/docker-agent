@@ -1,7 +1,4 @@
-_site
-.jekyll-cache
-pages
+public
+resources
 node_modules
 recordings
-DEVELOPMENT.md
-TODO.md

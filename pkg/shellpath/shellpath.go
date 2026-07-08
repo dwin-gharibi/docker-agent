@@ -49,13 +49,21 @@ func DetectShell() (shell string, argsPrefix []string) {
 // It prefers PowerShell (resolved via LookPath, which returns an absolute path),
 // falling back to cmd.exe via [WindowsCmdExe].
 func DetectWindowsShell() (shell string, argsPrefix []string) {
-	powershellArgs := []string{"-NoProfile", "-NonInteractive", "-Command"}
-	for _, ps := range []string{"pwsh.exe", "powershell.exe"} {
-		if path, err := exec.LookPath(ps); err == nil {
-			return path, powershellArgs
-		}
+	if path, ok := lookPowerShell(); ok {
+		return path, []string{"-NoProfile", "-NonInteractive", "-Command"}
 	}
 	return WindowsCmdExe(), []string{"/C"}
+}
+
+// lookPowerShell resolves the preferred PowerShell binary (pwsh.exe first,
+// then powershell.exe) via LookPath, which returns an absolute path.
+func lookPowerShell() (string, bool) {
+	for _, ps := range []string{"pwsh.exe", "powershell.exe"} {
+		if path, err := exec.LookPath(ps); err == nil {
+			return path, true
+		}
+	}
+	return "", false
 }
 
 // DetectUnixShell returns the user's shell from the SHELL environment variable,
@@ -70,4 +78,41 @@ func defaultUnixShell() string {
 		return shell
 	}
 	return "/bin/sh"
+}
+
+// InteractiveShellCmd returns a command that launches the user's preferred
+// interactive shell, printing exitMsg first. The message is passed through an
+// environment variable — never interpolated into the command line — so it
+// cannot be reparsed as shell syntax. The command is owned by the caller
+// (typically tea.ExecProcess), not by a request-scoped context, so
+// exec.Command is intentional.
+func InteractiveShellCmd(exitMsg string) *exec.Cmd {
+	const msgVar = "DOCKER_AGENT_SHELL_EXIT_MSG"
+	cmd := interactiveShellCmd(msgVar)
+	cmd.Env = append(os.Environ(), msgVar+"="+exitMsg)
+	return cmd
+}
+
+// interactiveShellCmd builds the platform-specific command that prints the
+// message held in the msgVar environment variable, then hands over to an
+// interactive shell.
+func interactiveShellCmd(msgVar string) *exec.Cmd {
+	if runtime.GOOS != "windows" {
+		// printf (not `echo -e`) so the message prints verbatim under dash,
+		// bash, zsh and fish alike.
+		shell := DetectUnixShell()
+		return execCmd(shell, "-i", "-c", `printf '\n%s\n' "$`+msgVar+`"; exec `+shell)
+	}
+	if path, ok := lookPowerShell(); ok {
+		return execCmd(path, "-NoLogo", "-NoExit", "-Command", `Write-Host ""; Write-Host $env:`+msgVar)
+	}
+	// Absolute path to cmd.exe prevents PATH hijacking (CWE-426); /V:ON
+	// delayed expansion (!VAR!) keeps the message out of cmd's parser.
+	return execCmd(WindowsCmdExe(), "/V:ON", "/K", "echo. & echo !"+msgVar+"!")
+}
+
+// execCmd is a thin wrapper around exec.Command used for interactive
+// processes whose lifecycle is owned by the caller (not a context).
+func execCmd(name string, args ...string) *exec.Cmd {
+	return exec.Command(name, args...) //nolint:noctx // owned by the caller (tea.ExecProcess)
 }

@@ -24,6 +24,11 @@ type (
 	// ShowCostDialogMsg shows the cost/usage dialog.
 	ShowCostDialogMsg struct{}
 
+	// ShowContextDialogMsg shows the context-window breakdown dialog:
+	// estimated tokens per category (system prompt, tool definitions,
+	// prompt files, messages, tool results, compaction summary).
+	ShowContextDialogMsg struct{}
+
 	// ShowPermissionsDialogMsg shows the permissions dialog.
 	ShowPermissionsDialogMsg struct{}
 

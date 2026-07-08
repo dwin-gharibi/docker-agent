@@ -1,10 +1,11 @@
 ---
 title: "Agent Configuration"
 description: "Complete reference for defining agents in your YAML configuration."
-permalink: /configuration/agents/
+keywords: docker agent, ai agents, configuration, yaml, agent configuration
+linkTitle: "Agent Config"
+weight: 30
+canonical: https://docs.docker.com/ai/docker-agent/configuration/agents/
 ---
-
-# Agent Configuration
 
 _Complete reference for defining agents in your YAML configuration._
 
@@ -17,7 +18,7 @@ agents:
     model: string # Required: model reference
     description: string # Required: what this agent does
     instruction: string # Required (unless instruction_file): system prompt
-    instruction_file: string # Optional: load the system prompt from a file relative to this config (mutually exclusive with instruction)
+    instruction_file: string | [list] # Optional: load the system prompt from one or more files relative to this config (mutually exclusive with instruction)
     sub_agents: [list] # Optional: local or external sub-agent references
     toolsets: [list] # Optional: tool configurations (use `type: rag` for RAG sources)
     fallback: # Optional: fallback config
@@ -34,6 +35,8 @@ agents:
     max_consecutive_tool_calls: int # Optional: max identical consecutive tool calls
     max_old_tool_call_tokens: int # Optional: token budget for old tool call content (disabled unless positive)
     num_history_items: int # Optional: limit conversation history
+    session_compaction: boolean # Optional: disable automatic session compaction (default: true)
+    compaction_threshold: float # Optional: context-window fraction that triggers auto-compaction (0–1, default: 0.9)
     use_toolsets: [list] # Optional: names of top-level toolsets to merge into this agent
     readonly: boolean # Optional: restrict all toolsets to read-only tools only
     skills: boolean | [list] # Optional: enable skill discovery (true/false or list of names and/or sources)
@@ -69,12 +72,10 @@ agents:
       thinking: boolean # opencode only: enable extended thinking
 ```
 
-<div class="callout callout-tip" markdown="1">
-<div class="callout-title">See also
-</div>
-  <p>For model parameters, see <a href="{{ '/configuration/models/' | relative_url }}">Model Config</a>. For tool details, see <a href="{{ '/configuration/tools/' | relative_url }}">Tool Config</a>. For multi-agent patterns, see <a href="{{ '/concepts/multi-agent/' | relative_url }}">Multi-Agent</a>.</p>
-
-</div>
+> [!TIP]
+> **See also**
+>
+> For model parameters, see [Model Config](../models/index.md). For tool details, see [Tool Config](../tools/index.md). For multi-agent patterns, see [Multi-Agent](../../concepts/multi-agent/index.md).
 
 ## Properties Reference
 
@@ -83,9 +84,9 @@ agents:
 | `model`                     | string  | ✓        | Model reference. Either inline (`openai/gpt-5`) or a named model from the `models` section.                                                                              |
 | `description`               | string  | ✓        | Brief description of the agent's purpose. Used by coordinators to decide delegation.                                                                                          |
 | `instruction`               | string  | ✓        | System prompt that defines the agent's behavior, personality, and constraints. Required unless `instruction_file` is set.                                                      |
-| `instruction_file`          | string  | ✗        | Path to a file (relative to the config file's directory) whose contents become the agent's instruction, loaded at startup. Mutually exclusive with `instruction`. Must be a local relative path inside the config directory (absolute paths and `..` traversal are rejected). Only supported for local file-based configs, not OCI/URL sources. See [External Instruction Files](#external-instruction-files) below. |
-| `sub_agents`                | array   | ✗        | List of agent names or external OCI references this agent can delegate to. Supports local agents, registry references (e.g., `agentcatalog/pirate`), and named references (`name:reference`). Automatically enables the `transfer_task` tool. Pin external OCI references to a digest (`name@sha256:…`) to skip the per-run registry lookup that tag references incur. See [External Sub-Agents]({{ '/concepts/multi-agent/#external-sub-agents-from-registries' | relative_url }}). |
-| `toolsets`                  | array   | ✗        | List of tool configurations. See [Tool Config]({{ '/configuration/tools/' | relative_url }}).                                                                                                        |
+| `instruction_file`          | string \| array  | ✗        | Path(s) to a file or files (relative to the config file's directory) whose contents become the agent's instruction, loaded at startup. Accepts a single path or a list; multiple files are concatenated in order, separated by a blank line. Mutually exclusive with `instruction`. Each path must be a local relative path inside the config directory (absolute paths and `..` traversal are rejected). Only supported for local file-based configs, not OCI/URL sources. See [External Instruction Files](#external-instruction-files) below. |
+| `sub_agents`                | array   | ✗        | List of agent names or external OCI references this agent can delegate to. Supports local agents, registry references (e.g., `agentcatalog/pirate`), and named references (`name:reference`). Automatically enables the `transfer_task` tool. Pin external OCI references to a digest (`name@sha256:…`) to skip the per-run registry lookup that tag references incur. See [External Sub-Agents](../../concepts/multi-agent/index.md#external-sub-agents-from-registries). |
+| `toolsets`                  | array   | ✗        | List of tool configurations. See [Tool Config](../tools/index.md).                                                                                                        |
 | `fallback`                  | object  | ✗        | Automatic model failover configuration.                                                                                                                                       |
 | `add_date`                  | boolean | ✗        | When `true`, injects the current date into the agent's context.                                                                                                               |
 | `add_environment_info`      | boolean | ✗        | When `true`, injects working directory, OS, CPU architecture, and git info into context.                                                                                      |
@@ -97,26 +98,26 @@ agents:
 | `max_consecutive_tool_calls` | int     | ✗        | Maximum consecutive identical tool calls before the agent is terminated, preventing degenerate loops. Default: `5`.                                                          |
 | `max_old_tool_call_tokens`  | int     | ✗        | Maximum number of tokens to keep from old tool call arguments and results. Older tool calls beyond this budget have their content replaced with a placeholder, saving context space. Tokens are approximated as `len/4`. Truncation is disabled by default; set a positive value to enable it. Set to `-1` to disable truncation (unlimited). |
 | `num_history_items`         | int     | ✗        | Limit the number of conversation history messages sent to the model. Useful for managing context window size with long conversations. Default: unlimited (all messages sent). |
-| `skills`                    | bool/array | ✗     | Enable automatic skill discovery. `true` loads all discovered local skills, `false` disables them. A list can mix skill sources (`local` or `https://…` URLs) and skill names to include — see [Skills]({{ '/features/skills/' | relative_url }}).                                                     |
+| `session_compaction`        | boolean | ✗        | When `false`, disables automatic session compaction for this agent: neither the proactive threshold trigger nor the post-overflow auto-recovery runs. The manual `/compact` command remains available. Default: `true`. |
+| `compaction_threshold`      | float   | ✗        | Fraction of the model's context window at which proactive auto-compaction triggers. Must be greater than `0` and at most `1`. A `compaction_threshold` set on the agent's model takes precedence. Default: `0.9`. See [Compaction Threshold](../models/index.md#delegating-session-compaction). |
+| `skills`                    | bool/array | ✗     | Enable automatic skill discovery. `true` loads all discovered local skills, `false` disables them. A list can mix skill sources (`local` or `https://…` URLs) and skill names to include — see [Skills](../../features/skills/index.md).                                                     |
 | `commands`                  | object  | ✗        | Named prompts that can be run with `docker agent run config.yaml /command_name`. Can be simple strings or objects with `instruction` and/or `agent` fields for agent switching, or a `url` field to open a link in the browser (TUI only). See [Named Commands](#named-commands) below. |
 | `use_commands`              | list of string | ✗   | Names of top-level `commands` groups to merge into this agent. Inline `commands` entries take precedence on name conflicts. Default: `[]`. |
 | `use_skills`                | list of string | ✗   | Names of top-level `skills` groups to merge into this agent. Inline skills are deduplicated by name against merged entries. Default: `[]`. |
-| `use_toolsets`              | list of string | ✗   | Names of top-level `toolsets` groups to merge into this agent. See [Reusable Toolsets]({{ '/configuration/overview/#reusable-toolsets-toolsets' | relative_url }}). Default: `[]`. |
+| `use_toolsets`              | list of string | ✗   | Names of top-level `toolsets` groups to merge into this agent. See [Reusable Toolsets](../overview/index.md#reusable-toolsets-toolsets). Default: `[]`. |
 | `readonly`                  | boolean | ✗   | When `true`, every toolset on this agent is filtered to expose only read-only tools (those annotated with a read-only hint). Mutating tools are removed at load time and cannot be called even if the model tries. See [Read-Only Agents](#read-only-agents) below. |
 | `welcome_message`           | string  | ✗        | Message displayed to the user when a session starts. Rendered as Markdown in the TUI. **Not sent to the model** — it exists purely for the user's benefit. Useful for telling users what the agent can do and what commands are available. |
-| `handoffs`                  | array   | ✗        | List of agent names this agent can hand off the conversation to. Enables the `handoff` tool. See [Handoffs Routing]({{ '/concepts/multi-agent/#handoffs-routing' | relative_url }}).                  |
-| `force_handoff`             | string  | ✗        | Name of an agent that unconditionally receives the conversation whenever this agent produces a final response. The runtime performs the switch itself, bypassing the LLM's tool-calling, guaranteeing deterministic pipelines. Must not reference the agent itself, and chains must not form a cycle. See [Forced Handoffs]({{ '/concepts/multi-agent/#forced-handoffs' | relative_url }}). |
-| `hooks`                     | object  | ✗        | Lifecycle hooks for running commands at various points. See [Hooks]({{ '/configuration/hooks/' | relative_url }}).                                                                                   |
-| `structured_output`         | object  | ✗        | Constrain agent output to match a JSON schema. See [Structured Output]({{ '/configuration/structured-output/' | relative_url }}).                                                                    |
+| `handoffs`                  | array   | ✗        | List of agent names this agent can hand off the conversation to. Enables the `handoff` tool. See [Handoffs Routing](../../concepts/multi-agent/index.md#handoffs-routing).                  |
+| `force_handoff`             | string  | ✗        | Name of an agent that unconditionally receives the conversation whenever this agent produces a final response. The runtime performs the switch itself, bypassing the LLM's tool-calling, guaranteeing deterministic pipelines. Must not reference the agent itself, and chains must not form a cycle. See [Forced Handoffs](../../concepts/multi-agent/index.md#forced-handoffs). |
+| `hooks`                     | object  | ✗        | Lifecycle hooks for running commands at various points. See [Hooks](../hooks/index.md).                                                                                   |
+| `structured_output`         | object  | ✗        | Constrain agent output to match a JSON schema. See [Structured Output](../structured-output/index.md).                                                                    |
 | `cache`                     | object  | ✗        | Response cache. When the same user question is asked again, the previous answer is replayed verbatim and the model is not called. See [Response Cache](#response-cache) below.                  |
-| `harness`                   | object  | ✗        | Run this agent through an external coding CLI instead of a model. **Note:** Any `toolsets:` defined on the same agent are silently ignored when `harness:` is set — the external CLI brings its own tools. See [Coding Harnesses]({{ '/features/harnesses/' | relative_url }}). |
+| `harness`                   | object  | ✗        | Run this agent through an external coding CLI instead of a model. **Note:** Any `toolsets:` defined on the same agent are silently ignored when `harness:` is set — the external CLI brings its own tools. See [Coding Harnesses](../../features/harnesses/index.md). |
 
-<div class="callout callout-warning" markdown="1">
-<div class="callout-title">max_iterations
-</div>
-  <p>Default is <code>0</code> (unlimited). Always set <code>max_iterations</code> for agents with powerful tools like <code>shell</code> to prevent infinite loops. A value of 20–50 is typical for development agents.</p>
-
-</div>
+> [!WARNING]
+> **max_iterations**
+>
+> Default is `0` (unlimited). Always set `max_iterations` for agents with powerful tools like `shell` to prevent infinite loops. A value of 20–50 is typical for development agents.
 
 ## External Instruction Files
 
@@ -144,8 +145,22 @@ The path is resolved relative to the config file's directory and the file's
 contents are loaded as the agent's instruction when the config is loaded. Notes:
 
 - **Mutually exclusive** with `instruction`. Setting both is an error.
-- The path must be a **local relative path inside the config directory**.
+- Each path must be a **local relative path inside the config directory**.
   Absolute paths and `..` traversal are rejected.
+- A **list** of files is also accepted; their contents are concatenated in
+  order, separated by a blank line. This lets a shared preamble be reused
+  across agents while each agent appends its own specifics:
+
+  ```yaml
+  agents:
+    writer:
+      model: openai/gpt-5-mini
+      description: Drafts and edits written content
+      instruction_file:
+        - instructions/shared-preamble.md
+        - instructions/writer.md
+  ```
+
 - Only supported for **local file-based configs**, not agents loaded from OCI
   registries or URLs. When an agent is pushed with `docker agent share push`,
   the file contents are inlined into the pushed artifact, so the published
@@ -226,17 +241,15 @@ Detection uses the [portcullis](https://github.com/docker/portcullis) ruleset, w
 
 Each detected span is replaced with the literal string `[REDACTED]`; the surrounding text is preserved so a redacted argument still looks like a legitimate flag (e.g. `--token=[REDACTED]`). Redaction is idempotent — applying it twice yields the same result.
 
-<div class="callout callout-info" markdown="1">
-<div class="callout-title">False positives vs. false negatives
-</div>
-  <p>False positives are extremely rare: every rule pairs a regex with a discriminating keyword, so plain English never trips detection. <strong>False negatives are possible</strong> — only patterns the ruleset recognises are scrubbed, so this is a defense-in-depth feature, not a substitute for keeping secrets out of the conversation in the first place. Pair it with a proper <a href="{{ '/guides/secrets/' | relative_url }}">secret manager</a> for the credentials your agent actually needs.</p>
-</div>
+> [!NOTE]
+> **False positives vs. false negatives**
+>
+> False positives are extremely rare: every rule pairs a regex with a discriminating keyword, so plain English never trips detection. **False negatives are possible** — only patterns the ruleset recognises are scrubbed, so this is a defense-in-depth feature, not a substitute for keeping secrets out of the conversation in the first place. Pair it with a proper [secret manager](../../guides/secrets/index.md) for the credentials your agent actually needs.
 
-<div class="callout callout-info" markdown="1">
-<div class="callout-title">Equivalent hook entry
-</div>
-  <p>Setting <code>redact_secrets: true</code> on the agent is shorthand for auto-registering all three legs of the feature as hook entries. They share the <em>same</em> built-in name (<code>type: builtin</code>, <code>command: redact_secrets</code>) on <code>pre_tool_use</code>, <code>before_llm_call</code>, and <code>tool_response_transform</code> respectively — the implementation dispatches on the hook event. You can spell them out by hand to scope a leg to a subset of tools (set <code>matcher:</code> to a regex), stack them with other rewriters in a specific order, or enable just one or two legs. See <a href="https://github.com/docker/docker-agent/blob/main/examples/redact_secrets_hooks.yaml"><code>examples/redact_secrets_hooks.yaml</code></a> for a complete manual wiring and the <a href="{{ '/configuration/hooks/#available-built-ins' | relative_url }}">Hooks reference</a> for the builtin's event coverage.</p>
-</div>
+> [!NOTE]
+> **Equivalent hook entry**
+>
+> Setting `redact_secrets: true` on the agent is shorthand for auto-registering all three legs of the feature as hook entries. They share the _same_ built-in name (`type: builtin`, `command: redact_secrets`) on `pre_tool_use`, `before_llm_call`, and `tool_response_transform` respectively — the implementation dispatches on the hook event. You can spell them out by hand to scope a leg to a subset of tools (set `matcher:` to a regex), stack them with other rewriters in a specific order, or enable just one or two legs. See [`examples/redact_secrets_hooks.yaml`](https://github.com/docker/docker-agent/blob/main/examples/redact_secrets_hooks.yaml) for a complete manual wiring and the [Hooks reference](../hooks/index.md#available-built-ins) for the builtin's event coverage.
 
 ## Welcome Message
 
@@ -261,7 +274,7 @@ agents:
 
 ## Deferred Tool Loading
 
-Toolsets support `defer` to load tools on-demand and speed up agent startup. See [Deferred Tool Loading]({{ '/configuration/tools/#deferred-tool-loading' | relative_url }}) for details.
+Toolsets support `defer` to load tools on-demand and speed up agent startup. See [Deferred Tool Loading](../tools/index.md#deferred-tool-loading) for details.
 
 ```yaml
 agents:
@@ -335,17 +348,18 @@ agents:
         url: https://docs.docker.com/
 ```
 
-
 ### Command Formats
 
 Commands support three formats:
 
 1. **Simple string format**: The string becomes the instruction sent to the current agent
+
    ```yaml
    df: "Check disk space"
    ```
 
 2. **Advanced object format**: Supports agent switching and optional instructions
+
    ```yaml
    plan:
      agent: planner           # Required: name of sub-agent to switch to
@@ -354,6 +368,7 @@ Commands support three formats:
    ```
 
 3. **URL format**: Opens a link in the browser instead of messaging the agent
+
    ```yaml
    docs:
      url: https://docs.docker.com/          # Required: URL to open
@@ -421,7 +436,7 @@ Commands use JavaScript template literal syntax (`${env.VAR}`) for environment v
 
 The same syntax is also expanded in agent and toolset instructions: `agents.<name>.instruction` and `toolsets[*].instruction` support `${env.X}` placeholders (with optional `||` defaults and ternary expressions). `agents.<name>.description` and `agents.<name>.welcome_message` also support it.
 
-Note that path-like fields (`working_dir`, `path`) primarily use a shell-style syntax (`$VAR`, `${VAR}`, `~`), and also accept `${env.X}` as an alias (though not richer JS expressions). See [Variable Expansion in Config Fields]({{ '/configuration/overview/#variable-expansion-in-config-fields' | relative_url }}) for the full table.
+Note that path-like fields (`working_dir`, `path`) primarily use a shell-style syntax (`$VAR`, `${VAR}`, `~`), and also accept `${env.X}` as an alias (though not richer JS expressions). See [Variable Expansion in Config Fields](../overview/index.md#variable-expansion-in-config-fields) for the full table.
 
 ### URL Commands
 
@@ -483,11 +498,10 @@ agents:
 
 See [`examples/readonly.yaml`](https://github.com/docker/docker-agent/blob/main/examples/readonly.yaml) for a complete example.
 
-<div class="callout callout-info" markdown="1">
-<div class="callout-title">Which tools are read-only?
-</div>
-  <p>Whether a tool is read-only is determined by its <code>ReadOnlyHint</code> annotation. For built-in tools, read-only operations (list/read/search) carry the hint; mutating operations (write/delete/execute) do not. Custom and MCP tools expose the hint via their own annotations.</p>
-</div>
+> [!NOTE]
+> **Which tools are read-only?**
+>
+> Whether a tool is read-only is determined by its `ReadOnlyHint` annotation. For built-in tools, read-only operations (list/read/search) carry the hint; mutating operations (write/delete/execute) do not. Custom and MCP tools expose the hint via their own annotations.
 
 ## Complete Example
 

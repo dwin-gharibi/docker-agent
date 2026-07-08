@@ -1,16 +1,17 @@
 ---
 title: "Script Tool"
 description: "Define custom shell scripts as named tools with typed parameters."
-permalink: /tools/script/
+keywords: docker agent, ai agents, tools, toolsets, script tool
+linkTitle: "Script"
+weight: 30
+canonical: https://docs.docker.com/ai/docker-agent/tools/script/
 ---
-
-# Script Tool
 
 _Define custom shell scripts as named tools with typed parameters._
 
 ## Overview
 
-The script tool lets you define custom shell scripts as named tools. Unlike the generic [shell tool]({{ '/tools/shell/' | relative_url }}) where the agent writes the command, script tools execute predefined commands — ideal for exposing safe, well-scoped operations with descriptive names.
+The script tool lets you define custom shell scripts as named tools. Unlike the generic [shell tool](../shell/index.md) where the agent writes the command, script tools execute predefined commands — ideal for exposing safe, well-scoped operations with descriptive names.
 
 ## Configuration
 
@@ -57,8 +58,7 @@ toolsets:
 | `shell.<name>.env`                | object | Environment variables for this script                      |
 | `shell.<name>.working_dir`        | string | Working directory for script execution                     |
 
-<div class="callout callout-tip" markdown="1">
-<div class="callout-title">Script vs. Shell
-</div>
-  <p>Use the <a href="{{ '/tools/shell/' | relative_url }}">shell tool</a> when the agent needs to run arbitrary commands. Use the script tool when you want to expose specific, predefined operations with clear names and typed parameters — giving the agent less freedom but more safety.</p>
-</div>
+> [!TIP]
+> **Script vs. Shell**
+>
+> Use the [shell tool](../shell/index.md) when the agent needs to run arbitrary commands. Use the script tool when you want to expose specific, predefined operations with clear names and typed parameters — giving the agent less freedom but more safety.

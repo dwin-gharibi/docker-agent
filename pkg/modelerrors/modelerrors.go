@@ -400,6 +400,47 @@ var retryablePatterns = []string{
 	"internal_error",        // HTTP/2 INTERNAL_ERROR (stream-level)
 }
 
+// streamTruncationPatterns matches errors where the response body was cut off
+// mid-stream, before a clean end-of-stream marker. For local backends (e.g.
+// Docker Model Runner / llama.cpp) this most often happens when a large
+// prompt's prefill takes long enough with no bytes flowing that an idle or
+// connection timeout in the model server -- or a proxy in front of it -- drops
+// the connection before the first token is streamed (see issue #3298). The
+// connection reset / closed-by-peer variants are already covered by
+// [retryablePatterns]; these two cover the clean-FIN-mid-event shapes that
+// surface from the SSE/JSON decoder instead of the socket layer.
+//
+// Patterns MUST be lowercase: they are compared against a lowercased error
+// message (see [IsStreamTruncationError]).
+var streamTruncationPatterns = []string{
+	"unexpected eof",               // io.ErrUnexpectedEOF: HTTP body cut mid-frame
+	"unexpected end of json input", // json.Unmarshal on a truncated SSE event
+}
+
+// IsStreamTruncationError reports whether err indicates the model stream was
+// cut off before a clean completion: the connection was dropped or the body
+// was truncated mid-stream. See [streamTruncationPatterns] for why this happens
+// and why it is treated as retryable.
+//
+// Context cancellation/deadline is excluded: that is the caller tearing the
+// request down (e.g. the idle-timeout cancel or a user Ctrl+C), not an upstream
+// drop, and must stay non-retryable.
+func IsStreamTruncationError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	for _, p := range streamTruncationPatterns {
+		if strings.Contains(msg, p) {
+			return true
+		}
+	}
+	return false
+}
+
 // nonRetryablePatterns contains error message substrings that indicate a
 // permanent/non-retryable failure. Numeric status codes (429, 401, etc.) are
 // handled separately by extractHTTPStatusCode.
@@ -468,6 +509,17 @@ func isRetryableModelError(err error) bool {
 			slog.Debug("Network timeout error, retryable", "error", err)
 			return true
 		}
+	}
+
+	// A stream truncated mid-response is transient: the upstream (or a proxy)
+	// dropped a connection that was making progress, most often during a long
+	// prefill with no bytes flowing yet. Retrying usually succeeds because the
+	// backend's prompt cache makes the second prefill fast enough to beat the
+	// idle limit. Checked before the pattern loops below so the truncated-JSON
+	// variant isn't mis-classified by the "invalid" non-retryable pattern.
+	if IsStreamTruncationError(err) {
+		slog.Debug("Stream truncated mid-response, retryable", "error", err)
+		return true
 	}
 
 	errMsg := strings.ToLower(err.Error())
@@ -586,6 +638,14 @@ func FormatError(err error) string {
 	case OverflowKindTokens:
 		return "The conversation has exceeded the model's context window and automatic compaction is not enabled. " +
 			"Try running /compact to reduce the conversation size, or start a new session."
+	}
+
+	if IsStreamTruncationError(err) {
+		return "The connection to the model was closed unexpectedly before it completed its response. " +
+			"With local models (e.g. Docker Model Runner), this can happen when an idle or " +
+			"connection timeout in the model server (or a proxy in front of it) drops a silent " +
+			"prefill before the first token, or cuts a long response mid-stream. " +
+			"Try a shorter prompt, or raise the model server's idle/keep-alive timeout."
 	}
 
 	return err.Error()

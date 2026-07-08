@@ -30,56 +30,52 @@ type Coordinator struct {
 	active int32
 }
 
-// globalCoordinator is the singleton coordinator instance.
-var globalCoordinator = &Coordinator{}
-
 // Register increments the active animation count.
 // Call this when an animation starts.
-func Register() {
-	globalCoordinator.mu.Lock()
-	globalCoordinator.active++
-	globalCoordinator.mu.Unlock()
+func (c *Coordinator) Register() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.active++
 }
 
 // Unregister decrements the active animation count.
 // Call this when an animation stops.
-func Unregister() {
-	globalCoordinator.mu.Lock()
-	if globalCoordinator.active > 0 {
-		globalCoordinator.active--
+func (c *Coordinator) Unregister() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.active > 0 {
+		c.active--
 	}
-	globalCoordinator.mu.Unlock()
 }
 
 // HasActive returns true if any animations are currently active.
-func HasActive() bool {
-	globalCoordinator.mu.Lock()
-	active := globalCoordinator.active > 0
-	globalCoordinator.mu.Unlock()
-	return active
+func (c *Coordinator) HasActive() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.active > 0
 }
 
-// StartTick starts the global animation tick if any animations are active.
+// StartTick starts the animation tick if any animations are active.
 // Call this after processing a TickMsg to continue the tick stream.
-func StartTick() tea.Cmd {
-	globalCoordinator.mu.Lock()
-	defer globalCoordinator.mu.Unlock()
-	if globalCoordinator.active <= 0 {
+func (c *Coordinator) StartTick() tea.Cmd {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.active <= 0 {
 		return nil
 	}
-	return globalCoordinator.tickLocked()
+	return c.tickLocked()
 }
 
 // StartTickIfFirst registers an animation and starts the tick if this is the first.
 // This is atomic: no race between checking and registering.
 // Returns the tick command if the tick stream was started, nil otherwise.
-func StartTickIfFirst() tea.Cmd {
-	globalCoordinator.mu.Lock()
-	defer globalCoordinator.mu.Unlock()
-	wasEmpty := globalCoordinator.active == 0
-	globalCoordinator.active++
+func (c *Coordinator) StartTickIfFirst() tea.Cmd {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	wasEmpty := c.active == 0
+	c.active++
 	if wasEmpty {
-		return globalCoordinator.tickLocked()
+		return c.tickLocked()
 	}
 	return nil
 }
@@ -89,9 +85,29 @@ func StartTickIfFirst() tea.Cmd {
 func (c *Coordinator) tickLocked() tea.Cmd {
 	return tea.Tick(time.Second/14, func(time.Time) tea.Msg {
 		c.mu.Lock()
+		defer c.mu.Unlock()
 		c.frame++
 		frame := c.frame
-		c.mu.Unlock()
 		return TickMsg{Frame: frame}
 	})
 }
+
+// globalCoordinator is the singleton coordinator instance shared by all
+// animated components in the running TUI.
+var globalCoordinator = &Coordinator{}
+
+// Register increments the active animation count on the global coordinator.
+func Register() { globalCoordinator.Register() }
+
+// Unregister decrements the active animation count on the global coordinator.
+func Unregister() { globalCoordinator.Unregister() }
+
+// HasActive reports whether any animations are active on the global coordinator.
+func HasActive() bool { return globalCoordinator.HasActive() }
+
+// StartTick starts the global animation tick if any animations are active.
+func StartTick() tea.Cmd { return globalCoordinator.StartTick() }
+
+// StartTickIfFirst registers an animation on the global coordinator and starts
+// the tick if it is the first.
+func StartTickIfFirst() tea.Cmd { return globalCoordinator.StartTickIfFirst() }

@@ -20,30 +20,42 @@ import (
 )
 
 // fileName is the basename of the file holding the persistent UUID,
-// stored under [paths.GetConfigDir].
+// stored under the resolver's directory.
 const fileName = "user-uuid"
 
-var (
+// Resolver owns the directory it reads from and the in-memory cache of
+// the resolved UUID. Each instance is fully independent, so tests can
+// create one per [testing.T.TempDir] and run in parallel without
+// sharing any global state.
+type Resolver struct {
+	dirFn func() string
+
 	mu     sync.Mutex
 	cached string
-)
+}
+
+// New returns a [Resolver] that reads and writes the UUID file in dir.
+func New(dir string) *Resolver {
+	return &Resolver{dirFn: func() string { return dir }}
+}
 
 // Get returns the persistent UUID identifying this cagent installation.
 //
 // On the first call it tries to read the value from
-// `$configDir/user-uuid`; if the file does not exist, is empty, or
-// cannot be read, a fresh UUID is generated and persisted (best
-// effort). The result is cached in memory for the lifetime of the
-// process so subsequent calls do not touch the filesystem.
-func Get() string {
-	mu.Lock()
-	defer mu.Unlock()
+// `<dir>/user-uuid`; if the file does not exist, is empty, contains an
+// invalid UUID, or cannot be read, a fresh UUID is generated and
+// persisted (best effort). The result is cached in memory for the
+// lifetime of the resolver so subsequent calls do not touch the
+// filesystem.
+func (r *Resolver) Get() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
-	if cached != "" {
-		return cached
+	if r.cached != "" {
+		return r.cached
 	}
 
-	file := filePath()
+	file := filepath.Join(r.dirFn(), fileName)
 
 	if data, err := os.ReadFile(file); err == nil {
 		if existing := strings.TrimSpace(string(data)); existing != "" {
@@ -52,8 +64,8 @@ func Get() string {
 			// rather than propagating invalid data to telemetry and
 			// the gateway.
 			if _, err := uuid.Parse(existing); err == nil {
-				cached = existing
-				return cached
+				r.cached = existing
+				return r.cached
 			}
 			// File contains invalid UUID — fall through and regenerate.
 		}
@@ -66,22 +78,19 @@ func Get() string {
 	// disk we still cache it in memory so the same identifier is used
 	// for the rest of this process.
 	_ = save(file, id)
-	cached = id
-	return cached
+	r.cached = id
+	return r.cached
 }
 
-// ResetForTests clears the in-memory cache. Tests in any package
-// that rely on a deterministic config dir override should call this
-// after [paths.SetConfigDir] to force the next [Get] call to re-read
-// from disk.
-func ResetForTests() {
-	mu.Lock()
-	defer mu.Unlock()
-	cached = ""
-}
+// defaultResolver backs the package-level [Get]. It resolves its
+// directory lazily through [paths.GetConfigDir] so it always honours
+// the config-dir override in effect at call time.
+var defaultResolver = &Resolver{dirFn: paths.GetConfigDir}
 
-func filePath() string {
-	return filepath.Join(paths.GetConfigDir(), fileName)
+// Get returns the persistent UUID using the default resolver, which
+// reads from [paths.GetConfigDir].
+func Get() string {
+	return defaultResolver.Get()
 }
 
 func save(file, id string) error {

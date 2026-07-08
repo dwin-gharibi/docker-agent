@@ -10,6 +10,7 @@ import (
 	"github.com/docker/docker-agent/pkg/tools/a2a"
 	agenttool "github.com/docker/docker-agent/pkg/tools/builtin/agent"
 	"github.com/docker/docker-agent/pkg/tools/builtin/api"
+	"github.com/docker/docker-agent/pkg/tools/builtin/backgroundjobs"
 	"github.com/docker/docker-agent/pkg/tools/builtin/fetch"
 	"github.com/docker/docker-agent/pkg/tools/builtin/filesystem"
 	"github.com/docker/docker-agent/pkg/tools/builtin/lsp"
@@ -20,6 +21,8 @@ import (
 	"github.com/docker/docker-agent/pkg/tools/builtin/openurl"
 	"github.com/docker/docker-agent/pkg/tools/builtin/plan"
 	"github.com/docker/docker-agent/pkg/tools/builtin/rag"
+	"github.com/docker/docker-agent/pkg/tools/builtin/sessioncontext"
+	"github.com/docker/docker-agent/pkg/tools/builtin/sessionplan"
 	"github.com/docker/docker-agent/pkg/tools/builtin/shell"
 	"github.com/docker/docker-agent/pkg/tools/builtin/tasks"
 	"github.com/docker/docker-agent/pkg/tools/builtin/think"
@@ -43,6 +46,12 @@ func DefaultToolsetCreators() map[string]teamloader.ToolsetCreator {
 		"plan": func(_ context.Context, _ latest.Toolset, _ string, _ *config.RuntimeConfig, _ string) (tools.ToolSet, error) {
 			return plan.CreateToolSet()
 		},
+		"session_plan": func(_ context.Context, _ latest.Toolset, _ string, _ *config.RuntimeConfig, _ string) (tools.ToolSet, error) {
+			return sessionplan.CreateToolSet()
+		},
+		"session_context": func(_ context.Context, _ latest.Toolset, _ string, _ *config.RuntimeConfig, _ string) (tools.ToolSet, error) {
+			return sessioncontext.CreateToolSet()
+		},
 		"memory": func(_ context.Context, toolset latest.Toolset, parentDir string, runConfig *config.RuntimeConfig, configName string) (tools.ToolSet, error) {
 			return memory.CreateToolSet(toolset, parentDir, runConfig, configName)
 		},
@@ -51,6 +60,9 @@ func DefaultToolsetCreators() map[string]teamloader.ToolsetCreator {
 		},
 		"shell": func(ctx context.Context, toolset latest.Toolset, _ string, runConfig *config.RuntimeConfig, _ string) (tools.ToolSet, error) {
 			return shell.CreateToolSet(ctx, toolset, runConfig)
+		},
+		"background_jobs": func(ctx context.Context, toolset latest.Toolset, _ string, runConfig *config.RuntimeConfig, _ string) (tools.ToolSet, error) {
+			return backgroundjobs.CreateToolSet(ctx, toolset, runConfig)
 		},
 		"script": func(ctx context.Context, toolset latest.Toolset, _ string, runConfig *config.RuntimeConfig, _ string) (tools.ToolSet, error) {
 			return shell.CreateScriptToolSet(ctx, toolset, runConfig)

@@ -1,10 +1,10 @@
 ---
 title: "Hooks"
 description: "Run shell commands at various points during agent execution for deterministic control over behavior."
-permalink: /configuration/hooks/
+keywords: docker agent, ai agents, configuration, yaml, hooks
+weight: 60
+canonical: https://docs.docker.com/ai/docker-agent/configuration/hooks/
 ---
-
-# Hooks
 
 _Run shell commands at various points during agent execution for deterministic control over behavior._
 
@@ -12,23 +12,20 @@ _Run shell commands at various points during agent execution for deterministic c
 
 Hooks allow you to execute shell commands or scripts at key points in an agent's lifecycle. They provide deterministic control that works alongside the LLM's behavior, enabling validation, logging, environment setup, and more.
 
-<div class="callout callout-info" markdown="1">
-<div class="callout-title">Use Cases
-</div>
-
-- Validate or transform tool inputs before execution
-- Log all tool calls to an audit file
-- Block dangerous operations based on custom rules
-- Validate, redact, or enrich user prompts before they reach the model
-- Programmatically approve or deny tool calls without prompting the user
-- Steer or veto context-window compaction
-- Audit sub-agent handoffs in multi-agent setups
-- Set up the environment when a session starts
-- Clean up resources when a session ends
-- Log or validate model responses before returning to the user
-- Send external notifications on agent errors or warnings
-
-</div>
+> [!NOTE]
+> **Use Cases**
+>
+> - Validate or transform tool inputs before execution
+> - Log all tool calls to an audit file
+> - Block dangerous operations based on custom rules
+> - Validate, redact, or enrich user prompts before they reach the model
+> - Programmatically approve or deny tool calls without prompting the user
+> - Steer or veto context-window compaction
+> - Audit sub-agent handoffs in multi-agent setups
+> - Set up the environment when a session starts
+> - Clean up resources when a session ends
+> - Log or validate model responses before returning to the user
+> - Send external notifications on agent errors or warnings
 
 ## Hook Types
 
@@ -63,13 +60,14 @@ docker-agent dispatches the following hook events:
 | `on_tool_approval_decision` | After the runtime's approval chain (yolo / permissions / readonly / ask) resolves | No         |
 | `worktree_create`           | After `docker agent run --worktree` creates a git worktree, before the session     | Yes        |
 
-<div class="callout callout-info" markdown="1">
-<div class="callout-title">Two compaction events
-</div>
-  <p><code>pre_compact</code> and <code>before_compaction</code> both fire just before a compaction. <code>pre_compact</code> is the original event and is best-suited to <em>steering</em> the LLM-generated summary by appending guidance via <code>additional_context</code>. <code>before_compaction</code> is the newer, structured event: it carries the input/output token counts, the model's context limit, and a <code>compaction_reason</code> so handlers can decide based on real session pressure, and it can <em>replace</em> the LLM-generated summary verbatim via <code>hook_specific_output.summary</code>.</p>
-</div>
+> [!NOTE]
+> **Two compaction events**
+>
+> `pre_compact` and `before_compaction` both fire just before a compaction. `pre_compact` is the original event and is best-suited to _steering_ the LLM-generated summary by appending guidance via `additional_context`. `before_compaction` is the newer, structured event: it carries the input/output token counts, the model's context limit, and a `compaction_reason` so handlers can decide based on real session pressure, and it can _replace_ the LLM-generated summary verbatim via `hook_specific_output.summary`.
 
 ## Configuration
+
+You can configure hooks directly in an agent YAML file under the agent's `hooks:` block:
 
 ```yaml
 agents:
@@ -119,6 +117,56 @@ agents:
           command: "./scripts/alert.sh"
 ```
 
+## Global (user-level) hooks
+
+Global hooks let you apply the same hook configuration to every agent you run. Define them in your user config file at `~/.config/cagent/config.yaml` under `settings.hooks`:
+
+```yaml
+# ~/.config/cagent/config.yaml
+settings:
+  hooks:
+    session_start:
+      - type: command
+        command: "~/.config/cagent/hooks/session-start.sh"
+    pre_compact:
+      - type: command
+        command: "~/.config/cagent/hooks/pre-compact.sh"
+    pre_tool_use:
+      - matcher: "shell"
+        hooks:
+          - type: command
+            command: "~/.config/cagent/hooks/check-shell.sh"
+```
+
+Global hooks use the same schema as agent-level hooks and are additive. If an event is configured in multiple places, all matching hooks run in this order:
+
+1. Agent-config hooks from the agent YAML
+2. Global hooks from `settings.hooks`
+3. Hook drop-ins from `<config-dir>/hooks.d/` (lexicographic file order)
+4. CLI hooks from `--hook-*` flags
+
+Global hooks cannot be suppressed by an individual agent. Use them for user-wide audit logging, personal guardrails, notifications, and setup/cleanup behavior that should apply everywhere.
+
+### Hook drop-in files (`hooks.d`)
+
+External tools that integrate with docker-agent (terminal emulators, IDEs, audit or observability sidecars) shouldn't have to rewrite your `config.yaml` to install a hook. Instead, docker-agent also loads every `*.yaml` / `*.yml` file from the `hooks.d` directory next to your user config (default: `~/.config/cagent/hooks.d/`). Each file is a standalone hooks block with the same schema as the content of `settings.hooks`:
+
+```yaml
+# ~/.config/cagent/hooks.d/50-mytool.yaml
+session_start:
+  - type: command
+    command: mytool notify --event session-start
+stop:
+  - type: command
+    command: mytool notify --event stop
+```
+
+- Files are loaded in lexicographic order and merged additively after `settings.hooks` (use numeric prefixes like `10-`, `50-` to control ordering).
+- A malformed file is skipped with a logged warning; a broken drop-in never breaks a run.
+- Installing an integration means writing one self-contained file; uninstalling means deleting it. No shared-file edits, no conflicts between tools.
+
+The config directory can be relocated with the `--config-dir` flag or the `DOCKER_AGENT_CONFIG_DIR` (legacy `CAGENT_CONFIG_DIR`) environment variable, which external tools can use to locate `hooks.d` under non-default config dirs.
+
 ## Built-in Hooks
 
 In addition to shell `command` hooks, docker-agent ships a small library of **built-in hooks** — in-process Go functions that run without spawning a subprocess. They're invoked with `type: builtin`, where `command` is the builtin's registered name and `args` are passed through as the builtin's parameters.
@@ -159,19 +207,21 @@ Built-ins are typically zero-config and faster than equivalent shell hooks becau
 | `max_iterations`        | `before_llm_call`                                                                         | `["<N>"]` (required)  | Hard-stops the agent after `N` model calls. Stateless: the runtime supplies the iteration counter on every dispatch.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `snapshot`              | `session_start`, `turn_start`, `turn_end`, `pre_tool_use`, `post_tool_use`, `session_end` | _none_                | Records filesystem snapshots in a shadow git repo under the docker-agent data directory. No-op outside git repos; respects the source repo's ignore rules and skips newly-added files larger than 2 MiB.                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `redact_secrets`        | `pre_tool_use`, `before_llm_call`, `tool_response_transform`                              | _none_                | Scrubs detected secrets (API keys, tokens, private keys, …) out of tool call arguments, outgoing chat content, and tool output. The same builtin handles all three events and dispatches on the event name. Auto-registered on all three events by `redact_secrets: true` on the agent — see [`examples/redact_secrets_hooks.yaml`](https://github.com/docker/docker-agent/blob/main/examples/redact_secrets_hooks.yaml) for the manual wiring.                                                                                                                                                                                     |
+| `limit_large_tool_results` | `tool_response_transform`, `session_end`                                               | _none_                | **Always-on safety hook** — automatically injected by the runtime, no configuration required. When a tool result from the `filesystem`, `shell`, `mcp`, or `a2a` categories exceeds 2,000 lines or 50 KiB, the full payload is written to a per-session temp file and replaced in the conversation with a notice plus a bounded tail (last 2,000 lines, up to 50 KiB). The `session_end` leg deletes the temp directory. Internal toolsets (`memory`, `plan`, `tasks`, `think`, …) are not affected. |
+| `safer_shell`           | `pre_tool_use` (with `preempt_yolo: true`)                                                | _none_                | Classifies shell commands against an embedded taxonomy. Destructive matches (rm -rf, docker volume rm, mkfs, …) get an Ask verdict with `blast_radius` / `category` metadata; known-safe reads (ls, git status, docker ps, …) flow through silently; everything else asks with `blast_radius=unknown`. Filters by tool name internally (no-op for non-shell calls). Registered with `preempt_yolo: true` so the entry fires before `Decide()` / `--yolo`. Auto-registered by `safer: true` on a shell toolset — see [`examples/shell_safer.yaml`](https://github.com/docker/docker-agent/blob/main/examples/shell_safer.yaml). |
 | `unload`                | `on_agent_switch`                                                                         | _none_                | POSTs `{"model": "<id>"}` to each of the previous agent's DMR model endpoints (`/_unload` by default, overridable per-model via `unload_api`) to free the GPU/RAM the just-departing model was holding. Pure HTTP — reads the model snapshot the runtime ships on `on_agent_switch` and depends on no provider-specific runtime state. Non-DMR providers (OpenAI, Anthropic, …) are silently skipped, so cross-provider chains are safe. Errors are logged and swallowed; agent switching never blocks on a slow or unreachable engine (each call has a 10 s timeout). See [`examples/unload_on_switch.yaml`](https://github.com/docker/docker-agent/blob/main/examples/unload_on_switch.yaml). |
 
-<div class="callout callout-info" markdown="1">
-<div class="callout-title">Per-turn vs. per-session
-</div>
-  <p><code>turn_start</code> built-ins recompute every turn and contribute <strong>transient</strong> context that is <em>not</em> persisted to the session — perfect for fast-moving signals like the date or current git state. <code>session_start</code> built-ins run once per session and their context <strong>persists</strong> across turns and resumes — pick this for stable context like the OS user or the initial directory listing.</p>
-</div>
+> [!NOTE]
+> **Per-turn vs. per-session**
+>
+> `turn_start` built-ins recompute every turn and contribute **transient** context that is _not_ persisted to the session — perfect for fast-moving signals like the date or current git state. `session_start` built-ins run once per session and their context **persists** across turns and resumes — pick this for stable context like the OS user or the initial directory listing.
 
-<div class="callout callout-info" markdown="1">
-<div class="callout-title">Auto-injected built-ins
-</div>
-  <p>The agent flags <code>add_date: true</code>, <code>add_environment_info: true</code>, <code>add_prompt_files: [...]</code>, and <code>redact_secrets: true</code> are shorthands that auto-register the matching built-in hook. You don't need to repeat them under <code>hooks:</code> — set the flag <em>or</em> the hook entry(ies), not both. <code>redact_secrets: true</code> auto-registers the same builtin on all three of <code>pre_tool_use</code>, <code>before_llm_call</code>, and <code>tool_response_transform</code>; you can also wire any subset of them by hand for finer-grained control (per-tool matchers, ordering with other rewriters, …).</p>
-</div>
+> [!NOTE]
+> **Auto-injected built-ins**
+>
+> The agent flags `add_date: true`, `add_environment_info: true`, `add_prompt_files: [...]`, and `redact_secrets: true` are shorthands that auto-register the matching built-in hook. You don't need to repeat them under `hooks:` — set the flag _or_ the hook entry(ies), not both. `redact_secrets: true` auto-registers the same builtin on all three of `pre_tool_use`, `before_llm_call`, and `tool_response_transform`; you can also wire any subset of them by hand for finer-grained control (per-tool matchers, ordering with other rewriters, …).
+>
+> `limit_large_tool_results` is injected unconditionally by the runtime — it is always active and cannot be removed from config.
 
 A minimal snapshot wiring looks like this:
 
@@ -199,13 +249,12 @@ settings:
 
 Omit `snapshot` or set it to `false` to leave automatic snapshots off; manually configured snapshot hooks still run.
 
-See [`examples/snapshot_hooks.yaml`](https://github.com/docker/docker-agent/blob/main/examples/snapshot_hooks.yaml) for a complete snapshot hook configuration. For an overview of the snapshot feature and the `/undo` / `/snapshots` commands, see [Snapshots]({{ '/features/snapshots/' | relative_url }}).
+See [`examples/snapshot_hooks.yaml`](https://github.com/docker/docker-agent/blob/main/examples/snapshot_hooks.yaml) for a complete snapshot hook configuration. For an overview of the snapshot feature and the `/undo` / `/snapshots` commands, see [Snapshots](../../features/snapshots/index.md).
 
-<div class="callout callout-warning" markdown="1">
-<div class="callout-title">Two flavors of <code>max_iterations</code>
-</div>
-  <p>The <code>max_iterations</code> agent field has its own UX (it pauses and asks the user to resume past the limit). The <code>max_iterations</code> built-in hook is a <strong>hard stop with no resume</strong> — when its counter trips, the agent terminates with a block decision. Use the agent field for interactive sessions and the built-in hook to enforce non-negotiable caps in unattended runs.</p>
-</div>
+> [!WARNING]
+> **Two flavors of `max_iterations`**
+>
+> The `max_iterations` agent field has its own UX (it pauses and asks the user to resume past the limit). The `max_iterations` built-in hook is a **hard stop with no resume** — when its counter trips, the agent terminates with a block decision. Use the agent field for interactive sessions and the built-in hook to enforce non-negotiable caps in unattended runs.
 
 ## Matcher Patterns
 
@@ -287,9 +336,9 @@ Notes:
 - `steering_messages` is only populated for `user_steering_messages_submit`. It carries the user messages the runtime just drained from the steering queue — messages submitted while the agent was already working (mid-turn, after the model stopped, or while idle before the first model call).
 - `prompt` is also populated for `user_followup_submit`, carrying the text of the dequeued follow-up message (a user message queued for end-of-turn processing via the FollowUp API / queue, as opposed to mid-turn steering).
 - `stop_response` carries the model's final assistant text for `stop`, `after_llm_call`, and `subagent_stop`. `last_user_message` carries the latest user message at dispatch time.
-- `model_id` is populated for `after_llm_call` (and `before_llm_call`) in the canonical `<provider>/<model>` form (e.g. `anthropic/claude-sonnet-4-5`). For harness agents, `model_id` is the harness label (e.g. `claude-code`) rather than a canonical model name — see [Coding Harnesses]({{ '/features/harnesses/' | relative_url }}).
+- `model_id` is populated for `after_llm_call` (and `before_llm_call`) in the canonical `<provider>/<model>` form (e.g. `anthropic/claude-sonnet-4-5`). For harness agents, `model_id` is the harness label (e.g. `claude-code`) rather than a canonical model name — see [Coding Harnesses](../../features/harnesses/index.md).
 - `usage` and `cost` are populated for `after_llm_call` only. `usage` is the per-call token usage object (`input_tokens`, `output_tokens`, `cached_input_tokens`, `cached_write_tokens`, and `reasoning_tokens` — the last is itself omitted for non-reasoning models); the whole object is absent when the provider reported no usage. `cost` is the USD price of that one model response. For a **native model call** it is the price computed from `usage` and the model's pricing table, and equals the cost the session records for the turn: it is **absent** when the response is unpriced (no pricing data on file, or no usage) and an explicit `0` for a priced call that was free — so a present `cost` is authoritative and an absent one means "unpriced", with no need to cross-check `usage`. (For harness agents the meaning differs — see the next note.) A cost ledger can therefore record per-call spend from the payload alone, without subscribing to the runtime event channel.
-- For [harness agents]({{ '/features/harnesses/' | relative_url }}), `cost` is the harness's own reported total for the call rather than a computed price, and is present only when the harness reported a non-zero cost (some harnesses, e.g. `codex`, report token counts but no cost — those turns carry `usage` with `cost` absent, even though the recorded message stores `0`).
+- For [harness agents](../../features/harnesses/index.md), `cost` is the harness's own reported total for the call rather than a computed price, and is present only when the harness reported a non-zero cost (some harnesses, e.g. `codex`, report token counts but no cost — those turns carry `usage` with `cost` absent, even though the recorded message stores `0`).
 - `after_llm_call` fires for **every** model call, including calls made inside sub-sessions (transferred tasks, background agents, skills). For those, `session_id` is the sub-session's id. Summing `cost` across `after_llm_call` events therefore captures **all** spend, including sub-sessions (and even sub-sessions that error before their cost is persisted). Do **not** add a separately-queried session cost total on top: the runtime's own total already recurses into and includes completed sub-session spend, so combining the two double-counts. Pick one source — the summed hook costs — as the authoritative ledger.
 - `context_limit` is `0` when the model definition is unavailable (treat `0` as "unknown", not as a real limit).
 - `approval_decision` is one of `allow`, `deny`, `canceled`. `approval_source` is a stable classifier of which step decided (e.g. `yolo`, `session_permissions_allow`, `session_permissions_deny`, `team_permissions_allow`, `team_permissions_deny`, `pre_tool_use_hook_allow`, `pre_tool_use_hook_deny`, `readonly_hint`, `user_approved`, `user_approved_session`, `user_approved_tool`, `user_rejected`, `context_canceled`).
@@ -337,7 +386,52 @@ The `hook_specific_output` for `pre_tool_use` (and `permission_request`) support
 | `permission_decision`        | string | `allow`, `deny`, or `ask`               |
 | `permission_decision_reason` | string | Explanation for the decision            |
 | `updated_input`              | object | Modified tool input (replaces original) |
-| `metadata`                   | object | (`permission_request` only) string key/value annotations merged onto the tool-call confirmation prompt — see below |
+| `metadata`                   | object | (`permission_request` and `pre_tool_use` entries with `preempt_yolo: true` only) string key/value annotations merged onto the tool-call confirmation prompt — see below |
+
+### Preempting `--yolo` from `pre_tool_use`
+
+`pre_tool_use` entries default to firing AFTER the deterministic approval
+pipeline (`--yolo` / permission allow-rules / read-only hint), so a yolo'd
+call skips them entirely. For security-critical checks that MUST run on
+every call regardless of `--yolo`, set `preempt_yolo: true` on the matcher
+entry:
+
+```yaml
+hooks:
+  pre_tool_use:
+    - matcher: "*"
+      preempt_yolo: true
+      hooks:
+        - type: builtin
+          command: safer_shell
+```
+
+The entry then fires in a dedicated stage 0 BEFORE `Decide()`:
+
+- `deny` rejects the call outright; the user is not prompted.
+- `ask` forces user confirmation. The default `pre_tool_use` lane and
+  `permission_request` are skipped on this path so a policy-level
+  allow there can't override the security verdict.
+- `allow` is advisory — the pipeline still runs `Decide()` and the
+  rest of `pre_tool_use`. Same shape as a regular `allow` on the
+  default lane, just observed earlier.
+- No verdict (empty `permission_decision`) falls through.
+
+Hook crashes on a `preempt_yolo: true` entry fail closed (deny), matching
+the default `pre_tool_use` posture.
+
+Preempting entries can attach structured context via
+`hook_specific_output.metadata` (`map[string]string`). The runtime merges
+that into the tool-call confirmation event. Two key conventions get
+special rendering in the TUI confirmation prompt:
+
+- `blast_radius` — one of `low`, `medium`, `high`, `unknown`. Rendered
+  as a colored severity badge (green / yellow / red / muted).
+- `category` — taxonomy tag (e.g. `fs-delete`, `dk-volume-del`).
+
+Plus a free-form `reason` key that the dialog shows as supporting
+context. Other keys render as plain text. Last writer wins on key
+clashes across hooks. The `safer_shell` builtin uses this convention.
 
 ### Tool-Response-Transform Specific Output
 
@@ -403,19 +497,17 @@ hooks:
 
 `pre_tool_use` is fail-closed for safety: a failed pre-tool hook blocks the tool call regardless of `on_error`.
 
-<div class="callout callout-warning" markdown="1">
-<div class="callout-title">Performance
-</div>
-  <p>Hooks run synchronously and can slow down agent execution. Keep hook scripts fast and efficient. Consider using <code>suppress_output: true</code> for logging hooks to reduce noise.</p>
+`working_dir` and `env` apply to `command` and `builtin` hooks. For `builtin` hooks, `working_dir` is resolved with the same logic as `command` hooks (absolute path wins; relative paths join onto the executor directory). `working_dir` accepts `~`, `$VAR`, `${VAR}` and `${env.VAR}`; `env` values expand only the plain `${env.VAR}` form (resolved from the OS process environment), keeping any other `$` literal (see [Variable Expansion in Config Fields](../overview/index.md#variable-expansion-in-config-fields)). A `working_dir` that expands to an empty string (e.g. an unset variable) falls back to the executor's directory with a warning. For `model` hooks, both fields are accepted by the schema but have no effect: model hooks render a prompt template and call the LLM API directly — no subprocess is spawned and no file I/O is performed, so working directory and environment variables have no applicable semantics.
 
-</div>
+> [!WARNING]
+> **Performance**
+>
+> Hooks run synchronously and can slow down agent execution. Keep hook scripts fast and efficient. Consider using `suppress_output: true` for logging hooks to reduce noise.
 
-<div class="callout callout-info" markdown="1">
-<div class="callout-title">Session End and Cancellation
-</div>
-  <p><code>session_end</code> hooks are designed to run even when the session is interrupted (e.g., Ctrl+C). They are still subject to their configured timeout.</p>
-
-</div>
+> [!NOTE]
+> **Session End and Cancellation**
+>
+> `session_end` hooks are designed to run even when the session is interrupted (e.g., Ctrl+C). They are still subject to their configured timeout.
 
 ## Examples
 
@@ -616,7 +708,7 @@ At every transfer the runtime ships a snapshot of the previous agent's model end
 
 ### Worktree-Create: prepare an isolated checkout
 
-`worktree_create` fires once, just after `docker agent run --worktree[=name]` creates a fresh [git worktree]({{ '/features/cli/' | relative_url }}) and **before** the session starts. Each hook runs **inside** the new worktree — its working directory (and `cwd` in the input) is the fresh checkout — so setup commands operate on the new tree rather than your original one. The worktree path and branch are in `worktree_path` and `worktree_branch`, and `worktree_source_dir` carries the repository root it was branched from.
+`worktree_create` fires once, just after `docker agent run --worktree[=name]` creates a fresh [git worktree](../../features/cli/index.md) and **before** the session starts. Each hook runs **inside** the new worktree — its working directory (and `cwd` in the input) is the fresh checkout — so setup commands operate on the new tree rather than your original one. The worktree path and branch are in `worktree_path` and `worktree_branch`, and `worktree_source_dir` carries the repository root it was branched from.
 
 Use it to prepare the checkout before the agent begins: copy untracked files git won't carry over (`.env`, local config), install dependencies, or warm caches. Because the worktree lives under the docker-agent data directory — not next to your checkout — resolve the original files through `worktree_source_dir` rather than a relative path. A hook may **abort the run** by returning `decision: block` / `{"continue": false}` / exit code 2 (for example, when a setup step fails); plain stdout is surfaced as additional context.
 
@@ -837,9 +929,7 @@ $ docker agent run agentcatalog/coder \
   --hook-pre-tool-use "./audit.sh"
 ```
 
-<div class="callout callout-info" markdown="1">
-<div class="callout-title">Merging behavior
-</div>
-  <p>CLI hooks are <strong>appended</strong> to any hooks already defined in the agent's YAML config. They don't replace existing hooks. Pre/post-tool-use hooks added via CLI match all tools (equivalent to <code>matcher: "*"</code>).</p>
-
-</div>
+> [!NOTE]
+> **Merging behavior**
+>
+> Agent-config, global, drop-in, and CLI hooks are additive. For each event, hooks run in this order: agent-config hooks first, then global hooks from `settings.hooks`, then [hook drop-ins](#hook-drop-in-files-hooksd) from `hooks.d/`, then CLI hooks. No source replaces another, and individual agents cannot opt out of global hooks.

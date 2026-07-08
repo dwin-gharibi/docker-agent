@@ -25,20 +25,23 @@ type agentDetailsDialog struct {
 
 	agent runtime.AgentDetails
 	cfg   runtime.AgentConfigInfo
+	usage *runtime.Usage
 }
 
 // NewAgentDetailsDialog creates the read-only Agent Inspector: an agent's
 // static configuration combined with live state. It shows the description, a
-// "current agent" line when live, model/fallback/thinking, the sub-agent,
-// handoff and skill lists, configured limits and enabled option flags, every
-// toolset with a status marker and its tools (live names when started,
-// otherwise the declared allow-list), and the slash commands it defines. The
-// instruction/system prompt is deliberately omitted. cfg carries the inspector
-// dataset resolved by the caller (pass the zero value to omit those sections,
-// e.g. for remote runtimes). The dialog is opened by right-clicking (or
-// Ctrl+clicking) an agent in the sidebar.
-func NewAgentDetailsDialog(a runtime.AgentDetails, cfg runtime.AgentConfigInfo) Dialog {
-	d := &agentDetailsDialog{agent: a, cfg: cfg}
+// "current agent" line when live, model/fallback/thinking, the agent's latest
+// known context usage, the sub-agent, handoff and skill lists, configured
+// limits and enabled option flags, every toolset with a status marker and its
+// tools (live names when started, otherwise the declared allow-list), and the
+// slash commands it defines. The instruction/system prompt is deliberately
+// omitted. cfg carries the inspector dataset resolved by the caller (pass the
+// zero value to omit those sections, e.g. for remote runtimes); usage carries
+// the agent's latest token-usage snapshot (pass nil when the agent has not
+// run). The dialog is opened by right-clicking (or Ctrl+clicking) an agent in
+// the sidebar.
+func NewAgentDetailsDialog(a runtime.AgentDetails, cfg runtime.AgentConfigInfo, usage *runtime.Usage) Dialog {
+	d := &agentDetailsDialog{agent: a, cfg: cfg, usage: usage}
 	d.readOnlyScrollDialog = newReadOnlyScrollDialog(
 		readOnlyScrollDialogSize{widthPercent: 70, minWidth: 50, maxWidth: 100, heightPercent: 80, heightMax: 40},
 		d.renderLines,
@@ -75,6 +78,9 @@ func (d *agentDetailsDialog) renderLines(contentWidth, _ int) []string {
 	if gv := toolcommon.ThinkingGaugeValue(d.agent.Thinking); gv != "" {
 		lines = append(lines, styles.BoldStyle.Render("Thinking:")+" "+gv)
 	}
+	if l := d.contextLine(); l != "" {
+		lines = append(lines, l)
+	}
 
 	lines = append(lines, d.inlineList(contentWidth, "Sub-agents", d.cfg.SubAgents)...)
 	lines = append(lines, d.inlineList(contentWidth, "Handoffs", d.cfg.Handoffs)...)
@@ -101,6 +107,24 @@ func (d *agentDetailsDialog) modelText() string {
 		return d.agent.Model
 	}
 	return d.agent.Provider
+}
+
+// contextLine renders the agent's latest known context usage as
+// "Context: 12.3K of 128.0K tokens (10%)", falling back to a bare token count
+// when the context limit is unknown (e.g. harness-backed agents). It returns
+// "" when no usage has been recorded yet — the agent has not run in this
+// session, as a delegated sub-agent, or as a background agent task.
+func (d *agentDetailsDialog) contextLine() string {
+	if d.usage == nil || d.usage.ContextLength <= 0 {
+		return ""
+	}
+	tokens := toolcommon.FormatTokenCount(d.usage.ContextLength)
+	if d.usage.ContextLimit <= 0 {
+		return detailField("Context", tokens+" tokens")
+	}
+	percent := float64(d.usage.ContextLength) / float64(d.usage.ContextLimit) * 100
+	return detailField("Context", fmt.Sprintf("%s of %s tokens (%.0f%%)",
+		tokens, toolcommon.FormatTokenCount(d.usage.ContextLimit), percent))
 }
 
 // inlineList renders a compact "Label (N): a, b, c" summary wrapped to the

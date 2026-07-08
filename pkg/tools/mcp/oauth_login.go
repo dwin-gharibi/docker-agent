@@ -64,12 +64,14 @@ func PerformOAuthLogin(ctx context.Context, serverURL string) error {
 	}
 
 	// Set up the callback server for the redirect.
-	callbackServer, err := NewCallbackServer()
+	callbackServer, err := NewCallbackServer(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to create callback server: %w", err)
 	}
 	defer func() {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		// Detach from ctx's cancellation (the request may be done) but
+		// keep its trace context for the shutdown.
+		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
 		if err := callbackServer.Shutdown(shutdownCtx); err != nil {
 			slog.ErrorContext(ctx, "Failed to shutdown callback server", "error", err)

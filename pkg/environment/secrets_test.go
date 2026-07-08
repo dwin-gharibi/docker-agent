@@ -22,6 +22,8 @@ func writeNothing() func(string) error {
 }
 
 func TestRunSecretsProvider(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name     string
 		key      string

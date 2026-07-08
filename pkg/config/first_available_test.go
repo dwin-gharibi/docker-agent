@@ -180,8 +180,10 @@ func TestResolveFirstAvailableModels_NoCandidateAvailable(t *testing.T) {
 	assert.Contains(t, err.Error(), "Set the environment variables for at least one candidate:")
 	assert.Contains(t, err.Error(), " - anthropic/claude-sonnet-4-6: ANTHROPIC_API_KEY")
 	assert.Contains(t, err.Error(), " - openai/gpt-5: OPENAI_API_KEY")
-	assert.Contains(t, err.Error(), "Set one of those groups of environment variables")
-	assert.Contains(t, err.Error(), "Run docker agent with --env-from-file")
+	assert.Contains(t, err.Error(), "export ANTHROPIC_API_KEY=<value>")
+	assert.Contains(t, err.Error(), "--env-from-file")
+	assert.Contains(t, err.Error(), environment.SecretsDocsURL)
+	assert.Contains(t, err.Error(), environment.ModelSetupDocsURL)
 }
 
 func TestResolveFirstAvailableModels_InvalidCandidate(t *testing.T) {
@@ -263,9 +265,24 @@ func TestValidateFirstAvailable(t *testing.T) {
 			wantErr: "cannot be combined with title_model",
 		},
 		{
+			name:    "combined with compaction_model",
+			model:   latest.ModelConfig{FirstAvailable: []string{"openai/gpt-5"}, CompactionModel: "openai/gpt-4o-mini"},
+			wantErr: "cannot be combined with compaction_model",
+		},
+		{
+			name:    "combined with compaction_threshold",
+			model:   latest.ModelConfig{FirstAvailable: []string{"openai/gpt-5"}, CompactionThreshold: new(0.8)},
+			wantErr: "cannot be combined with compaction_threshold",
+		},
+		{
 			name:    "combined with token key",
 			model:   latest.ModelConfig{FirstAvailable: []string{"openai/gpt-5"}, TokenKey: "CUSTOM_API_KEY"},
 			wantErr: "cannot be combined with token_key",
+		},
+		{
+			name:    "combined with bypass_models_gateway",
+			model:   latest.ModelConfig{FirstAvailable: []string{"openai/gpt-5"}, BypassModelsGateway: true},
+			wantErr: "cannot be combined with bypass_models_gateway",
 		},
 		{
 			name:    "combined with model options",

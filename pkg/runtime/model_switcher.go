@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/docker/docker-agent/pkg/agent"
 	"github.com/docker/docker-agent/pkg/config/latest"
@@ -165,6 +166,13 @@ type ModelSwitcherConfig struct {
 	ProviderRegistry *provider.Registry
 	// AgentDefaultModels maps agent names to their configured default model references
 	AgentDefaultModels map[string]string
+	// ModelsStore is the models.dev catalog store used for the picker's
+	// pricing/context/modality metadata and the catalog listing. When set, the
+	// runtime adopts it instead of building its own (cold) lazy store, so a
+	// store the team loader already warmed is reused. Optional: a nil store
+	// falls back to the lazy default. An explicit WithModelStore takes
+	// precedence over this field.
+	ModelsStore ModelStore
 }
 
 // SetAgentModel implements [Runtime.SetAgentModel] for LocalRuntime.
@@ -186,6 +194,39 @@ func (r *LocalRuntime) SupportsModelSwitching() bool {
 // supports (see [modelinfo.SupportedThinkingLevels]), re-creates the
 // provider(s) with the new level, and installs them as a runtime override.
 func (r *LocalRuntime) CycleAgentThinkingLevel(ctx context.Context, agentName string) (effort.Level, error) {
+	return r.applyAgentThinkingLevel(ctx, agentName, func(supported []effort.Level, current effort.Level) (effort.Level, error) {
+		// Clamp first so a configured level the model does not support re-enters
+		// the cycle at the nearest supported tier instead of resetting it.
+		return effort.NextSupportedLevel(supported, effort.Clamp(supported, current)), nil
+	})
+}
+
+// SetAgentThinkingLevel implements [Runtime.SetAgentThinkingLevel] for
+// LocalRuntime. The requested level must be one the agent's current model
+// supports; otherwise an error listing the supported levels is returned.
+func (r *LocalRuntime) SetAgentThinkingLevel(ctx context.Context, agentName string, level effort.Level) (effort.Level, error) {
+	return r.applyAgentThinkingLevel(ctx, agentName, func(supported []effort.Level, _ effort.Level) (effort.Level, error) {
+		if !slices.Contains(supported, level) {
+			return "", fmt.Errorf("thinking level %q is not supported by this model (supported: %s)", level, levelNames(supported))
+		}
+		return level, nil
+	})
+}
+
+// levelNames renders levels as a comma-separated list for error messages.
+func levelNames(levels []effort.Level) string {
+	names := make([]string, len(levels))
+	for i, l := range levels {
+		names[i] = string(l)
+	}
+	return strings.Join(names, ", ")
+}
+
+// applyAgentThinkingLevel resolves the agent's current model, asks pick to
+// choose the target level among the model's supported ones, re-creates the
+// effective provider(s) with that level, and installs them as a runtime
+// override.
+func (r *LocalRuntime) applyAgentThinkingLevel(ctx context.Context, agentName string, pick func(supported []effort.Level, current effort.Level) (effort.Level, error)) (effort.Level, error) {
 	if r.modelSwitcherCfg == nil {
 		return "", ErrUnsupported
 	}
@@ -206,10 +247,10 @@ func (r *LocalRuntime) CycleAgentThinkingLevel(ctx context.Context, agentName st
 	}
 
 	supported := modelinfo.SupportedThinkingLevels(baseCfg.Provider, baseCfg.Model)
-	// Clamp first so a configured level the model does not support re-enters
-	// the cycle at the nearest supported tier instead of resetting it.
-	current := effort.Clamp(supported, currentThinkingLevel(&baseCfg))
-	next := effort.NextSupportedLevel(supported, current)
+	next, err := pick(supported, currentThinkingLevel(&baseCfg))
+	if err != nil {
+		return "", err
+	}
 
 	// Re-create each effective provider (alloy models can have several) with
 	// the new thinking level so the override preserves the existing pool.
@@ -226,7 +267,7 @@ func (r *LocalRuntime) CycleAgentThinkingLevel(ctx context.Context, agentName st
 	}
 
 	a.SetModelOverride(newProviders...)
-	slog.InfoContext(ctx, "Cycled agent thinking level", "agent", agentName, "level", next)
+	slog.InfoContext(ctx, "Set agent thinking level", "agent", agentName, "level", next)
 	return next, nil
 }
 
@@ -463,18 +504,21 @@ func (r *LocalRuntime) resolveModelRefs(ctx context.Context, commaSeparatedRefs 
 
 // AvailableModels implements [Runtime.AvailableModels] for LocalRuntime.
 func (r *LocalRuntime) AvailableModels(ctx context.Context) []ModelChoice {
+	start := time.Now()
 	if r.modelSwitcherCfg == nil {
+		slog.DebugContext(ctx, "Runtime available models skipped; model switching not configured", "duration", time.Since(start))
 		return nil
 	}
 
 	// Get the current agent's default model reference
 	currentAgentDefault := ""
 	if r.modelSwitcherCfg.AgentDefaultModels != nil {
-		currentAgentDefault = r.modelSwitcherCfg.AgentDefaultModels[r.CurrentAgentName()]
+		currentAgentDefault = r.modelSwitcherCfg.AgentDefaultModels[r.currentAgentName()]
 	}
 
 	var choices []ModelChoice
 
+	configuredStart := time.Now()
 	// Add all configured models, marking the current agent's default
 	for name, cfg := range r.modelSwitcherCfg.Models {
 		choice := ModelChoice{
@@ -490,6 +534,7 @@ func (r *LocalRuntime) AvailableModels(ctx context.Context) []ModelChoice {
 		}
 		choices = append(choices, choice)
 	}
+	configuredDuration := time.Since(configuredStart)
 
 	// Prefer live gateway discovery when a models gateway is configured:
 	// the picker then only shows the models actually served by the
@@ -497,29 +542,64 @@ func (r *LocalRuntime) AvailableModels(ctx context.Context) []ModelChoice {
 	// gateway doesn't expose /v1/models, fall back to the models.dev
 	// catalog filtered by available credentials.
 	if r.modelSwitcherCfg.ModelsGateway != "" {
-		if gatewayChoices, ok := r.buildGatewayChoices(ctx); ok {
-			return append(choices, gatewayChoices...)
+		gatewayStart := time.Now()
+		gatewayChoices, ok := r.buildGatewayChoices(ctx)
+		slog.DebugContext(ctx, "Runtime available models gateway discovery completed",
+			"duration", time.Since(gatewayStart),
+			"ok", ok,
+			"models", len(gatewayChoices),
+		)
+		if ok {
+			result := append(choices, gatewayChoices...)
+			slog.DebugContext(ctx, "Runtime available models completed",
+				"duration", time.Since(start),
+				"configured_duration", configuredDuration,
+				"configured_models", len(choices),
+				"gateway_models", len(gatewayChoices),
+				"catalog_models", 0,
+				"dmr_models", 0,
+				"models", len(result),
+			)
+			return result
 		}
 	}
 
 	// Surface models pulled locally in Docker Model Runner. They are not part
-	// of the models.dev catalog, so without this a working local DMR setup
+	// of the models.dev catalog, so without this a working local Model Runner
 	// would show nothing selectable in the picker.
-	choices = append(choices, r.buildDMRChoices(ctx)...)
+	dmrStart := time.Now()
+	dmrChoices := r.buildDMRChoices(ctx)
+	dmrDuration := time.Since(dmrStart)
+	choices = append(choices, dmrChoices...)
 
 	// Append models.dev catalog entries filtered by available credentials
+	catalogStart := time.Now()
 	catalogChoices := r.buildCatalogChoices(ctx)
+	catalogDuration := time.Since(catalogStart)
 	choices = append(choices, catalogChoices...)
 
+	slog.DebugContext(ctx, "Runtime available models completed",
+		"duration", time.Since(start),
+		"configured_duration", configuredDuration,
+		"dmr_duration", dmrDuration,
+		"catalog_duration", catalogDuration,
+		"configured_models", len(r.modelSwitcherCfg.Models),
+		"dmr_models", len(dmrChoices),
+		"catalog_models", len(catalogChoices),
+		"models", len(choices),
+	)
 	return choices
 }
 
 // buildCatalogChoices builds ModelChoice entries from the models.dev catalog,
 // filtered by supported providers and available credentials.
 func (r *LocalRuntime) buildCatalogChoices(ctx context.Context) []ModelChoice {
+	start := time.Now()
+	dbStart := time.Now()
 	db, err := r.modelsStore.GetDatabase(ctx)
+	dbDuration := time.Since(dbStart)
 	if err != nil {
-		slog.DebugContext(ctx, "Failed to get models.dev database for catalog", "error", err)
+		slog.DebugContext(ctx, "Failed to get models.dev database for catalog", "duration", time.Since(start), "database_duration", dbDuration, "error", err)
 		return nil
 	}
 
@@ -533,35 +613,50 @@ func (r *LocalRuntime) buildCatalogChoices(ctx context.Context) []ModelChoice {
 	}
 
 	// Check which providers the user has credentials for
+	providerStart := time.Now()
 	availableProviders := r.getAvailableProviders(ctx)
+	providerDuration := time.Since(providerStart)
 	if len(availableProviders) == 0 {
-		slog.DebugContext(ctx, "No provider credentials available, skipping catalog")
+		slog.DebugContext(ctx, "No provider credentials available, skipping catalog",
+			"duration", time.Since(start),
+			"database_duration", dbDuration,
+			"provider_duration", providerDuration,
+		)
 		return nil
 	}
 
+	iterateStart := time.Now()
 	var choices []ModelChoice
+	var providerCount, modelCount, skippedProvider, skippedNonText, skippedEmbedding, skippedDuplicate int
 	for providerID, prov := range db.Providers {
+		providerCount++
 		// Check if this provider is supported and user has credentials
 		dockerAgentProvider, supported := mapModelsDevProvider(providerID)
 		if !supported {
+			skippedProvider++
 			continue
 		}
 		if !availableProviders[dockerAgentProvider] {
+			skippedProvider++
 			continue
 		}
 
 		for modelID, model := range prov.Models {
+			modelCount++
 			// Skip models that don't output text (not suitable for chat)
 			if !slices.Contains(model.Modalities.Output, "text") {
+				skippedNonText++
 				continue
 			}
 			// Skip embedding models (not suitable for chat)
 			if isEmbeddingModel(model.Family, model.Name) {
+				skippedEmbedding++
 				continue
 			}
 
 			ref := dockerAgentProvider + "/" + modelID
 			if existingRefs[ref] {
+				skippedDuplicate++
 				continue
 			}
 			existingRefs[ref] = true
@@ -578,7 +673,20 @@ func (r *LocalRuntime) buildCatalogChoices(ctx context.Context) []ModelChoice {
 		}
 	}
 
-	slog.DebugContext(ctx, "Built catalog choices", "count", len(choices), "available_providers", len(availableProviders))
+	slog.DebugContext(ctx, "Built catalog choices",
+		"duration", time.Since(start),
+		"database_duration", dbDuration,
+		"provider_duration", providerDuration,
+		"iterate_duration", time.Since(iterateStart),
+		"providers", providerCount,
+		"models_seen", modelCount,
+		"models", len(choices),
+		"available_providers", len(availableProviders),
+		"skipped_provider", skippedProvider,
+		"skipped_non_text", skippedNonText,
+		"skipped_embedding", skippedEmbedding,
+		"skipped_duplicate", skippedDuplicate,
+	)
 	return choices
 }
 
@@ -633,6 +741,20 @@ func isEmbeddingModel(family, name string) bool {
 	return strings.Contains(familyLower, "embed") || strings.Contains(nameLower, "embed")
 }
 
+// aliasBaseURLResolvable reports whether every environment variable referenced
+// by a (possibly templated) alias base URL is set. Aliases like Cloudflare's
+// account/gateway-scoped endpoints need extra vars beyond their token; without
+// them the alias would resolve to a broken URL, so it must not be advertised as
+// an available provider (mirrors the preflight check in config.gather).
+func aliasBaseURLResolvable(ctx context.Context, baseURL string, env environment.Provider) bool {
+	for _, name := range environment.Refs(baseURL) {
+		if v, _ := env.Get(ctx, name); v == "" {
+			return false
+		}
+	}
+	return true
+}
+
 // getAvailableProviders returns a map of provider names that the user has credentials for.
 func (r *LocalRuntime) getAvailableProviders(ctx context.Context) map[string]bool {
 	available := make(map[string]bool)
@@ -656,9 +778,16 @@ func (r *LocalRuntime) getAvailableProviders(ctx context.Context) map[string]boo
 		if alias.TokenEnvVar == "" {
 			continue
 		}
-		if key, _ := env.Get(ctx, alias.TokenEnvVar); key != "" {
-			available[name] = true
+		if key, _ := env.Get(ctx, alias.TokenEnvVar); key == "" {
+			continue
 		}
+		// A templated base URL (e.g. Cloudflare's account/gateway-scoped
+		// endpoint) also needs the vars it references; without them the alias
+		// resolves to a broken URL, so don't advertise its catalog models.
+		if !aliasBaseURLResolvable(ctx, alias.BaseURL, env) {
+			continue
+		}
+		available[name] = true
 	}
 
 	// Check core providers with well-known env vars
@@ -742,6 +871,10 @@ func (r *LocalRuntime) createProviderFromConfig(ctx context.Context, cfg *latest
 		if err == nil && m != nil {
 			opts = append(opts, options.WithMaxTokens(m.Limit.Output))
 		}
+	}
+
+	if store, ok := r.modelsStore.(*modelsdev.Store); ok && store != nil {
+		opts = append(opts, options.WithModelsDevStore(store))
 	}
 
 	registry := r.modelSwitcherCfg.ProviderRegistry

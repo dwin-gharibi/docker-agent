@@ -183,6 +183,29 @@ func TestListDMRModels_CachesFailure(t *testing.T) {
 	assert.Equal(t, int32(1), calls.Load(), "failures must be cached to avoid re-probing DMR on every picker open")
 }
 
+func TestListDMRModels_DoesNotCacheCallerCancellation(t *testing.T) {
+	t.Parallel()
+
+	var calls atomic.Int32
+	r := dmrRuntime(func(ctx context.Context) ([]string, error) {
+		calls.Add(1)
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return []string{"ai/qwen3:latest"}, nil
+	}, nil, nil)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err := r.listDMRModels(ctx)
+	require.Error(t, err)
+
+	ids, err := r.listDMRModels(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, []string{"ai/qwen3:latest"}, ids)
+	assert.Equal(t, int32(2), calls.Load(), "caller cancellation must not poison the DMR discovery cache")
+}
+
 func TestListDMRModels_CacheExpires(t *testing.T) {
 	t.Parallel()
 

@@ -12,6 +12,7 @@ import (
 )
 
 func TestCodeModeTool_Tools(t *testing.T) {
+	t.Parallel()
 	tool := &codeModeTool{}
 
 	toolSet, err := tool.Tools(t.Context())
@@ -93,6 +94,7 @@ func TestCodeModeTool_Tools(t *testing.T) {
 }
 
 func TestCodeModeTool_Instructions(t *testing.T) {
+	t.Parallel()
 	tool := &codeModeTool{}
 
 	instructions := tools.GetInstructions(tool)
@@ -101,6 +103,7 @@ func TestCodeModeTool_Instructions(t *testing.T) {
 }
 
 func TestCodeModeTool_StartStop(t *testing.T) {
+	t.Parallel()
 	inner := &testToolSet{}
 
 	tool := Wrap(inner)
@@ -121,6 +124,7 @@ func TestCodeModeTool_StartStop(t *testing.T) {
 }
 
 func TestCodeModeTool_CallHello(t *testing.T) {
+	t.Parallel()
 	tool := Wrap(&testToolSet{
 		tools: []tools.Tool{
 			{
@@ -140,7 +144,7 @@ func TestCodeModeTool_CallHello(t *testing.T) {
 		Function: tools.FunctionCall{
 			Arguments: `{"script":"return hello_world();"}`,
 		},
-	})
+	}, tools.NopRuntime{})
 	require.NoError(t, err)
 
 	var scriptResult ScriptResult
@@ -153,6 +157,7 @@ func TestCodeModeTool_CallHello(t *testing.T) {
 }
 
 func TestCodeModeTool_CallEcho(t *testing.T) {
+	t.Parallel()
 	type EchoArgs struct {
 		Message string `json:"message" jsonschema:"Message to echo"`
 	}
@@ -175,7 +180,7 @@ func TestCodeModeTool_CallEcho(t *testing.T) {
 		Function: tools.FunctionCall{
 			Arguments: `{"script":"return echo({'message':'ECHO'});"}`,
 		},
-	})
+	}, tools.NopRuntime{})
 	require.NoError(t, err)
 
 	var scriptResult ScriptResult
@@ -190,6 +195,7 @@ func TestCodeModeTool_CallEcho(t *testing.T) {
 // TestCodeModeTool_StartRollsBackOnError verifies that when one toolset fails
 // to start, all successfully-started toolsets are stopped (rolled back).
 func TestCodeModeTool_StartRollsBackOnError(t *testing.T) {
+	t.Parallel()
 	failing := &testToolSet{startErr: assert.AnError}
 	healthy := &testToolSet{}
 
@@ -205,6 +211,7 @@ func TestCodeModeTool_StartRollsBackOnError(t *testing.T) {
 // TestCodeModeTool_StartStopWrappedToolSet verifies that Start/Stop find
 // Startable through a StartableToolSet wrapper via tools.As.
 func TestCodeModeTool_StartStopWrappedToolSet(t *testing.T) {
+	t.Parallel()
 	inner := &testToolSet{}
 	wrapped := tools.NewStartable(inner)
 
@@ -248,6 +255,7 @@ func (t *testToolSet) Stop(context.Context) error {
 
 // TestCodeModeTool_SuccessNoToolCalls verifies that successful execution does not include tool calls.
 func TestCodeModeTool_SuccessNoToolCalls(t *testing.T) {
+	t.Parallel()
 	tool := Wrap(&testToolSet{
 		tools: []tools.Tool{
 			{
@@ -267,7 +275,7 @@ func TestCodeModeTool_SuccessNoToolCalls(t *testing.T) {
 		Function: tools.FunctionCall{
 			Arguments: `{"script":"return get_data();"}`,
 		},
-	})
+	}, tools.NopRuntime{})
 	require.NoError(t, err)
 
 	var scriptResult ScriptResult
@@ -281,6 +289,7 @@ func TestCodeModeTool_SuccessNoToolCalls(t *testing.T) {
 
 // TestCodeModeTool_FailureIncludesToolCalls verifies that failed execution includes tool call history.
 func TestCodeModeTool_FailureIncludesToolCalls(t *testing.T) {
+	t.Parallel()
 	tool := Wrap(&testToolSet{
 		tools: []tools.Tool{
 			{
@@ -307,7 +316,7 @@ func TestCodeModeTool_FailureIncludesToolCalls(t *testing.T) {
 		Function: tools.FunctionCall{
 			Arguments: `{"script":"var a = first_tool(); var b = second_tool(); throw new Error('runtime error');"}`,
 		},
-	})
+	}, tools.NopRuntime{})
 	require.NoError(t, err)
 
 	var scriptResult ScriptResult
@@ -331,6 +340,7 @@ func TestCodeModeTool_FailureIncludesToolCalls(t *testing.T) {
 
 // TestCodeModeTool_FailureIncludesToolError verifies that tool errors are captured in tool call history.
 func TestCodeModeTool_FailureIncludesToolError(t *testing.T) {
+	t.Parallel()
 	tool := Wrap(&testToolSet{
 		tools: []tools.Tool{
 			{
@@ -350,7 +360,7 @@ func TestCodeModeTool_FailureIncludesToolError(t *testing.T) {
 		Function: tools.FunctionCall{
 			Arguments: `{"script":"return failing_tool();"}`,
 		},
-	})
+	}, tools.NopRuntime{})
 	require.NoError(t, err)
 
 	var scriptResult ScriptResult
@@ -369,6 +379,7 @@ func TestCodeModeTool_FailureIncludesToolError(t *testing.T) {
 
 // TestCodeModeTool_FailureIncludesToolArguments verifies that tool arguments are captured.
 func TestCodeModeTool_FailureIncludesToolArguments(t *testing.T) {
+	t.Parallel()
 	type TestArgs struct {
 		Value string `json:"value" jsonschema:"Test value"`
 	}
@@ -393,7 +404,7 @@ func TestCodeModeTool_FailureIncludesToolArguments(t *testing.T) {
 		Function: tools.FunctionCall{
 			Arguments: `{"script":"tool_with_args({'value': 'test123'}); throw new Error('forced error');"}`,
 		},
-	})
+	}, tools.NopRuntime{})
 	require.NoError(t, err)
 
 	var scriptResult ScriptResult

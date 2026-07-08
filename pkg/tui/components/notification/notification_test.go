@@ -3,7 +3,6 @@ package notification
 import (
 	"strings"
 	"testing"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -14,6 +13,8 @@ import (
 )
 
 func TestNotification_InitialState(t *testing.T) {
+	t.Parallel()
+
 	n := New()
 
 	require.Empty(t, n.items)
@@ -21,13 +22,14 @@ func TestNotification_InitialState(t *testing.T) {
 }
 
 func TestNotification_AutoHideDurations(t *testing.T) {
-	require.Equal(t, defaultDuration, TypeSuccess.autoHideDuration())
-	require.Equal(t, defaultDuration, TypeInfo.autoHideDuration())
-	require.Equal(t, defaultDuration, TypeError.autoHideDuration())
-	require.Equal(t, defaultDuration, TypeWarning.autoHideDuration())
+	t.Parallel()
+
+	require.Equal(t, defaultDuration, New().autoHideDuration)
 }
 
 func TestNotification_Show(t *testing.T) {
+	t.Parallel()
+
 	n := New()
 
 	updated, cmd := n.Update(ShowMsg{Text: "Test notification"})
@@ -41,6 +43,8 @@ func TestNotification_Show(t *testing.T) {
 }
 
 func TestNotification_Hide(t *testing.T) {
+	t.Parallel()
+
 	n := New()
 
 	updated, _ := n.Update(ShowMsg{Text: "Test"})
@@ -54,6 +58,8 @@ func TestNotification_Hide(t *testing.T) {
 }
 
 func TestNotification_HideByID(t *testing.T) {
+	t.Parallel()
+
 	n := New()
 	updated, _ := n.Update(ShowMsg{Text: "first"})
 	updated, _ = updated.Update(ShowMsg{Text: "second"})
@@ -67,6 +73,8 @@ func TestNotification_HideByID(t *testing.T) {
 }
 
 func TestNotification_DismissByID(t *testing.T) {
+	t.Parallel()
+
 	n := New()
 	updated, _ := n.Update(ShowMsg{Text: "dismiss me", Type: TypeWarning})
 	id := updated.items[0].ID
@@ -78,6 +86,8 @@ func TestNotification_DismissByID(t *testing.T) {
 }
 
 func TestNotification_Position(t *testing.T) {
+	t.Parallel()
+
 	n := New()
 	n.SetSize(100, 50)
 	updated, _ := n.Update(ShowMsg{Text: "Test"})
@@ -89,6 +99,8 @@ func TestNotification_Position(t *testing.T) {
 }
 
 func TestNotification_GetLayer(t *testing.T) {
+	t.Parallel()
+
 	n := New()
 
 	require.Nil(t, n.GetLayer())
@@ -98,6 +110,8 @@ func TestNotification_GetLayer(t *testing.T) {
 }
 
 func TestNotification_AutoHideGeneration(t *testing.T) {
+	t.Parallel()
+
 	n := New()
 	updated, _ := n.Update(ShowMsg{Text: "auto", Type: TypeInfo})
 	id := updated.items[0].ID
@@ -109,6 +123,8 @@ func TestNotification_AutoHideGeneration(t *testing.T) {
 }
 
 func TestNotification_StaleTimerIgnored(t *testing.T) {
+	t.Parallel()
+
 	n := New()
 	n.SetSize(100, 50)
 	updated, _ := n.Update(ShowMsg{Text: "hover me", Type: TypeInfo})
@@ -126,12 +142,12 @@ func TestNotification_StaleTimerIgnored(t *testing.T) {
 }
 
 func TestNotification_HoverEnterLeaveRestartsTimer(t *testing.T) {
-	t.Cleanup(func(previous time.Duration) func() {
-		timerDuration = 0
-		return func() { timerDuration = previous }
-	}(timerDuration))
+	t.Parallel()
 
 	n := New()
+	// Zero duration so the auto-hide timer resolves promptly; set on this
+	// Manager only, so the test stays parallel-safe.
+	n.autoHideDuration = 0
 	n.SetSize(100, 50)
 	updated, _ := n.Update(ShowMsg{Text: "hover", Type: TypeInfo})
 	id := updated.items[0].ID
@@ -154,12 +170,12 @@ func TestNotification_HoverEnterLeaveRestartsTimer(t *testing.T) {
 }
 
 func TestNotification_WarningHoverEnterLeaveRestartsTimer(t *testing.T) {
-	t.Cleanup(func(previous time.Duration) func() {
-		timerDuration = 0
-		return func() { timerDuration = previous }
-	}(timerDuration))
+	t.Parallel()
 
 	n := New()
+	// Zero duration so the auto-hide timer resolves promptly; set on this
+	// Manager only, so the test stays parallel-safe.
+	n.autoHideDuration = 0
 	n.SetSize(100, 50)
 	updated, showCmd := n.Update(ShowMsg{Text: "warning", Type: TypeWarning})
 	require.NotNil(t, showCmd)
@@ -183,6 +199,8 @@ func TestNotification_WarningHoverEnterLeaveRestartsTimer(t *testing.T) {
 }
 
 func TestNotification_CloseButtonHit(t *testing.T) {
+	t.Parallel()
+
 	n := New()
 	n.SetSize(100, 50)
 	updated, _ := n.Update(ShowMsg{Text: "close", Type: TypeWarning})
@@ -195,6 +213,8 @@ func TestNotification_CloseButtonHit(t *testing.T) {
 }
 
 func TestNotification_CloseButtonHitWithWideText(t *testing.T) {
+	t.Parallel()
+
 	n := New()
 	n.SetSize(100, 50)
 	updated, _ := n.Update(ShowMsg{Text: "wide 🚀 漢字", Type: TypeInfo})
@@ -209,6 +229,8 @@ func TestNotification_CloseButtonHitWithWideText(t *testing.T) {
 }
 
 func TestNotification_HandleClickDismissesOnlyCloseButton(t *testing.T) {
+	t.Parallel()
+
 	n := New()
 	n.SetSize(100, 50)
 	updated, _ := n.Update(ShowMsg{Text: "click", Type: TypeWarning})
@@ -230,6 +252,8 @@ func TestNotification_HandleClickDismissesOnlyCloseButton(t *testing.T) {
 }
 
 func TestNotification_StackingLayerBasics(t *testing.T) {
+	t.Parallel()
+
 	n := New()
 	n.SetSize(100, 50)
 	updated, _ := n.Update(ShowMsg{Text: "old"})
@@ -247,6 +271,8 @@ func TestNotification_StackingLayerBasics(t *testing.T) {
 }
 
 func TestNotification_CloseGlyphAndPaddingRegression(t *testing.T) {
+	t.Parallel()
+
 	n := New()
 	updated, _ := n.Update(ShowMsg{Text: "glyph"})
 	plain := ansi.Strip(updated.View())
@@ -260,12 +286,12 @@ func TestNotification_CloseGlyphAndPaddingRegression(t *testing.T) {
 }
 
 func TestNotification_WarningsAutoHide(t *testing.T) {
-	t.Cleanup(func(previous time.Duration) func() {
-		timerDuration = 0
-		return func() { timerDuration = previous }
-	}(timerDuration))
+	t.Parallel()
 
 	n := New()
+	// Zero duration so the auto-hide timer resolves promptly; set on this
+	// Manager only, so the test stays parallel-safe.
+	n.autoHideDuration = 0
 	updated, cmd := n.Update(ShowMsg{Text: "warn", Type: TypeWarning})
 	require.NotNil(t, cmd)
 	require.Len(t, updated.items, 1)
@@ -282,12 +308,12 @@ func TestNotification_WarningsAutoHide(t *testing.T) {
 }
 
 func TestNotification_ErrorAutoHides(t *testing.T) {
-	t.Cleanup(func(previous time.Duration) func() {
-		timerDuration = 0
-		return func() { timerDuration = previous }
-	}(timerDuration))
+	t.Parallel()
 
 	n := New()
+	// Zero duration so the auto-hide timer resolves promptly; set on this
+	// Manager only, so the test stays parallel-safe.
+	n.autoHideDuration = 0
 	updated, cmd := n.Update(ShowMsg{Text: "err", Type: TypeError})
 	require.NotNil(t, cmd)
 	require.Len(t, updated.items, 1)
@@ -304,12 +330,12 @@ func TestNotification_ErrorAutoHides(t *testing.T) {
 }
 
 func TestNotification_ErrorHoverEnterLeaveRestartsTimer(t *testing.T) {
-	t.Cleanup(func(previous time.Duration) func() {
-		timerDuration = 0
-		return func() { timerDuration = previous }
-	}(timerDuration))
+	t.Parallel()
 
 	n := New()
+	// Zero duration so the auto-hide timer resolves promptly; set on this
+	// Manager only, so the test stays parallel-safe.
+	n.autoHideDuration = 0
 	n.SetSize(100, 50)
 	updated, _ := n.Update(ShowMsg{Text: "err", Type: TypeError})
 	id := updated.items[0].ID
@@ -335,12 +361,12 @@ func TestNotification_ErrorHoverEnterLeaveRestartsTimer(t *testing.T) {
 }
 
 func TestNotification_ErrorAutodetectAutoHides(t *testing.T) {
-	t.Cleanup(func(previous time.Duration) func() {
-		timerDuration = 0
-		return func() { timerDuration = previous }
-	}(timerDuration))
+	t.Parallel()
 
 	n := New()
+	// Zero duration so the auto-hide timer resolves promptly; set on this
+	// Manager only, so the test stays parallel-safe.
+	n.autoHideDuration = 0
 	updated, cmd := n.Update(ShowMsg{Text: "operation failed"})
 
 	require.NotNil(t, cmd)
@@ -348,6 +374,8 @@ func TestNotification_ErrorAutodetectAutoHides(t *testing.T) {
 }
 
 func TestNotification_BodyHit(t *testing.T) {
+	t.Parallel()
+
 	n := New()
 	n.SetSize(100, 50)
 	updated, _ := n.Update(ShowMsg{Text: "copy this", Type: TypeInfo})
@@ -367,6 +395,8 @@ func TestNotification_BodyHit(t *testing.T) {
 }
 
 func TestNotification_CopyHitRequiresHoveredBody(t *testing.T) {
+	t.Parallel()
+
 	n := New()
 	n.SetSize(120, 50)
 	updated, _ := n.Update(ShowMsg{Text: "copy this", Type: TypeInfo})
@@ -394,6 +424,8 @@ func TestNotification_CopyHitRequiresHoveredBody(t *testing.T) {
 }
 
 func TestNotification_HoverAndCopiedLabels(t *testing.T) {
+	t.Parallel()
+
 	n := New()
 	n.SetSize(120, 50)
 	updated, _ := n.Update(ShowMsg{Text: "copyable notification with enough width", Type: TypeInfo})
@@ -415,6 +447,8 @@ func TestNotification_HoverAndCopiedLabels(t *testing.T) {
 }
 
 func TestNotification_HideAllClearsCopiedState(t *testing.T) {
+	t.Parallel()
+
 	n := New()
 	n.SetSize(100, 50)
 	updated, _ := n.Update(ShowMsg{Text: "copy", Type: TypeInfo})

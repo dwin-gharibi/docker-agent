@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	stdruntime "runtime"
@@ -16,16 +17,51 @@ import (
 	"github.com/docker/docker-agent/pkg/team"
 )
 
+// harnessBinDir holds shim executables (codex, claude) shared by every
+// harness test. The shims are written exactly once (see TestMain) and
+// each cats a per-harness ".out" data file that individual tests
+// overwrite. Because the executable bytes never change, the OS
+// validates each shim only on first exec instead of paying that cost
+// for a brand-new file in every test (~0.25s per first-time exec on
+// macOS).
+var harnessBinDir string
+
+func TestMain(m *testing.M) {
+	//nolint:forbidigo // TestMain has no *testing.T, so t.TempDir is unavailable.
+	dir, err := os.MkdirTemp("", "harness-shim")
+	if err != nil {
+		panic(err)
+	}
+	for _, name := range []string{"codex", "claude"} {
+		script := fmt.Sprintf("#!/bin/sh\ncat %q\n", filepath.Join(dir, name+".out"))
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(script), 0o755); err != nil {
+			panic(err)
+		}
+	}
+	harnessBinDir = dir
+
+	code := m.Run()
+	_ = os.RemoveAll(dir)
+	os.Exit(code)
+}
+
+// useHarnessShim points PATH at the shared shim directory and sets the
+// stdout the named harness program ("codex" or "claude") emits when the
+// runtime invokes it. PATH is prepended, not replaced, so the shim can
+// still resolve "cat".
+func useHarnessShim(t *testing.T, name, out string) {
+	t.Helper()
+	require.NoError(t, os.WriteFile(filepath.Join(harnessBinDir, name+".out"), []byte(out), 0o600))
+	t.Setenv("PATH", harnessBinDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
 func TestHarnessAgentRunStream(t *testing.T) {
 	if stdruntime.GOOS == "windows" {
 		t.Skip("shell script shim test")
 	}
 
-	binDir := t.TempDir()
-	writeHarnessScript(t, binDir, "codex", `#!/bin/sh
-printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"harness done"}}'
+	useHarnessShim(t, "codex", `{"type":"item.completed","item":{"type":"agent_message","text":"harness done"}}
 `)
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	rt := newHarnessRuntime(t, "codex")
 	sess := session.New(session.WithUserMessage("do the task"))
@@ -48,12 +84,9 @@ func TestHarnessToolCallCompletes(t *testing.T) {
 		t.Skip("shell script shim test")
 	}
 
-	binDir := t.TempDir()
-	writeHarnessScript(t, binDir, "codex", `#!/bin/sh
-printf '%s\n' '{"type":"item.started","item":{"type":"command_execution","command":"npm test"}}'
-printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"tests passed"}}'
+	useHarnessShim(t, "codex", `{"type":"item.started","item":{"type":"command_execution","command":"npm test"}}
+{"type":"item.completed","item":{"type":"agent_message","text":"tests passed"}}
 `)
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	rt := newHarnessRuntime(t, "codex")
 	events := collectRuntimeEvents(t, rt, session.New(session.WithUserMessage("run tests")))
@@ -80,12 +113,9 @@ func TestHarnessShowsClaudeCodeToolCallAlongsideText(t *testing.T) {
 		t.Skip("shell script shim test")
 	}
 
-	binDir := t.TempDir()
-	writeHarnessScript(t, binDir, "claude", `#!/bin/sh
-printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"I will create the file."},{"type":"tool_use","id":"toolu_write","name":"Write","input":{"file_path":"/tmp/poem.md","content":"roses"}}]}}'
-printf '%s\n' '{"type":"result","result":"created"}'
+	useHarnessShim(t, "claude", `{"type":"assistant","message":{"content":[{"type":"text","text":"I will create the file."},{"type":"tool_use","id":"toolu_write","name":"Write","input":{"file_path":"/tmp/poem.md","content":"roses"}}]}}
+{"type":"result","result":"created"}
 `)
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	rt := newHarnessRuntime(t, "claude-code")
 	events := collectRuntimeEvents(t, rt, session.New(session.WithUserMessage("write poem")))
@@ -113,15 +143,12 @@ func TestHarnessSuppressesDuplicateClaudeCodeToolCall(t *testing.T) {
 		t.Skip("shell script shim test")
 	}
 
-	binDir := t.TempDir()
-	writeHarnessScript(t, binDir, "claude", `#!/bin/sh
-printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_1","name":"Bash"}}}'
-printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"command\":\"uname -a\"}"}}}'
-printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_stop","index":1}}'
-printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"uname -a"}}]}}'
-printf '%s\n' '{"type":"result","result":"done"}'
+	useHarnessShim(t, "claude", `{"type":"stream_event","event":{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_1","name":"Bash"}}}
+{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"command\":\"uname -a\"}"}}}
+{"type":"stream_event","event":{"type":"content_block_stop","index":1}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"uname -a"}}]}}
+{"type":"result","result":"done"}
 `)
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	rt := newHarnessRuntime(t, "claude-code")
 	events := collectRuntimeEvents(t, rt, session.New(session.WithUserMessage("run uname")))
@@ -146,14 +173,11 @@ func TestHarnessSuppressesReplayedClaudeCodeFinalText(t *testing.T) {
 		t.Skip("shell script shim test")
 	}
 
-	binDir := t.TempDir()
-	writeHarnessScript(t, binDir, "claude", `#!/bin/sh
-printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Hello"}}}'
-printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":" world"}}}'
-printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"Hello world"}]}}'
-printf '%s\n' '{"type":"result","result":"Hello world"}'
+	useHarnessShim(t, "claude", `{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Hello"}}}
+{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":" world"}}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Hello world"}]}}
+{"type":"result","result":"Hello world"}
 `)
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	rt := newHarnessRuntime(t, "claude-code")
 	events := collectRuntimeEvents(t, rt, session.New(session.WithUserMessage("say hello")))
@@ -167,15 +191,10 @@ printf '%s\n' '{"type":"result","result":"Hello world"}'
 	assert.Equal(t, []string{"Hello", " world"}, chunks)
 }
 
-func writeHarnessScript(t *testing.T, dir, name, content string) {
-	t.Helper()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0o755))
-}
-
 func newHarnessRuntime(t *testing.T, harnessType string) *LocalRuntime {
 	t.Helper()
 	root := agent.New("root", "You are an external coder.", agent.WithHarness(&latest.HarnessConfig{Type: harnessType}))
-	rt, err := NewLocalRuntime(team.New(team.WithAgents(root)), WithSessionCompaction(false), WithModelStore(mockModelStore{}))
+	rt, err := NewLocalRuntime(t.Context(), team.New(team.WithAgents(root)), WithSessionCompaction(false), WithModelStore(mockModelStore{}))
 	require.NoError(t, err)
 	return rt
 }

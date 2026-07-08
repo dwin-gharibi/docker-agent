@@ -1,10 +1,12 @@
 ---
 title: "Tips & Best Practices"
 description: "Expert guidance for building effective, efficient, and secure agents."
-permalink: /guides/tips/
+keywords: docker agent, ai agents, guides, tips & best practices
+weight: 10
+canonical: https://docs.docker.com/ai/docker-agent/guides/tips/
+aliases:
+  - /ai/docker-agent/best-practices/
 ---
-
-# Tips & Best Practices
 
 _Expert guidance for building effective, efficient, and secure agents._
 
@@ -178,7 +180,7 @@ toolsets:
   - type: think # Useful for models without native reasoning
 ```
 
-The agent uses it as a scratchpad for planning and decision-making. If your model already supports a [thinking budget]({{ '/configuration/models/#thinking-budget' | relative_url }}) (e.g., Claude with extended thinking, OpenAI o-series, Gemini with thinking enabled), you don't need this tool — the model can reason internally.
+The agent uses it as a scratchpad for planning and decision-making. If your model already supports a [thinking budget](../../configuration/models/index.md#thinking-budget) (e.g., Claude with extended thinking, OpenAI o-series, Gemini with thinking enabled), you don't need this tool — the model can reason internally.
 
 ## Security Tips
 
@@ -205,7 +207,7 @@ $ docker agent run agent.yaml --yolo
 
 ### Combine Permissions with Sandbox
 
-For defense in depth, use both permissions and [sandbox mode]({{ '/configuration/sandbox/' | relative_url }}):
+For defense in depth, use both permissions and [sandbox mode](../../configuration/sandbox/index.md):
 
 ```yaml
 agents:
@@ -234,7 +236,7 @@ docker-agent run --sandbox agent.yaml
 
 ### Set Global Permission Guardrails
 
-Use [global permissions]({{ '/configuration/permissions/' | relative_url }}#global-permissions) in your user config to enforce safety rules across every agent:
+Use [global permissions](../../configuration/permissions/index.md#global-permissions) in your user config to enforce safety rules across every agent:
 
 ```yaml
 # ~/.config/cagent/config.yaml
@@ -276,22 +278,21 @@ agents:
 
 Understand the difference between `sub_agents` and `handoffs`:
 
-<div class="cards">
-  <div class="card" style="cursor:default;">
-    <h3>sub_agents (transfer_task)</h3>
-    <p>Delegates task to a child in a sub-session, waits for result, then continues. Hierarchical — the parent remains in control.</p>
-    <pre style="margin-top:12px"><code class="language-yaml">sub_agents: [researcher, writer]</code></pre>
-  </div>
-  <div class="card" style="cursor:default;">
-    <h3>handoffs (peer-to-peer)</h3>
-    <p>Hands off the entire conversation to another agent in the same session. The active agent switches and sees the full history. Agents can form cycles.</p>
-    <pre style="margin-top:12px"><code class="language-yaml">handoffs:
-  - specialist
-  - summarizer</code></pre>
-  </div>
-</div>
+- **`sub_agents` (transfer_task)** — delegates a task to a child in a sub-session, waits for the result, then continues. Hierarchical: the parent remains in control.
 
-See <a href="{{ '/concepts/multi-agent/' | relative_url }}">Multi-Agent Systems</a> for a detailed comparison.
+  ```yaml
+  sub_agents: [researcher, writer]
+  ```
+
+- **`handoffs` (peer-to-peer)** — hands off the entire conversation to another agent in the same session. The active agent switches and sees the full history. Agents can form cycles.
+
+  ```yaml
+  handoffs:
+    - specialist
+    - summarizer
+  ```
+
+See [Multi-Agent Systems](../../concepts/multi-agent/index.md) for a detailed comparison.
 
 ### Give Sub-Agents Clear Descriptions
 
@@ -375,6 +376,59 @@ settings:
 ```
 
 This model is used when you run `docker agent run` without a config file.
+
+### Get Desktop Notifications with Hooks
+
+Long-running agents shouldn't require staring at the terminal. Add [global hooks](../../configuration/hooks/index.md#global-user-level-hooks) to your user config so every agent notifies you when it needs attention or finishes:
+
+```yaml
+# ~/.config/cagent/config.yaml
+settings:
+  hooks:
+    # Agent is waiting for your input (question, approval prompt, ...)
+    on_user_input:
+      - type: command
+        command: osascript -e 'display notification "Agent needs your input" with title "docker-agent"'
+
+    # Agent finished responding
+    stop:
+      - type: command
+        command: osascript -e 'display notification "Task finished" with title "docker-agent"'
+```
+
+On Linux, replace `osascript` with `notify-send`:
+
+```yaml
+command: notify-send "docker-agent" "Agent needs your input"
+```
+
+Hooks inherit docker-agent's environment, so this works as-is from a desktop terminal. In detached contexts (SSH, tmux started outside your desktop session, containers), `notify-send` needs the session's `DISPLAY` and `DBUS_SESSION_BUS_ADDRESS` to reach the notification daemon, and fails silently without them. Pass them with the per-hook `env` option:
+
+```yaml
+on_user_input:
+  - type: command
+    command: notify-send "docker-agent" "Agent needs your input"
+    env:
+      DISPLAY: ":0"
+      DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/1000/bus"
+```
+
+To also get alerted on errors and warnings, hook the `notification` event and read the message from the JSON payload on stdin:
+
+```yaml
+settings:
+  hooks:
+    notification:
+      - type: command
+        timeout: 10
+        command: |
+          MESSAGE=$(cat | jq -r '.notification_message // "Agent error"')
+          osascript -e "display notification \"$MESSAGE\" with title \"docker-agent\""
+```
+
+If a sound is enough, set `settings: { sound: true }` instead — docker-agent plays a failure sound when a task errors, and a success sound when a task that ran longer than `sound_threshold` seconds (default 10) completes.
+
+See the [Hooks documentation](../../configuration/hooks/index.md) for the full list of events, their payloads, and per-hook options (`env`, `working_dir`, `timeout`).
 
 ### GitHub PR Reviewer Example
 

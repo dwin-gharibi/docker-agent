@@ -2,12 +2,25 @@ package provider
 
 import (
 	"cmp"
+	"context"
 	"log/slog"
 	"maps"
 
 	"github.com/docker/docker-agent/pkg/config/latest"
+	"github.com/docker/docker-agent/pkg/environment"
 	"github.com/docker/docker-agent/pkg/modelinfo"
 )
+
+// expandModelConfigEnv substitutes ${env.X} / ${X} references in the model
+// config's value-bearing fields (model, base_url) against the runtime
+// environment. createDirectProvider calls it on the cloned, defaults-applied
+// config so every leaf provider (direct, routed, fallback, title) dials the
+// resolved endpoint and sends the resolved model id. See issue #2261.
+func expandModelConfigEnv(ctx context.Context, cfg *latest.ModelConfig, env environment.Provider) error {
+	return cfg.ExpandEnv(func(s string) (string, error) {
+		return environment.Expand(ctx, s, env)
+	})
+}
 
 // ---------------------------------------------------------------------------
 // Provider-type resolution

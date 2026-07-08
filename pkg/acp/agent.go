@@ -126,7 +126,7 @@ func (a *Agent) Initialize(ctx context.Context, params acp.InitializeRequest) (a
 }
 
 // newRuntime creates a new runtime using the default agent.
-func (a *Agent) newRuntime(workingDir string) (runtime.Runtime, *agent.Agent, error) {
+func (a *Agent) newRuntime(ctx context.Context, workingDir string) (runtime.Runtime, *agent.Agent, error) {
 	if a.team == nil {
 		return nil, nil, errors.New("agent not initialized")
 	}
@@ -142,13 +142,13 @@ func (a *Agent) newRuntime(workingDir string) (runtime.Runtime, *agent.Agent, er
 		runtime.WithProviderRegistry(a.providerRegistry),
 		// Match the CLI tracer scope; without this the ACP-mode
 		// runtime's `startSpan` is a no-op for every runtime.* span.
-		runtime.WithTracer(otel.Tracer("cagent")),
+		runtime.WithTracer(otel.Tracer(version.AppName)),
 	}
 	if workingDir != "" {
 		opts = append(opts, runtime.WithWorkingDir(workingDir))
 	}
 
-	rt, err := runtime.New(a.team, opts...)
+	rt, err := runtime.New(ctx, a.team, opts...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -158,8 +158,8 @@ func (a *Agent) newRuntime(workingDir string) (runtime.Runtime, *agent.Agent, er
 // registerSession stores a session in the active sessions map.
 func (a *Agent) registerSession(acpSess *Session) {
 	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.sessions[acpSess.id] = acpSess
-	a.mu.Unlock()
 }
 
 // registerSessionIfAbsent stores acpSess only if no session with the same id
@@ -202,7 +202,7 @@ func (a *Agent) NewSession(ctx context.Context, params acp.NewSessionRequest) (a
 		return acp.NewSessionResponse{}, err
 	}
 
-	rt, defaultAgent, err := a.newRuntime(workingDir)
+	rt, defaultAgent, err := a.newRuntime(ctx, workingDir)
 	if err != nil {
 		return acp.NewSessionResponse{}, err
 	}
@@ -332,7 +332,7 @@ func (a *Agent) ResumeSession(ctx context.Context, params acp.ResumeSessionReque
 		return acp.ResumeSessionResponse{}, err
 	}
 
-	rt, _, err := a.newRuntime(sess.WorkingDir)
+	rt, _, err := a.newRuntime(ctx, sess.WorkingDir)
 	if err != nil {
 		return acp.ResumeSessionResponse{}, err
 	}
@@ -420,8 +420,8 @@ func (a *Agent) Prompt(ctx context.Context, params acp.PromptRequest) (acp.Promp
 	}
 
 	a.mu.Lock()
+	defer a.mu.Unlock()
 	acpSess.cancel = nil
-	a.mu.Unlock()
 
 	return acp.PromptResponse{StopReason: acp.StopReasonEndTurn}, nil
 }

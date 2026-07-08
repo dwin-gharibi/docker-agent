@@ -1,6 +1,6 @@
 agents:
   root:
-    model: anthropic/claude-3-7-sonnet-20250219
+    model: anthropic/claude-sonnet-4-5
     description: Expert developer
     instruction: |
       You are an expert developer, your only purpose in life is to help the user with their query.

@@ -1,6 +1,6 @@
 agents:
   root:
-    model: anthropic/claude-3-7-sonnet-20250219
+    model: anthropic/claude-sonnet-4-5
     description: Notion Expert
     instruction: You are an AI assistant with expertise in the Notion project's documentation.
     toolsets:

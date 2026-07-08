@@ -24,7 +24,7 @@ type mockRuntime struct {
 func (m *mockRuntime) CurrentAgentTools(context.Context) ([]tools.Tool, error) {
 	return m.tools, nil
 }
-func (m *mockRuntime) CurrentAgentName() string                           { return "test" }
+func (m *mockRuntime) CurrentAgentName(context.Context) string            { return "test" }
 func (m *mockRuntime) CurrentAgentToolsetStatuses() []tools.ToolsetStatus { return nil }
 func (m *mockRuntime) RestartToolset(context.Context, string) error       { return nil }
 func (m *mockRuntime) CurrentAgentInfo(context.Context) CurrentAgentInfo {
@@ -35,7 +35,7 @@ func (m *mockRuntime) CurrentAgentInfo(context.Context) CurrentAgentInfo {
 	}
 }
 
-func (m *mockRuntime) SetCurrentAgent(string) error {
+func (m *mockRuntime) SetCurrentAgent(context.Context, string) error {
 	return nil
 }
 func (m *mockRuntime) EmitStartupInfo(context.Context, *session.Session, EventSink) {}
@@ -75,19 +75,24 @@ func (m *mockRuntime) ExecuteMCPPrompt(context.Context, string, map[string]strin
 func (m *mockRuntime) UpdateSessionTitle(context.Context, *session.Session, string) error {
 	return nil
 }
-func (m *mockRuntime) TitleGenerator() *sessiontitle.Generator             { return nil }
-func (m *mockRuntime) Close() error                                        { return nil }
-func (m *mockRuntime) Steer(QueuedMessage) error                           { return nil }
-func (m *mockRuntime) FollowUp(QueuedMessage) error                        { return nil }
-func (m *mockRuntime) QueueStatus() QueueStatus                            { return QueueStatus{} }
-func (m *mockRuntime) TogglePause(context.Context) (bool, error)           { return false, nil }
-func (m *mockRuntime) SetAgentModel(context.Context, string, string) error { return nil }
+func (m *mockRuntime) TitleGenerator(context.Context) *sessiontitle.Generator { return nil }
+func (m *mockRuntime) Close() error                                           { return nil }
+func (m *mockRuntime) Steer(context.Context, QueuedMessage) error             { return nil }
+func (m *mockRuntime) FollowUp(context.Context, QueuedMessage) error          { return nil }
+func (m *mockRuntime) QueueStatus() QueueStatus                               { return QueueStatus{} }
+func (m *mockRuntime) TogglePause(context.Context) (bool, error)              { return false, nil }
+func (m *mockRuntime) SetAgentModel(context.Context, string, string) error    { return nil }
 func (m *mockRuntime) CycleAgentThinkingLevel(context.Context, string) (effort.Level, error) {
+	return "", ErrUnsupported
+}
+
+func (m *mockRuntime) SetAgentThinkingLevel(context.Context, string, effort.Level) (effort.Level, error) {
 	return "", ErrUnsupported
 }
 func (m *mockRuntime) AvailableModels(context.Context) []ModelChoice { return nil }
 func (m *mockRuntime) SupportsModelSwitching() bool                  { return false }
 func (m *mockRuntime) OnToolsChanged(func(Event))                    {}
+func (m *mockRuntime) OnBackgroundEvent(func(Event))                 {}
 
 func (m *mockRuntime) RegenerateTitle(context.Context, *session.Session, chan Event) {
 }
@@ -231,7 +236,7 @@ func TestResolveCommand_ToolCommand(t *testing.T) {
 		tools: []tools.Tool{
 			{
 				Name: "echo_tool",
-				Handler: func(_ context.Context, _ tools.ToolCall) (*tools.ToolCallResult, error) {
+				Handler: func(_ context.Context, _ tools.ToolCall, _ tools.Runtime) (*tools.ToolCallResult, error) {
 					return tools.ResultSuccess("hello from tool"), nil
 				},
 			},
@@ -252,7 +257,7 @@ func TestResolveCommand_ToolCommandWithArgs(t *testing.T) {
 		tools: []tools.Tool{
 			{
 				Name: "greet_tool",
-				Handler: func(_ context.Context, tc tools.ToolCall) (*tools.ToolCallResult, error) {
+				Handler: func(_ context.Context, tc tools.ToolCall, _ tools.Runtime) (*tools.ToolCallResult, error) {
 					// Parse the args to verify they're passed correctly
 					return tools.ResultSuccess("Hello, " + tc.Function.Arguments), nil
 				},
@@ -275,7 +280,7 @@ func TestResolveCommand_ToolCommandWithQuotedArgs(t *testing.T) {
 		tools: []tools.Tool{
 			{
 				Name: "search_tool",
-				Handler: func(_ context.Context, tc tools.ToolCall) (*tools.ToolCallResult, error) {
+				Handler: func(_ context.Context, tc tools.ToolCall, _ tools.Runtime) (*tools.ToolCallResult, error) {
 					return tools.ResultSuccess("searched: " + tc.Function.Arguments), nil
 				},
 			},
@@ -314,7 +319,7 @@ func TestResolveCommand_CombinedPositionalAndTool(t *testing.T) {
 		tools: []tools.Tool{
 			{
 				Name: "check_tool",
-				Handler: func(_ context.Context, _ tools.ToolCall) (*tools.ToolCallResult, error) {
+				Handler: func(_ context.Context, _ tools.ToolCall, _ tools.Runtime) (*tools.ToolCallResult, error) {
 					return tools.ResultSuccess("check_output"), nil
 				},
 			},
@@ -340,6 +345,8 @@ func TestResolveCommand_ExtraArgsAppended(t *testing.T) {
 }
 
 func TestTokenize(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name     string
 		input    string
@@ -364,6 +371,8 @@ func TestTokenize(t *testing.T) {
 }
 
 func TestParseToolArgs(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name     string
 		input    string
@@ -436,6 +445,8 @@ func TestParseToolArgs(t *testing.T) {
 }
 
 func TestParseValue(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name     string
 		input    string
@@ -462,6 +473,8 @@ func TestParseValue(t *testing.T) {
 }
 
 func TestParseToolCommands(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name        string
 		instruction string
@@ -561,7 +574,7 @@ func TestResolveCommand_NestedParentheses(t *testing.T) {
 		tools: []tools.Tool{
 			{
 				Name: "shell",
-				Handler: func(_ context.Context, tc tools.ToolCall) (*tools.ToolCallResult, error) {
+				Handler: func(_ context.Context, tc tools.ToolCall, _ tools.Runtime) (*tools.ToolCallResult, error) {
 					// Return the arguments to verify they're parsed correctly
 					return tools.ResultSuccess("args: " + tc.Function.Arguments), nil
 				},
@@ -583,7 +596,7 @@ func TestResolveCommand_MultipleNestedParens(t *testing.T) {
 		tools: []tools.Tool{
 			{
 				Name: "tool",
-				Handler: func(_ context.Context, tc tools.ToolCall) (*tools.ToolCallResult, error) {
+				Handler: func(_ context.Context, tc tools.ToolCall, _ tools.Runtime) (*tools.ToolCallResult, error) {
 					return tools.ResultSuccess(tc.Function.Arguments), nil
 				},
 			},

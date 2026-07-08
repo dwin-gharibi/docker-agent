@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,7 +18,7 @@ import (
 	"github.com/docker/docker-agent/pkg/effort"
 )
 
-const Version = "11"
+const Version = "12"
 
 // Config represents the entire configuration file
 type Config struct {
@@ -424,6 +426,74 @@ type HarnessConfig struct {
 	Thinking bool `json:"thinking,omitempty"`
 }
 
+// InstructionFiles holds one or more instruction file paths. It accepts both
+// a single string (`instruction_file: prompt.md`) and a list of strings
+// (`instruction_file: [intro.md, rules.md]`) in YAML and JSON. Empty strings
+// are dropped on decode, so `instruction_file: ""` and `instruction_file: [""]`
+// both decode to nil (treated as absent). A single path is marshalled back as
+// a scalar, and an empty value is omitted entirely, so configs round-trip
+// unchanged.
+type InstructionFiles []string
+
+func (f *InstructionFiles) unmarshal(scalar, list func(any) error) error {
+	var one string
+	if err := scalar(&one); err == nil {
+		*f = nonEmptyInstructionFiles(one)
+		return nil
+	}
+	var many []string
+	if err := list(&many); err != nil {
+		return errors.New("instruction_file must be a string or a list of strings")
+	}
+	*f = nonEmptyInstructionFiles(many...)
+	return nil
+}
+
+// nonEmptyInstructionFiles returns the given paths with empty strings dropped,
+// or nil when nothing remains. This keeps the list form consistent with the
+// scalar form, where `instruction_file: ""` is treated as absent rather than a
+// path to resolve.
+func nonEmptyInstructionFiles(paths ...string) InstructionFiles {
+	var out InstructionFiles
+	for _, p := range paths {
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func (f *InstructionFiles) UnmarshalYAML(unmarshal func(any) error) error {
+	return f.unmarshal(unmarshal, unmarshal)
+}
+
+func (f InstructionFiles) MarshalYAML() (any, error) {
+	if len(f) == 0 {
+		return nil, nil
+	}
+	if len(f) == 1 {
+		return f[0], nil
+	}
+	return []string(f), nil
+}
+
+func (f *InstructionFiles) UnmarshalJSON(data []byte) error {
+	return f.unmarshal(
+		func(v any) error { return json.Unmarshal(data, v) },
+		func(v any) error { return json.Unmarshal(data, v) },
+	)
+}
+
+func (f InstructionFiles) MarshalJSON() ([]byte, error) {
+	if len(f) == 0 {
+		return json.Marshal(nil)
+	}
+	if len(f) == 1 {
+		return json.Marshal(f[0])
+	}
+	return json.Marshal([]string(f))
+}
+
 // AgentConfig represents a single agent configuration
 type AgentConfig struct {
 	Name           string
@@ -433,18 +503,21 @@ type AgentConfig struct {
 	WelcomeMessage string          `json:"welcome_message,omitempty"`
 	Toolsets       []Toolset       `json:"toolsets,omitempty"`
 	Instruction    string          `json:"instruction,omitempty"`
-	// InstructionFile names a file, relative to the config file's directory,
-	// whose contents are loaded into Instruction when the config is loaded.
-	// It keeps long behavioral prompts out of the YAML, letting infrastructure
-	// configuration and instruction content evolve in separate files. Mutually
-	// exclusive with Instruction. Only file-based config sources are supported
-	// (not OCI/URL/bytes sources, which have no directory to resolve against).
-	// The field is cleared once resolved so the in-memory config stays
-	// self-contained (see config.Load).
-	InstructionFile string         `json:"instruction_file,omitempty" yaml:"instruction_file,omitempty"`
-	Harness         *HarnessConfig `json:"harness,omitempty"`
-	SubAgents       []string       `json:"sub_agents,omitempty"`
-	Handoffs        []string       `json:"handoffs,omitempty"`
+	// InstructionFile names one or more files, relative to the config file's
+	// directory, whose contents are loaded into Instruction when the config is
+	// loaded. It accepts either a single path (`instruction_file: prompt.md`)
+	// or a list (`instruction_file: [intro.md, rules.md]`); when several files
+	// are given their contents are concatenated in order, separated by a blank
+	// line. It keeps long behavioral prompts out of the YAML, letting
+	// infrastructure configuration and instruction content evolve in separate
+	// files. Mutually exclusive with Instruction. Only file-based config
+	// sources are supported (not OCI/URL/bytes sources, which have no directory
+	// to resolve against). The field is cleared once resolved so the in-memory
+	// config stays self-contained (see config.Load).
+	InstructionFile InstructionFiles `json:"instruction_file,omitempty" yaml:"instruction_file,omitempty"`
+	Harness         *HarnessConfig   `json:"harness,omitempty"`
+	SubAgents       []string         `json:"sub_agents,omitempty"`
+	Handoffs        []string         `json:"handoffs,omitempty"`
 	// ForceHandoff names an agent that unconditionally receives the
 	// conversation whenever this agent produces a final response,
 	// bypassing the LLM's tool-calling entirely. Unlike Handoffs (which
@@ -473,17 +546,29 @@ type AgentConfig struct {
 	// Pointer (tri-state) so we can distinguish "unset" (nil → default
 	// on) from "explicitly disabled" (false). Use
 	// [AgentConfig.RedactSecretsEnabled] to read the effective value.
-	RedactSecrets           *bool             `json:"redact_secrets,omitempty"`
-	CodeModeTools           bool              `json:"code_mode_tools,omitempty"`
-	AddDescriptionParameter bool              `json:"add_description_parameter,omitempty"`
-	MaxIterations           int               `json:"max_iterations,omitempty"`
-	MaxConsecutiveToolCalls int               `json:"max_consecutive_tool_calls,omitempty"`
-	MaxOldToolCallTokens    int               `json:"max_old_tool_call_tokens,omitempty"`
-	NumHistoryItems         int               `json:"num_history_items,omitempty"`
-	AddPromptFiles          []string          `json:"add_prompt_files,omitempty" yaml:"add_prompt_files,omitempty"`
-	Commands                types.Commands    `json:"commands,omitempty"`
-	StructuredOutput        *StructuredOutput `json:"structured_output,omitempty"`
-	Skills                  SkillsConfig      `json:"skills,omitzero"`
+	RedactSecrets           *bool `json:"redact_secrets,omitempty"`
+	CodeModeTools           bool  `json:"code_mode_tools,omitempty"`
+	AddDescriptionParameter bool  `json:"add_description_parameter,omitempty"`
+	MaxIterations           int   `json:"max_iterations,omitempty"`
+	MaxConsecutiveToolCalls int   `json:"max_consecutive_tool_calls,omitempty"`
+	MaxOldToolCallTokens    int   `json:"max_old_tool_call_tokens,omitempty"`
+	NumHistoryItems         int   `json:"num_history_items,omitempty"`
+	// SessionCompaction toggles automatic session compaction for this agent:
+	// the proactive threshold trigger and the post-overflow auto-recovery.
+	// Manual /compact stays available regardless. Pointer (tri-state) so
+	// "unset" (nil → default on) is distinguishable from an explicit
+	// `session_compaction: false`. Use [AgentConfig.SessionCompactionEnabled]
+	// to read the effective value.
+	SessionCompaction *bool `json:"session_compaction,omitempty"`
+	// CompactionThreshold is the fraction of the context window at which
+	// proactive auto-compaction triggers for this agent. Must be greater than
+	// 0 and at most 1; defaults to 0.9 when unset. A `compaction_threshold`
+	// set on the agent's model takes precedence.
+	CompactionThreshold *float64          `json:"compaction_threshold,omitempty"`
+	AddPromptFiles      []string          `json:"add_prompt_files,omitempty" yaml:"add_prompt_files,omitempty"`
+	Commands            types.Commands    `json:"commands,omitempty"`
+	StructuredOutput    *StructuredOutput `json:"structured_output,omitempty"`
+	Skills              SkillsConfig      `json:"skills,omitzero"`
 	// UseCommands and UseSkills reference reusable groups defined in the
 	// top-level Config.Commands / Config.Skills sections. The referenced
 	// groups are merged into Commands / Skills during config resolution;
@@ -793,6 +878,45 @@ func (a *AgentConfig) RedactSecretsEnabled() bool {
 	return *a.RedactSecrets
 }
 
+// SessionCompactionEnabled reports the effective value of the agent's
+// session_compaction flag. Automatic compaction is on by default: a nil
+// pointer (the field omitted from YAML) means enabled, an explicit
+// `session_compaction: false` is the only way to disable it.
+func (a *AgentConfig) SessionCompactionEnabled() bool {
+	if a == nil || a.SessionCompaction == nil {
+		return true
+	}
+	return *a.SessionCompaction
+}
+
+// SaferShellEnabled reports whether any of the agent's shell toolsets
+// has opted into destructive-command detection. The flag lives on the
+// toolset (not the agent), so this aggregates across all of an agent's
+// toolsets — one match anywhere flips the agent-level flag the runtime
+// uses to register the safer_shell builtin.
+//
+// Off by default: a missing pointer or explicit `safer: false` does
+// not enable the feature. Only an explicit `safer: true` on at least
+// one shell toolset switches it on.
+//
+// Multi-toolset note: when an agent declares more than one shell
+// toolset and only some opt in, the safer_shell builtin still runs
+// for every shell call on this agent (it filters by ToolName, not
+// by toolset identity). Author one shell toolset per agent when you
+// need toolset-scoped granularity.
+func (a *AgentConfig) SaferShellEnabled() bool {
+	if a == nil {
+		return false
+	}
+	for i := range a.Toolsets {
+		ts := &a.Toolsets[i]
+		if ts.Type == "shell" && ts.Safer != nil && *ts.Safer {
+			return true
+		}
+	}
+	return false
+}
+
 // GetFallbackRetries returns the fallback retries from the config.
 func (a *AgentConfig) GetFallbackRetries() int {
 	if a.Fallback != nil {
@@ -830,6 +954,18 @@ type ModelConfig struct {
 	BaseURL           string   `json:"base_url,omitempty"`
 	ParallelToolCalls *bool    `json:"parallel_tool_calls,omitempty"`
 	TokenKey          string   `json:"token_key,omitempty"`
+	// BypassModelsGateway, when true, forces this model to connect directly to
+	// its provider, ignoring any configured models gateway (the --models-gateway
+	// flag / CAGENT_MODELS_GATEWAY env var). The model then authenticates with
+	// the provider's own credentials (e.g. OPENAI_API_KEY, ANTHROPIC_API_KEY, or
+	// token_key) instead of routing through the gateway.
+	//
+	// Security note: a model that bypasses the gateway sends the provider's
+	// ambient credentials directly to its endpoint. Combined with a custom
+	// base_url this lets a config exfiltrate those credentials to an arbitrary
+	// host, so only enable it on configs you trust. For a router model the
+	// bypass propagates to its fallback and every routed target.
+	BypassModelsGateway bool `json:"bypass_models_gateway,omitempty"`
 	// ProviderOpts allows provider-specific options.
 	ProviderOpts map[string]any `json:"provider_opts,omitempty"`
 	TrackUsage   *bool          `json:"track_usage,omitempty"`
@@ -866,6 +1002,25 @@ type ModelConfig struct {
 	// model name from the models section or an inline "provider/model" spec.
 	// When empty, title generation reuses the agent's own model.
 	TitleModel string `json:"title_model,omitempty"`
+	// CompactionModel names the model used to summarize the conversation when
+	// this model's session is compacted (manual /compact, the proactive
+	// threshold trigger, or post-overflow recovery). The summary call ingests
+	// the whole conversation, so it is the slowest and most expensive call in a
+	// session; pointing this at a smaller/faster model makes compaction cheaper
+	// and more reliable without changing the model that runs the conversation.
+	// The value can be a model name from the models section or an inline
+	// "provider/model" spec. When empty, compaction reuses the agent's own
+	// model. If the compaction model has a smaller context window than the
+	// primary, compaction is triggered against the smaller window so the
+	// summary call can always ingest the conversation it must compact.
+	CompactionModel string `json:"compaction_model,omitempty"`
+	// CompactionThreshold overrides, for agents running this model, the
+	// fraction of the context window at which proactive auto-compaction
+	// triggers. Must be greater than 0 and at most 1. It takes precedence over
+	// the agent-level `compaction_threshold`; when both are unset the default
+	// of 0.9 applies. Useful next to CompactionModel: a model that compacts
+	// with a slower/smaller summarizer may want to trigger earlier.
+	CompactionThreshold *float64 `json:"compaction_threshold,omitempty"`
 	// Capabilities optionally declares the model's attachment capabilities,
 	// overriding the automatic models.dev-based detection. See [CapabilitiesConfig].
 	Capabilities *CapabilitiesConfig `json:"capabilities,omitempty"`
@@ -922,6 +1077,89 @@ func (m *ModelConfig) UnloadAPI() string {
 	return v
 }
 
+// ContextSizeFromProviderOpts reads a positive `context_size` from a
+// provider_opts map, returning 0 when the key is absent, non-positive, or not
+// parseable as an integer. Accepted shapes mirror what the YAML/JSON decoders
+// produce: goccy/go-yaml decodes a positive integer as uint64 (and a negative
+// one as int64), JSON decodes numbers as float64, and env expansion can leave a
+// decimal string. Shared by the runtime (context-limit resolution) and the
+// provider clients (max_tokens clamping) so the two never diverge on how
+// context_size is interpreted.
+func ContextSizeFromProviderOpts(opts map[string]any) int64 {
+	v, ok := opts["context_size"]
+	if !ok {
+		return 0
+	}
+	var n int64
+	switch t := v.(type) {
+	case int64:
+		n = t
+	case int:
+		n = int64(t)
+	case int32:
+		n = int64(t)
+	case uint64:
+		if t > math.MaxInt64 {
+			return 0
+		}
+		n = int64(t)
+	case uint:
+		if uint64(t) > math.MaxInt64 {
+			return 0
+		}
+		n = int64(t)
+	case uint32:
+		n = int64(t)
+	case float64:
+		n = int64(t)
+	case float32:
+		n = int64(t)
+	case string:
+		parsed, err := strconv.ParseInt(strings.TrimSpace(t), 10, 64)
+		if err != nil {
+			return 0
+		}
+		n = parsed
+	default:
+		return 0
+	}
+	if n <= 0 {
+		return 0
+	}
+	return n
+}
+
+// ExpandEnv rewrites the model config's value-bearing string fields in place by
+// passing each through expand, which substitutes ${env.X} / ${X} references
+// against the runtime environment. Only fields that carry a literal value the
+// provider sends or dials are expanded: model (the model identifier) and
+// base_url (the endpoint). token_key is intentionally excluded because it names
+// an environment variable rather than holding a value, and reference-only
+// fields (provider, routing/fallback specs) are resolved before a provider is
+// built.
+//
+// expand is injected so this package keeps no dependency on pkg/environment,
+// which already depends on the config packages. A nil expand or an empty field
+// is a no-op; the first expansion error is returned and stops processing.
+// Addresses issue #2261, where ${env.X} in a model's model field reached the
+// provider verbatim instead of being substituted.
+func (m *ModelConfig) ExpandEnv(expand func(string) (string, error)) error {
+	if m == nil || expand == nil {
+		return nil
+	}
+	for _, field := range []*string{&m.Model, &m.BaseURL} {
+		if *field == "" {
+			continue
+		}
+		expanded, err := expand(*field)
+		if err != nil {
+			return err
+		}
+		*field = expanded
+	}
+	return nil
+}
+
 // FlexibleModelConfig wraps ModelConfig to support both shorthand and full syntax.
 // It can be unmarshaled from either:
 //   - A shorthand string: "provider/model" (e.g., "anthropic/claude-sonnet-4-5")
@@ -971,6 +1209,7 @@ func (f *FlexibleModelConfig) isShorthandOnly() bool {
 		f.BaseURL == "" &&
 		f.ParallelToolCalls == nil &&
 		f.TokenKey == "" &&
+		!f.BypassModelsGateway &&
 		len(f.ProviderOpts) == 0 &&
 		f.TrackUsage == nil &&
 		f.ThinkingBudget == nil &&
@@ -978,6 +1217,8 @@ func (f *FlexibleModelConfig) isShorthandOnly() bool {
 		len(f.Routing) == 0 &&
 		f.FirstAvailable == nil &&
 		f.TitleModel == "" &&
+		f.CompactionModel == "" &&
+		f.CompactionThreshold == nil &&
 		f.Capabilities == nil
 }
 
@@ -991,11 +1232,12 @@ type RoutingRule struct {
 }
 
 type Metadata struct {
-	Author      string `json:"author,omitempty"`
-	License     string `json:"license,omitempty"`
-	Description string `json:"description,omitempty"`
-	Readme      string `json:"readme,omitempty"`
-	Version     string `json:"version,omitempty"`
+	Author      string   `json:"author,omitempty"`
+	License     string   `json:"license,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Readme      string   `json:"readme,omitempty"`
+	Version     string   `json:"version,omitempty"`
+	Tags        []string `json:"tags,omitempty"`
 }
 
 // Commands represents a set of named prompts for quick-starting conversations.
@@ -1083,7 +1325,7 @@ type Toolset struct {
 	URL     string            `json:"url,omitempty"`
 	Headers map[string]string `json:"headers,omitempty"`
 
-	// For `shell`, `script`, `mcp` or `lsp` tools
+	// For `shell`, `background_jobs`, `script`, `mcp` or `lsp` tools
 	Env map[string]string `json:"env,omitempty"`
 
 	// For the `todo` tool
@@ -1176,6 +1418,24 @@ type Toolset struct {
 	// is declined automatically and sudo fails as before. No effect on Windows.
 	// nil/false keeps the default behaviour (sudo has no TTY and fails fast).
 	SudoAskpass *bool `json:"sudo_askpass,omitempty" yaml:"sudo_askpass,omitempty"`
+
+	// For the `background_jobs` toolset — opt in to background-job recall. When
+	// enabled, run_background_job exposes a recall boolean parameter. If the
+	// agent sets recall:true on a background job, the runtime injects a steering
+	// message with a short completion sentence and the job output when the job
+	// finishes.
+	Recall *bool `json:"recall,omitempty" yaml:"recall,omitempty"`
+
+	// For the `shell` toolset — opt in to destructive-command detection.
+	// When enabled, the agent auto-registers the safer_shell builtin under
+	// pre_tool_use with preempt_yolo:true. Destructive commands (rm -rf, docker
+	// volume rm, mkfs, …) get an Ask verdict carrying a blast-radius
+	// classification; known-safe reads (ls, git status, docker ps, …)
+	// flow through silently; everything else asks with blast_radius=unknown
+	// so the user sees the prompt before --yolo or permission allow-rules
+	// can auto-approve it. nil/false leaves the agent's shell calls subject
+	// only to the regular approval pipeline.
+	Safer *bool `json:"safer,omitempty" yaml:"safer,omitempty"`
 
 	// For the `rag` tool
 	RAGConfig *RAGConfig `json:"rag_config,omitempty" yaml:"rag_config,omitempty"`
@@ -2234,6 +2494,20 @@ type HookMatcherConfig struct {
 
 	// Hooks are the hooks to execute when the matcher matches
 	Hooks []HookDefinition `json:"hooks" yaml:"hooks"`
+
+	// PreemptYolo opts a pre_tool_use entry into firing BEFORE the
+	// deterministic approval pipeline (--yolo, permission patterns).
+	// A deny/ask verdict from a preempting hook cannot be bypassed by
+	// auto-approval rules; an allow verdict is advisory (the pipeline
+	// still runs Decide() and the rest of pre_tool_use). Default
+	// pre_tool_use entries fire AFTER Decide(), as before. Only valid
+	// on pre_tool_use; ignored on other events.
+	//
+	// Used by the safer_shell builtin (auto-registered with this flag
+	// when a shell toolset has `safer: true`). Custom hooks set it to
+	// true when they implement a security-critical check that must
+	// not be bypassed by --yolo.
+	PreemptYolo *bool `json:"preempt_yolo,omitempty" yaml:"preempt_yolo,omitempty"`
 }
 
 // HookDefinition represents a single hook configuration

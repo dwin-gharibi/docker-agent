@@ -44,9 +44,39 @@ var filePickerLayout = pickerLayout{
 	ListStartOffset: filePickerListStartY,
 }
 
+// filePickerKeyMap holds the file-picker-specific visibility toggles, on top
+// of the navigation bindings provided by the shared pickerKeyMap.
+//
+// On macOS the OS substitutes a Unicode character for Option+key at the
+// input-system level before the terminal sees the event, so the alt+h / alt+i
+// ESC sequences never reach us. Each toggle therefore also accepts the
+// characters that the standard US and US-International layouts emit (Option+H
+// -> "˙" U+02D9, Option+I -> "ˆ" U+02C6). Option+I is a dead key on macOS, so
+// the first press may arrive as an escaped or combining circumflex. See issue
+// #2611. The visible help labels are rendered separately (and dynamically) by
+// filePickerHelpKeysRows.
+type filePickerKeyMap struct {
+	ToggleHidden  key.Binding
+	ToggleIgnored key.Binding
+}
+
+func defaultFilePickerKeyMap() filePickerKeyMap {
+	return filePickerKeyMap{
+		ToggleHidden: key.NewBinding(
+			key.WithKeys("alt+h", "˙", "alt+˙"),
+			key.WithHelp("alt+h", "toggle hidden"),
+		),
+		ToggleIgnored: key.NewBinding(
+			key.WithKeys("alt+i", "ˆ", "alt+ˆ", "\u0302", "alt+\u0302"),
+			key.WithHelp("alt+i", "toggle ignored"),
+		),
+	}
+}
+
 type filePickerDialog struct {
 	pickerCore
 
+	fpKeyMap    filePickerKeyMap
 	currentDir  string
 	entries     []fileEntry
 	filtered    []fileEntry
@@ -89,6 +119,7 @@ func NewFilePickerDialog(initialPath string) Dialog {
 
 	d := &filePickerDialog{
 		pickerCore: newPickerCore(filePickerLayout, "Type to filter files…"),
+		fpKeyMap:   defaultFilePickerKeyMap(),
 		currentDir: startDir,
 	}
 
@@ -209,10 +240,10 @@ func (d *filePickerDialog) Update(msg tea.Msg) (layout.Model, tea.Cmd) {
 		case key.Matches(msg, d.keyMap.Enter):
 			cmd := d.activateSelected()
 			return d, cmd
-		case msg.String() == "alt+h":
+		case key.Matches(msg, d.fpKeyMap.ToggleHidden):
 			d.toggleHidden()
 			return d, nil
-		case msg.String() == "alt+i":
+		case key.Matches(msg, d.fpKeyMap.ToggleIgnored):
 			d.toggleIgnored()
 			return d, nil
 		default:
@@ -309,7 +340,7 @@ func (d *filePickerDialog) View() string {
 		scrollableContent = d.scrollview.View()
 	}
 
-	helpRow1, helpRow2 := d.filePickerHelpKeysRows()
+	helpRow1, helpRow2 := d.filePickerHelpKeysRows(d.regionWidth(contentWidth))
 	content := NewContent(d.regionWidth(contentWidth)).
 		AddTitle("Attach File").
 		AddSpace().
@@ -352,7 +383,11 @@ func (d *filePickerDialog) renderEntry(entry fileEntry, selected bool, maxWidth 
 	return line
 }
 
-func (d *filePickerDialog) filePickerHelpKeysRows() (row1, row2 []string) {
+// filePickerHelpKeysRows returns the help key bindings split into two rows.
+// When contentWidth is wide enough to fit every shortcut on a single line,
+// all bindings are returned in row1 and row2 is empty; the second (empty) row
+// keeps the dialog height stable.
+func (d *filePickerDialog) filePickerHelpKeysRows(contentWidth int) (row1, row2 []string) {
 	hiddenLabel := "show hidden"
 	if d.showHidden {
 		hiddenLabel = "hide hidden"
@@ -361,14 +396,15 @@ func (d *filePickerDialog) filePickerHelpKeysRows() (row1, row2 []string) {
 	if d.showIgnored {
 		ignoredLabel = "hide ignored"
 	}
-	row1 = []string{
+	all := []string{
 		"↑/↓", "navigate",
 		"enter", "select",
 		"esc", "close",
 		"alt+h", hiddenLabel,
-	}
-	row2 = []string{
 		"alt+i", ignoredLabel,
 	}
-	return row1, row2
+	if HelpKeysWidth(all...) <= contentWidth {
+		return all, nil
+	}
+	return all[:8], all[8:]
 }

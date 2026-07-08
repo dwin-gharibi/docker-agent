@@ -1,8 +1,11 @@
 package userconfig
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/goccy/go-yaml"
@@ -10,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/docker/docker-agent/pkg/config/latest"
+	"github.com/docker/docker-agent/pkg/paths"
 )
 
 func TestConfig_Empty(t *testing.T) {
@@ -169,6 +173,45 @@ func TestConfig_SaveAndLoad(t *testing.T) {
 	assert.Equal(t, CurrentVersion, loaded.Version)
 	assert.Equal(t, config.Aliases["code"].Path, loaded.Aliases["code"].Path)
 	assert.Equal(t, config.Aliases["myagent"].Path, loaded.Aliases["myagent"].Path)
+}
+
+func TestSettings_LayoutRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "config.yaml")
+
+	config := &Config{
+		Settings: &Settings{
+			Layout: &LayoutSettings{
+				SidebarPosition: "left",
+				SectionSpacing:  "compact",
+				HideUsage:       true,
+				HideTodos:       true,
+			},
+		},
+	}
+
+	require.NoError(t, config.saveTo(configFile))
+
+	loaded, err := loadFrom(configFile, "")
+	require.NoError(t, err)
+
+	layout := loaded.GetSettings().GetLayout()
+	assert.Equal(t, "left", layout.SidebarPosition)
+	assert.Equal(t, "compact", layout.SectionSpacing)
+	assert.True(t, layout.HideUsage)
+	assert.False(t, layout.HideAgents)
+	assert.False(t, layout.HideTools)
+	assert.True(t, layout.HideTodos)
+}
+
+func TestSettings_GetLayoutDefaults(t *testing.T) {
+	t.Parallel()
+
+	var nilSettings *Settings
+	assert.Equal(t, LayoutSettings{}, nilSettings.GetLayout())
+	assert.Equal(t, LayoutSettings{}, (&Settings{}).GetLayout())
 }
 
 func TestConfig_MigrateFromLegacy(t *testing.T) {
@@ -1029,4 +1072,222 @@ func TestConfig_SandboxAllowlistRoundTrip(t *testing.T) {
 	loaded, err := loadFrom(configFile, "")
 	require.NoError(t, err)
 	assert.Equal(t, original.SandboxAllowlist, loaded.SandboxAllowlist)
+}
+
+func TestConfig_HooksRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "config.yaml")
+
+	original := &Config{
+		Aliases: make(map[string]*Alias),
+		Settings: &Settings{
+			Hooks: &latest.HooksConfig{
+				SessionStart: []latest.HookDefinition{{Type: "command", Command: "echo start"}},
+				PreCompact:   []latest.HookDefinition{{Type: "command", Command: "echo compact"}},
+			},
+		},
+	}
+
+	require.NoError(t, original.saveTo(configFile))
+
+	loaded, err := loadFrom(configFile, "")
+	require.NoError(t, err)
+	require.NotNil(t, loaded.Settings)
+	require.NotNil(t, loaded.Settings.Hooks)
+	assert.Equal(t, original.Settings.Hooks.SessionStart, loaded.Settings.Hooks.SessionStart)
+	assert.Equal(t, original.Settings.Hooks.PreCompact, loaded.Settings.Hooks.PreCompact)
+
+	reloaded, err := yaml.Marshal(loaded)
+	require.NoError(t, err)
+	assert.Contains(t, string(reloaded), "session_start:")
+	assert.Contains(t, string(reloaded), "pre_compact:")
+}
+
+func TestConfig_Settings_HooksEmpty(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "config.yaml")
+	require.NoError(t, os.WriteFile(configFile, []byte("settings:\n  hide_tool_results: true\n"), 0o644))
+
+	cfg, err := loadFrom(configFile, "")
+	require.NoError(t, err)
+	require.NotNil(t, cfg.Settings)
+	assert.Nil(t, cfg.Settings.Hooks)
+	assert.Nil(t, cfg.Settings.GlobalHooks())
+	assert.Nil(t, (*Settings)(nil).GlobalHooks())
+}
+
+func TestGet_MalformedConfigReturnsSafeDefaults(t *testing.T) {
+	// Not parallel: SetConfigDir mutates process-global state.
+	dir := t.TempDir()
+	paths.SetConfigDir(dir)
+	t.Cleanup(func() { paths.SetConfigDir("") })
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("settings: [not a map"), 0o600))
+
+	settings := Get()
+	require.NotNil(t, settings)
+	require.NotNil(t, settings.RestoreTabs, "RestoreTabs must be non-nil even when the config cannot be loaded")
+	assert.False(t, settings.GetRestoreTabs())
+}
+
+func TestSettings_GetRestoreTabs(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		settings *Settings
+		expected bool
+	}{
+		{"nil settings", nil, false},
+		{"empty settings", &Settings{}, false},
+		{"explicitly disabled", &Settings{RestoreTabs: new(false)}, false},
+		{"explicitly enabled", &Settings{RestoreTabs: new(true)}, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.expected, tt.settings.GetRestoreTabs())
+		})
+	}
+}
+
+func TestLoadSave_PreservesCommentsAndUnknownKeys(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "config.yaml")
+	input := `# docker agent user configuration
+version: v1
+aliases:
+  dev:
+    path: ./dev.yaml
+settings:
+  theme: dark # my favorite
+  future_flag: true
+top_secret_future: keep-me
+`
+	require.NoError(t, os.WriteFile(configFile, []byte(input), 0o600))
+
+	cfg, err := loadFrom(configFile, "")
+	require.NoError(t, err)
+	require.NoError(t, cfg.SetAlias("extra", &Alias{Path: "./extra.yaml"}))
+	require.NoError(t, cfg.saveTo(configFile))
+
+	data, err := os.ReadFile(configFile)
+	require.NoError(t, err)
+	out := string(data)
+
+	assert.Contains(t, out, "# docker agent user configuration")
+	assert.Contains(t, out, "# my favorite")
+	assert.Contains(t, out, "future_flag: true")
+	assert.Contains(t, out, "top_secret_future: keep-me")
+	assert.Contains(t, out, "extra")
+
+	reloaded, err := loadFrom(configFile, "")
+	require.NoError(t, err)
+	assert.Equal(t, "dark", reloaded.Settings.Theme)
+	assert.Len(t, reloaded.Aliases, 2)
+}
+
+func TestSave_ClearedCommentedSectionStillSaves(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "config.yaml")
+	input := `version: v1
+settings:
+  theme: dark
+  # sidebar on the left
+  layout:
+    sidebar_position: left
+`
+	require.NoError(t, os.WriteFile(configFile, []byte(input), 0o600))
+
+	cfg, err := loadFrom(configFile, "")
+	require.NoError(t, err)
+	cfg.Settings.Layout = nil
+	require.NoError(t, cfg.saveTo(configFile))
+
+	reloaded, err := loadFrom(configFile, "")
+	require.NoError(t, err)
+	assert.Nil(t, reloaded.Settings.Layout)
+	assert.Equal(t, "dark", reloaded.Settings.Theme)
+}
+
+func TestUpdate_ConcurrentWritersDoNotLoseChanges(t *testing.T) {
+	// Not parallel: SetConfigDir mutates process-global state.
+	dir := t.TempDir()
+	paths.SetConfigDir(dir)
+	t.Cleanup(func() { paths.SetConfigDir("") })
+
+	const writers = 8
+	var wg sync.WaitGroup
+	errs := make([]error, writers)
+	for i := range writers {
+		wg.Go(func() {
+			errs[i] = Update(func(cfg *Config) error {
+				return cfg.SetAlias(fmt.Sprintf("alias-%d", i), &Alias{Path: fmt.Sprintf("./agent-%d.yaml", i)})
+			})
+		})
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		require.NoError(t, err, "writer %d", i)
+	}
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.Len(t, cfg.Aliases, writers, "every concurrent update must be persisted")
+}
+
+func TestUpdate_MutateErrorLeavesFileUntouched(t *testing.T) {
+	// Not parallel: SetConfigDir mutates process-global state.
+	dir := t.TempDir()
+	paths.SetConfigDir(dir)
+	t.Cleanup(func() { paths.SetConfigDir("") })
+
+	original := []byte("version: v1\nmodels_gateway: https://gw.example.com\n")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.yaml"), original, 0o600))
+
+	boom := errors.New("boom")
+	err := Update(func(*Config) error { return boom })
+	require.ErrorIs(t, err, boom)
+
+	data, err := os.ReadFile(filepath.Join(dir, "config.yaml"))
+	require.NoError(t, err)
+	assert.Equal(t, original, data)
+}
+
+func TestSettings_GlobalHooksValidation(t *testing.T) {
+	t.Parallel()
+
+	valid := &latest.HooksConfig{
+		SessionStart: []latest.HookDefinition{{Type: "command", Command: "echo hi"}},
+	}
+	invalid := &latest.HooksConfig{
+		SessionStart: []latest.HookDefinition{{Type: "command"}},
+	}
+
+	assert.Nil(t, (*Settings)(nil).GlobalHooks())
+	assert.Nil(t, (&Settings{}).GlobalHooks())
+	assert.Same(t, valid, (&Settings{Hooks: valid}).GlobalHooks())
+	assert.Nil(t, (&Settings{Hooks: invalid}).GlobalHooks(), "invalid hooks must not reach the runtime")
+}
+
+func TestLoad_UnknownVersionStillLoads(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "config.yaml")
+	require.NoError(t, os.WriteFile(configFile, []byte("version: v99\nmodels_gateway: https://gw.example.com\n"), 0o600))
+
+	cfg, err := loadFrom(configFile, "")
+	require.NoError(t, err)
+	assert.Equal(t, "https://gw.example.com", cfg.ModelsGateway)
 }

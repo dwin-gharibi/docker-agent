@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/spf13/cobra"
 	"go.opentelemetry.io/otel"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/docker/docker-agent/pkg/telemetry"
 	"github.com/docker/docker-agent/pkg/tui"
 	tuiinput "github.com/docker/docker-agent/pkg/tui/input"
+	"github.com/docker/docker-agent/pkg/tui/styles"
 )
 
 type newFlags struct {
@@ -40,7 +42,7 @@ Optionally provide a description as an argument to skip the initial prompt.`,
 		Example: `  docker-agent new
   docker-agent new "a web scraper that extracts product prices"
   docker-agent new --model openai/gpt-4o "a code reviewer agent"`,
-		GroupID: "core",
+		GroupID: "advanced",
 		RunE:    flags.runNewCommand,
 	}
 
@@ -63,9 +65,9 @@ func (f *newFlags) runNewCommand(cmd *cobra.Command, args []string) (commandErr 
 		return err
 	}
 	t := loadResult.Team
-	defer stopToolSets(t)
+	defer stopToolSets(ctx, t)
 
-	rt, err := runtime.New(t,
+	rt, err := runtime.New(ctx, t,
 		runtime.WithProviderRegistry(loadResult.ProviderRegistry),
 		runtime.WithTracer(otel.Tracer(AppName)),
 	)
@@ -87,11 +89,21 @@ func (f *newFlags) runNewCommand(cmd *cobra.Command, args []string) (commandErr 
 
 	sess := session.New(sessOpts...)
 
+	// The agent builder shares the run TUI, so honour the user's configured
+	// theme (including "auto") the same way `docker-agent run` does.
+	applyTheme("")
+
 	return runTUI(ctx, rt, sess, nil, nil, nil, appOpts...)
 }
 
 func runTUI(ctx context.Context, rt runtime.Runtime, sess *session.Session, spawner tui.SessionSpawner, cleanup func(), tuiOpts []tui.Option, opts ...app.Opt) error {
-	if gen := rt.TitleGenerator(); gen != nil {
+	return runTUIWrapped(ctx, rt, sess, spawner, cleanup, tuiOpts, nil, opts...)
+}
+
+// runTUIWrapped is runTUI with an optional model wrapper, used by --record to
+// interpose the input recorder between the terminal and the real model.
+func runTUIWrapped(ctx context.Context, rt runtime.Runtime, sess *session.Session, spawner tui.SessionSpawner, cleanup func(), tuiOpts []tui.Option, wrap func(tea.Model) tea.Model, opts ...app.Opt) error {
+	if gen := rt.TitleGenerator(ctx); gen != nil {
 		opts = append(opts, app.WithTitleGenerator(gen))
 	}
 
@@ -112,8 +124,17 @@ func runTUI(ctx context.Context, rt runtime.Runtime, sess *session.Session, spaw
 	if cleanup == nil {
 		cleanup = func() {}
 	}
-	wd, _ := os.Getwd()
+	// Prefer the session's working directory so the TUI (and features keyed
+	// off it, like /shell) operate where the tools do — e.g. the worktree
+	// created by --worktree, not the process CWD it was launched from.
+	wd := sess.WorkingDir
+	if wd == "" {
+		wd, _ = os.Getwd()
+	}
 	model := tui.New(ctx, spawner, a, wd, cleanup, tuiOpts...)
+	if wrap != nil {
+		model = wrap(model)
+	}
 
 	p := tea.NewProgram(model, tea.WithContext(ctx), tea.WithFilter(filter))
 	coalescer.SetSender(p.Send)
@@ -123,5 +144,18 @@ func runTUI(ctx context.Context, rt runtime.Runtime, sess *session.Session, spaw
 	}
 
 	_, err := p.Run()
+	resetLightDarkReports()
 	return err
+}
+
+// resetLightDarkReports clears DEC mode 2031 after the TUI program exits
+// while the auto theme is active, covering exits that bypass the model's own
+// quit path (context cancellation, forced shutdown). A duplicate reset is
+// harmless and invisible, and nothing is written when the auto theme was
+// never enabled.
+func resetLightDarkReports() {
+	if !styles.AutoThemeEnabled() {
+		return
+	}
+	_, _ = os.Stdout.WriteString(ansi.ResetModeLightDark)
 }

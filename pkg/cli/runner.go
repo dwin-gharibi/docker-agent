@@ -118,9 +118,11 @@ func Run(ctx context.Context, out *Printer, cfg Config, rt runtime.Runtime, sess
 			for event := range rt.RunStream(ctx, sess) {
 				switch e := event.(type) {
 				case *runtime.ToolCallConfirmationEvent:
-					if !cfg.AutoApprove {
-						rt.Resume(ctx, runtime.ResumeReject(""))
-					}
+					// JSON mode has no user at stdin — reject unconditionally.
+					// A confirmation event under AutoApprove means a
+					// preempt-yolo hook overrode --yolo; the safe answer is
+					// still Reject (the hook said Ask, not Approve).
+					rt.Resume(ctx, runtime.ResumeReject(""))
 				case *runtime.ElicitationRequestEvent:
 					_ = rt.ResumeElicitation(ctx, "decline", nil)
 				case *runtime.MaxIterationsReachedEvent:
@@ -146,7 +148,7 @@ func Run(ctx context.Context, out *Printer, cfg Config, rt runtime.Runtime, sess
 		}
 
 		firstLoop := true
-		lastAgent := rt.CurrentAgentName()
+		lastAgent := rt.CurrentAgentName(ctx)
 		var lastConfirmedToolCallID string
 		for event := range rt.RunStream(ctx, sess) {
 			agentName := event.GetAgentName()
@@ -201,13 +203,20 @@ func Run(ctx context.Context, out *Printer, cfg Config, rt runtime.Runtime, sess
 				if e.ToolCallID == lastConfirmedToolCallID {
 					lastConfirmedToolCallID = ""
 				}
+			case *runtime.WarningEvent:
+				// Surface warnings (e.g. a refusal, or a turn that produced only
+				// reasoning / an empty response) in non-TUI runs, where they would
+				// otherwise be dropped. The TUI renders these as notifications.
+				out.PrintWarning(e.Message)
 			case *runtime.ErrorEvent:
 				lowerErr := strings.ToLower(e.Error)
 				if strings.Contains(lowerErr, "context cancel") && ctx.Err() != nil { // treat Ctrl+C cancellations as non-errors
 					lastErr = nil
 				} else {
+					// Not printed here: the error is returned to the command layer,
+					// which prints it exactly once. Printing here too showed every
+					// failure twice in --exec runs.
 					lastErr = fmt.Errorf("%s", e.Error)
-					out.PrintError(lastErr)
 				}
 			case *runtime.MaxIterationsReachedEvent:
 				switch handleMaxIterationsAutoApprove(cfg.AutoApprove, &autoExtensions, e.MaxIterations) {
@@ -267,6 +276,9 @@ func Run(ctx context.Context, out *Printer, cfg Config, rt runtime.Runtime, sess
 		if err != nil {
 			return fmt.Errorf("failed to read from stdin: %w", err)
 		}
+		if strings.TrimSpace(string(buf)) == "" {
+			return errors.New(`no message received on stdin: with "-" the prompt is read from stdin, e.g. echo "Hello" | docker agent run <agent> -`)
+		}
 
 		if err := oneLoop(string(buf), os.Stdin); err != nil {
 			return err
@@ -283,6 +295,11 @@ func Run(ctx context.Context, out *Printer, cfg Config, rt runtime.Runtime, sess
 		buf, err := io.ReadAll(os.Stdin)
 		if err != nil {
 			return fmt.Errorf("failed to read from stdin: %w", err)
+		}
+		// Exiting 0 with no output on empty input (e.g. bare `docker agent`
+		// in CI) would be a silent no-op; fail with the next steps instead.
+		if strings.TrimSpace(string(buf)) == "" {
+			return errors.New("no message provided and stdin is not a terminal: pass a message (docker agent run <agent> \"<message>\"), pipe one on stdin, or run from an interactive terminal to use the chat UI")
 		}
 
 		if err := oneLoop(string(buf), os.Stdin); err != nil {
@@ -346,7 +363,7 @@ func PrepareUserMessage(ctx context.Context, rt runtime.Runtime, userInput, glob
 	// This must happen before the message is added to the session so the
 	// next runtime turn runs on the right agent.
 	if cmd, _, ok := runtime.LookupCommand(ctx, rt, userInput); ok && cmd.Agent != "" {
-		if err := rt.SetCurrentAgent(cmd.Agent); err != nil {
+		if err := rt.SetCurrentAgent(ctx, cmd.Agent); err != nil {
 			slog.WarnContext(ctx, "Failed to switch agent for /command", "agent", cmd.Agent, "error", err)
 			return nil, "", fmt.Errorf("switch agent %q: %w", cmd.Agent, err)
 		}

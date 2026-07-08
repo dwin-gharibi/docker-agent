@@ -91,6 +91,37 @@ func WithTitleModel(model provider.Provider) Opt {
 	}
 }
 
+// WithCompactionModel sets a dedicated model for session compaction (summary
+// generation), letting a heavyweight primary model delegate the slow, expensive
+// whole-conversation summary call to a smaller/faster one.
+func WithCompactionModel(model provider.Provider) Opt {
+	return func(a *Agent) {
+		a.compactionModel = model
+	}
+}
+
+// WithCompactionThreshold sets the fraction of the context window at which
+// proactive auto-compaction triggers. Values outside (0, 1] are ignored and
+// the default (0.9) applies; config validation rejects them before this
+// point, so the guard only protects programmatic callers.
+func WithCompactionThreshold(threshold float64) Opt {
+	return func(a *Agent) {
+		if threshold > 0 && threshold <= 1 {
+			a.compactionThreshold = threshold
+		}
+	}
+}
+
+// WithSessionCompaction toggles automatic session compaction (proactive
+// threshold trigger and post-overflow auto-recovery) for this agent.
+// Enabled by default; the runtime only auto-compacts a session when both
+// this flag and the runtime-level session-compaction option are on.
+func WithSessionCompaction(enabled bool) Opt {
+	return func(a *Agent) {
+		a.sessionCompactionOff = !enabled
+	}
+}
+
 func WithSubAgents(subAgents ...*Agent) Opt {
 	return func(a *Agent) {
 		a.subAgents = subAgents
@@ -134,6 +165,17 @@ func WithAddEnvironmentInfo(addEnvironmentInfo bool) Opt {
 func WithRedactSecrets(redactSecrets bool) Opt {
 	return func(a *Agent) {
 		a.redactSecrets = redactSecrets
+	}
+}
+
+// WithSaferShell registers the safer_shell builtin under pre_tool_use
+// with preempt_yolo:true when any of the agent's shell toolsets has
+// `safer: true`. The builtin runs pre-Decide() and routes destructive
+// shell commands to user confirmation regardless of --yolo or
+// permission allow-rules. See [builtins.SaferShell].
+func WithSaferShell(saferShell bool) Opt {
+	return func(a *Agent) {
+		a.saferShell = saferShell
 	}
 }
 

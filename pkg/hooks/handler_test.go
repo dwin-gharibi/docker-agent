@@ -230,6 +230,34 @@ func TestCommandHookUsesPerHookEnvAndWorkingDir(t *testing.T) {
 	assert.True(t, strings.HasSuffix(result.AdditionalContext, "/scripts"), result.AdditionalContext)
 }
 
+// TestCommandHookExpandsEnvRefs pins the ${env.X} expansion contract for
+// hook fields (issue #2615): working_dir accepts ${env.X} (and ~/$X via
+// path.ExpandPath), env values expand only the plain ${env.X} form, and
+// shell-style $X stays literal so values containing $ are not mangled.
+func TestCommandHookExpandsEnvRefs(t *testing.T) {
+	baseDir := t.TempDir()
+	scriptsDir := filepath.Join(baseDir, "scripts")
+	require.NoError(t, os.Mkdir(scriptsDir, 0o755))
+
+	t.Setenv("HOOK_TEST_DIR", "scripts")
+	t.Setenv("HOOK_TEST_TOKEN", "tok")
+
+	exec := NewExecutor(&Config{SessionStart: []Hook{{
+		Type:    HookTypeCommand,
+		Command: `printf '{"hook_specific_output":{"additional_context":"%s:%s:%s"}}' "$HOOK_VALUE" "$HOOK_LITERAL" "$(pwd)"`,
+		Env: map[string]string{
+			"HOOK_VALUE":   "v-${env.HOOK_TEST_TOKEN}",
+			"HOOK_LITERAL": "pa$$word",
+		},
+		WorkingDir: "${env.HOOK_TEST_DIR}",
+	}}}, baseDir, os.Environ())
+
+	result, err := exec.Dispatch(t.Context(), EventSessionStart, &Input{SessionID: "s"})
+	require.NoError(t, err)
+	assert.True(t, strings.HasPrefix(result.AdditionalContext, "v-tok:pa$$word:"), result.AdditionalContext)
+	assert.True(t, strings.HasSuffix(result.AdditionalContext, "/scripts"), result.AdditionalContext)
+}
+
 // TestCommandHookDefaultsToExecutorWorkingDir pins that a hook WITHOUT a
 // working_dir override runs in the executor's working directory rather
 // than inheriting the process cwd. This matters for executors that run

@@ -19,13 +19,20 @@ import (
 type HTTPOptions struct {
 	Header http.Header
 	Query  url.Values
+
+	// cagentID resolves the persistent install UUID stamped as
+	// `X-Cagent-Id` on gateway-bound requests. It defaults to
+	// [userid.Get]; tests inject their own source via
+	// [withCagentIDSource] to stay independent of global state.
+	cagentID func() string
 }
 
 type Opt func(*HTTPOptions)
 
 func NewHTTPClient(ctx context.Context, opts ...Opt) *http.Client {
 	httpOptions := HTTPOptions{
-		Header: make(http.Header),
+		Header:   make(http.Header),
+		cagentID: userid.Get,
 	}
 
 	for _, opt := range opts {
@@ -125,14 +132,16 @@ func WithProxiedBaseURL(value string) Opt {
 		o.Header.Set("X-Cagent-Arch", runtime.GOARCH)
 		o.Header.Set("X-Cagent-Runtime", "cagent")
 		o.Header.Set("X-Cagent-Runtime-Version", version.Version)
+	}
+}
 
-		// Stamp the persistent UUID identifying this cagent install so
-		// the gateway can correlate calls coming from the same client
-		// across sessions and processes. Same value as the `user_uuid`
-		// telemetry property; the gateway is free to ignore it.
-		if id := userid.Get(); id != "" {
-			o.Header.Set("X-Cagent-Id", id)
-		}
+// withCagentIDSource overrides the source of the `X-Cagent-Id` header.
+// Unexported because it exists solely so tests can supply a
+// deterministic, isolated [userid.Resolver] instead of the global
+// default.
+func withCagentIDSource(fn func() string) Opt {
+	return func(o *HTTPOptions) {
+		o.cagentID = fn
 	}
 }
 
@@ -196,6 +205,16 @@ func (u *userAgentTransport) RoundTrip(req *http.Request) (*http.Response, error
 	if r2.Header.Get("X-Cagent-Forward") != "" {
 		if sid := SessionIDFromContext(r2.Context()); sid != "" {
 			r2.Header.Set("X-Cagent-Session-Id", sid)
+		}
+
+		// Stamp the persistent UUID identifying this cagent install so
+		// the gateway can correlate calls coming from the same client
+		// across sessions and processes. Same value as the `user_uuid`
+		// telemetry property; the gateway is free to ignore it.
+		if u.httpOptions.cagentID != nil {
+			if id := u.httpOptions.cagentID(); id != "" {
+				r2.Header.Set("X-Cagent-Id", id)
+			}
 		}
 	}
 

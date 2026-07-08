@@ -96,39 +96,6 @@ func TestWarnExpansionMismatches_JSEnvInPathAndEnvNoLongerWarns(t *testing.T) {
 	assert.NotContains(t, out, "WARN")
 }
 
-func TestWarnExpansionMismatches_DoesNotLeakValueInExecField(t *testing.T) {
-	t.Parallel()
-
-	const secretToken = "supers3cret-token-DO-NOT-LOG"
-	cfg := &latest.Config{
-		Agents: []latest.AgentConfig{{
-			Name: "root",
-			Toolsets: []latest.Toolset{{
-				Type: "script",
-				Shell: map[string]latest.ScriptShellToolConfig{
-					"build": {
-						Cmd: "make",
-						// Realistic shape: secret prefix followed by an
-						// unsupported JS-style expansion in a verbatim-exec env
-						// value. We must surface the variable name so users can
-						// fix the typo, but we must not echo the secret.
-						Env: map[string]string{
-							"TOKEN": secretToken + "/${env.MEM_DIR}/db",
-						},
-					},
-				},
-			}},
-		}},
-	}
-
-	out := captureWarnings(t, func(ctx context.Context, logger *slog.Logger) {
-		warnExpansionMismatches(ctx, logger, cfg)
-	})
-
-	assert.Contains(t, out, "MEM_DIR")
-	assert.NotContains(t, out, secretToken, "warning must not include the field's full value")
-}
-
 func TestWarnExpansionMismatches_NoFalsePositives(t *testing.T) {
 	t.Parallel()
 
@@ -219,7 +186,7 @@ func TestWarnExpansionMismatches_APIConfigHeaders(t *testing.T) {
 	assert.Contains(t, out, "shell-style")
 }
 
-func TestWarnExpansionMismatches_ScriptShellTool(t *testing.T) {
+func TestWarnExpansionMismatches_ScriptShellTool_NoLongerWarns(t *testing.T) {
 	t.Parallel()
 
 	cfg := &latest.Config{
@@ -244,12 +211,12 @@ func TestWarnExpansionMismatches_ScriptShellTool(t *testing.T) {
 		warnExpansionMismatches(ctx, logger, cfg)
 	})
 
-	assert.Contains(t, out, "WORK")
-	assert.Contains(t, out, "BAR")
-	assert.Contains(t, out, "shell[build]")
+	// Script-shell working_dir and env now expand ${env.X} at execution
+	// time (issue #2615), so no warning is emitted.
+	assert.Empty(t, out)
 }
 
-func TestWarnExpansionMismatches_Hooks(t *testing.T) {
+func TestWarnExpansionMismatches_Hooks_NoLongerWarns(t *testing.T) {
 	t.Parallel()
 
 	cfg := &latest.Config{
@@ -275,6 +242,7 @@ func TestWarnExpansionMismatches_Hooks(t *testing.T) {
 		warnExpansionMismatches(ctx, logger, cfg)
 	})
 
-	assert.Contains(t, out, "HOME")
-	assert.Contains(t, out, "hooks.")
+	// Hook working_dir and env now expand ${env.X} at execution time
+	// (issue #2615), so no warning is emitted.
+	assert.Empty(t, out)
 }

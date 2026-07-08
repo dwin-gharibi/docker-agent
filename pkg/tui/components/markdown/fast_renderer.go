@@ -173,8 +173,8 @@ func ResetStyles() {
 	chromaStyleCache.Clear()
 
 	syntaxHighlightCacheMu.Lock()
+	defer syntaxHighlightCacheMu.Unlock()
 	syntaxHighlightCache.Clear()
-	syntaxHighlightCacheMu.Unlock()
 }
 
 func getGlobalStyles() *cachedStyles {
@@ -2409,8 +2409,8 @@ func (p *parser) syntaxHighlight(code, lang string) []token {
 	tokens := p.doSyntaxHighlight(code, lang)
 
 	syntaxHighlightCacheMu.Lock()
+	defer syntaxHighlightCacheMu.Unlock()
 	syntaxHighlightCache.Put(cacheKey, tokens)
-	syntaxHighlightCacheMu.Unlock()
 
 	return tokens
 }

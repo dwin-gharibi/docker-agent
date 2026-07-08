@@ -74,8 +74,8 @@ func CurrentStability() Stability {
 			}
 		}
 		stabilityMu.Lock()
+		defer stabilityMu.Unlock()
 		cachedStability = StabilityDualEmit
-		stabilityMu.Unlock()
 	})
 
 	stabilityMu.Lock()

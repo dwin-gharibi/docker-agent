@@ -1,6 +1,6 @@
 agents:
   root:
-    model: anthropic/claude-3-7-sonnet-20250219
+    model: anthropic/claude-sonnet-4-5
     description: An agent that fetches and summarizes web content
     instruction: |
       You are a web content analyzer that fetches web pages and provides concise summaries.

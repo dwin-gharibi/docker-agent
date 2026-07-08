@@ -10,6 +10,8 @@ import (
 )
 
 func TestValidatePathInDirectory(t *testing.T) {
+	t.Parallel()
+
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "test.yaml")
 	err := os.WriteFile(testFile, []byte("test: value"), 0o644)

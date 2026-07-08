@@ -206,14 +206,14 @@ func (t *Toolset) Start(ctx context.Context) error {
 // Stop disconnects from the A2A agent.
 func (t *Toolset) Stop(_ context.Context) error {
 	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.client = nil
 	t.card = nil
-	t.mu.Unlock()
 	return nil
 }
 
 func (t *Toolset) createHandler() tools.ToolHandler {
-	return func(ctx context.Context, toolCall tools.ToolCall) (*tools.ToolCallResult, error) {
+	return func(ctx context.Context, toolCall tools.ToolCall, _ tools.Runtime) (*tools.ToolCallResult, error) {
 		var args struct {
 			Message string `json:"message"`
 		}

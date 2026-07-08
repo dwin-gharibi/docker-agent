@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -35,6 +36,8 @@ import (
 )
 
 type App struct {
+	ctx func() context.Context
+
 	runtime                runtime.Runtime
 	session                *session.Session
 	firstMessage           *string
@@ -50,6 +53,7 @@ type App struct {
 	titleGen               *sessiontitle.Generator     // Title generator for local runtime (nil for remote)
 	snapshotController     builtins.SnapshotController // Drives /undo, /snapshots, /reset; nil for runtimes that don't capture snapshots
 
+	startOnce  sync.Once
 	subsMu     sync.Mutex
 	subs       []chan tea.Msg
 	fanoutOnce sync.Once
@@ -119,6 +123,7 @@ func WithSnapshotController(c builtins.SnapshotController) Opt {
 
 func New(ctx context.Context, rt runtime.Runtime, sess *session.Session, opts ...Opt) *App {
 	app := &App{
+		ctx:              func() context.Context { return context.WithoutCancel(ctx) },
 		runtime:          rt,
 		session:          sess,
 		events:           make(chan tea.Msg, 128),
@@ -129,34 +134,51 @@ func New(ctx context.Context, rt runtime.Runtime, sess *session.Session, opts ..
 		opt(app)
 	}
 
-	// Emit startup info (agent, team, tools) through the events channel.
-	// This runs in the background so the TUI can start immediately while
-	// slow operations (like MCP tool loading) complete asynchronously.
-	go func() {
-		startupEvents := make(chan runtime.Event, 10)
-		go func() {
-			defer close(startupEvents)
-			rt.EmitStartupInfo(ctx, sess, runtime.NewChannelSink(startupEvents))
-		}()
-		for event := range startupEvents {
-			select {
-			case app.events <- event:
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-
-	// Subscribe to tool list changes so the sidebar updates immediately
-	// when an MCP server adds or removes tools (outside of a RunStream).
-	rt.OnToolsChanged(func(event runtime.Event) {
-		select {
-		case app.events <- event:
-		case <-ctx.Done():
-		}
-	})
-
 	return app
+}
+
+// Start begins App-owned background event producers. Construction stays cheap
+// and side-effect free; embedders call Start when the App enters a managed
+// lifecycle.
+func (a *App) Start(ctx context.Context) {
+	a.startOnce.Do(func() {
+		// Emit startup info (agent, team, tools) through the events channel.
+		// This runs in the background so the TUI can start immediately while
+		// slow operations (like MCP tool loading) complete asynchronously.
+		go func() {
+			startupEvents := make(chan runtime.Event, 10)
+			go func() {
+				defer close(startupEvents)
+				a.runtime.EmitStartupInfo(ctx, a.session, runtime.NewChannelSink(startupEvents))
+			}()
+			for event := range startupEvents {
+				select {
+				case a.events <- event:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+
+		// Subscribe to tool list changes so the sidebar updates immediately
+		// when an MCP server adds or removes tools (outside of a RunStream).
+		a.runtime.OnToolsChanged(func(event runtime.Event) {
+			select {
+			case a.events <- event:
+			case <-ctx.Done():
+			}
+		})
+
+		// Forward events surfaced from detached background work (token usage
+		// from background agent tasks) so the sidebar and agent inspector can
+		// account for background agents' context usage.
+		a.runtime.OnBackgroundEvent(func(event runtime.Event) {
+			select {
+			case a.events <- event:
+			case <-ctx.Done():
+			}
+		})
+	})
 }
 
 func (a *App) SendFirstMessage() tea.Cmd {
@@ -167,7 +189,7 @@ func (a *App) SendFirstMessage() tea.Cmd {
 	cmds := []tea.Cmd{
 		func() tea.Msg {
 			// Use the shared PrepareUserMessage function for consistent attachment handling
-			userMsg, attachedPath, err := cli.PrepareUserMessage(context.Background(), a.runtime, *a.firstMessage, a.firstMessageAttach)
+			userMsg, attachedPath, err := cli.PrepareUserMessage(a.ctx(), a.runtime, *a.firstMessage, a.firstMessageAttach)
 			if err != nil {
 				slog.Error("Failed to prepare first message", "error", err)
 				return nil
@@ -216,19 +238,19 @@ func (a *App) CurrentAgentTools(ctx context.Context) ([]tools.Tool, error) {
 // Only the local runtime (which holds the team) implements it; remote runtimes
 // don't, so the agent-details config sections are simply omitted for them.
 type agentConfigProvider interface {
-	AgentConfigInfo(agentName string) runtime.AgentConfigInfo
+	AgentConfigInfo(ctx context.Context, agentName string) runtime.AgentConfigInfo
 }
 
 // AgentConfigInfo returns the named agent's static configuration for the
 // read-only agent-details dialog, or the zero value when it can't be resolved
 // (remote runtime or unknown agent). It reads resolved config only and starts
 // no toolsets.
-func (a *App) AgentConfigInfo(agentName string) runtime.AgentConfigInfo {
+func (a *App) AgentConfigInfo(ctx context.Context, agentName string) runtime.AgentConfigInfo {
 	cp, ok := a.runtime.(agentConfigProvider)
 	if !ok {
 		return runtime.AgentConfigInfo{}
 	}
-	return cp.AgentConfigInfo(agentName)
+	return cp.AgentConfigInfo(ctx, agentName)
 }
 
 // CurrentAgentToolsetStatuses returns lifecycle status for each toolset of
@@ -339,7 +361,7 @@ func (a *App) RunSkillFork(ctx context.Context, cancel context.CancelFunc, skill
 	// Mirrors App.Run's drain loop: forward events to the App bus and
 	// always let StreamStoppedEvent through, even after ctx cancellation,
 	// so the supervisor marks the session idle.
-	go func() { //nolint:gosec // background processing intentionally continues after request ctx ends; uses context.Background() only to forward StreamStoppedEvent
+	go func() {
 		events := make(chan runtime.Event, defaultRuntimeEventBuffer)
 		go func() {
 			defer close(events)
@@ -362,7 +384,9 @@ func (a *App) RunSkillFork(ctx context.Context, cancel context.CancelFunc, skill
 		for event := range events {
 			if ctx.Err() != nil {
 				if _, ok := event.(*runtime.StreamStoppedEvent); ok {
-					a.sendEvent(context.Background(), event)
+					// ctx is cancelled; detach cancellation but keep its trace
+					// context so the stop event still reaches subscribers.
+					a.sendEvent(context.WithoutCancel(ctx), event)
 				}
 				continue
 			}
@@ -390,13 +414,13 @@ func (a *App) ResolveInput(ctx context.Context, input string) string {
 // CurrentAgentModel returns the model ID for the current agent.
 // Returns the tracked model from AgentInfoEvent, or falls back to session overrides.
 // Returns empty string if no model information is available (fail-open scenario).
-func (a *App) CurrentAgentModel() string {
+func (a *App) CurrentAgentModel(ctx context.Context) string {
 	if a.currentAgentModel != "" {
 		return a.currentAgentModel
 	}
 	// Fallback to session overrides
 	if a.session != nil && a.session.AgentModelOverrides != nil {
-		agentName := a.runtime.CurrentAgentName()
+		agentName := a.runtime.CurrentAgentName(ctx)
 		if modelRef, ok := a.session.AgentModelOverrides[agentName]; ok {
 			return modelRef
 		}
@@ -449,7 +473,7 @@ func (a *App) Run(ctx context.Context, cancel context.CancelFunc, message string
 		go a.generateTitle(ctx, []string{message})
 	}
 
-	go func() { //nolint:gosec // background processing intentionally continues after request ctx ends; uses context.Background() only to forward StreamStoppedEvent
+	go func() {
 		if len(attachments) > 0 {
 			// Build a single text string with the user's message and inlined text files.
 			// Keeping everything in one text block ensures the model sees file content
@@ -494,7 +518,9 @@ func (a *App) Run(ctx context.Context, cancel context.CancelFunc, message string
 			// supervisor can mark the session as no longer running.
 			if ctx.Err() != nil {
 				if _, ok := event.(*runtime.StreamStoppedEvent); ok {
-					a.sendEvent(context.Background(), event)
+					// ctx is cancelled; detach cancellation but keep its trace
+					// context so the stop event still reaches subscribers.
+					a.sendEvent(context.WithoutCancel(ctx), event)
 				}
 				continue
 			}
@@ -631,7 +657,7 @@ func (a *App) processInlineAttachment(att messages.Attachment, textBuilder *stri
 func (a *App) Retry(ctx context.Context, cancel context.CancelFunc) {
 	a.cancel = cancel
 
-	go func() { //nolint:gosec // background processing intentionally continues after request ctx ends; uses context.Background() only to forward StreamStoppedEvent
+	go func() {
 		streamStarted := false
 		for event := range a.runtime.RunStream(ctx, a.session) {
 			// If context is cancelled, continue draining but don't forward events
@@ -639,7 +665,7 @@ func (a *App) Retry(ctx context.Context, cancel context.CancelFunc) {
 			// supervisor can mark the session as no longer running.
 			if ctx.Err() != nil {
 				if _, ok := event.(*runtime.StreamStoppedEvent); ok {
-					a.sendEvent(context.Background(), event)
+					a.sendEvent(context.WithoutCancel(ctx), event)
 				}
 				continue
 			}
@@ -683,7 +709,7 @@ func (a *App) RunWithMessage(ctx context.Context, cancel context.CancelFunc, msg
 		go a.generateTitle(ctx, []string{userMessage})
 	}
 
-	go func() { //nolint:gosec // background processing intentionally continues after request ctx ends; uses context.Background() only to forward StreamStoppedEvent
+	go func() {
 		a.session.AddMessage(msg)
 		for event := range a.runtime.RunStream(ctx, a.session) {
 			// If context is cancelled, continue draining but don't forward events
@@ -691,7 +717,9 @@ func (a *App) RunWithMessage(ctx context.Context, cancel context.CancelFunc, msg
 			// supervisor can mark the session as no longer running.
 			if ctx.Err() != nil {
 				if _, ok := event.(*runtime.StreamStoppedEvent); ok {
-					a.sendEvent(context.Background(), event)
+					// ctx is cancelled; detach cancellation but keep its trace
+					// context so the stop event still reaches subscribers.
+					a.sendEvent(context.WithoutCancel(ctx), event)
 				}
 				continue
 			}
@@ -777,8 +805,14 @@ func (a *App) removeSubscriber(ch chan tea.Msg) {
 // scatters every message to all currently-registered subscribers. Sends are
 // non-blocking; if a subscriber's buffer is full the event is dropped for
 // that subscriber so one slow consumer cannot stall the others.
+//
+// Turn-boundary events are the exception: dropping a stream_started or
+// stream_stopped skews a consumer's turn accounting for good (the SSE replay
+// buffer never sees the event, so reconnecting cannot recover it). For those,
+// the oldest pending message — almost always a content delta, which the next
+// delta supersedes — is evicted to make room instead.
 func (a *App) startFanOut() {
-	throttled := a.throttleEvents(context.Background(), a.events)
+	throttled := a.throttleEvents(a.ctx(), a.events)
 	go func() {
 		for msg := range throttled {
 			a.subsMu.Lock()
@@ -788,16 +822,55 @@ func (a *App) startFanOut() {
 				select {
 				case ch <- msg:
 				default:
-					slog.Warn("app: subscriber buffer full, dropping event")
+					if !isTurnBoundaryEvent(msg) {
+						slog.Warn("app: subscriber buffer full, dropping event")
+						continue
+					}
+					// Evict the oldest pending message (racing the subscriber's
+					// own receive is fine: either way a slot frees up), then
+					// retry once. Still full means the subscriber is wedged;
+					// drop as before rather than block the fan-out.
+					select {
+					case <-ch:
+					default:
+					}
+					select {
+					case ch <- msg:
+					default:
+						slog.Warn("app: subscriber buffer full, dropping turn-boundary event")
+					}
 				}
 			}
 		}
 	}()
 }
 
+// isTurnBoundaryEvent reports whether msg is one of the events consumers use
+// to track turn state (running/waiting/failed/paused) and identity (title).
+// These are low-frequency and irrecoverable when lost, unlike the content
+// deltas that dominate the stream, so the fan-out prefers them on overflow.
+func isTurnBoundaryEvent(msg tea.Msg) bool {
+	switch msg.(type) {
+	case *runtime.StreamStartedEvent,
+		*runtime.StreamStoppedEvent,
+		*runtime.UserMessageEvent,
+		*runtime.ErrorEvent,
+		*runtime.PausedEvent,
+		*runtime.SessionTitleEvent:
+		return true
+	default:
+		return false
+	}
+}
+
 // Resume resumes the runtime with the given confirmation request
 func (a *App) Resume(req runtime.ResumeRequest) {
-	a.runtime.Resume(context.Background(), req)
+	a.runtime.Resume(a.ctx(), req)
+}
+
+// Steer queues a user message for mid-turn injection into the running agent.
+func (a *App) Steer(ctx context.Context, msg runtime.QueuedMessage) error {
+	return a.runtime.Steer(ctx, msg)
 }
 
 // TogglePause toggles whether the runtime loop is paused at iteration
@@ -805,7 +878,7 @@ func (a *App) Resume(req runtime.ResumeRequest) {
 // doesn't support pausing (e.g. remote runtimes), in which case the first
 // return value is meaningless.
 func (a *App) TogglePause() (paused, supported bool) {
-	p, err := a.runtime.TogglePause(context.Background())
+	p, err := a.runtime.TogglePause(a.ctx())
 	if errors.Is(err, runtime.ErrUnsupported) {
 		return false, false
 	}
@@ -842,7 +915,7 @@ func (a *App) NewSession() {
 	a.firstMessageAttach = ""
 
 	// Re-emit startup info so the sidebar shows agent/tools info in the new session
-	a.reEmitStartupInfo(context.Background())
+	a.reEmitStartupInfo(a.ctx())
 }
 
 // reEmitStartupInfo resets and re-emits startup info (agent, team, tools)
@@ -877,6 +950,87 @@ func (a *App) pumpToEvents(ctx context.Context, emit func(runtime.EventSink)) {
 
 func (a *App) Session() *session.Session {
 	return a.session
+}
+
+// contextBreakdownProvider is an optional runtime capability: computing the
+// estimated context-window composition for a session. Only the local runtime
+// (which holds the agent and its tools) implements it; remote runtimes
+// don't, so the /context dialog reports the feature as unavailable.
+type contextBreakdownProvider interface {
+	ContextBreakdown(ctx context.Context, sess *session.Session) (*runtime.ContextBreakdown, error)
+}
+
+// ContextBreakdown returns the estimated context-window composition for the
+// current session. Returns an error wrapping [runtime.ErrUnsupported] when
+// the runtime cannot compute it (e.g. remote runtimes).
+func (a *App) ContextBreakdown(ctx context.Context) (*runtime.ContextBreakdown, error) {
+	cp, ok := a.runtime.(contextBreakdownProvider)
+	if !ok {
+		return nil, fmt.Errorf("context breakdown: %w", runtime.ErrUnsupported)
+	}
+	return cp.ContextBreakdown(ctx, a.Session())
+}
+
+// DropAttachedFile removes a file from the current session's attached files
+// and returns the absolute path that was dropped. The path is resolved
+// against the session's attachment list: exact match first, then the
+// absolute form of a relative path, then a unique base-name match. Dropping
+// stops the file from being propagated to future sub-agent delegations and
+// skill prompts; content already inlined in past messages is unaffected.
+//
+// Attached files are in-memory session state (recording them never touches
+// the store either), so the store sync afterwards is best-effort: it only
+// refreshes stores that snapshot the attachment list and a failure does not
+// undo the drop.
+func (a *App) DropAttachedFile(ctx context.Context, path string) (string, error) {
+	sess := a.Session()
+	if sess == nil {
+		return "", errors.New("no active session")
+	}
+	resolved, err := resolveAttachedFile(sess.AttachedFilesSnapshot(), path)
+	if err != nil {
+		return "", err
+	}
+	if !sess.RemoveAttachedFile(resolved) {
+		return "", fmt.Errorf("file is not attached to this session: %s", resolved)
+	}
+	if store := a.runtime.SessionStore(); store != nil {
+		if err := store.UpdateSession(ctx, sess); err != nil {
+			slog.WarnContext(ctx, "Failed to sync session store after dropping attachment", "session_id", sess.ID, "path", resolved, "error", err)
+		}
+	}
+	return resolved, nil
+}
+
+// resolveAttachedFile maps user input to one recorded attachment path.
+func resolveAttachedFile(attached []string, path string) (string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", errors.New("no file specified")
+	}
+	if len(attached) == 0 {
+		return "", errors.New("no files are attached to this session")
+	}
+	if slices.Contains(attached, path) {
+		return path, nil
+	}
+	if abs, err := filepath.Abs(path); err == nil && slices.Contains(attached, abs) {
+		return abs, nil
+	}
+	var matches []string
+	for _, candidate := range attached {
+		if filepath.Base(candidate) == path {
+			matches = append(matches, candidate)
+		}
+	}
+	switch len(matches) {
+	case 1:
+		return matches[0], nil
+	case 0:
+		return "", fmt.Errorf("file is not attached to this session: %s", path)
+	default:
+		return "", fmt.Errorf("%q matches %d attached files, use the full path", path, len(matches))
+	}
 }
 
 // PermissionsInfo returns combined permissions info from team and session.
@@ -925,7 +1079,9 @@ func (a *App) HasPermissions() bool {
 
 // SwitchAgent switches the currently active agent for subsequent user messages
 func (a *App) SwitchAgent(agentName string) error {
-	return a.runtime.SetCurrentAgent(agentName)
+	// Called from the Bubble Tea event loop, which has no context; this is
+	// a TUI-root boundary.
+	return a.runtime.SetCurrentAgent(a.ctx(), agentName)
 }
 
 // SetCurrentAgentModel sets the model for the current agent and persists
@@ -933,7 +1089,7 @@ func (a *App) SwitchAgent(agentName string) error {
 // supported by the runtime (e.g., remote runtimes).
 // Pass an empty modelRef to clear the override and use the agent's default model.
 func (a *App) SetCurrentAgentModel(ctx context.Context, modelRef string) error {
-	agentName := a.runtime.CurrentAgentName()
+	agentName := a.runtime.CurrentAgentName(ctx)
 
 	// Set the model override on the runtime (empty modelRef clears the override)
 	if err := a.runtime.SetAgentModel(ctx, agentName, modelRef); err != nil {
@@ -982,7 +1138,7 @@ func (a *App) SetCurrentAgentModel(ctx context.Context, modelRef string) error {
 // as a model override). Returns an error wrapping [runtime.ErrUnsupported]
 // when the runtime or model cannot cycle thinking levels.
 func (a *App) CycleAgentThinkingLevel(ctx context.Context) (effort.Level, error) {
-	agentName := a.runtime.CurrentAgentName()
+	agentName := a.runtime.CurrentAgentName(ctx)
 	level, err := a.runtime.CycleAgentThinkingLevel(ctx, agentName)
 	if err != nil {
 		return "", err
@@ -992,6 +1148,21 @@ func (a *App) CycleAgentThinkingLevel(ctx context.Context) (effort.Level, error)
 	// re-run tool discovery and make the sidebar's tool count flicker.
 	a.refreshAgentInfo(ctx)
 	return level, nil
+}
+
+// SetAgentThinkingLevel sets the current agent's thinking-effort level to the
+// requested value and returns the applied level. Like
+// [App.CycleAgentThinkingLevel], the change applies to the running session
+// only. Returns an error wrapping [runtime.ErrUnsupported] when the runtime
+// or model cannot switch thinking levels.
+func (a *App) SetAgentThinkingLevel(ctx context.Context, level effort.Level) (effort.Level, error) {
+	agentName := a.runtime.CurrentAgentName(ctx)
+	applied, err := a.runtime.SetAgentThinkingLevel(ctx, agentName, level)
+	if err != nil {
+		return "", err
+	}
+	a.refreshAgentInfo(ctx)
+	return applied, nil
 }
 
 // refreshAgentInfo pushes fresh agent and team info through the events channel
@@ -1005,18 +1176,35 @@ func (a *App) refreshAgentInfo(ctx context.Context) {
 // AvailableModels returns the list of models available for selection.
 // Returns nil if model switching is not supported.
 func (a *App) AvailableModels(ctx context.Context) []runtime.ModelChoice {
+	start := time.Now()
 	if !a.runtime.SupportsModelSwitching() {
+		slog.DebugContext(ctx, "App available models skipped; model switching unsupported", "duration", time.Since(start))
 		return nil
 	}
 
-	agentName := a.runtime.CurrentAgentName()
+	agentName := a.runtime.CurrentAgentName(ctx)
 	currentRef := ""
 	var customRefs []string
 	if a.session != nil {
 		currentRef = a.session.AgentModelOverrides[agentName]
 		customRefs = a.session.CustomModelsUsed
 	}
-	return runtime.DecorateModelChoices(a.runtime.AvailableModels(ctx), currentRef, customRefs)
+
+	runtimeStart := time.Now()
+	baseModels := a.runtime.AvailableModels(ctx)
+	runtimeDuration := time.Since(runtimeStart)
+	decorateStart := time.Now()
+	models := runtime.DecorateModelChoices(baseModels, currentRef, customRefs)
+	slog.DebugContext(ctx, "App available models completed",
+		"duration", time.Since(start),
+		"runtime_duration", runtimeDuration,
+		"decorate_duration", time.Since(decorateStart),
+		"base_models", len(baseModels),
+		"models", len(models),
+		"custom_refs", len(customRefs),
+		"agent", agentName,
+	)
+	return models
 }
 
 // trackCustomModel adds a custom model to the session's history if not already present.
@@ -1063,7 +1251,7 @@ func (a *App) CompactSession(ctx context.Context, cancel context.CancelFunc, add
 	go func() {
 		defer cancel()
 
-		agentName := a.runtime.CurrentAgentName()
+		agentName := a.runtime.CurrentAgentName(ctx)
 		completed := false
 		events := make(chan runtime.Event, 100)
 		go func() {
@@ -1080,7 +1268,11 @@ func (a *App) CompactSession(ctx context.Context, cancel context.CancelFunc, add
 			a.sendEvent(ctx, event)
 		}
 		if !completed && ctx.Err() == nil {
-			a.sendEvent(ctx, runtime.SessionCompaction(sess.ID, "completed", agentName))
+			// The compaction never emitted its started/completed pair (e.g. a
+			// pre_compact / before_compaction hook vetoed it). Synthesize the
+			// terminal event so the TUI unsticks, but report it as skipped —
+			// nothing was compacted.
+			a.sendEvent(ctx, runtime.SessionCompactionCompleted(sess.ID, runtime.CompactionOutcomeSkipped, agentName))
 		}
 	}()
 }

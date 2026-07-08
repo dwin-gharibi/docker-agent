@@ -14,6 +14,8 @@ import (
 
 // TestAPIMessageWithImageStructure tests that the API message type can hold image attachments
 func TestAPIMessageWithImageStructure(t *testing.T) {
+	t.Parallel()
+
 	imageData := createTestImageDataURL()
 	messages := []api.Message{
 		{
@@ -59,6 +61,8 @@ func TestAPIMessageWithImageStructure(t *testing.T) {
 
 // TestAPIMessageWithTextOnly tests backwards compatibility with plain text messages
 func TestAPIMessageWithTextOnly(t *testing.T) {
+	t.Parallel()
+
 	messages := []api.Message{
 		{
 			Role:    chat.MessageRoleUser,
@@ -83,6 +87,8 @@ func TestAPIMessageWithTextOnly(t *testing.T) {
 
 // TestAPIMessageMixedContentTypes tests a message with both content and multi_content
 func TestAPIMessageMixedContentTypes(t *testing.T) {
+	t.Parallel()
+
 	// This tests what happens if both are set - MultiContent should take precedence
 	imageData := createTestImageDataURL()
 	msg := api.Message{

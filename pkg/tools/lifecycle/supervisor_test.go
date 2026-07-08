@@ -10,6 +10,7 @@ import (
 
 	"gotest.tools/v3/assert"
 	is "gotest.tools/v3/assert/cmp"
+	"gotest.tools/v3/poll"
 
 	"github.com/docker/docker-agent/pkg/tools/lifecycle"
 )
@@ -19,6 +20,7 @@ import (
 type fakeSession struct {
 	mu       sync.Mutex
 	closed   bool
+	closedCh chan struct{} // closed once Close has run
 	waitDone atomic.Bool   // set true after Wait returns
 	waiting  chan struct{} // closed once Wait has parked on failCh
 	waitOnce sync.Once
@@ -27,8 +29,9 @@ type fakeSession struct {
 
 func newFakeSession() *fakeSession {
 	return &fakeSession{
-		waiting: make(chan struct{}),
-		failCh:  make(chan error, 1),
+		waiting:  make(chan struct{}),
+		closedCh: make(chan struct{}),
+		failCh:   make(chan error, 1),
 	}
 }
 
@@ -54,16 +57,27 @@ func (f *fakeSession) waitParked(t *testing.T) {
 
 func (f *fakeSession) Close(context.Context) error {
 	f.mu.Lock()
+	defer f.mu.Unlock()
 	if !f.closed {
 		f.closed = true
+		close(f.closedCh)
 		// Closed sessions return nil from Wait by convention.
 		select {
 		case f.failCh <- nil:
 		default:
 		}
 	}
-	f.mu.Unlock()
 	return nil
+}
+
+// waitClosed blocks until Close has been called on the session.
+func (f *fakeSession) waitClosed(t *testing.T) {
+	t.Helper()
+	select {
+	case <-f.closedCh:
+	case <-time.After(time.Second):
+		t.Fatal("session was not closed")
+	}
 }
 
 func (f *fakeSession) fail(err error) {
@@ -114,6 +128,29 @@ func (c *scriptedConnector) Connect(context.Context) (lifecycle.Session, error) 
 
 func (c *scriptedConnector) Calls() int { return int(c.calls.Load()) }
 
+// blockingConnector blocks in Connect until release is closed, then returns
+// the configured session/err. It lets tests exercise the startup-timeout path
+// where Connect is slow rather than failing outright.
+type blockingConnector struct {
+	release chan struct{}
+	session *fakeSession
+	err     error
+	calls   atomic.Int32
+}
+
+func (c *blockingConnector) Connect(ctx context.Context) (lifecycle.Session, error) {
+	c.calls.Add(1)
+	select {
+	case <-c.release:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	if c.err != nil {
+		return nil, c.err
+	}
+	return c.session, nil
+}
+
 // fastBackoff is a minimal backoff for tests so we don't sit in time.Sleep.
 var fastBackoff = lifecycle.Backoff{
 	Initial:    1 * time.Millisecond,
@@ -147,6 +184,104 @@ func TestSupervisor_StartSucceedsAndReadies(t *testing.T) {
 	assert.Check(t, is.Equal(s.State().State, lifecycle.StateStopped))
 }
 
+// TestSupervisor_StartTimesOutOnSlowConnect verifies that a Connect that
+// hangs past StartupTimeout causes Start to return ErrInitTimeout and leaves
+// the supervisor in StateStopped so the caller can retry.
+func TestSupervisor_StartTimesOutOnSlowConnect(t *testing.T) {
+	t.Parallel()
+
+	c := &blockingConnector{release: make(chan struct{}), session: newFakeSession()}
+	s := lifecycle.New("test", c, lifecycle.Policy{StartupTimeout: 20 * time.Millisecond})
+
+	err := s.Start(t.Context())
+	assert.Check(t, errors.Is(err, lifecycle.ErrInitTimeout))
+	assert.Check(t, is.Equal(s.State().State, lifecycle.StateStopped))
+
+	// Only one Connect is ever launched, even though it is still wedged.
+	assert.Check(t, is.Equal(c.calls.Load(), int32(1)))
+}
+
+// TestSupervisor_StartAdoptsLateConnect verifies that a Connect that finishes
+// after the first Start timed out is adopted by the next Start (reusing the
+// same in-flight goroutine) rather than launching a second, concurrent
+// Connect.
+func TestSupervisor_StartAdoptsLateConnect(t *testing.T) {
+	t.Parallel()
+
+	c := &blockingConnector{release: make(chan struct{}), session: newFakeSession()}
+	s := lifecycle.New("test", c, lifecycle.Policy{StartupTimeout: 20 * time.Millisecond})
+
+	assert.Check(t, errors.Is(s.Start(t.Context()), lifecycle.ErrInitTimeout))
+
+	// The handshake completes; the next Start adopts it.
+	close(c.release)
+	assert.NilError(t, s.Start(t.Context()))
+	assert.Check(t, is.Equal(s.State().State, lifecycle.StateReady))
+	// Still only one Connect was ever launched.
+	assert.Check(t, is.Equal(c.calls.Load(), int32(1)))
+
+	assert.NilError(t, s.Stop(t.Context()))
+}
+
+// TestSupervisor_StartAdoptsLateConnectAfterFirstCtxCancelled verifies that
+// the in-flight Connect is detached from the first caller's context: when that
+// context is cancelled after the first Start times out, a connector that
+// respects ctx cancellation still completes, and the adopting Start does not
+// receive a stale context.Canceled.
+func TestSupervisor_StartAdoptsLateConnectAfterFirstCtxCancelled(t *testing.T) {
+	t.Parallel()
+
+	c := &blockingConnector{release: make(chan struct{}), session: newFakeSession()}
+	s := lifecycle.New("test", c, lifecycle.Policy{StartupTimeout: 20 * time.Millisecond})
+
+	ctx, cancel := context.WithCancel(t.Context())
+	assert.Check(t, errors.Is(s.Start(ctx), lifecycle.ErrInitTimeout))
+	// Cancelling the first caller's context must not poison the detached
+	// in-flight Connect: blockingConnector returns ctx.Err() if its ctx is done.
+	cancel()
+
+	close(c.release)
+	assert.NilError(t, s.Start(t.Context()))
+	assert.Check(t, is.Equal(s.State().State, lifecycle.StateReady))
+	assert.Check(t, is.Equal(c.calls.Load(), int32(1)))
+
+	assert.NilError(t, s.Stop(t.Context()))
+}
+
+// TestSupervisor_StopReapsLateConnect verifies that when Stop is called while a
+// timed-out Connect is still in flight, the session it eventually produces is
+// closed rather than leaked.
+func TestSupervisor_StopReapsLateConnect(t *testing.T) {
+	t.Parallel()
+
+	sess := newFakeSession()
+	c := &blockingConnector{release: make(chan struct{}), session: sess}
+	s := lifecycle.New("test", c, lifecycle.Policy{StartupTimeout: 20 * time.Millisecond})
+
+	assert.Check(t, errors.Is(s.Start(t.Context()), lifecycle.ErrInitTimeout))
+
+	// Stop while the connect is still wedged, then let it complete.
+	assert.NilError(t, s.Stop(t.Context()))
+	close(c.release)
+
+	// The reaper must close the late session.
+	sess.waitClosed(t)
+}
+
+// TestSupervisor_StartWithinTimeoutSucceeds verifies that a Connect that
+// completes before StartupTimeout readies the supervisor normally.
+func TestSupervisor_StartWithinTimeoutSucceeds(t *testing.T) {
+	t.Parallel()
+
+	c := &blockingConnector{release: make(chan struct{}), session: newFakeSession()}
+	close(c.release) // Connect returns immediately
+	s := lifecycle.New("test", c, lifecycle.Policy{StartupTimeout: time.Second})
+
+	assert.NilError(t, s.Start(t.Context()))
+	assert.Check(t, is.Equal(s.State().State, lifecycle.StateReady))
+	assert.NilError(t, s.Stop(t.Context()))
+}
+
 func TestSupervisor_StartIsIdempotent(t *testing.T) {
 	t.Parallel()
 
@@ -173,7 +308,7 @@ func TestSupervisor_RestartAfterDisconnect(t *testing.T) {
 	restarted := make(chan struct{}, 1)
 	s := lifecycle.New("test", c, lifecycle.Policy{
 		Backoff: fastBackoff,
-		OnRestart: func() {
+		OnRestart: func(context.Context) {
 			select {
 			case restarted <- struct{}{}:
 			default:
@@ -317,8 +452,9 @@ func TestSupervisor_StopWakesRestartAndWait(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- s.RestartAndWait(t.Context(), 30*time.Second) }()
 
-	// Give RestartAndWait time to enter its select.
-	time.Sleep(20 * time.Millisecond)
+	// RestartAndWait force-closes the current session before parking in
+	// its select; once the close is observed it is safe to Stop.
+	sess.waitClosed(t)
 	assert.NilError(t, s.Stop(t.Context()))
 
 	select {
@@ -352,8 +488,9 @@ func TestSupervisor_FailedWakesRestartAndWait(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- s.RestartAndWait(t.Context(), 30*time.Second) }()
 
-	// Give RestartAndWait time to enter its select, then crash the session.
-	time.Sleep(20 * time.Millisecond)
+	// RestartAndWait force-closes the current session before parking in
+	// its select; once that close lands, crash the session.
+	sess1.waitClosed(t)
 	sess1.fail(errors.New("crash"))
 
 	select {
@@ -391,13 +528,12 @@ func TestSupervisor_RecoverFromFailedViaStart(t *testing.T) {
 
 	// Drive into Failed.
 	sess1.fail(errors.New("crash"))
-	deadline := time.Now().Add(2 * time.Second)
-	for s.State().State != lifecycle.StateFailed {
-		if time.Now().After(deadline) {
-			t.Fatalf("supervisor did not reach Failed; state=%s", s.State().State)
+	poll.WaitOn(t, func(poll.LogT) poll.Result {
+		if s.State().State == lifecycle.StateFailed {
+			return poll.Success()
 		}
-		time.Sleep(5 * time.Millisecond)
-	}
+		return poll.Continue("supervisor state=%s", s.State().State)
+	}, poll.WithTimeout(2*time.Second), poll.WithDelay(5*time.Millisecond))
 
 	// Recovery: Start should refresh the done channel and bring us back
 	// to Ready without RestartAndWait wedging on a stale close.
@@ -547,7 +683,7 @@ func TestSupervisor_RestartAlwaysReconnectsCleanCloseAndResetsBudget(t *testing.
 		Restart:     lifecycle.RestartAlways,
 		MaxAttempts: 1,
 		Backoff:     fastBackoff,
-		OnRestart: func() {
+		OnRestart: func(context.Context) {
 			select {
 			case restarted <- struct{}{}:
 			default:

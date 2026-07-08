@@ -399,8 +399,8 @@ func New(command string, args, env []string, workingDir string, policy ...lifecy
 		// Reset diagnostics on disconnect: the next server may not
 		// re-emit them and stale data is worse than nothing.
 		h.diagnosticsMu.Lock()
+		defer h.diagnosticsMu.Unlock()
 		h.diagnostics = make(map[string][]lspDiagnostic)
-		h.diagnosticsMu.Unlock()
 	}
 	h.supervisor = lifecycle.New("lsp/"+command, &lspConnector{h: h}, base)
 	return &ToolSet{handler: h}
@@ -504,14 +504,14 @@ func lspTool(name, title, description string, readOnly bool, params any, handler
 	// kept under the cagent.* namespace for symmetry with the other
 	// builtin tool annotations and so dashboards have a uniform
 	// `cagent.tool.{kind}.*` query surface across builtins.
-	wrapped := func(ctx context.Context, tc tools.ToolCall) (*tools.ToolCallResult, error) {
+	wrapped := func(ctx context.Context, tc tools.ToolCall, rt tools.Runtime) (*tools.ToolCallResult, error) {
 		if span := trace.SpanFromContext(ctx); span.IsRecording() {
 			span.SetAttributes(
 				attribute.String("cagent.tool.lsp.tool", name),
 				attribute.Bool("cagent.tool.lsp.read_only", readOnly),
 			)
 		}
-		return handler(ctx, tc)
+		return handler(ctx, tc, rt)
 	}
 	return tools.Tool{
 		Name:        name,
@@ -554,8 +554,8 @@ func (h *lspHandler) snapshotCapabilities() *lspServerCapabilities {
 // capability-filtered list.
 func (t *ToolSet) SetToolsChangedHandler(handler func()) {
 	t.handler.mu.Lock()
+	defer t.handler.mu.Unlock()
 	t.handler.toolsChangedHandler = handler
-	t.handler.mu.Unlock()
 }
 
 // allLSPTools returns the full catalogue of LSP tools backed by h. It is
@@ -696,7 +696,7 @@ func isProviderEnabled(v any) bool {
 // responsible for the per-request JSON-RPC protocol and the persistent
 // state (open files, diagnostics) that survives reconnects.
 
-func (h *lspHandler) ensureInitialized() error {
+func (h *lspHandler) ensureInitialized(ctx context.Context) error {
 	// Fast path: rely on the atomic initialized flag. lspConnector.Connect
 	// only sets initialized=true after publishing h.cmd / h.stdin /
 	// h.stdout under h.mu, and lspSession.Close clears initialized BEFORE
@@ -712,7 +712,7 @@ func (h *lspHandler) ensureInitialized() error {
 	// Lazy-start through the supervisor. Concurrent ensureInitialized
 	// callers serialize inside Supervisor.Start.
 	if !h.supervisor.IsReady() {
-		if err := h.supervisor.Start(context.Background()); err != nil {
+		if err := h.supervisor.Start(ctx); err != nil {
 			return fmt.Errorf("failed to start LSP server: %w", err)
 		}
 	}
@@ -796,7 +796,7 @@ func (h *lspHandler) initializeLocked() error {
 
 // prepareFileRequest handles common setup for file-based requests
 func (h *lspHandler) prepareFileRequest(ctx context.Context, file string) (string, error) {
-	if err := h.ensureInitialized(); err != nil {
+	if err := h.ensureInitialized(ctx); err != nil {
 		return "", fmt.Errorf("LSP initialization failed: %w", err)
 	}
 	uri := pathToURI(file)
@@ -809,7 +809,7 @@ func (h *lspHandler) prepareFileRequest(ctx context.Context, file string) (strin
 // Tool handler implementations
 
 func (h *lspHandler) workspace(ctx context.Context, _ WorkspaceArgs) (*tools.ToolCallResult, error) {
-	if err := h.ensureInitialized(); err != nil {
+	if err := h.ensureInitialized(ctx); err != nil {
 		return tools.ResultError(fmt.Sprintf("LSP initialization failed: %s", err)), nil
 	}
 
@@ -994,7 +994,7 @@ func (h *lspHandler) documentSymbols(ctx context.Context, args FileArgs) (*tools
 }
 
 func (h *lspHandler) workspaceSymbols(ctx context.Context, args WorkspaceSymbolsArgs) (*tools.ToolCallResult, error) {
-	if err := h.ensureInitialized(); err != nil {
+	if err := h.ensureInitialized(ctx); err != nil {
 		return tools.ResultError(fmt.Sprintf("LSP initialization failed: %s", err)), nil
 	}
 
@@ -1017,7 +1017,7 @@ func (h *lspHandler) workspaceSymbols(ctx context.Context, args WorkspaceSymbols
 }
 
 func (h *lspHandler) getDiagnostics(ctx context.Context, args FileArgs) (*tools.ToolCallResult, error) {
-	if err := h.ensureInitialized(); err != nil {
+	if err := h.ensureInitialized(ctx); err != nil {
 		return tools.ResultError(fmt.Sprintf("LSP initialization failed: %s", err)), nil
 	}
 

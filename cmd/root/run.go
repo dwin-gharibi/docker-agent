@@ -7,16 +7,18 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 	"go.opentelemetry.io/otel"
 
 	"github.com/docker/docker-agent/pkg/agent"
 	"github.com/docker/docker-agent/pkg/app"
+	boardtui "github.com/docker/docker-agent/pkg/board/tui"
 	"github.com/docker/docker-agent/pkg/cli"
 	"github.com/docker/docker-agent/pkg/config"
 	latestcfg "github.com/docker/docker-agent/pkg/config/latest"
@@ -24,7 +26,6 @@ import (
 	"github.com/docker/docker-agent/pkg/hooks/builtins"
 	"github.com/docker/docker-agent/pkg/input"
 	"github.com/docker/docker-agent/pkg/leantui"
-	"github.com/docker/docker-agent/pkg/paths"
 	"github.com/docker/docker-agent/pkg/permissions"
 	"github.com/docker/docker-agent/pkg/profiling"
 	"github.com/docker/docker-agent/pkg/runtime"
@@ -33,7 +34,9 @@ import (
 	"github.com/docker/docker-agent/pkg/teamloader"
 	loaderdefaults "github.com/docker/docker-agent/pkg/teamloader/defaults"
 	"github.com/docker/docker-agent/pkg/telemetry"
+	"github.com/docker/docker-agent/pkg/tour"
 	"github.com/docker/docker-agent/pkg/tui"
+	"github.com/docker/docker-agent/pkg/tui/recorder"
 	"github.com/docker/docker-agent/pkg/tui/styles"
 	"github.com/docker/docker-agent/pkg/userconfig"
 	"github.com/docker/docker-agent/pkg/worktree"
@@ -63,6 +66,7 @@ type runExecFlags struct {
 	cpuProfile        string
 	memProfile        string
 	forceTUI          bool
+	tour              bool
 	sandbox           bool
 	sandboxTemplate   string
 	sbx               bool
@@ -120,7 +124,7 @@ func newRunCmd() *cobra.Command {
   docker-agent run ./echo.yaml "INSTRUCTIONS"
   docker-agent run ./echo.yaml "First question" "Follow-up question"
   echo "INSTRUCTIONS" | docker-agent run ./echo.yaml -
-  docker-agent run ./agent.yaml --record  # Records session to auto-generated file`,
+  docker-agent run ./agent.yaml --record  # Records session + generates a TUI e2e test`,
 		GroupID:           "core",
 		ValidArgsFunction: completeRunExec,
 		Args:              cobra.ArbitraryArgs,
@@ -142,12 +146,12 @@ func addRunOrExecFlags(cmd *cobra.Command, flags *runExecFlags) {
 	cmd.PersistentFlags().StringArrayVar(&flags.modelOverrides, "model", nil, "Override agent model: [agent=]provider/model (repeatable)")
 	cmd.PersistentFlags().BoolVar(&flags.dryRun, "dry-run", false, "Initialize the agent without executing anything")
 	cmd.PersistentFlags().StringVar(&flags.remoteAddress, "remote", "", "Use remote runtime with specified address")
-	cmd.PersistentFlags().StringVarP(&flags.sessionDB, "session-db", "s", filepath.Join(paths.GetHomeDir(), ".cagent", "session.db"), "Path to the session database")
+	cmd.PersistentFlags().StringVarP(&flags.sessionDB, "session-db", "s", "", "Path to the session database (default: <data-dir>/session.db)")
 	cmd.PersistentFlags().StringVar(&flags.sessionID, "session", "", "Continue from a previous session by ID or relative offset (e.g., -1 for last session). An explicit ID that does not exist yet is created with that ID.")
 	cmd.PersistentFlags().StringVar(&flags.fakeResponses, "fake", "", "Replay AI responses from cassette file (for testing)")
 	cmd.PersistentFlags().IntVar(&flags.fakeStreamDelay, "fake-stream", 0, "Simulate streaming with delay in ms between chunks (default 15ms if no value given)")
 	cmd.Flag("fake-stream").NoOptDefVal = "15" // --fake-stream without value uses 15ms
-	cmd.PersistentFlags().StringVar(&flags.recordPath, "record", "", "Record AI API interactions to cassette file (auto-generates filename if empty)")
+	cmd.PersistentFlags().StringVar(&flags.recordPath, "record", "", "Record AI API interactions to cassette file and generate a TUI e2e test from the session (auto-generates filename if empty)")
 	cmd.PersistentFlags().Lookup("record").NoOptDefVal = "true"
 	cmd.PersistentFlags().BoolVar(&flags.exitAfterResponse, "exit-after-response", false, "Exit TUI after first assistant response completes")
 	_ = cmd.PersistentFlags().MarkHidden("exit-after-response")
@@ -160,18 +164,20 @@ func addRunOrExecFlags(cmd *cobra.Command, flags *runExecFlags) {
 	_ = cmd.PersistentFlags().MarkHidden("memprofile")
 	cmd.PersistentFlags().BoolVar(&flags.forceTUI, "force-tui", false, "Force TUI mode even when not in a terminal")
 	_ = cmd.PersistentFlags().MarkHidden("force-tui")
+	cmd.PersistentFlags().BoolVar(&flags.tour, "tour", false, "Start the interactive getting-started tour in the TUI")
+	_ = cmd.PersistentFlags().MarkHidden("tour")
 	cmd.PersistentFlags().BoolVar(&flags.lean, "lean", false, "Use a simplified TUI with minimal chrome")
 	cmd.PersistentFlags().StringVar(&flags.appName, "app-name", "", "Application name shown in the TUI in place of \"docker agent\"")
 	cmd.PersistentFlags().StringSliceVar(&flags.disabledCommands, "disable-commands", nil, "Comma-separated list of slash commands to hide and disable in the TUI (e.g. /cost,/eval,/model)")
 	cmd.PersistentFlags().BoolVar(&flags.sidebar, "sidebar", true, "Show the sidebar in the TUI (set --sidebar=false to hide it)")
-	cmd.PersistentFlags().StringVar(&flags.theme, "theme", "", "Preselect a TUI theme by name (overrides the theme from user config; ignored outside the interactive TUI)")
+	cmd.PersistentFlags().StringVar(&flags.theme, "theme", "", "Preselect a TUI theme by name, or \"auto\" to match the terminal's light/dark background (overrides the theme from user config; ignored outside the interactive TUI)")
 	_ = cmd.RegisterFlagCompletionFunc("theme", completeTheme)
 	cmd.PersistentFlags().BoolVar(&flags.sandbox, "sandbox", false, "Run the agent inside a Docker sandbox (requires Docker Desktop with sandbox support)")
 	cmd.PersistentFlags().StringVar(&flags.sandboxTemplate, "template", "docker/sandbox-templates:docker-agent", "Template image for the sandbox (passed to docker sandbox create -t)")
 	cmd.PersistentFlags().BoolVar(&flags.sbx, "sbx", true, "Prefer the sbx CLI backend when available (set --sbx=false to force docker sandbox)")
 	cmd.PersistentFlags().BoolVar(&flags.noKit, "no-kit", false, "Do not stage a docker-agent kit (skills, prompt files) when running in a sandbox")
-	cmd.PersistentFlags().StringVar(&flags.agentPickerSpec, "agent-picker", "", "Show a full-screen picker to choose an agent before launching. Optional comma-separated list of agent refs (defaults to \"default,coder\")")
-	cmd.PersistentFlags().Lookup("agent-picker").NoOptDefVal = strings.Join(defaultAgentPickerRefs, ",")
+	cmd.PersistentFlags().StringVar(&flags.agentPickerSpec, "agent-picker", "", "Show a full-screen picker to choose an agent before launching. Optional comma-separated list of agent refs; \"defaults\" (or no value) offers the built-in agents plus any configs in ~/.agents")
+	cmd.PersistentFlags().Lookup("agent-picker").NoOptDefVal = agentPickerDefaultsSpec
 	cmd.PersistentFlags().StringVarP(&flags.worktreeName, "worktree", "w", "", "Run the agent in a fresh git worktree of the working directory (isolates changes from your checkout). Optionally name it: --worktree=my-name")
 	cmd.PersistentFlags().Lookup("worktree").NoOptDefVal = worktreeAutoName
 	cmd.PersistentFlags().StringVar(&flags.worktreePR, "worktree-pr", "", "Run the agent in a git worktree checked out on an existing GitHub pull request (number or URL). Continues the PR's branch; requires the GitHub CLI (gh).")
@@ -228,6 +234,7 @@ func (f *runExecFlags) runRunCommand(cmd *cobra.Command, args []string) (command
 	}
 
 	useTUI := !f.exec && (f.forceTUI || isatty.IsTerminal(os.Stdout.Fd()))
+	f.leanChanged = cmd.Flags().Changed("lean")
 
 	// When --agent-picker is set, show a full-screen picker up front and use
 	// the chosen ref as the agent to run. Resolving it here (before sandbox
@@ -240,14 +247,28 @@ func (f *runExecFlags) runRunCommand(cmd *cobra.Command, args []string) (command
 		}
 		refs := parseAgentPickerRefs(f.agentPickerSpec)
 		applyTheme(f.theme)
-		chosen, err := selectAgentRef(ctx, refs, f.runConfig.EnvProvider())
+		// Seed the picker's "Lean Mode" checkbox with the lean state the run
+		// would otherwise use (--lean, or the user-config default applied in
+		// applyUserSettings) so the checkbox never lies about the run mode.
+		initialLean := f.lean || (!f.leanChanged && userconfig.Get().Lean && !f.tour)
+		chosen, lean, err := selectAgentRef(ctx, refs, f.runConfig.EnvProvider(), initialLean)
 		if err != nil {
 			if errors.Is(err, errAgentPickerCancelled) {
 				cli.NewPrinter(cmd.OutOrStdout()).Println("Agent selection cancelled.")
 				return nil
 			}
+			if errors.Is(err, errAgentPickerStartBoard) {
+				// Intentionally tracked in addition to the "run" event above:
+				// the user asked for a run but ended up on the board.
+				telemetry.TrackCommand(ctx, "board", nil)
+				return boardtui.Run(ctx)
+			}
 			return err
 		}
+		// The checkbox is the user's explicit choice: it wins over both the
+		// --lean flag and the user-config lean default.
+		f.lean = lean
+		f.leanChanged = true
 		// With --agent-picker the agent comes from the picker, so any
 		// positional args are messages. Prepend the chosen ref so the rest
 		// of the pipeline (which expects args[0] to be the agent) is happy.
@@ -283,11 +304,13 @@ func (f *runExecFlags) runRunCommand(cmd *cobra.Command, args []string) (command
 	if f.worktreeBase != "" && !f.worktree {
 		return errors.New("--worktree-base requires --worktree")
 	}
-	f.leanChanged = cmd.Flags().Changed("lean")
 
 	out := cli.NewPrinter(cmd.OutOrStdout())
 
-	return f.runOrExec(ctx, out, args, useTUI)
+	// When an interactive run cannot find any usable model, offer the setup
+	// wizard instead of leaving the user alone with the error.
+	err := f.runOrExec(ctx, out, args, useTUI)
+	return f.offerSetupOnNoModel(ctx, cmd, out, args, useTUI, err)
 }
 
 func (f *runExecFlags) runOrExec(ctx context.Context, out *cli.Printer, args []string, useTUI bool) error {
@@ -313,6 +336,7 @@ func (f *runExecFlags) runOrExec(ctx context.Context, out *cli.Printer, args []s
 	// User settings only apply if the flag wasn't explicitly set by the user
 	userSettings := userconfig.Get()
 	f.applyUserSettings(ctx, userSettings)
+	f.runConfig.GlobalHooks = config.MergeHooks(userSettings.GlobalHooks(), config.LoadHookDropIns())
 
 	// Apply alias options if this is an alias reference
 	// Alias options only apply if the flag wasn't explicitly set by the user
@@ -339,7 +363,7 @@ func (f *runExecFlags) runOrExec(ctx context.Context, out *cli.Printer, args []s
 	}
 
 	// Start fake proxy if --fake is specified
-	fakeCleanup, err := setupFakeProxy(f.fakeResponses, f.fakeStreamDelay, &f.runConfig)
+	fakeCleanup, err := setupFakeProxy(ctx, f.fakeResponses, f.fakeStreamDelay, &f.runConfig)
 	if err != nil {
 		return err
 	}
@@ -350,7 +374,7 @@ func (f *runExecFlags) runOrExec(ctx context.Context, out *cli.Printer, args []s
 	}()
 
 	// Record AI API interactions to a cassette file if --record flag is specified.
-	cassettePath, recordCleanup, err := setupRecordingProxy(f.recordPath, &f.runConfig)
+	cassettePath, recordCleanup, err := setupRecordingProxy(ctx, f.recordPath, &f.runConfig)
 	if err != nil {
 		return err
 	}
@@ -381,7 +405,7 @@ func (f *runExecFlags) runOrExec(ctx context.Context, out *cli.Printer, args []s
 			return err
 		}
 		if loadResult != nil {
-			stopToolSets(loadResult.Team)
+			stopToolSets(ctx, loadResult.Team)
 		}
 		out.Println("Dry run mode enabled. Agent initialized but will not execute.")
 		return nil
@@ -421,7 +445,7 @@ func (f *runExecFlags) runOrExec(ctx context.Context, out *cli.Printer, args []s
 		// the nil-guard used for cleanup throughout this function.
 		if loadResult != nil {
 			if err := f.dispatchWorktreeCreate(ctx, out, loadResult.Team, createdWorktree); err != nil {
-				stopToolSets(loadResult.Team)
+				stopToolSets(ctx, loadResult.Team)
 				return err
 			}
 		}
@@ -439,7 +463,7 @@ func (f *runExecFlags) runOrExec(ctx context.Context, out *cli.Printer, args []s
 		return f.handleExecMode(ctx, out, rt, sess, args)
 	}
 
-	listenOpt, err := f.startAttachedServer(ctx, out, rt, sess)
+	coordinatorOpt, err := f.startSessionCoordinator(ctx, out, rt, sess)
 	if err != nil {
 		return err
 	}
@@ -449,8 +473,8 @@ func (f *runExecFlags) runOrExec(ctx context.Context, out *cli.Printer, args []s
 	if err != nil {
 		return err
 	}
-	if listenOpt != nil {
-		opts = append(opts, listenOpt)
+	if coordinatorOpt != nil {
+		opts = append(opts, coordinatorOpt)
 	}
 
 	eventHooks, err := parseOnEventFlags(f.onEventSpecs)
@@ -461,12 +485,25 @@ func (f *runExecFlags) runOrExec(ctx context.Context, out *cli.Printer, args []s
 		opts = append(opts, hookOpt)
 	}
 
+	var rec *recorder.Recorder
 	runErr := func() error {
 		if f.lean {
 			return f.runLeanTUI(ctx, rt, sess, cleanup, args, opts...)
 		}
-		return runTUI(ctx, rt, sess, b.Spawner(rt), cleanup, f.tuiOpts(), opts...)
+		if cassettePath != "" {
+			// Record keystrokes and clicks alongside the model traffic so a
+			// complete tuitest e2e test can be generated when the session ends.
+			wrap := func(m tea.Model) tea.Model {
+				rec = recorder.New(m)
+				return rec
+			}
+			return runTUIWrapped(ctx, rt, sess, b.Spawner(rt), cleanup, f.tuiOpts(args), wrap, opts...)
+		}
+		return runTUI(ctx, rt, sess, b.Spawner(rt), cleanup, f.tuiOpts(args), opts...)
 	}()
+	if rec != nil && rec.HasInput() {
+		writeGeneratedTUITest(ctx, out, rec, cassettePath, agentFileName)
+	}
 	if runErr != nil {
 		// On a TUI error we deliberately leave the worktree in place rather
 		// than risk discarding work after an abnormal exit.
@@ -507,7 +544,9 @@ func (f *runExecFlags) applyUserSettings(ctx context.Context, userSettings *user
 		f.autoApprove = true
 		slog.DebugContext(ctx, "Applying user settings", "YOLO", true)
 	}
-	if userSettings.Lean && !f.leanChanged && !f.lean {
+	// The tour needs the full TUI's overlay support, so a lean default from
+	// user config is not applied when the tour was requested.
+	if userSettings.Lean && !f.leanChanged && !f.lean && !f.tour {
 		f.lean = true
 		slog.DebugContext(ctx, "Applying user settings", "lean", true)
 	}
@@ -635,7 +674,9 @@ func promptRemoveDirtyWorktree(ctx context.Context, out *cli.Printer, wt *worktr
 	}
 
 	out.Println("\nThe git worktree " + wt.Dir + " (branch " + wt.Branch + ") still has " + strings.Join(held, ", ") + ".")
-	out.Println("Remove it and discard this work? Keeping preserves the directory and branch so you can return later. (y/N):")
+	out.Println("  y: delete the worktree, its branch, and all of this work")
+	out.Println("  N: keep them so you can return later")
+	out.Print("Delete this worktree and discard the work? (y/N) ")
 
 	response, err := input.ReadLine(ctx, os.Stdin)
 	if err != nil {
@@ -714,6 +755,15 @@ func (f *runExecFlags) runtimeOpts(loadResult *teamloader.LoadResult, runConfig 
 		ProviderRegistry:   loadResult.ProviderRegistry,
 		AgentDefaultModels: loadResult.AgentDefaultModels,
 	}
+	// Share the models.dev store the team loader already warmed (parsing the
+	// multi-MB catalog once) so the runtime doesn't build its own cold store
+	// and re-pay the parse on the first /model open. On error we leave it unset
+	// and the runtime falls back to its lazy default.
+	if store, err := runConfig.ModelsDevStore(); err == nil {
+		modelSwitcherCfg.ModelsStore = store
+	} else {
+		slog.Warn("Failed to obtain shared models.dev store; runtime will use its own", "error", err)
+	}
 	opts := []runtime.Opt{
 		runtime.WithSessionStore(sessStore),
 		runtime.WithCurrentAgent(agentName),
@@ -770,7 +820,7 @@ func (f *runExecFlags) createLocalRuntimeAndSession(ctx context.Context, loadRes
 		return nil, nil, err
 	}
 	runtimeOpts := append(f.runtimeOpts(loadResult, &f.runConfig, sessStore, agentName), rtOpts...)
-	localRt, err := runtime.New(t, runtimeOpts...)
+	localRt, err := runtime.New(ctx, t, runtimeOpts...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("creating runtime: %w", err)
 	}
@@ -788,7 +838,10 @@ func (f *runExecFlags) createLocalRuntimeAndSession(ctx context.Context, loadRes
 		sess, err = sessStore.GetSession(ctx, resolvedID)
 		switch {
 		case err == nil:
-			sess.ToolsApproved = req.ToolsApproved
+			// Via the option, not a raw field write: WithToolsApproved
+			// backfills SafetyPolicy=unsafe so safer_shell honours --yolo
+			// on resumed sessions too.
+			session.WithToolsApproved(req.ToolsApproved)(sess)
 			sess.HideToolResults = req.HideToolResults
 
 			// Apply any stored model overrides from the session
@@ -864,8 +917,9 @@ func readInitialMessage(args []string) (*string, error) {
 	return &args[1], nil
 }
 
-// tuiOpts returns the TUI options derived from the current flags.
-func (f *runExecFlags) tuiOpts() []tui.Option {
+// tuiOpts returns the TUI options derived from the current flags. args are
+// the run command's positional arguments, used to detect an initial message.
+func (f *runExecFlags) tuiOpts(args []string) []tui.Option {
 	var opts []tui.Option
 	if f.lean {
 		opts = append(opts, tui.WithLeanMode())
@@ -879,7 +933,30 @@ func (f *runExecFlags) tuiOpts() []tui.Option {
 	if !f.sidebar {
 		opts = append(opts, tui.WithHideSidebar())
 	}
+	switch {
+	case f.tour:
+		opts = append(opts, tui.WithTourStart())
+	case f.shouldOfferTour(args):
+		opts = append(opts, tui.WithTourOffer(telemetry.GetTelemetryEnabled()))
+	}
 	return opts
+}
+
+// shouldOfferTour reports whether this interactive run should show the
+// first-run dialog offering the getting-started tour. Automation and
+// replay/record contexts never see the offer, and neither does a run that
+// already carries an initial message (the user clearly has a task in mind);
+// DOCKER_AGENT_NO_TOUR=1 suppresses it for scripted environments. The
+// explicit --tour flag (or the getting-started command) bypasses the offer
+// and starts the tour directly.
+func (f *runExecFlags) shouldOfferTour(args []string) bool {
+	if f.lean || f.exitAfterResponse || f.sessionReadOnly || f.recordPath != "" || f.fakeResponses != "" {
+		return false
+	}
+	if len(args) > 1 {
+		return false
+	}
+	return tour.ShouldOffer(os.Getenv)
 }
 
 // runLeanTUI builds the App and drives the standalone lean TUI, used when
@@ -887,10 +964,11 @@ func (f *runExecFlags) tuiOpts() []tui.Option {
 // (no alternate screen) and sends the first/queued messages itself rather than
 // through the App's bubbletea command pipeline.
 func (f *runExecFlags) runLeanTUI(ctx context.Context, rt runtime.Runtime, sess *session.Session, cleanup func(), args []string, opts ...app.Opt) error {
-	if gen := rt.TitleGenerator(); gen != nil {
+	if gen := rt.TitleGenerator(ctx); gen != nil {
 		opts = append(opts, app.WithTitleGenerator(gen))
 	}
 	a := app.New(ctx, rt, sess, opts...)
+	a.Start(ctx)
 
 	firstMessage, err := readInitialMessage(args)
 	if err != nil {
@@ -904,7 +982,13 @@ func (f *runExecFlags) runLeanTUI(ctx context.Context, rt runtime.Runtime, sess 
 		cleanup = func() {}
 	}
 
-	wd, _ := os.Getwd()
+	// Prefer the session's working directory so the lean status bar shows
+	// where the tools operate — e.g. the worktree from --worktree, not the
+	// process CWD it was launched from.
+	wd := sess.WorkingDir
+	if wd == "" {
+		wd, _ = os.Getwd()
+	}
 	return leantui.Run(ctx, leantui.Config{
 		App:                    a,
 		WorkingDir:             wd,
@@ -996,7 +1080,7 @@ func (f *runExecFlags) createSessionSpawner(agentSource config.Source, sessStore
 			return nil, nil, nil, err
 		}
 		runtimeOpts := append(f.runtimeOpts(loadResult, runConfigCopy, sessStore, agt.Name()), rtOpts...)
-		localRt, err := runtime.New(t, runtimeOpts...)
+		localRt, err := runtime.New(spawnCtx, t, runtimeOpts...)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -1008,16 +1092,19 @@ func (f *runExecFlags) createSessionSpawner(agentSource config.Source, sessStore
 
 		// Create cleanup function
 		cleanup := func() {
-			stopToolSets(t)
+			stopToolSets(spawnCtx, t)
 		}
 
 		// Create the app
 		var appOpts []app.Opt
-		if gen := localRt.TitleGenerator(); gen != nil {
+		if gen := localRt.TitleGenerator(spawnCtx); gen != nil {
 			appOpts = append(appOpts, app.WithTitleGenerator(gen))
 		}
 		if ctrl != nil {
 			appOpts = append(appOpts, app.WithSnapshotController(ctrl))
+		}
+		if coordinatorOpt := f.recallCoordinatorOpt(spawnCtx, localRt, newSess); coordinatorOpt != nil {
+			appOpts = append(appOpts, coordinatorOpt)
 		}
 
 		a := app.New(spawnCtx, localRt, newSess, appOpts...)
@@ -1032,9 +1119,11 @@ type toolStopper interface {
 }
 
 // stopToolSets gracefully stops all tool sets with a bounded timeout so
-// that cleanup cannot block indefinitely.
-func stopToolSets(t toolStopper) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+// that cleanup cannot block indefinitely. It detaches from ctx's
+// cancellation (cleanup often runs after the caller's ctx is already done,
+// e.g. on shutdown or tab close) while keeping ctx's trace context.
+func stopToolSets(ctx context.Context, t toolStopper) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
 	if err := t.StopToolSets(ctx); err != nil {
 		slog.ErrorContext(ctx, "Failed to stop tool sets", "error", err)
@@ -1043,10 +1132,15 @@ func stopToolSets(t toolStopper) {
 
 // validateTheme reports whether ref names a loadable theme. It is used to
 // fail fast on an explicit --theme value, listing the available themes so the
-// user can correct a typo.
+// user can correct a typo. The "auto" sentinel is accepted as-is: it resolves
+// to a concrete theme at apply time.
 func validateTheme(ref string) error {
+	if ref == styles.AutoThemeRef {
+		return nil
+	}
 	if _, err := styles.LoadTheme(ref); err != nil {
 		if refs, listErr := styles.ListThemeRefs(); listErr == nil && len(refs) > 0 {
+			refs = append([]string{styles.AutoThemeRef}, refs...)
 			return fmt.Errorf("unknown theme %q; available themes: %s", ref, strings.Join(refs, ", "))
 		}
 		return fmt.Errorf("unknown theme %q: %w", ref, err)
@@ -1055,7 +1149,10 @@ func validateTheme(ref string) error {
 }
 
 // applyTheme applies the theme, resolving it from the --theme flag, then the
-// user config, then the built-in default.
+// user config, then the built-in default. The "auto" sentinel resolves to the
+// configured light/dark theme pair based on the terminal background, queried
+// synchronously (OSC 11) before the TUI starts so the first frame already has
+// the right polarity.
 func applyTheme(themeOverride string) {
 	// Resolve theme from --theme flag > user config > built-in default
 	themeRef := styles.DefaultThemeRef
@@ -1066,6 +1163,14 @@ func applyTheme(themeOverride string) {
 		themeRef = themeOverride
 	}
 
+	if themeRef == styles.AutoThemeRef {
+		styles.SetAutoThemeEnabled(true)
+		styles.SetTerminalDark(detectDarkTerminalBackground())
+		themeRef = styles.ResolveThemeRef(themeRef)
+	} else {
+		styles.SetAutoThemeEnabled(false)
+	}
+
 	theme, err := styles.LoadTheme(themeRef)
 	if err != nil {
 		slog.Warn("Failed to load theme, using default", "theme", themeRef, "error", err)
@@ -1074,4 +1179,23 @@ func applyTheme(themeOverride string) {
 
 	styles.ApplyTheme(theme)
 	slog.Debug("Applied theme", "theme_ref", themeRef, "theme_name", theme.Name)
+}
+
+// detectDarkTerminalBackground reports whether the terminal background is
+// dark, falling back to dark when it cannot tell (non-TTY, pipes, CI, or a
+// terminal that never answers). The query is TTY-gated so non-interactive
+// runs emit no escape sequences at all; lipgloss bounds the wait internally
+// and terminates early on the DA1 fallback answer that virtually every
+// terminal sends.
+func detectDarkTerminalBackground() bool {
+	return terminalHasDarkBackground(os.Stdin, os.Stdout)
+}
+
+// terminalHasDarkBackground implements detectDarkTerminalBackground against
+// explicit files so tests can drive the OSC 11 round-trip with a pty pair.
+func terminalHasDarkBackground(in, out *os.File) bool {
+	if !isatty.IsTerminal(in.Fd()) || !isatty.IsTerminal(out.Fd()) {
+		return true
+	}
+	return lipgloss.HasDarkBackground(in, out)
 }

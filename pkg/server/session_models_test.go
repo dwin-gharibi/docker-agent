@@ -55,7 +55,7 @@ func newModelSwitchingRuntime(models []runtime.ModelChoice) *modelSwitchingRunti
 	}
 }
 
-func (m *modelSwitchingRuntime) CurrentAgentName() string { return m.currentAgent }
+func (m *modelSwitchingRuntime) CurrentAgentName(context.Context) string { return m.currentAgent }
 
 func (m *modelSwitchingRuntime) SupportsModelSwitching() bool { return true }
 
@@ -172,7 +172,7 @@ func TestAttachedServer_GetSessionModels(t *testing.T) {
 	fake := newModelSwitchingRuntime(choices)
 
 	sm := NewSessionManager(ctx, config.Sources{}, store, 0, &config.RuntimeConfig{})
-	sm.AttachRuntime(sess.ID, fake, sess)
+	sm.AttachRuntime(t.Context(), sess.ID, fake, sess)
 
 	addr := startAttachedServer(t, ctx, sm)
 	resp := httpDoTCP(t, ctx, http.MethodGet, addr+"/api/sessions/"+sess.ID+"/models", nil)
@@ -208,7 +208,7 @@ func TestAttachedServer_GetSessionModels_DefaultMarkedCurrent(t *testing.T) {
 	fake := newModelSwitchingRuntime(choices)
 
 	sm := NewSessionManager(ctx, config.Sources{}, store, 0, &config.RuntimeConfig{})
-	sm.AttachRuntime(sess.ID, fake, sess)
+	sm.AttachRuntime(t.Context(), sess.ID, fake, sess)
 
 	addr := startAttachedServer(t, ctx, sm)
 	resp := httpDoTCP(t, ctx, http.MethodGet, addr+"/api/sessions/"+sess.ID+"/models", nil)
@@ -240,7 +240,7 @@ func TestAttachedServer_GetSessionModels_AppendsCustomModels(t *testing.T) {
 	fake := newModelSwitchingRuntime(choices)
 
 	sm := NewSessionManager(ctx, config.Sources{}, store, 0, &config.RuntimeConfig{})
-	sm.AttachRuntime(sess.ID, fake, sess)
+	sm.AttachRuntime(t.Context(), sess.ID, fake, sess)
 
 	addr := startAttachedServer(t, ctx, sm)
 	resp := httpDoTCP(t, ctx, http.MethodGet, addr+"/api/sessions/"+sess.ID+"/models", nil)
@@ -271,7 +271,7 @@ func TestAttachedServer_SetSessionModel_PersistsViaRunAgent(t *testing.T) {
 	fake := newModelSwitchingRuntime(nil)
 
 	sm := NewSessionManager(ctx, config.Sources{}, store, 0, &config.RuntimeConfig{})
-	sm.AttachRuntime(sess.ID, fake, sess)
+	sm.AttachRuntime(t.Context(), sess.ID, fake, sess)
 
 	addr := startAttachedServer(t, ctx, sm)
 	resp := httpDoTCP(t, ctx, http.MethodPost,
@@ -313,7 +313,7 @@ func TestAttachedServer_RunAgent_EmptyModelLeavesOverrideUntouched(t *testing.T)
 	fake.overrides["root"] = "openai/gpt-4o"
 
 	sm := NewSessionManager(ctx, config.Sources{}, store, 0, &config.RuntimeConfig{})
-	sm.AttachRuntime(sess.ID, fake, sess)
+	sm.AttachRuntime(t.Context(), sess.ID, fake, sess)
 
 	addr := startAttachedServer(t, ctx, sm)
 	_ = httpDoTCP(t, ctx, http.MethodPost,
@@ -340,7 +340,7 @@ func TestAttachedServer_GetSessionModels_NotSupported(t *testing.T) {
 	require.NoError(t, store.AddSession(ctx, sess))
 
 	sm := NewSessionManager(ctx, config.Sources{}, store, 0, &config.RuntimeConfig{})
-	sm.AttachRuntime(sess.ID, &fakeRuntime{}, sess)
+	sm.AttachRuntime(t.Context(), sess.ID, &fakeRuntime{}, sess)
 
 	addr := startAttachedServer(t, ctx, sm)
 
@@ -385,7 +385,7 @@ func TestSessionManager_SetSessionAgentModel_RollsBackOnStoreFailure(t *testing.
 	fake := newModelSwitchingRuntime(nil)
 
 	sm := NewSessionManager(ctx, config.Sources{}, store, 0, &config.RuntimeConfig{})
-	sm.AttachRuntime(sess.ID, fake, sess)
+	sm.AttachRuntime(t.Context(), sess.ID, fake, sess)
 
 	store.mu.Lock()
 	store.failUpdate = true
@@ -422,7 +422,7 @@ func TestSessionManager_SetSessionAgentModel_RuntimeFailureLeavesStateUntouched(
 	fake.setErr = errors.New("runtime says no")
 
 	sm := NewSessionManager(ctx, config.Sources{}, store, 0, &config.RuntimeConfig{})
-	sm.AttachRuntime(sess.ID, fake, sess)
+	sm.AttachRuntime(t.Context(), sess.ID, fake, sess)
 
 	_, _, err := sm.SetSessionAgentModel(ctx, sess.ID, "anthropic/claude-sonnet-4-0")
 	require.Error(t, err)
@@ -446,7 +446,7 @@ func TestAttachedServer_RunAgent_StoreFailureReturns500(t *testing.T) {
 	fake := newModelSwitchingRuntime(nil)
 
 	sm := NewSessionManager(ctx, config.Sources{}, store, 0, &config.RuntimeConfig{})
-	sm.AttachRuntime(sess.ID, fake, sess)
+	sm.AttachRuntime(t.Context(), sess.ID, fake, sess)
 
 	store.mu.Lock()
 	store.failUpdate = true
@@ -516,8 +516,8 @@ func TestSessionManager_AvailableSessionModels_DoesNotHoldMuxDuringRuntimeIO(t *
 	slow.availableModelsDelay = release
 
 	sm := NewSessionManager(ctx, config.Sources{}, store, 0, &config.RuntimeConfig{})
-	sm.AttachRuntime(slowSess.ID, slow, slowSess)
-	sm.AttachRuntime(unrelatedSess.ID, &fakeRuntime{}, unrelatedSess)
+	sm.AttachRuntime(t.Context(), slowSess.ID, slow, slowSess)
+	sm.AttachRuntime(t.Context(), unrelatedSess.ID, &fakeRuntime{}, unrelatedSess)
 
 	// Start a slow AvailableSessionModels call on the first session.
 	done := make(chan struct{})
@@ -575,8 +575,8 @@ func TestSessionManager_SetSessionAgentModel_DoesNotHoldMuxDuringRuntimeIO(t *te
 	slow.setAgentModelDelay = release
 
 	sm := NewSessionManager(ctx, config.Sources{}, store, 0, &config.RuntimeConfig{})
-	sm.AttachRuntime(slowSess.ID, slow, slowSess)
-	sm.AttachRuntime(unrelatedSess.ID, &fakeRuntime{}, unrelatedSess)
+	sm.AttachRuntime(t.Context(), slowSess.ID, slow, slowSess)
+	sm.AttachRuntime(t.Context(), unrelatedSess.ID, &fakeRuntime{}, unrelatedSess)
 
 	done := make(chan struct{})
 	go func() {
@@ -621,8 +621,8 @@ func TestApplyStoredOverrides(t *testing.T) {
 		applyStoredOverrides(t.Context(), "sess", fake, nil)
 
 		fake.mu.Lock()
+		defer fake.mu.Unlock()
 		assert.Empty(t, fake.overrides)
-		fake.mu.Unlock()
 	})
 
 	t.Run("no-op when runtime does not support switching", func(t *testing.T) {
@@ -643,9 +643,9 @@ func TestApplyStoredOverrides(t *testing.T) {
 		})
 
 		fake.mu.Lock()
+		defer fake.mu.Unlock()
 		assert.Equal(t, "openai/gpt-4o", fake.overrides["root"])
 		assert.Equal(t, "anthropic/claude-sonnet-4-0", fake.overrides["researcher"])
-		fake.mu.Unlock()
 	})
 
 	t.Run("runtime errors are swallowed (logged) so the session still loads", func(t *testing.T) {
@@ -656,5 +656,34 @@ func TestApplyStoredOverrides(t *testing.T) {
 		require.NotPanics(t, func() {
 			applyStoredOverrides(t.Context(), "sess", fake, map[string]string{"root": "gone/model"})
 		})
+	})
+}
+
+func TestSessionManager_CreateSession_CarriesTitle(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	store := session.NewInMemorySessionStore()
+	sm := NewSessionManager(ctx, config.Sources{}, store, 0, &config.RuntimeConfig{})
+
+	t.Run("non-empty title is preserved on the created session", func(t *testing.T) {
+		t.Parallel()
+		created, err := sm.CreateSession(ctx, &session.Session{Title: "harbor-watch"})
+		require.NoError(t, err)
+		assert.Equal(t, "harbor-watch", created.Title)
+	})
+
+	t.Run("whitespace-only title is not set (TrimSpace guard)", func(t *testing.T) {
+		t.Parallel()
+		created, err := sm.CreateSession(ctx, &session.Session{Title: "   "})
+		require.NoError(t, err)
+		assert.Empty(t, created.Title)
+	})
+
+	t.Run("empty title leaves session title unset", func(t *testing.T) {
+		t.Parallel()
+		created, err := sm.CreateSession(ctx, &session.Session{})
+		require.NoError(t, err)
+		assert.Empty(t, created.Title)
 	})
 }

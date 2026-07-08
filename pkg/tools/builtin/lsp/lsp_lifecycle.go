@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"sync/atomic"
 
 	"github.com/docker/docker-agent/pkg/concurrent"
 	"github.com/docker/docker-agent/pkg/telemetry/genai"
@@ -76,9 +77,11 @@ type lspProcess struct {
 // apply the right policy.
 func spawnLSPProcess(callerCtx context.Context, h *lspHandler) (*lspProcess, error) {
 	// The process must outlive the caller's request context (which is
-	// often cancelled when an HTTP/agent turn ends). The supervisor
-	// calls Close to shut it down on Stop or restart.
-	processCtx, processCancel := context.WithCancel(context.Background())
+	// often cancelled when an HTTP/agent turn ends). WithoutCancel keeps
+	// the caller's trace context (so spans/the env injection below chain
+	// onto the agent trace) while detaching from its cancellation. The
+	// supervisor calls Close to shut it down on Stop or restart.
+	processCtx, processCancel := context.WithCancel(context.WithoutCancel(callerCtx))
 
 	cmd := exec.CommandContext(processCtx, h.command, h.args...)
 	// Inherit the caller's W3C trace context (the Connect call's
@@ -158,8 +161,8 @@ func (h *lspHandler) publishSession(cmd *exec.Cmd, stdin io.WriteCloser, stdout 
 	h.capabilities = nil
 	h.serverInfo = nil
 	h.openFilesMu.Lock()
+	defer h.openFilesMu.Unlock()
 	h.openFiles = make(map[string]int)
-	h.openFilesMu.Unlock()
 }
 
 // clearSession is the inverse of publishSession: it nils all session
@@ -189,8 +192,8 @@ func (h *lspHandler) clearSessionLocked() {
 	h.capabilities = nil
 	h.serverInfo = nil
 	h.openFilesMu.Lock()
+	defer h.openFilesMu.Unlock()
 	h.openFiles = make(map[string]int)
-	h.openFilesMu.Unlock()
 }
 
 // fireToolsChanged invokes the registered tools-changed handler if any,
@@ -215,8 +218,7 @@ type lspSession struct {
 	stdin         io.WriteCloser
 	cmd           *exec.Cmd // captured at construction; never nilled by handler teardown.
 
-	mu     sync.Mutex
-	closed bool
+	closed atomic.Bool
 
 	waitOnce sync.Once
 	waitErr  error
@@ -244,10 +246,7 @@ func (s *lspSession) startWait() {
 			// An *exec.ExitError after a signal-induced shutdown
 			// (Close → cancel) is expected; treat it as a clean exit
 			// so the supervisor only restarts on real crashes.
-			s.mu.Lock()
-			closed := s.closed
-			s.mu.Unlock()
-			if closed {
+			if s.closed.Load() {
 				return
 			}
 			s.waitErr = fmt.Errorf("%w: %w", lifecycle.ErrServerCrashed, err)
@@ -258,13 +257,9 @@ func (s *lspSession) startWait() {
 // Close performs the LSP shutdown handshake and tears down the process.
 // Idempotent; safe to call concurrently with Wait.
 func (s *lspSession) Close(ctx context.Context) error {
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
+	if !s.closed.CompareAndSwap(false, true) {
 		return nil
 	}
-	s.closed = true
-	s.mu.Unlock()
 
 	slog.DebugContext(ctx, "Stopping LSP server")
 

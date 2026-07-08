@@ -1,5 +1,5 @@
 /* ===================================================
-   docker agent docs – Jekyll site utilities
+   docker agent docs – site utilities
    (theme, search, TOC, copy buttons)
    =================================================== */
 

@@ -299,6 +299,7 @@ var proxyManagedEnvVars = []string{
 	"ANTHROPIC_API_KEY",
 	"GOOGLE_API_KEY",
 	"MISTRAL_API_KEY",
+	"OPENROUTER_API_KEY",
 	"XAI_API_KEY",
 	"NEBIUS_API_KEY",
 	environment.DockerDesktopTokenEnv,

@@ -19,6 +19,8 @@ func localBackendWithStore(f *runExecFlags, store session.Store) *localBackend {
 }
 
 func TestResumeWorkingDir(t *testing.T) {
+	t.Parallel()
+
 	t.Run("returns the stored working dir of an existing session", func(t *testing.T) {
 		dir := t.TempDir()
 		store := session.NewInMemorySessionStore()

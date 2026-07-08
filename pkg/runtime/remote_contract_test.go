@@ -154,6 +154,8 @@ func (s *stubRemoteClient) SetSessionStarred(context.Context, string, bool) erro
 // no-op on RemoteRuntime that the contract considers a failure surfaces
 // here as a red test rather than a runtime user complaint.
 func TestRemoteRuntime_Contract(t *testing.T) {
+	t.Parallel()
+
 	runRuntimeContract(t, func(t *testing.T) Runtime {
 		t.Helper()
 		client := &stubRemoteClient{
@@ -190,7 +192,7 @@ func TestRemoteRuntime_SetCurrentAgent_PropagatesClientError(t *testing.T) {
 	rt, err := NewRemoteRuntime(client)
 	require.NoError(t, err)
 
-	err = rt.SetCurrentAgent("anything")
+	err = rt.SetCurrentAgent(t.Context(), "anything")
 	require.Error(t, err)
 	require.ErrorIs(t, err, want)
 	assert.Empty(t, rt.currentAgent, "currentAgent must not be mutated when validation fails")

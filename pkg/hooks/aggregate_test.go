@@ -86,10 +86,10 @@ func TestAggregateTracksMostRestrictiveDecision(t *testing.T) {
 }
 
 // TestAggregateDecisionEmptyForNonPreToolUse documents that
-// Result.Decision is meaningful only for pre_tool_use events. Other
-// events (turn_start, post_tool_use, ...) MUST leave it empty so a
-// runtime that consults it can't accidentally act on a stale verdict
-// from an unrelated hook.
+// Result.Decision is meaningful only for pre_tool_use (both the
+// default and preempt-yolo lanes). Other events (turn_start, post_tool_use, ...)
+// MUST leave it empty so a runtime that consults it can't accidentally
+// act on a stale verdict from an unrelated hook.
 func TestAggregateDecisionEmptyForNonPreToolUse(t *testing.T) {
 	t.Parallel()
 
@@ -134,18 +134,76 @@ func TestAggregateMergesPermissionRequestMetadata(t *testing.T) {
 	}, final.Metadata)
 }
 
-// TestAggregateIgnoresMetadataForNonPermissionRequest documents that
-// Metadata is only collected for permission_request events.
-func TestAggregateIgnoresMetadataForNonPermissionRequest(t *testing.T) {
+// TestAggregateIgnoresMetadataForUnrelatedEvent documents that
+// Metadata collection is scoped: only permission_request and the
+// preempt-yolo lane of pre_tool_use collect it. Other events that
+// happen to set the field on their HookSpecificOutput get nil.
+func TestAggregateIgnoresMetadataForUnrelatedEvent(t *testing.T) {
 	t.Parallel()
 
 	results := []hookResult{{HandlerResult: HandlerResult{Output: &Output{
 		HookSpecificOutput: &HookSpecificOutput{
-			HookEventName: EventPreToolUse,
+			HookEventName: EventTurnStart,
 			Metadata:      map[string]string{"a": "1"},
 		},
 	}}}}
 
-	final := aggregate(results, EventPreToolUse)
+	final := aggregate(results, EventTurnStart)
 	assert.Nil(t, final.Metadata)
+}
+
+// TestAggregatePreToolUsePreYolo_MergesMetadata pins the
+// preempt-yolo lane's metadata collection. The default pre_tool_use
+// lane (EventPreToolUse) does NOT collect Metadata; the preempt lane
+// (EventPreToolUsePreYolo) does, with last-writer-wins on key clashes
+// — same shape as permission_request. This is the only meaningful
+// aggregator difference between the two lanes; Decision/Allowed/
+// UpdatedInput semantics are shared and covered by the existing
+// pre_tool_use tests.
+func TestAggregatePreToolUsePreYolo_MergesMetadata(t *testing.T) {
+	t.Parallel()
+
+	mk := func(meta map[string]string) hookResult {
+		return hookResult{HandlerResult: HandlerResult{Output: &Output{
+			HookSpecificOutput: &HookSpecificOutput{
+				HookEventName:      EventPreToolUse,
+				PermissionDecision: DecisionAsk,
+				Metadata:           meta,
+			},
+		}}}
+	}
+
+	results := []hookResult{
+		mk(map[string]string{"blast_radius": "medium", "category": "fs-modify"}),
+		mk(map[string]string{"blast_radius": "high", "reason": "irreversible"}),
+	}
+
+	final := aggregate(results, EventPreToolUsePreYolo)
+	assert.Equal(t, map[string]string{
+		"blast_radius": "high",
+		"category":     "fs-modify",
+		"reason":       "irreversible",
+	}, final.Metadata)
+}
+
+// TestAggregatePreToolUseDefault_IgnoresMetadata documents the
+// lane distinction from the other direction: aggregating EventPreToolUse
+// (the default lane) does NOT collect Metadata even when hooks set it.
+// Default-lane consumers (the regular pre_tool_use chain in the
+// dispatcher) have no use for Metadata; collecting it would be a
+// silent no-op behavior change that could surprise hook authors.
+func TestAggregatePreToolUseDefault_IgnoresMetadata(t *testing.T) {
+	t.Parallel()
+
+	results := []hookResult{{HandlerResult: HandlerResult{Output: &Output{
+		HookSpecificOutput: &HookSpecificOutput{
+			HookEventName:      EventPreToolUse,
+			PermissionDecision: DecisionAsk,
+			Metadata:           map[string]string{"blast_radius": "high"},
+		},
+	}}}}
+
+	final := aggregate(results, EventPreToolUse)
+	assert.Nil(t, final.Metadata,
+		"default pre_tool_use lane must not collect Metadata; only the preempt_yolo lane does")
 }

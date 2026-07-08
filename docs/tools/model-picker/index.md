@@ -1,10 +1,11 @@
 ---
 title: "Model Picker Tool"
 description: "Let the agent pick between several models per turn."
-permalink: /tools/model-picker/
+keywords: docker agent, ai agents, tools, toolsets, model picker tool
+linkTitle: "Model Picker"
+weight: 200
+canonical: https://docs.docker.com/ai/docker-agent/tools/model-picker/
 ---
-
-# Model Picker Tool
 
 _Let the agent pick between several models per turn._
 
@@ -50,12 +51,10 @@ agents:
           - openai/gpt-5
 ```
 
-<div class="callout callout-tip" markdown="1">
-<div class="callout-title">Cost optimization
-</div>
-  <p>The model picker tool is particularly useful for cost optimization: let the agent use a cheap model by default and only escalate to expensive models when necessary.</p>
-
-</div>
+> [!TIP]
+> **Cost optimization**
+>
+> The model picker tool is particularly useful for cost optimization: let the agent use a cheap model by default and only escalate to expensive models when necessary.
 
 ## Tool Interface
 

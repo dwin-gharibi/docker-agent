@@ -49,6 +49,8 @@ func TestServer_ListAgents(t *testing.T) {
 }
 
 func TestServer_EmptyList(t *testing.T) {
+	t.Parallel()
+
 	ctx := t.Context()
 	lnPath := startServer(t, ctx, prepareAgentsDir(t))
 

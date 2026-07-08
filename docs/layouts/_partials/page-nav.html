@@ -1,0 +1,39 @@
+{{/* Build a flat list of all pages from nav data (handles both flat
+     items and grouped items) and find prev/next. */}}
+{{ $allPages := slice }}
+{{ range hugo.Data.nav }}
+  {{ range .items }}{{ $allPages = $allPages | append . }}{{ end }}
+  {{ range .groups }}
+    {{ range .items }}{{ $allPages = $allPages | append . }}{{ end }}
+  {{ end }}
+{{ end }}
+
+{{ $currentURL := .RelPermalink }}
+{{ $currentIndex := -1 }}
+{{ range $i, $item := $allPages }}
+  {{ if eq $currentURL (relURL (strings.TrimPrefix "/" $item.url)) }}
+    {{ $currentIndex = $i }}
+  {{ end }}
+{{ end }}
+
+{{ if ge $currentIndex 0 }}
+<div class="page-nav">
+  {{ if gt $currentIndex 0 }}
+  {{ $prev := index $allPages (sub $currentIndex 1) }}
+  <a href="{{ relURL (strings.TrimPrefix "/" $prev.url) }}">
+    <span class="nav-label">← Previous</span>
+    <span class="nav-title">{{ $prev.title }}</span>
+  </a>
+  {{ else }}
+  <span></span>
+  {{ end }}
+
+  {{ if lt (add $currentIndex 1) (len $allPages) }}
+  {{ $next := index $allPages (add $currentIndex 1) }}
+  <a class="next" href="{{ relURL (strings.TrimPrefix "/" $next.url) }}">
+    <span class="nav-label">Next →</span>
+    <span class="nav-title">{{ $next.title }}</span>
+  </a>
+  {{ end }}
+</div>
+{{ end }}

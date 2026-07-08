@@ -1,16 +1,16 @@
 ---
 title: "Remote MCP Servers"
 description: "Connect docker-agent to cloud services via remote MCP servers with built-in OAuth authentication."
-permalink: /features/remote-mcp/
+keywords: docker agent, ai agents, features, remote mcp servers
+weight: 120
+canonical: https://docs.docker.com/ai/docker-agent/features/remote-mcp/
 ---
-
-# Remote MCP Servers
 
 _Connect docker-agent to cloud services via remote MCP servers with built-in OAuth authentication._
 
 ## Overview
 
-Docker Agent supports connecting to remote MCP servers over **Streamable HTTP** and **SSE** (Server-Sent Events) transports. Streamable HTTP is the current recommended transport for most hosted MCP servers. Many popular services offer MCP endpoints with OAuth — docker-agent handles the authentication flow automatically.
+Docker Agent supports connecting to remote MCP servers over **Streamable HTTP**, **SSE** (Server-Sent Events), and **Unix domain sockets**. Streamable HTTP is the current recommended transport for most hosted MCP servers. Many popular services offer MCP endpoints with OAuth — docker-agent handles the authentication flow automatically.
 
 ```yaml
 toolsets:
@@ -20,19 +20,29 @@ toolsets:
       transport_type: "streamable"
 ```
 
-<div class="callout callout-tip" markdown="1">
-<div class="callout-title">OAuth flow
-</div>
-  <p>When you connect to a remote MCP server that requires OAuth, docker-agent opens your browser automatically for authentication. Tokens are cached for subsequent sessions.</p>
+## Unix Domain Sockets
 
-</div>
+Use a `unix://` URL to connect to an MCP server listening on a local Unix socket. This is useful when running docker-agent inside a container and exposing an MCP server from the host via a bind-mounted socket:
 
-<div class="callout callout-tip" markdown="1">
-<div class="callout-title">Cancelling the authorization dialog
-</div>
-  <p>If you dismiss the OAuth authorization dialog, the request is cancelled cleanly — no repeated prompts appear. The agent will report that authorization was declined. To try again, simply re-enable the server or repeat the request that triggered the flow.</p>
+```yaml
+toolsets:
+  - type: mcp
+    remote:
+      url: "unix:///tmp/mcp-notify.sock"
+      transport_type: "streamable"
+```
 
-</div>
+The path after `unix://` is the absolute path to the socket file. Configured `headers` are forwarded over the socket connection. OAuth discovery is not supported for Unix socket URLs.
+
+> [!TIP]
+> **OAuth flow**
+>
+> When you connect to a remote MCP server that requires OAuth, docker-agent opens your browser automatically for authentication. Tokens are cached for subsequent sessions.
+
+> [!TIP]
+> **Cancelling the authorization dialog**
+>
+> If you dismiss the OAuth authorization dialog, the request is cancelled cleanly — no repeated prompts appear. The agent will report that authorization was declined. To try again, simply re-enable the server or repeat the request that triggered the flow.
 
 ## Configuration
 
@@ -48,36 +58,33 @@ toolsets:
     allow_private_ips: true
 ```
 
-For full configuration details, see the [Tool Config]({{ '/configuration/tools/' | relative_url }}) page.
+For full configuration details, see the [Tool Config](../../configuration/tools/index.md) page.
 
 Set `allow_private_ips: true` on a remote MCP toolset only when the MCP server or its OAuth registration/token endpoints intentionally resolve to private, loopback, or link-local addresses. The default blocks those OAuth helper requests to reduce SSRF risk.
 
-<div class="callout callout-info" markdown="1">
-<div class="callout-title">Headers forwarded during OAuth discovery
-</div>
-  <p>Configured <code>headers</code> are forwarded to OAuth protected-resource-metadata discovery requests directed at the MCP server's own host — not to third-party authorization servers. This allows services like Grafana Cloud that require a routing header (e.g. <code>X-Grafana-URL</code>) on the discovery request to scope the OAuth flow correctly. Headers are never sent to a different host than the one in <code>remote.url</code>.</p>
-</div>
+> [!NOTE]
+> **Headers forwarded during OAuth discovery**
+>
+> Configured `headers` are forwarded to OAuth protected-resource-metadata discovery requests directed at the MCP server's own host — not to third-party authorization servers. This allows services like Grafana Cloud that require a routing header (e.g. `X-Grafana-URL`) on the discovery request to scope the OAuth flow correctly. Headers are never sent to a different host than the one in `remote.url`.
 
-<div class="callout callout-info" markdown="1">
-<div class="callout-title">Automatic reconnection after idle timeouts
-</div>
-  <p>Remote MCP connections (Streamable HTTP / SSE) automatically reconnect after the server closes an idle connection — no configuration needed. Services like Notion and Linear close idle connections periodically; docker-agent detects the clean close and reconnects with exponential backoff. To tune reconnect behaviour or disable reconnection entirely, use the <a href="{{ '/configuration/tools/#toolset-lifecycle' | relative_url }}"><code>lifecycle</code> block</a>.</p>
-</div>
+> [!NOTE]
+> **Automatic reconnection after idle timeouts**
+>
+> Remote MCP connections (Streamable HTTP / SSE) automatically reconnect after the server closes an idle connection — no configuration needed. Services like Notion and Linear close idle connections periodically; docker-agent detects the clean close and reconnects with exponential backoff. To tune reconnect behaviour or disable reconnection entirely, use the [`lifecycle` block](../../configuration/tools/index.md#toolset-lifecycle).
 
-<div class="callout callout-info" markdown="1">
-<div class="callout-title">Automatic recovery from revoked or rotated OAuth tokens
-</div>
-  <p>If a remote MCP server rejects the cached token with a <code>401 invalid_token</code> error (for example, because the token was revoked or rotated server-side), docker-agent handles the failure automatically:</p>
-  <ul>
-    <li><strong>Silent refresh:</strong> when a refresh token is available, docker-agent silently exchanges it for a new access token and replays the request — no user interaction required.</li>
-    <li><strong>Re-authentication prompt:</strong> when the refresh token is absent or has also expired, the toolset transitions to a "needs re-auth" state and surfaces an OAuth prompt on your next message (exactly like the first-time flow).</li>
-  </ul>
-  <p>Either way, the agent never burns 5 reconnect attempts on an auth failure — it fails fast and either refreshes silently or defers to interactive re-auth. If you want to trigger re-auth immediately without waiting for the next message, run <code>/toolset-restart &lt;name&gt;</code> from the TUI.</p>
-</div>
+> [!NOTE]
+> **Automatic recovery from revoked or rotated OAuth tokens**
+>
+> If a remote MCP server rejects the cached token with a `401 invalid_token` error (for example, because the token was revoked or rotated server-side), docker-agent handles the failure automatically:
+>
+> - **Silent refresh:** when a refresh token is available, docker-agent silently exchanges it for a new access token and replays the request — no user interaction required.
+> - **Re-authentication prompt:** when the refresh token is absent or has also expired, the toolset transitions to a "needs re-auth" state and surfaces an OAuth prompt on your next message (exactly like the first-time flow).
+>
+> Either way, the agent never burns 5 reconnect attempts on an auth failure — it fails fast and either refreshes silently or defers to interactive re-auth. If you want to trigger re-auth immediately without waiting for the next message, run `/toolset-restart <name>` from the TUI.
 
 ### OAuth for servers without Dynamic Client Registration
 
-Most remote MCP servers that require OAuth support [Dynamic Client Registration (RFC 7591)]({{ 'https://datatracker.ietf.org/doc/html/rfc7591' }}) — no configuration is needed, docker-agent handles the flow for you.
+Most remote MCP servers that require OAuth support [Dynamic Client Registration (RFC 7591)](https://datatracker.ietf.org/doc/html/rfc7591) — no configuration is needed, docker-agent handles the flow for you.
 
 For servers that do **not** support DCR, provide explicit OAuth credentials with the `oauth:` block:
 
@@ -104,7 +111,7 @@ toolsets:
 | `scopes`       | array[string]   | ✗        | Scopes to request during the authorization step. Values are server-specific.                     |
 | `callbackRedirectURL` | string   | ✗        | Custom OAuth redirect URI. Useful when the auth server requires HTTPS or a pre-registered URL. The literal placeholder `${callbackPort}` is replaced with the actual local callback port. See below.            |
 
-Secrets should be stored in a credential helper or environment variable rather than committed — see [Secrets]({{ '/guides/secrets/' | relative_url }}) for interpolation patterns.
+Secrets should be stored in a credential helper or environment variable rather than committed — see [Secrets](../../guides/secrets/index.md) for interpolation patterns.
 
 ### Custom redirect URI (`callbackRedirectURL`)
 
@@ -168,12 +175,10 @@ The client-driven `{access_token, ...}` reply shape is still accepted on the `--
 
 A per-toolset `callbackRedirectURL` (in the YAML) overrides the runtime-wide `--mcp-oauth-redirect-uri` for that toolset.
 
-<div class="callout callout-warning" markdown="1">
-<div class="callout-title">Security note
-</div>
-  <p>The <code>POST /api/mcp-oauth/callback</code> route is open by default (no auth required) when <code>--auth-token</code> is unset. State values are 128-bit opaque tokens, so brute-force is infeasible, but a state value that leaks (e.g. via debug logs or a compromised host) could be exploited by an attacker to inject a code. Set <code>--auth-token</code> when <code>docker agent serve api</code> listens on a network-reachable interface. When set, <code>--auth-token</code> enforces Bearer-token authentication on all API routes including this callback endpoint.</p>
-
-</div>
+> [!WARNING]
+> **Security note**
+>
+> The `POST /api/mcp-oauth/callback` route is open by default (no auth required) when `--auth-token` is unset. State values are 128-bit opaque tokens, so brute-force is infeasible, but a state value that leaks (e.g. via debug logs or a compromised host) could be exploited by an attacker to inject a code. Set `--auth-token` when `docker agent serve api` listens on a network-reachable interface. When set, `--auth-token` enforces Bearer-token authentication on all API routes including this callback endpoint.
 
 ## Project Management &amp; Collaboration
 
@@ -283,9 +288,7 @@ agents:
         instruction: Use Vercel for deployments.
 ```
 
-<div class="callout callout-info" markdown="1">
-<div class="callout-title">Growing list
-</div>
-  <p>This list is updated as more services add MCP support. If a service you use isn't listed, check their documentation — many providers are adding MCP endpoints regularly.</p>
-
-</div>
+> [!NOTE]
+> **Growing list**
+>
+> This list is updated as more services add MCP support. If a service you use isn't listed, check their documentation — many providers are adding MCP endpoints regularly.

@@ -4,9 +4,11 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestWithWorkingDir_SetsAllowedDirectories(t *testing.T) {
+	t.Parallel()
 	s := New(WithWorkingDir("/projects/myapp"))
 
 	assert.Equal(t, "/projects/myapp", s.WorkingDir)
@@ -14,6 +16,7 @@ func TestWithWorkingDir_SetsAllowedDirectories(t *testing.T) {
 }
 
 func TestWithWorkingDir_EmptyReturnsNilAllowedDirs(t *testing.T) {
+	t.Parallel()
 	s := New()
 
 	assert.Empty(t, s.WorkingDir)
@@ -21,6 +24,7 @@ func TestWithWorkingDir_EmptyReturnsNilAllowedDirs(t *testing.T) {
 }
 
 func TestNewSession_AllOptionsApplied(t *testing.T) {
+	t.Parallel()
 	s := New(
 		WithMaxIterations(10),
 		WithToolsApproved(true),
@@ -40,6 +44,7 @@ func TestNewSession_AllOptionsApplied(t *testing.T) {
 // This test documents the expected option set so that adding a new option
 // to one path without the other will be caught.
 func TestNewSession_ConsistencyBetweenInitialAndSpawned(t *testing.T) {
+	t.Parallel()
 	workingDir := "/projects/app"
 	autoApprove := true
 	hideToolResults := true
@@ -69,7 +74,9 @@ func TestNewSession_ConsistencyBetweenInitialAndSpawned(t *testing.T) {
 }
 
 func TestAddAttachedFile(t *testing.T) {
+	t.Parallel()
 	t.Run("deduplicates and preserves order", func(t *testing.T) {
+		t.Parallel()
 		s := New()
 		s.AddAttachedFile("/abs/foo.go")
 		s.AddAttachedFile("/abs/bar.go")
@@ -78,12 +85,14 @@ func TestAddAttachedFile(t *testing.T) {
 	})
 
 	t.Run("ignores empty paths", func(t *testing.T) {
+		t.Parallel()
 		s := New()
 		s.AddAttachedFile("")
 		assert.Empty(t, s.AttachedFilesSnapshot())
 	})
 
 	t.Run("ignores non-absolute paths", func(t *testing.T) {
+		t.Parallel()
 		s := New()
 		s.AddAttachedFile("foo.go")
 		s.AddAttachedFile("./bar.go")
@@ -92,6 +101,7 @@ func TestAddAttachedFile(t *testing.T) {
 	})
 
 	t.Run("snapshot is independent of session storage", func(t *testing.T) {
+		t.Parallel()
 		s := New()
 		s.AddAttachedFile("/abs/foo.go")
 		snap := s.AttachedFilesSnapshot()
@@ -100,7 +110,47 @@ func TestAddAttachedFile(t *testing.T) {
 	})
 }
 
+func TestRemoveAttachedFile(t *testing.T) {
+	t.Parallel()
+	t.Run("removes and reports presence", func(t *testing.T) {
+		t.Parallel()
+		s := New()
+		s.AddAttachedFile("/abs/foo.go")
+		s.AddAttachedFile("/abs/bar.go")
+		s.AddAttachedFile("/abs/baz.go")
+
+		assert.True(t, s.RemoveAttachedFile("/abs/bar.go"))
+		assert.Equal(t, []string{"/abs/foo.go", "/abs/baz.go"}, s.AttachedFilesSnapshot())
+	})
+
+	t.Run("reports absent paths", func(t *testing.T) {
+		t.Parallel()
+		s := New()
+		s.AddAttachedFile("/abs/foo.go")
+		assert.False(t, s.RemoveAttachedFile("/abs/other.go"))
+		assert.False(t, s.RemoveAttachedFile(""))
+		assert.Equal(t, []string{"/abs/foo.go"}, s.AttachedFilesSnapshot())
+	})
+
+	t.Run("no-op on empty list", func(t *testing.T) {
+		t.Parallel()
+		s := New()
+		assert.False(t, s.RemoveAttachedFile("/abs/foo.go"))
+		assert.Empty(t, s.AttachedFilesSnapshot())
+	})
+
+	t.Run("file can be re-attached after removal", func(t *testing.T) {
+		t.Parallel()
+		s := New()
+		s.AddAttachedFile("/abs/foo.go")
+		require.True(t, s.RemoveAttachedFile("/abs/foo.go"))
+		s.AddAttachedFile("/abs/foo.go")
+		assert.Equal(t, []string{"/abs/foo.go"}, s.AttachedFilesSnapshot())
+	})
+}
+
 func TestWithAttachedFiles(t *testing.T) {
+	t.Parallel()
 	s := New(WithAttachedFiles([]string{"/abs/foo.go", "", "relative/path.go", "/abs/bar.go", "/abs/foo.go"}))
 	assert.Equal(t, []string{"/abs/foo.go", "/abs/bar.go"}, s.AttachedFilesSnapshot())
 }

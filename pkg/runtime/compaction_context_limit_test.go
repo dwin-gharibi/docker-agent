@@ -56,6 +56,7 @@ func TestProviderContextLimit(t *testing.T) {
 		{name: "missing key", opts: map[string]any{"other": 123}, want: 0},
 		{name: "int", opts: map[string]any{"context_size": 32768}, want: 32768},
 		{name: "int64", opts: map[string]any{"context_size": int64(65536)}, want: 65536},
+		{name: "uint64 (yaml)", opts: map[string]any{"context_size": uint64(262144)}, want: 262144},
 		{name: "float64 (json)", opts: map[string]any{"context_size": float64(8192)}, want: 8192},
 		{name: "string decimal", opts: map[string]any{"context_size": "16384"}, want: 16384},
 		{name: "string with whitespace", opts: map[string]any{"context_size": "  4096 "}, want: 4096},
@@ -114,7 +115,7 @@ func TestCompactionContextLimit_FallsBackToProviderOpts(t *testing.T) {
 	root := agent.New("root", "test", agent.WithModel(prov))
 	tm := team.New(team.WithAgents(root))
 
-	rt, err := NewLocalRuntime(tm, WithModelStore(errorModelStore{err: errors.New("not in catalogue")}))
+	rt, err := NewLocalRuntime(t.Context(), tm, WithModelStore(errorModelStore{err: errors.New("not in catalogue")}))
 	require.NoError(t, err)
 
 	got := rt.compactionContextLimit(t.Context(), root)
@@ -138,7 +139,7 @@ func TestCompactionContextLimit_PrefersProviderOpts(t *testing.T) {
 	root := agent.New("root", "test", agent.WithModel(prov))
 	tm := team.New(team.WithAgents(root))
 
-	rt, err := NewLocalRuntime(tm, WithModelStore(mockModelStoreWithLimit{limit: 200_000}))
+	rt, err := NewLocalRuntime(t.Context(), tm, WithModelStore(mockModelStoreWithLimit{limit: 200_000}))
 	require.NoError(t, err)
 
 	got := rt.compactionContextLimit(t.Context(), root)
@@ -156,7 +157,7 @@ func TestCompactionContextLimit_FallsBackToCatalogue(t *testing.T) {
 	root := agent.New("root", "test", agent.WithModel(prov))
 	tm := team.New(team.WithAgents(root))
 
-	rt, err := NewLocalRuntime(tm, WithModelStore(mockModelStoreWithLimit{limit: 200_000}))
+	rt, err := NewLocalRuntime(t.Context(), tm, WithModelStore(mockModelStoreWithLimit{limit: 200_000}))
 	require.NoError(t, err)
 
 	got := rt.compactionContextLimit(t.Context(), root)
@@ -174,9 +175,104 @@ func TestCompactionContextLimit_NoSourcesYieldsZero(t *testing.T) {
 	root := agent.New("root", "test", agent.WithModel(prov))
 	tm := team.New(team.WithAgents(root))
 
-	rt, err := NewLocalRuntime(tm, WithModelStore(mockModelStore{}))
+	rt, err := NewLocalRuntime(t.Context(), tm, WithModelStore(mockModelStore{}))
 	require.NoError(t, err)
 
 	got := rt.compactionContextLimit(t.Context(), root)
 	assert.Equal(t, int64(0), got)
+}
+
+// TestCompactionContextLimit_UsesCompactionModel verifies that when a
+// dedicated compaction model is configured, the resolved context limit comes
+// from that model and not from the agent's (larger) primary model. This is the
+// budget the summary call is scaled against (issue #3241).
+func TestCompactionContextLimit_UsesCompactionModel(t *testing.T) {
+	t.Parallel()
+
+	primary := &providerOptsProvider{id: "openai/gpt-5", opts: map[string]any{"context_size": 200_000}}
+	compaction := &providerOptsProvider{id: "openai/gpt-4o-mini", opts: map[string]any{"context_size": 16_000}}
+	root := agent.New("root", "test",
+		agent.WithModel(primary),
+		agent.WithCompactionModel(compaction),
+	)
+	tm := team.New(team.WithAgents(root))
+
+	rt, err := NewLocalRuntime(t.Context(), tm, WithModelStore(errorModelStore{err: errors.New("not in catalogue")}))
+	require.NoError(t, err)
+
+	got := rt.compactionContextLimit(t.Context(), root)
+	assert.Equal(t, int64(16_000), got,
+		"context limit must resolve from the dedicated compaction model, not the primary")
+}
+
+// TestEffectiveContextLimit covers the budget that drives both the proactive
+// compaction trigger and the UI context gauge. With no dedicated compaction
+// model it equals the primary limit; with one it is min(primary, compaction)
+// so compaction fires while the conversation still fits the compaction model's
+// window. An unresolvable compaction-model limit falls back to the primary so
+// a misconfigured compaction model never suppresses compaction.
+func TestEffectiveContextLimit(t *testing.T) {
+	t.Parallel()
+
+	t.Run("no compaction model uses primary", func(t *testing.T) {
+		t.Parallel()
+		primary := &providerOptsProvider{id: "openai/gpt-5", opts: map[string]any{"context_size": 200_000}}
+		root := agent.New("root", "test", agent.WithModel(primary))
+		tm := team.New(team.WithAgents(root))
+		rt, err := NewLocalRuntime(t.Context(), tm, WithModelStore(errorModelStore{err: errors.New("x")}))
+		require.NoError(t, err)
+
+		assert.Equal(t, int64(200_000), rt.effectiveContextLimit(t.Context(), root, 200_000))
+	})
+
+	t.Run("smaller compaction model caps the trigger", func(t *testing.T) {
+		t.Parallel()
+		primary := &providerOptsProvider{id: "openai/gpt-5", opts: map[string]any{"context_size": 200_000}}
+		compaction := &providerOptsProvider{id: "openai/gpt-4o-mini", opts: map[string]any{"context_size": 16_000}}
+		root := agent.New("root", "test", agent.WithModel(primary), agent.WithCompactionModel(compaction))
+		tm := team.New(team.WithAgents(root))
+		rt, err := NewLocalRuntime(t.Context(), tm, WithModelStore(errorModelStore{err: errors.New("x")}))
+		require.NoError(t, err)
+
+		assert.Equal(t, int64(16_000), rt.effectiveContextLimit(t.Context(), root, 200_000))
+	})
+
+	t.Run("larger compaction model leaves the primary trigger", func(t *testing.T) {
+		t.Parallel()
+		primary := &providerOptsProvider{id: "openai/gpt-5", opts: map[string]any{"context_size": 200_000}}
+		compaction := &providerOptsProvider{id: "openai/big", opts: map[string]any{"context_size": 1_000_000}}
+		root := agent.New("root", "test", agent.WithModel(primary), agent.WithCompactionModel(compaction))
+		tm := team.New(team.WithAgents(root))
+		rt, err := NewLocalRuntime(t.Context(), tm, WithModelStore(errorModelStore{err: errors.New("x")}))
+		require.NoError(t, err)
+
+		assert.Equal(t, int64(200_000), rt.effectiveContextLimit(t.Context(), root, 200_000))
+	})
+
+	t.Run("unresolvable primary uses the compaction model limit", func(t *testing.T) {
+		t.Parallel()
+		// A local/DMR primary not catalogued and without provider_opts.context_size
+		// yields primaryLimit==0; a catalogued compaction model still lets
+		// compaction run against the compaction model's window.
+		primary := &providerOptsProvider{id: "dmr/local-gguf"} // unresolvable
+		compaction := &providerOptsProvider{id: "openai/gpt-4o-mini", opts: map[string]any{"context_size": 16_000}}
+		root := agent.New("root", "test", agent.WithModel(primary), agent.WithCompactionModel(compaction))
+		tm := team.New(team.WithAgents(root))
+		rt, err := NewLocalRuntime(t.Context(), tm, WithModelStore(errorModelStore{err: errors.New("x")}))
+		require.NoError(t, err)
+
+		assert.Equal(t, int64(16_000), rt.effectiveContextLimit(t.Context(), root, 0))
+	})
+
+	t.Run("unresolvable compaction limit falls back to primary", func(t *testing.T) {
+		t.Parallel()
+		primary := &providerOptsProvider{id: "openai/gpt-5", opts: map[string]any{"context_size": 200_000}}
+		compaction := &providerOptsProvider{id: "unknown/model"} // no opts, no catalogue entry
+		root := agent.New("root", "test", agent.WithModel(primary), agent.WithCompactionModel(compaction))
+		tm := team.New(team.WithAgents(root))
+		rt, err := NewLocalRuntime(t.Context(), tm, WithModelStore(mockModelStore{}))
+		require.NoError(t, err)
+
+		assert.Equal(t, int64(200_000), rt.effectiveContextLimit(t.Context(), root, 200_000))
+	})
 }

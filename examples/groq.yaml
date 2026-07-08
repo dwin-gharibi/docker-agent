@@ -1,0 +1,17 @@
+# yaml-language-server: $schema=../agent-schema.json
+
+models:
+  groq_model:
+    provider: groq
+    model: llama-3.3-70b-versatile
+
+agents:
+  root:
+    model: groq_model
+    description: Assistant using Groq
+    instruction: |
+      You are a helpful assistant.
+    toolsets:
+      - type: filesystem
+      - type: shell
+      - type: think

@@ -424,6 +424,29 @@ func SessionTitle(sessionID, title string) Event {
 
 func (e *SessionTitleEvent) GetSessionID() string { return e.SessionID }
 
+// SessionPlanUpdatedEvent fires when the session_plan toolset writes a plan.
+// Content and Path let a UI render the plan inline without re-reading the file.
+type SessionPlanUpdatedEvent struct {
+	AgentContext
+
+	Type      string `json:"type"`
+	SessionID string `json:"session_id"`
+	Content   string `json:"content,omitempty"`
+	Path      string `json:"path,omitempty"`
+}
+
+func SessionPlanUpdated(sessionID, content, path, agentName string) Event {
+	return &SessionPlanUpdatedEvent{
+		Type:         "session_plan_updated",
+		SessionID:    sessionID,
+		Content:      content,
+		Path:         path,
+		AgentContext: newAgentContext(agentName),
+	}
+}
+
+func (e *SessionPlanUpdatedEvent) GetSessionID() string { return e.SessionID }
+
 type SessionSummaryEvent struct {
 	AgentContext
 
@@ -445,12 +468,26 @@ func SessionSummary(sessionID, summary, agentName string, firstKeptEntry int) Ev
 
 func (e *SessionSummaryEvent) GetSessionID() string { return e.SessionID }
 
+// Outcome values carried by a "completed" [SessionCompactionEvent].
+const (
+	CompactionOutcomeApplied = "applied"
+	CompactionOutcomeSkipped = "skipped"
+	CompactionOutcomeFailed  = "failed"
+)
+
 type SessionCompactionEvent struct {
 	AgentContext
 
 	Type      string `json:"type"`
 	SessionID string `json:"session_id"`
 	Status    string `json:"status"`
+	// Outcome qualifies a "completed" status: "applied" (a summary
+	// replaced part of the history), "skipped" (no-op: nothing to
+	// compact or the model produced no summary), or "failed" (an error
+	// was emitted). Empty on "started" events and events from older
+	// servers; consumers should treat empty as "applied" for backward
+	// compatibility.
+	Outcome string `json:"outcome,omitempty"`
 }
 
 func SessionCompaction(sessionID, status, agentName string) Event {
@@ -458,6 +495,22 @@ func SessionCompaction(sessionID, status, agentName string) Event {
 		Type:         "session_compaction",
 		SessionID:    sessionID,
 		Status:       status,
+		AgentContext: newAgentContext(agentName),
+	}
+}
+
+// SessionCompactionCompleted is the terminal counterpart of a "started"
+// [SessionCompaction] event, carrying the outcome ("applied", "skipped"
+// or "failed") so consumers can render an honest completion signal.
+// A "completed" event may arrive without a preceding "started" when a
+// pre-compaction hook vetoes the operation; consumers replaying the
+// event stream should tolerate the unpaired terminal event.
+func SessionCompactionCompleted(sessionID, outcome, agentName string) Event {
+	return &SessionCompactionEvent{
+		Type:         "session_compaction",
+		SessionID:    sessionID,
+		Status:       "completed",
+		Outcome:      outcome,
 		AgentContext: newAgentContext(agentName),
 	}
 }
@@ -606,15 +659,21 @@ type AgentInfoEvent struct {
 	Model          string `json:"model"` // this is in provider/model format (e.g., "openai/gpt-4o")
 	Description    string `json:"description"`
 	WelcomeMessage string `json:"welcome_message,omitempty"`
+	ContextLimit   int64  `json:"context_limit,omitempty"`
 }
 
-func AgentInfo(agentName, model, description, welcomeMessage string) Event {
+func AgentInfo(agentName, model, description, welcomeMessage string, contextLimit ...int64) Event {
+	var limit int64
+	if len(contextLimit) > 0 {
+		limit = contextLimit[0]
+	}
 	return &AgentInfoEvent{
 		Type:           "agent_info",
 		AgentName:      agentName,
 		Model:          model,
 		Description:    description,
 		WelcomeMessage: welcomeMessage,
+		ContextLimit:   limit,
 		AgentContext:   newAgentContext(agentName),
 	}
 }

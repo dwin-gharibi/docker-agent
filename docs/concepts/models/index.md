@@ -1,10 +1,10 @@
 ---
 title: "Models"
 description: "Models are the AI brains behind your agents. docker-agent supports multiple providers and flexible configuration."
-permalink: /concepts/models/
+keywords: docker agent, ai agents, concepts, models
+weight: 20
+canonical: https://docs.docker.com/ai/docker-agent/concepts/models/
 ---
-
-# Models
 
 _Models are the AI brains behind your agents. docker-agent supports multiple providers and flexible configuration._
 
@@ -65,7 +65,7 @@ agents:
 
 At load time, docker-agent selects the first candidate whose credentials are
 configured. You only need credentials for one candidate. See
-[Model Configuration]({{ '/configuration/models/#first-available-models' | relative_url }})
+[Model Configuration](../../configuration/models/index.md#first-available-models)
 for details.
 
 ## Supported Providers
@@ -80,13 +80,28 @@ for details.
 | Mistral             | `mistral`        | Mistral models                       | `MISTRAL_API_KEY`                   |
 | xAI                 | `xai`            | Grok models                          | `XAI_API_KEY`                       |
 | Nebius              | `nebius`         | Open-source and specialised models   | `NEBIUS_API_KEY`                    |
+| NVIDIA NIM          | `nvidia`         | Nemotron, Llama, Qwen, DeepSeek (open models) | `NVIDIA_API_KEY`               |
 | MiniMax             | `minimax`        | MiniMax models                       | `MINIMAX_API_KEY`                   |
+| Baseten             | `baseten`        | DeepSeek, Kimi, GLM, Llama models    | `BASETEN_API_KEY`                   |
+| OVHcloud            | `ovhcloud`       | Qwen, Llama, Mistral, DeepSeek (EU-hosted) | `OVH_AI_ENDPOINTS_ACCESS_TOKEN` |
+| Groq                | `groq`           | Llama, Qwen, GPT-OSS (fast inference) | `GROQ_API_KEY`                     |
+| Fireworks AI        | `fireworks`      | Kimi, Llama, Qwen, DeepSeek, GLM (open models) | `FIREWORKS_API_KEY`         |
+| DeepSeek            | `deepseek`       | DeepSeek-V3 chat and R1 reasoner     | `DEEPSEEK_API_KEY`                  |
+| Cerebras            | `cerebras`       | GPT-OSS, GLM (fast inference)         | `CEREBRAS_API_KEY`                  |
+| Together AI         | `together`       | Llama, Qwen, DeepSeek, Kimi (open models) | `TOGETHER_API_KEY`             |
+| Hugging Face        | `huggingface`    | Llama, Qwen, DeepSeek, GLM (open models) | `HF_TOKEN`                      |
+| Cloudflare Workers AI | `cloudflare-workers-ai` | Llama, Mistral, Qwen, Gemma (edge-hosted open models) | `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` |
+| Moonshot AI         | `moonshot`       | Kimi K2 chat, reasoning, and coding models | `MOONSHOT_API_KEY`             |
+| Vercel AI Gateway   | `vercel`         | Multi-provider gateway               | `AI_GATEWAY_API_KEY`                |
+| Cloudflare AI Gateway | `cloudflare-ai-gateway` | Multi-provider gateway         | `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` + `CLOUDFLARE_GATEWAY_ID` |
 | Requesty            | `requesty`       | Multi-provider gateway               | `REQUESTY_API_KEY`                  |
+| OpenRouter          | `openrouter`     | Multi-provider gateway               | `OPENROUTER_API_KEY`                |
 | Azure OpenAI        | `azure`          | gpt-4o, gpt-5 on Azure               | `AZURE_API_KEY` + `base_url`        |
 | Ollama              | `ollama`         | Any local Ollama model               | None (local; optional `base_url`)   |
 | GitHub Copilot      | `github-copilot` | Copilot-hosted OpenAI/Anthropic      | `GITHUB_TOKEN` (PAT with `copilot`) |
+| ChatGPT (OpenAI account) | `chatgpt`   | gpt-5 family via ChatGPT subscription | None (sign in via `docker agent setup`) |
 
-See the [Model Providers]({{ '/providers/overview/' | relative_url }}) section for detailed configuration guides.
+See the [Model Providers](../../providers/overview/index.md) section for detailed configuration guides.
 
 ## Model Properties
 
@@ -129,12 +144,10 @@ models:
     thinking_budget: none # disable thinking
 ```
 
-<div class="callout callout-info" markdown="1">
-<div class="callout-title">Multi-provider teams
-</div>
-  <p>Different agents can use different providers in the same config. See <a href="{{ '/concepts/multi-agent/' | relative_url }}">Multi-Agent</a> for patterns.</p>
-
-</div>
+> [!NOTE]
+> **Multi-provider teams**
+>
+> Different agents can use different providers in the same config. See [Multi-Agent](../multi-agent/index.md) for patterns.
 
 ## Alloy Models
 

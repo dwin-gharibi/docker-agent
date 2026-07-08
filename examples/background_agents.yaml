@@ -7,7 +7,7 @@
 
 agents:
   root:
-    model: anthropic/claude-sonnet-4-0
+    model: anthropic/claude-sonnet-4-5
     description: Research coordinator that dispatches work in parallel
     instruction: |
       You are a research coordinator. When the user asks a question:
@@ -37,7 +37,7 @@ agents:
         ref: docker:duckduckgo
 
   code_analyst:
-    model: anthropic/claude-sonnet-4-0
+    model: anthropic/claude-sonnet-4-5
     description: Analyses local code and provides technical insights
     instruction: |
       You are a code analyst. Read the codebase to answer technical

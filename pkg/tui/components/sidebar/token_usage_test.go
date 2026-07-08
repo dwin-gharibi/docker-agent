@@ -15,7 +15,7 @@ import (
 func TestActiveSessionTokens_SingleSession(t *testing.T) {
 	t.Parallel()
 
-	m := newTestSidebar()
+	m := newTestSidebar(t)
 	m.startStream("session-1", "root")
 	m.recordUsageTokens("session-1", "root", 5000, 3000)
 
@@ -30,7 +30,7 @@ func TestActiveSessionTokens_SingleSession(t *testing.T) {
 func TestActiveSessionTokens_TracksActiveSubSession(t *testing.T) {
 	t.Parallel()
 
-	m := newTestSidebar()
+	m := newTestSidebar(t)
 
 	m.startStream("session-root", "root")
 	m.recordUsageTokens("session-root", "root", 20000, 10000)
@@ -55,7 +55,7 @@ func TestActiveSessionTokens_FallbackToSingleSession(t *testing.T) {
 
 	sess := session.New()
 	sessionState := service.NewSessionState(sess)
-	m := New(sessionState).(*model)
+	m := New(t.Context(), sessionState).(*model)
 
 	m.sessionUsage["session-1"] = &runtime.Usage{
 		InputTokens:  5000,
@@ -72,7 +72,7 @@ func TestActiveSessionTokens_Empty(t *testing.T) {
 
 	sess := session.New()
 	sessionState := service.NewSessionState(sess)
-	m := New(sessionState).(*model)
+	m := New(t.Context(), sessionState).(*model)
 
 	tokens, found := m.activeSessionTokens()
 	assert.False(t, found)
@@ -85,7 +85,7 @@ func TestActiveSessionTokens_Empty(t *testing.T) {
 func TestActiveSessionTokens_StableDuringSubAgent(t *testing.T) {
 	t.Parallel()
 
-	m := newTestSidebar()
+	m := newTestSidebar(t)
 
 	m.startStream("session-root", "root")
 	m.recordUsageTokens("session-root", "root", 20000, 10000)
@@ -109,7 +109,7 @@ func TestActiveSessionTokens_StableDuringSubAgent(t *testing.T) {
 func TestActiveSessionTokens_RecoversFromImbalancedStreams(t *testing.T) {
 	t.Parallel()
 
-	m := newTestSidebar()
+	m := newTestSidebar(t)
 
 	// Turn 1: a sub-agent stream is left unbalanced (no matching stop).
 	m.startStream("session-root", "root")
@@ -132,7 +132,7 @@ func TestActiveSessionTokens_RecoversFromImbalancedStreams(t *testing.T) {
 func TestTokenUsageSummary_SingleSession(t *testing.T) {
 	t.Parallel()
 
-	m := newTestSidebar()
+	m := newTestSidebar(t)
 	m.startStream("session-1", "root")
 	m.SetTokenUsage(&runtime.TokenUsageEvent{
 		SessionID:    "session-1",
@@ -146,18 +146,19 @@ func TestTokenUsageSummary_SingleSession(t *testing.T) {
 		},
 	})
 
-	summary := m.tokenUsageSummary()
-	// Single session: shows total tokens, cost, and context
-	assert.Contains(t, summary, "Tokens: 8.0K")
-	assert.Contains(t, summary, "Cost: $0.05")
-	assert.Contains(t, summary, "Context: 8%")
+	summary := ansi.Strip(m.tokenUsageSummary())
+	// Single session: shows total tokens, context, and cost in the same
+	// compact format as the vertical Token Usage tab
+	assert.Contains(t, summary, "8.0K")
+	assert.Contains(t, summary, "$0.05")
+	assert.Contains(t, summary, "(8%)")
 	assert.NotContains(t, summary, "sub-sessions")
 }
 
 func TestTokenUsageSummary_MultipleSessions_ShowsActiveSessionTokens(t *testing.T) {
 	t.Parallel()
 
-	m := newTestSidebar()
+	m := newTestSidebar(t)
 
 	// Root agent session: 30K tokens, $0.10
 	m.startStream("session-root", "root")
@@ -189,18 +190,18 @@ func TestTokenUsageSummary_MultipleSessions_ShowsActiveSessionTokens(t *testing.
 
 	// While the sub-agent runs, show its tokens and context, with the
 	// aggregated cost and sub-session count.
-	summary := m.tokenUsageSummary()
-	assert.Contains(t, summary, "Tokens: 10.0K")
-	assert.Contains(t, summary, "Cost: $0.15")
-	assert.Contains(t, summary, "Context: 5%")
-	assert.Contains(t, summary, "1 sub-sessions")
+	summary := ansi.Strip(m.tokenUsageSummary())
+	assert.Contains(t, summary, "10.0K")
+	assert.Contains(t, summary, "$0.15")
+	assert.Contains(t, summary, "(5%)")
+	assert.Contains(t, summary, "(1 sub-sessions)")
 
 	// Once it returns, the parent's tokens and context are shown again.
 	m.stopStream()
-	summary = m.tokenUsageSummary()
-	assert.Contains(t, summary, "Tokens: 30.0K")
-	assert.Contains(t, summary, "Cost: $0.15")
-	assert.Contains(t, summary, "Context: 30%")
+	summary = ansi.Strip(m.tokenUsageSummary())
+	assert.Contains(t, summary, "30.0K")
+	assert.Contains(t, summary, "$0.15")
+	assert.Contains(t, summary, "(30%)")
 }
 
 func TestTokenUsageSummary_Empty(t *testing.T) {
@@ -208,7 +209,7 @@ func TestTokenUsageSummary_Empty(t *testing.T) {
 
 	sess := session.New()
 	sessionState := service.NewSessionState(sess)
-	m := New(sessionState).(*model)
+	m := New(t.Context(), sessionState).(*model)
 
 	assert.Empty(t, m.tokenUsageSummary())
 }
@@ -218,7 +219,7 @@ func TestTokenUsageSummary_Empty(t *testing.T) {
 func TestTokenUsageTab_ShowsTokenGlyph(t *testing.T) {
 	t.Parallel()
 
-	m := newTestSidebar()
+	m := newTestSidebar(t)
 	m.startStream("session-1", "root")
 	m.recordUsageTokens("session-1", "root", 5000, 3000)
 

@@ -20,6 +20,7 @@ const (
 var (
 	_ tools.ToolSet      = (*ToolSet)(nil)
 	_ tools.Instructable = (*ToolSet)(nil)
+	_ tools.Named        = (*ToolSet)(nil)
 )
 
 // BuildSkillUserMessage formats a PreparedSkillFork as the implicit user
@@ -94,6 +95,11 @@ func New(loadedSkills []skills.Skill, workingDir string) *ToolSet {
 // after resolving the skills' declared toolset names.
 func (s *ToolSet) SetForkToolSets(m map[string][]tools.ToolSet) {
 	s.forkToolSets = m
+}
+
+// Name implements tools.Named; loader-created, so no registry WithName wrapper.
+func (s *ToolSet) Name() string {
+	return "skills"
 }
 
 // Skills returns the loaded skills (used by the app layer for slash commands).

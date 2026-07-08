@@ -1,0 +1,17 @@
+# yaml-language-server: $schema=../agent-schema.json
+
+models:
+  baseten_model:
+    provider: baseten
+    model: deepseek-ai/DeepSeek-V3.1
+
+agents:
+  root:
+    model: baseten_model
+    description: Assistant using Baseten
+    instruction: |
+      You are a helpful assistant.
+    toolsets:
+      - type: filesystem
+      - type: shell
+      - type: think

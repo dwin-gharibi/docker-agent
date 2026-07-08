@@ -1,16 +1,19 @@
 ---
 title: "Configuration Overview"
 description: "docker-agent uses YAML or HCL configuration files to define agents, models, tools, and their relationships."
-permalink: /configuration/overview/
+keywords: docker agent, ai agents, configuration, yaml, configuration overview
+linkTitle: "Overview"
+weight: 10
+canonical: https://docs.docker.com/ai/docker-agent/configuration/overview/
+aliases:
+  - /ai/docker-agent/reference/config/
 ---
-
-# Configuration Overview
 
 _docker-agent uses YAML or HCL configuration files to define agents, models, tools, and their relationships._
 
 ## File Structure
 
-A docker-agent config can be written in YAML or HCL. The examples on this page use YAML; see [HCL Configuration]({{ '/configuration/hcl/' | relative_url }}) for the block-based HCL syntax.
+A docker-agent config can be written in YAML or HCL. The examples on this page use YAML; see [HCL Configuration](../hcl/index.md) for the block-based HCL syntax.
 
 A docker-agent config has these main sections:
 
@@ -107,72 +110,26 @@ agent "root" {
 
 Models can be referenced inline or defined in the `models` section:
 
-<div class="cards">
-  <div class="card" style="cursor:default;">
-    <h3>Inline</h3>
-    <p>Quick and simple. Use <code>provider/model</code> syntax directly.</p>
-    <pre style="margin-top:12px"><code class="language-yaml">model: openai/gpt-5</code></pre>
-  </div>
-  <div class="card" style="cursor:default;">
-    <h3>Named</h3>
-    <p>Full control over parameters. Reusable across agents.</p>
-    <pre style="margin-top:12px"><code class="language-yaml">model: my_claude</code></pre>
-  </div>
-</div>
+- **Inline** — quick and simple. Use `provider/model` syntax directly: `model: openai/gpt-5`
+- **Named** — full control over parameters, reusable across agents: `model: my_claude`
 
 ## Config Sections
 
-<div class="cards">
-  <a class="card" href="{{ '/configuration/hcl/' | relative_url }}">
-    <div class="card-icon">🧱</div>
-    <h3>HCL Configuration</h3>
-    <p>Write the same agent schema in HCL using labeled blocks, heredocs, and block-based tool definitions.</p>
-  </a>
-  <a class="card" href="{{ '/configuration/agents/' | relative_url }}">
-    <div class="card-icon">🤖</div>
-    <h3>Agent Config</h3>
-    <p>All agent properties: model, instruction, tools, sub-agents, hooks, and more.</p>
-  </a>
-  <a class="card" href="{{ '/configuration/models/' | relative_url }}">
-    <div class="card-icon">🧠</div>
-    <h3>Model Config</h3>
-    <p>Provider setup, parameters, thinking budget, and provider-specific options.</p>
-  </a>
-  <a class="card" href="{{ '/configuration/tools/' | relative_url }}">
-    <div class="card-icon">🔧</div>
-    <h3>Tool Config</h3>
-    <p>Built-in tools, MCP tools, Docker MCP, LSP, API tools, and tool filtering.</p>
-  </a>
-</div>
+- [**HCL Configuration**](../hcl/index.md) — write the same agent schema in HCL using labeled blocks, heredocs, and block-based tool definitions.
+- [**Agent Config**](../agents/index.md) — all agent properties: model, instruction, tools, sub-agents, hooks, and more.
+- [**Model Config**](../models/index.md) — provider setup, parameters, thinking budget, and provider-specific options.
+- [**Tool Config**](../tools/index.md) — built-in tools, MCP tools, Docker MCP, LSP, API tools, and tool filtering.
 
 ## Advanced Configuration
 
-<div class="cards">
-  <a class="card" href="{{ '/configuration/hooks/' | relative_url }}">
-    <div class="card-icon">⚡</div>
-    <h3>Hooks</h3>
-    <p>Run shell commands at lifecycle events like tool calls and session start/end.</p>
-  </a>
-  <a class="card" href="{{ '/configuration/permissions/' | relative_url }}">
-    <div class="card-icon">🔐</div>
-    <h3>Permissions</h3>
-    <p>Control which tools auto-approve, require confirmation, or are blocked.</p>
-  </a>
-  <a class="card" href="{{ '/configuration/sandbox/' | relative_url }}">
-    <div class="card-icon">📦</div>
-    <h3>Sandbox Mode</h3>
-    <p>Run agents in an isolated Docker container for security.</p>
-  </a>
-  <a class="card" href="{{ '/configuration/structured-output/' | relative_url }}">
-    <div class="card-icon">📋</div>
-    <h3>Structured Output</h3>
-    <p>Constrain agent responses to match a specific JSON schema.</p>
-  </a>
-</div>
+- [**Hooks**](../hooks/index.md) — run shell commands at lifecycle events like tool calls and session start/end.
+- [**Permissions**](../permissions/index.md) — control which tools auto-approve, require confirmation, or are blocked.
+- [**Sandbox Mode**](../sandbox/index.md) — run agents in an isolated Docker container for security.
+- [**Structured Output**](../structured-output/index.md) — constrain agent responses to match a specific JSON schema.
 
 ## Environment Variables
 
-API keys and secrets are read from environment variables — never stored in config files. See [Managing Secrets]({{ '/guides/secrets/' | relative_url }}) for all the ways to provide credentials (env files, Docker Compose secrets, macOS Keychain, `pass`):
+API keys and secrets are read from environment variables — never stored in config files. See [Managing Secrets](../../guides/secrets/index.md) for all the ways to provide credentials (env files, Docker Compose secrets, macOS Keychain, `pass`):
 
 | Variable                   | Provider                                            |
 | -------------------------- | --------------------------------------------------- |
@@ -184,6 +141,7 @@ API keys and secrets are read from environment variables — never stored in con
 | `NEBIUS_API_KEY`           | Nebius                                              |
 | `MINIMAX_API_KEY`          | MiniMax                                             |
 | `REQUESTY_API_KEY`         | Requesty                                            |
+| `OPENROUTER_API_KEY`       | OpenRouter                                          |
 | `GITHUB_TOKEN`             | GitHub Copilot (PAT with `copilot` scope)           |
 | `AZURE_API_KEY`            | Azure OpenAI (override with `token_key`)            |
 | `AWS_BEARER_TOKEN_BEDROCK` | AWS Bedrock (or the standard AWS credentials chain) |
@@ -202,25 +160,19 @@ API keys and secrets are read from environment variables — never stored in con
 | `DOCKER_AGENT_DEFAULT_MODEL`        | Default model used when none is specified, in `provider/model` form (e.g. `openai/gpt-5`).      |
 | `DOCKER_AGENT_MODELS_GATEWAY`       | Route model traffic through a gateway. Equivalent to the `--models-gateway` flag.                    |
 | `DOCKER_AGENT_HIDE_TELEMETRY_BANNER`| Set to `1` to suppress the first-run telemetry notice.                                               |
-| `DOCKER_AGENT_AUTO_UPDATE`          | Set to a truthy value (`1`, `true`, `yes`, `on`) to let standalone release binaries self-update before running. See [Optional Self-Updates]({{ '/getting-started/installation/#optional-self-updates' | relative_url }}). |
+| `DOCKER_AGENT_AUTO_UPDATE`          | Set to a truthy value (`1`, `true`, `yes`, `on`) to let standalone release binaries self-update before running. See [Optional Self-Updates](../../getting-started/installation/index.md#optional-self-updates). |
 
-<div class="callout callout-info" markdown="1">
-<div class="callout-title">Legacy <code>CAGENT_*</code> aliases
-</div>
-  <p>The same variables are also accepted with the legacy <code>CAGENT_</code> prefix (e.g. <code>CAGENT_DEFAULT_MODEL</code>, <code>CAGENT_MODELS_GATEWAY</code>, <code>CAGENT_HIDE_TELEMETRY_BANNER</code>) for backward compatibility. Prefer the <code>DOCKER_AGENT_*</code> form in new setups.</p>
+> [!NOTE]
+> **Legacy `CAGENT_*` aliases**
+>
+> The same variables are also accepted with the legacy `CAGENT_` prefix (e.g. `CAGENT_DEFAULT_MODEL`, `CAGENT_MODELS_GATEWAY`, `CAGENT_HIDE_TELEMETRY_BANNER`) for backward compatibility. Prefer the `DOCKER_AGENT_*` form in new setups.
 
-</div>
-
-<div class="callout callout-warning" markdown="1">
-<div class="callout-title">Important
-</div>
-  <p>Model references are case-sensitive: <code>openai/gpt-5</code> is not the same as <code>openai/GPT-5</code>.</p>
-
-</div>
+> [!IMPORTANT]
+> Model references are case-sensitive: `openai/gpt-5` is not the same as `openai/GPT-5`.
 
 ## Variable Expansion in Config Fields
 
-docker-agent uses **two different expansion syntaxes** depending on the field. They are not interchangeable: using the wrong syntax in a field is currently a silent no-op, so the literal string is passed through. Tracking issue: [#2615](https://github.com/docker/docker-agent/issues/2615).
+docker-agent expands `${env.VAR}` references in many config fields. This is the **canonical syntax everywhere** — prefer it for every field. Two engines back it: a full JavaScript evaluator for prompt/HTTP fields (where you also get defaults, ternaries, and tool calls), and a simpler path expander for filesystem/env fields (which additionally accepts the legacy `$VAR` / `${VAR}` / `~` shell forms). Picking `${env.VAR}` everywhere always works; the one caveat is that the path expander does not evaluate richer JS expressions. Using a shell-style `$VAR` in a JS-templated field is currently a silent no-op, so the literal string is passed through. Tracking issue: [#2615](https://github.com/docker/docker-agent/issues/2615).
 
 ### JavaScript template literals — `${env.VAR}`
 
@@ -252,15 +204,17 @@ agents:
 
 Undefined variables expand to the empty string.
 
-### Shell-style — `$VAR`, `${VAR}`, `~`
+### Path & env fields — `${env.VAR}` (canonical), `$VAR` / `${VAR}` / `~` (aliases)
 
-Used for filesystem paths. Backed by `os.ExpandEnv` plus tilde expansion against the current user's home directory.
+Used for filesystem paths and process environment values. Backed by `os.ExpandEnv` plus tilde expansion against the current user's home directory. The canonical `${env.VAR}` form is accepted here too, so a single syntax works across every field; the bare `$VAR` / `${VAR}` shell forms remain supported as aliases.
 
 Applies to:
 
 - `agents.<name>.toolsets[*].working_dir` (MCP, LSP)
 - `agents.<name>.toolsets[*].path` (memory, tasks)
 - `agents.<name>.toolsets[*].env` values (MCP, shell, script, LSP)
+- `agents.<name>.toolsets[*].shell.<tool>.working_dir` (script tools)
+- `agents.<name>.hooks.*.working_dir`
 - The `~` prefix is also accepted in any path-like field documented as such.
 
 ```yaml
@@ -268,13 +222,40 @@ agents:
   root:
     toolsets:
       - type: memory
-        path: "~/notes/${PROJECT}/memory.db"
+        path: "~/notes/${env.PROJECT}/memory.db"
       - type: mcp
         command: my-server
-        working_dir: "$HOME/work"
+        working_dir: "${env.HOME}/work"
 ```
 
-The `working_dir`, `path`, and `env` value fields additionally accept the `${env.VAR}` form as an alias for `${VAR}`, so the JS-style syntax works there too. Richer JS expressions (e.g. `${env.VAR || 'default'}`) are still **not** evaluated in these fields.
+Unlike the JS-templated fields above, these accept only a plain variable reference: richer JS expressions (e.g. `${env.VAR || 'default'}`) are **not** evaluated here, and the legacy `$VAR` / `${VAR}` forms keep working for backward compatibility.
+
+Hook and script-tool `env` values expand only the plain `${env.VAR}` form, resolved against the **OS process environment** (dotenv/secret-provider values are not consulted); a bare `$VAR` or `${VAR}` is passed through **literally**, so values that legitimately contain `$` (passwords, templates) are never mangled:
+
+```yaml
+agents:
+  root:
+    hooks:
+      session_start:
+        - type: command
+          command: ./notify.sh
+          working_dir: "~/scripts"                # ~, $VAR, ${VAR}, ${env.VAR} all work
+          env:
+            API_TOKEN: "${env.NOTIFY_TOKEN}"      # expanded
+            PASSWORD: "pa$$word"                  # kept literal
+```
+
+Model definitions follow the same rule. The `models.<name>.model` and `models.<name>.base_url` fields are expanded when the provider is built, accepting both `${env.VAR}` and `${VAR}`. This is useful when the model id or endpoint is injected by the environment (for example a Docker Compose / DMR setup that exports the model reference as a variable):
+
+```yaml
+models:
+  nemotron3:
+    provider: dmr
+    model: "${env.NEMOTRON3_MODEL}" # resolved from the environment at load time
+    base_url: "${DMR_BASE_URL}"     # ${VAR} is accepted as well
+```
+
+`token_key` is **not** expanded: it already names the environment variable that holds the API token, so its value is used as a key rather than substituted. An unset variable in `model` or `base_url` is reported as an error instead of dialing with an empty value.
 
 ### Quick reference
 
@@ -284,12 +265,14 @@ The `working_dir`, `path`, and `env` value fields additionally accept the `${env
 | `instruction` (agent and toolset)             |     ✓      |       ✗       |  ✗  |
 | `commands.*`                                  |     ✓      |       ✗       |  ✗  |
 | `headers`, `remote.headers`, `api_config.headers` |     ✓      |       ✗       |  ✗  |
-| `working_dir`, `path`                         |     ✓      |       ✓       |  ✓  |
-| `env` values                                  |     ✓      |       ✓       |  ✗  |
+| `models.*.model`, `models.*.base_url`         |     ✓      |       ✓       |  ✗  |
+| `working_dir`, `path` (toolset, script tool, hook) |     ✓      |       ✓       |  ✓  |
+| `env` values (toolset)                        |     ✓      |       ✓       |  ✗  |
+| `env` values (hook, script tool)              |     ✓      |   literal     |  ✗  |
 
-The `~` prefix is meaningful only in path-like fields (`working_dir`, `path`).
+The `~` prefix is meaningful only in path-like fields (`working_dir`, `path`). In hook and script-tool `env` values, "literal" means a bare `$X` / `${X}` is passed to the process unchanged — only `${env.X}` is substituted there, so values containing `$` survive intact.
 
-When in doubt, prefer `${env.X}` for prompts and headers, and `${X}` (or `$X`) for paths.
+Prefer `${env.X}` everywhere. The bare `$X` / `${X}` and `~` forms are accepted only in path and `env` value fields, where they remain supported for backward compatibility.
 
 ## Validation
 
@@ -336,6 +319,7 @@ metadata:
   readme: | # Displayed in registries
     This agent helps with coding tasks.
   version: "1.0.0"
+  tags: [coding, review]
 ```
 
 | Field         | Description                                |
@@ -345,8 +329,9 @@ metadata:
 | `description` | Short description for the agent            |
 | `readme`      | Longer markdown description                |
 | `version`     | Semantic version string                    |
+| `tags`        | Tags for categorization and discovery      |
 
-See [Agent Distribution]({{ '/concepts/distribution/' | relative_url }}) for publishing agents to registries.
+See [Agent Distribution](../../concepts/distribution/index.md) for publishing agents to registries.
 
 ## Reusable MCP Servers (`mcps:`)
 
@@ -372,7 +357,7 @@ agents:
         ref: playwright
 ```
 
-An `mcps` entry accepts every field a regular `type: mcp` toolset accepts (command/args/env, `remote` with `url`/`transport_type`/`headers`/`oauth`, `tools` filter, `instruction`, `defer`, …) — the `type: mcp` is implicit. See the [Tool Config]({{ '/configuration/tools/' | relative_url }}) page for all options and the [Remote MCP Servers]({{ '/features/remote-mcp/' | relative_url }}) guide for remote setups.
+An `mcps` entry accepts every field a regular `type: mcp` toolset accepts (command/args/env, `remote` with `url`/`transport_type`/`headers`/`oauth`, `tools` filter, `instruction`, `defer`, …) — the `type: mcp` is implicit. See the [Tool Config](../tools/index.md) page for all options and the [Remote MCP Servers](../../features/remote-mcp/index.md) guide for remote setups.
 
 ## Reusable Toolsets (`toolsets:`)
 
@@ -486,7 +471,7 @@ agents:
 | `track_usage`         | Track token usage by default.                                                             |
 | `provider_opts`       | Provider-specific options.                                                                |
 
-See [Provider Definitions]({{ '/providers/custom/' | relative_url }}) for more details.
+See [Provider Definitions](../../providers/custom/index.md) for more details.
 
 ## Reusable YAML (anchors & aliases)
 
@@ -526,15 +511,15 @@ agents:
     description: Writes documentation. # then override one field
 ```
 
-<div class="callout callout-warning" markdown="1">
-<div class="callout-title">Where anchors can live</div>
-  <p>An anchor has to sit on a real value inside a known section (for example a real agent, model, or MCP entry, as above). Parking anchors in a separate top-level block such as <code>defaults:</code> or <code>prompts:</code> fails, because the parser rejects unknown top-level keys.</p>
-</div>
+> [!WARNING]
+> **Where anchors can live**
+>
+> An anchor has to sit on a real value inside a known section (for example a real agent, model, or MCP entry, as above). Parking anchors in a separate top-level block such as `defaults:` or `prompts:` fails, because the parser rejects unknown top-level keys.
 
-<div class="callout callout-warning" markdown="1">
-<div class="callout-title">Overriding merged keys</div>
-  <p>Overriding a key that a <code>&lt;&lt;</code> merge already set works only in the <code>agents:</code> section, as shown above. Every other section (<code>models:</code>, <code>mcps:</code>, <code>providers:</code>, <code>rag:</code>) is parsed strictly and reports the override as a duplicate key. There, use <code>&lt;&lt;</code> only to add new fields, or use the named-reuse sections above when you need per-entry overrides.</p>
-</div>
+> [!WARNING]
+> **Overriding merged keys**
+>
+> Overriding a key that a `<<` merge already set works only in the `agents:` section, as shown above. Every other section (`models:`, `mcps:`, `providers:`, `rag:`) is parsed strictly and reports the override as a duplicate key. There, use `<<` only to add new fields, or use the named-reuse sections above when you need per-entry overrides.
 
 Anchors are for static reuse within a single file, not dynamic values or cross-file composition. For environment-specific settings, see [Variable Expansion in Config Fields](#variable-expansion-in-config-fields), which substitutes `${env.VAR}` at load time. Templating tags such as `!include` are not acted on: the tag is ignored and its argument is kept as a plain string, so no other file is loaded. Circular aliases are not detected, so keep references acyclic.
 

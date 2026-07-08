@@ -30,6 +30,9 @@ type Agent struct {
 	fallbackRetries         int                                 // Number of retries per fallback model with exponential backoff
 	fallbackCooldown        time.Duration                       // Duration to stick with fallback after non-retryable error
 	titleModel              provider.Provider                   // Optional dedicated model for session-title generation
+	compactionModel         provider.Provider                   // Optional dedicated model for session compaction (summary generation)
+	compactionThreshold     float64                             // Custom proactive-compaction trigger fraction; 0 means "use the default"
+	sessionCompactionOff    bool                                // True when the agent opted out of automatic session compaction
 	modelOverrides          atomic.Pointer[[]provider.Provider] // Optional model override(s) set at runtime (supports alloy)
 	subAgents               []*Agent
 	handoffs                []*Agent
@@ -39,6 +42,7 @@ type Agent struct {
 	addEnvironmentInfo      bool
 	addDescriptionParameter bool
 	redactSecrets           bool
+	saferShell              bool
 	maxIterations           int
 	maxConsecutiveToolCalls int
 	maxOldToolCallTokens    int
@@ -55,6 +59,12 @@ type Agent struct {
 	// the TUI and session manager.
 	warningsMu      sync.Mutex
 	pendingWarnings []string
+
+	// collisionsMu guards reportedCollisions, the once-per-streak guard for
+	// duplicate-tool-name warnings. collectTools may run concurrently from
+	// the runtime loop and MCP notification handlers.
+	collisionsMu       sync.Mutex
+	reportedCollisions map[string]bool
 }
 
 // New creates a new agent
@@ -98,6 +108,14 @@ func (a *Agent) AddEnvironmentInfo() bool {
 // input, or the next LLM call).
 func (a *Agent) RedactSecrets() bool {
 	return a.redactSecrets
+}
+
+// SaferShell reports whether any of the agent's shell toolsets opted
+// into the `safer: true` destructive-command guard. When true, the
+// runtime auto-injects the safer_shell builtin under pre_tool_use
+// with preempt_yolo:true; see [builtins.ApplyAgentDefaults].
+func (a *Agent) SaferShell() bool {
+	return a.saferShell
 }
 
 func (a *Agent) MaxIterations() int {
@@ -311,6 +329,34 @@ func (a *Agent) TitleModels(ctx context.Context) []provider.Provider {
 	return append(models, a.fallbackModels...)
 }
 
+// CompactionModel returns the dedicated model configured for session
+// compaction (summary generation), or nil when none was configured (in which
+// case compaction reuses the agent's own model). Unlike the primary model,
+// it is not affected by runtime model switching: a /compact still runs on the
+// configured compaction model after the conversation model has been changed.
+func (a *Agent) CompactionModel() provider.Provider {
+	return a.compactionModel
+}
+
+// CompactionThreshold returns the configured fraction of the context window
+// at which proactive auto-compaction triggers, or 0 when the agent uses the
+// default. Callers pass the value verbatim to [compaction.ShouldCompact],
+// which maps 0 (and any out-of-range value) to the package default. Like
+// CompactionModel, it is resolved at load time and not affected by runtime
+// model switching.
+func (a *Agent) CompactionThreshold() float64 {
+	return a.compactionThreshold
+}
+
+// SessionCompaction reports whether automatic session compaction (the
+// proactive threshold trigger and post-overflow auto-recovery) is enabled
+// for this agent. Defaults to true; disabled only by an explicit
+// `session_compaction: false` in the agent's config. Manual /compact is
+// not affected by this flag.
+func (a *Agent) SessionCompaction() bool {
+	return !a.sessionCompactionOff
+}
+
 // Commands returns the named commands configured for this agent.
 func (a *Agent) Commands() types.Commands {
 	return a.commands
@@ -361,8 +407,30 @@ func (a *Agent) StartedTools(ctx context.Context) ([]tools.Tool, error) {
 }
 
 // collectTools gathers tools from all started toolsets plus static tools.
+// Tool names must be unique across the whole set (providers such as
+// Anthropic reject requests with duplicate tool names, and the dispatcher
+// resolves calls by name), so duplicates are dropped as they are collected:
+// the first toolset in configuration order wins, as documented in the MCP
+// toolset docs. Each collision is surfaced to the user once per streak via
+// reportCollisions. See #2251.
 func (a *Agent) collectTools(ctx context.Context) ([]tools.Tool, error) {
 	var agentTools []tools.Tool
+	origins := make(map[string]string)
+	collisions := make(map[string]string)
+
+	collect := func(candidates []tools.Tool, origin string) {
+		for _, tool := range candidates {
+			if firstOrigin, exists := origins[tool.Name]; exists {
+				collisions[collisionKey(tool.Name, firstOrigin, origin)] = fmt.Sprintf(
+					"duplicate tool %q: kept from %s, ignored from %s (first toolset in config wins) — set a unique 'name:' on the MCP toolset or use its 'tools:' filter to disambiguate",
+					tool.Name, firstOrigin, origin)
+				continue
+			}
+			origins[tool.Name] = origin
+			agentTools = append(agentTools, tool)
+		}
+	}
+
 	for _, toolSet := range a.toolsets {
 		if !toolSet.IsStarted() {
 			// Toolset not started; skip it
@@ -383,16 +451,54 @@ func (a *Agent) collectTools(ctx context.Context) ([]tools.Tool, error) {
 			}
 			continue
 		}
-		agentTools = append(agentTools, ta...)
+		collect(ta, tools.DescribeToolSet(toolSet))
 	}
 
-	agentTools = append(agentTools, a.tools...)
+	collect(a.tools, "agent static tools")
+
+	a.reportCollisions(ctx, collisions)
 
 	if a.addDescriptionParameter {
 		agentTools = tools.AddDescriptionParameter(agentTools)
 	}
 
 	return agentTools, nil
+}
+
+// collisionKey identifies one (tool, kept origin, dropped origin) collision so
+// the same persistent collision is reported once per streak, while a new
+// collision (e.g. introduced by an MCP ToolListChanged notification) is
+// reported as fresh.
+func collisionKey(toolName, keptOrigin, droppedOrigin string) string {
+	return toolName + "\x00" + keptOrigin + "\x00" + droppedOrigin
+}
+
+// reportCollisions surfaces duplicate-tool-name collisions to the user once
+// per streak: a collision present on consecutive collectTools runs is only
+// logged at debug level after the first report, and a collision that
+// disappears then reappears is reported again. This mirrors the
+// once-per-streak semantics of toolset start/list failure warnings so the
+// user is alerted without being spammed on every conversation turn.
+func (a *Agent) reportCollisions(ctx context.Context, collisions map[string]string) {
+	a.collisionsMu.Lock()
+	defer a.collisionsMu.Unlock()
+
+	if len(collisions) == 0 {
+		a.reportedCollisions = nil
+		return
+	}
+
+	reported := make(map[string]bool, len(collisions))
+	for key, msg := range collisions {
+		if a.reportedCollisions[key] {
+			slog.DebugContext(ctx, "Duplicate tool name still present", "agent", a.Name(), "detail", msg)
+		} else {
+			slog.WarnContext(ctx, "Duplicate tool name; keeping first occurrence", "agent", a.Name(), "detail", msg)
+			a.AddToolWarning(msg)
+		}
+		reported[key] = true
+	}
+	a.reportedCollisions = reported
 }
 
 func (a *Agent) ToolSets() []tools.ToolSet {
@@ -452,8 +558,8 @@ func (a *Agent) AddToolWarning(msg string) {
 		return
 	}
 	a.warningsMu.Lock()
+	defer a.warningsMu.Unlock()
 	a.pendingWarnings = append(a.pendingWarnings, msg)
-	a.warningsMu.Unlock()
 }
 
 // DrainWarnings returns pending warnings and clears them.

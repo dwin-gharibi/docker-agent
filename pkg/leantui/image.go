@@ -10,29 +10,16 @@ import (
 	"strings"
 
 	"github.com/docker/docker-agent/pkg/chat"
+	"github.com/docker/docker-agent/pkg/leantui/ui"
 	"github.com/docker/docker-agent/pkg/tools"
 )
 
-const (
-	kittyMaxChunkSize = 4096
-	kittyMaxImageCols = 80
-	kittyMaxImageRows = 30
-)
-
-type inlineImage struct {
-	name    string
-	mime    string
-	pngData []byte
-	width   int
-	height  int
-}
-
-func inlineImagesFromToolResult(result *tools.ToolCallResult) []inlineImage {
+func inlineImagesFromToolResult(result *tools.ToolCallResult) []ui.InlineImage {
 	if result == nil {
 		return nil
 	}
 
-	images := make([]inlineImage, 0, len(result.Images)+len(result.Documents))
+	images := make([]ui.InlineImage, 0, len(result.Images)+len(result.Documents))
 	for i, img := range result.Images {
 		name := fmt.Sprintf("image-%d", i+1)
 		if inline, ok := inlineImageFromBase64(name, img.MimeType, img.Data); ok {
@@ -54,20 +41,20 @@ func inlineImagesFromToolResult(result *tools.ToolCallResult) []inlineImage {
 	return images
 }
 
-func inlineImageFromBase64(name, mimeType, b64 string) (inlineImage, bool) {
+func inlineImageFromBase64(name, mimeType, b64 string) (ui.InlineImage, bool) {
 	if strings.TrimSpace(b64) == "" {
-		return inlineImage{}, false
+		return ui.InlineImage{}, false
 	}
 
 	data, err := base64.StdEncoding.DecodeString(b64)
 	if err != nil {
-		return inlineImage{}, false
+		return ui.InlineImage{}, false
 	}
 	if mimeType == "" {
 		mimeType = chat.DetectMimeTypeByContent(data)
 	}
 	if !chat.IsImageMimeType(mimeType) {
-		return inlineImage{}, false
+		return ui.InlineImage{}, false
 	}
 	if resized, err := chat.ResizeImage(data, mimeType); err == nil {
 		data = resized.Data
@@ -76,63 +63,20 @@ func inlineImageFromBase64(name, mimeType, b64 string) (inlineImage, bool) {
 
 	img, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
-		return inlineImage{}, false
+		return ui.InlineImage{}, false
 	}
 	bounds := img.Bounds()
 
 	var pngBuf bytes.Buffer
 	if err := png.Encode(&pngBuf, img); err != nil {
-		return inlineImage{}, false
+		return ui.InlineImage{}, false
 	}
 
-	return inlineImage{
-		name:    name,
-		mime:    mimeType,
-		pngData: pngBuf.Bytes(),
-		width:   bounds.Dx(),
-		height:  bounds.Dy(),
+	return ui.InlineImage{
+		Name:    name,
+		MIME:    mimeType,
+		PNGData: pngBuf.Bytes(),
+		Width:   bounds.Dx(),
+		Height:  bounds.Dy(),
 	}, true
-}
-
-func renderInlineImage(img inlineImage, width int) []string {
-	if len(img.pngData) == 0 || img.width <= 0 || img.height <= 0 {
-		return nil
-	}
-
-	cols := min(max(width-4, 1), kittyMaxImageCols)
-	rows := max(1, (img.height*cols+img.width-1)/img.width/2)
-	rows = min(rows, kittyMaxImageRows)
-
-	label := "image"
-	if img.name != "" {
-		label = img.name
-	}
-	if img.mime != "" {
-		label += " (" + img.mime + ")"
-	}
-
-	out := []string{"  " + stMuted().Render("🖼 "+label)}
-	out = append(out, "  "+kittyImageSequence(img.pngData, cols, rows))
-	for range rows - 1 {
-		out = append(out, "")
-	}
-	return out
-}
-
-func kittyImageSequence(pngData []byte, cols, rows int) string {
-	encoded := base64.StdEncoding.EncodeToString(pngData)
-	var b strings.Builder
-	for offset := 0; offset < len(encoded); offset += kittyMaxChunkSize {
-		end := min(offset+kittyMaxChunkSize, len(encoded))
-		more := 0
-		if end < len(encoded) {
-			more = 1
-		}
-		if offset == 0 {
-			fmt.Fprintf(&b, "\x1b_Ga=T,t=d,f=100,q=2,C=1,c=%d,r=%d,m=%d;%s\x1b\\", cols, rows, more, encoded[offset:end])
-		} else {
-			fmt.Fprintf(&b, "\x1b_Gm=%d;%s\x1b\\", more, encoded[offset:end])
-		}
-	}
-	return b.String()
 }

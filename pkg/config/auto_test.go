@@ -3,11 +3,13 @@ package config
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 
+	"github.com/docker/docker-agent/pkg/chatgpt"
 	"github.com/docker/docker-agent/pkg/config/latest"
 	"github.com/docker/docker-agent/pkg/environment"
 )
@@ -47,6 +49,83 @@ func TestAvailableProviders_NoGateway(t *testing.T) {
 				"MISTRAL_API_KEY": "test-key",
 			},
 			expectedProvider: "mistral",
+		},
+		{
+			name: "openrouter api key present",
+			envVars: map[string]string{
+				"OPENROUTER_API_KEY": "test-key",
+			},
+			expectedProvider: "openrouter",
+		},
+		{
+			name: "baseten api key present",
+			envVars: map[string]string{
+				"BASETEN_API_KEY": "test-key",
+			},
+			expectedProvider: "baseten",
+		},
+		{
+			name: "ovhcloud access token present",
+			envVars: map[string]string{
+				"OVH_AI_ENDPOINTS_ACCESS_TOKEN": "test-token",
+			},
+			expectedProvider: "ovhcloud",
+		},
+		{
+			name: "groq api key present",
+			envVars: map[string]string{
+				"GROQ_API_KEY": "test-key",
+			},
+			expectedProvider: "groq",
+		},
+		{
+			name: "fireworks api key present",
+			envVars: map[string]string{
+				"FIREWORKS_API_KEY": "test-key",
+			},
+			expectedProvider: "fireworks",
+		},
+		{
+			name: "deepseek api key present",
+			envVars: map[string]string{
+				"DEEPSEEK_API_KEY": "test-key",
+			},
+			expectedProvider: "deepseek",
+		},
+		{
+			name: "cerebras api key present",
+			envVars: map[string]string{
+				"CEREBRAS_API_KEY": "test-key",
+			},
+			expectedProvider: "cerebras",
+		},
+		{
+			name: "together api key present",
+			envVars: map[string]string{
+				"TOGETHER_API_KEY": "test-key",
+			},
+			expectedProvider: "together",
+		},
+		{
+			name: "huggingface token present",
+			envVars: map[string]string{
+				"HF_TOKEN": "test-token",
+			},
+			expectedProvider: "huggingface",
+		},
+		{
+			name: "moonshot api key present",
+			envVars: map[string]string{
+				"MOONSHOT_API_KEY": "test-key",
+			},
+			expectedProvider: "moonshot",
+		},
+		{
+			name: "vercel ai gateway key present",
+			envVars: map[string]string{
+				"AI_GATEWAY_API_KEY": "test-key",
+			},
+			expectedProvider: "vercel",
 		},
 		{
 			name:             "no api keys - defaults to dmr",
@@ -202,6 +281,105 @@ func TestAutoModelConfig(t *testing.T) {
 			expectedMaxTokens: 32000,
 		},
 		{
+			name: "openrouter provider",
+			envVars: map[string]string{
+				"OPENROUTER_API_KEY": "test-key",
+			},
+			expectedProvider:  "openrouter",
+			expectedModel:     "meta-llama/llama-3.3-70b-instruct",
+			expectedMaxTokens: 32000,
+		},
+		{
+			name: "baseten provider",
+			envVars: map[string]string{
+				"BASETEN_API_KEY": "test-key",
+			},
+			expectedProvider:  "baseten",
+			expectedModel:     "deepseek-ai/DeepSeek-V3.1",
+			expectedMaxTokens: 32000,
+		},
+		{
+			name: "ovhcloud provider",
+			envVars: map[string]string{
+				"OVH_AI_ENDPOINTS_ACCESS_TOKEN": "test-token",
+			},
+			expectedProvider:  "ovhcloud",
+			expectedModel:     "Qwen3.5-397B-A17B",
+			expectedMaxTokens: 32000,
+		},
+		{
+			name: "groq provider",
+			envVars: map[string]string{
+				"GROQ_API_KEY": "test-key",
+			},
+			expectedProvider:  "groq",
+			expectedModel:     "llama-3.3-70b-versatile",
+			expectedMaxTokens: 32000,
+		},
+		{
+			name: "fireworks provider",
+			envVars: map[string]string{
+				"FIREWORKS_API_KEY": "test-key",
+			},
+			expectedProvider:  "fireworks",
+			expectedModel:     "accounts/fireworks/models/kimi-k2-instruct",
+			expectedMaxTokens: 32000,
+		},
+		{
+			name: "deepseek provider",
+			envVars: map[string]string{
+				"DEEPSEEK_API_KEY": "test-key",
+			},
+			expectedProvider:  "deepseek",
+			expectedModel:     "deepseek-chat",
+			expectedMaxTokens: 32000,
+		},
+		{
+			name: "cerebras provider",
+			envVars: map[string]string{
+				"CEREBRAS_API_KEY": "test-key",
+			},
+			expectedProvider:  "cerebras",
+			expectedModel:     "gpt-oss-120b",
+			expectedMaxTokens: 32000,
+		},
+		{
+			name: "together provider",
+			envVars: map[string]string{
+				"TOGETHER_API_KEY": "test-key",
+			},
+			expectedProvider:  "together",
+			expectedModel:     "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+			expectedMaxTokens: 32000,
+		},
+		{
+			name: "huggingface provider",
+			envVars: map[string]string{
+				"HF_TOKEN": "test-token",
+			},
+			expectedProvider:  "huggingface",
+			expectedModel:     "meta-llama/Llama-3.3-70B-Instruct",
+			expectedMaxTokens: 32000,
+		},
+		{
+			name: "moonshot provider",
+			envVars: map[string]string{
+				"MOONSHOT_API_KEY": "test-key",
+			},
+			expectedProvider:  "moonshot",
+			expectedModel:     "kimi-k2-0905-preview",
+			expectedMaxTokens: 32000,
+		},
+		{
+			name: "vercel provider",
+			envVars: map[string]string{
+				"AI_GATEWAY_API_KEY": "test-key",
+			},
+			expectedProvider:  "vercel",
+			expectedModel:     "openai/gpt-5",
+			expectedMaxTokens: 32000,
+		},
+		{
 			name:              "dmr provider (no api keys)",
 			envVars:           map[string]string{},
 			expectedProvider:  "dmr",
@@ -259,6 +437,10 @@ func TestPreferredMaxTokens(t *testing.T) {
 			expectedTokens: 32000,
 		},
 		{
+			provider:       "openrouter",
+			expectedTokens: 32000,
+		},
+		{
 			provider:       "unknown-provider",
 			expectedTokens: 32000,
 		},
@@ -279,7 +461,7 @@ func TestDefaultModels(t *testing.T) {
 	t.Parallel()
 
 	// Test that DefaultModels map has all expected providers
-	expectedProviders := []string{"openai", "anthropic", "google", "dmr", "mistral", "amazon-bedrock"}
+	expectedProviders := []string{"openai", "anthropic", "google", "dmr", "mistral", "openrouter", "baseten", "ovhcloud", "groq", "fireworks", "deepseek", "cerebras", "together", "huggingface", "moonshot", "vercel", "amazon-bedrock", "opencode-zen", "opencode-go"}
 
 	for _, provider := range expectedProviders {
 		t.Run(provider, func(t *testing.T) {
@@ -295,14 +477,27 @@ func TestDefaultModels(t *testing.T) {
 	assert.Equal(t, "gemini-3.5-flash", DefaultModels["google"])
 	assert.Equal(t, "ai/qwen3:latest", DefaultModels["dmr"])
 	assert.Equal(t, "mistral-small-latest", DefaultModels["mistral"])
+	assert.Equal(t, "meta-llama/llama-3.3-70b-instruct", DefaultModels["openrouter"])
+	assert.Equal(t, "deepseek-ai/DeepSeek-V3.1", DefaultModels["baseten"])
+	assert.Equal(t, "Qwen3.5-397B-A17B", DefaultModels["ovhcloud"])
+	assert.Equal(t, "llama-3.3-70b-versatile", DefaultModels["groq"])
+	assert.Equal(t, "accounts/fireworks/models/kimi-k2-instruct", DefaultModels["fireworks"])
+	assert.Equal(t, "deepseek-chat", DefaultModels["deepseek"])
+	assert.Equal(t, "gpt-oss-120b", DefaultModels["cerebras"])
+	assert.Equal(t, "meta-llama/Llama-3.3-70B-Instruct-Turbo", DefaultModels["together"])
+	assert.Equal(t, "meta-llama/Llama-3.3-70B-Instruct", DefaultModels["huggingface"])
+	assert.Equal(t, "kimi-k2-0905-preview", DefaultModels["moonshot"])
+	assert.Equal(t, "openai/gpt-5", DefaultModels["vercel"])
 	assert.Equal(t, "global.anthropic.claude-sonnet-4-5-20250929-v1:0", DefaultModels["amazon-bedrock"])
+	assert.Equal(t, "deepseek-v4-flash", DefaultModels["opencode-go"])
+	assert.Equal(t, "deepseek-v4-flash-free", DefaultModels["opencode-zen"])
 }
 
 func TestAutoModelConfig_IntegrationWithDefaultModels(t *testing.T) {
 	t.Parallel()
 
 	// Verify that AutoModelConfig always returns a model from DefaultModels
-	providers := []string{"openai", "anthropic", "google", "mistral"}
+	providers := []string{"openai", "anthropic", "google", "mistral", "openrouter", "baseten", "ovhcloud", "groq", "fireworks", "deepseek", "cerebras", "together", "huggingface", "moonshot", "vercel", "opencode-zen"}
 
 	for _, provider := range providers {
 		t.Run(provider, func(t *testing.T) {
@@ -320,6 +515,30 @@ func TestAutoModelConfig_IntegrationWithDefaultModels(t *testing.T) {
 				envVars["GOOGLE_API_KEY"] = "test-key"
 			case "mistral":
 				envVars["MISTRAL_API_KEY"] = "test-key"
+			case "openrouter":
+				envVars["OPENROUTER_API_KEY"] = "test-key"
+			case "baseten":
+				envVars["BASETEN_API_KEY"] = "test-key"
+			case "ovhcloud":
+				envVars["OVH_AI_ENDPOINTS_ACCESS_TOKEN"] = "test-token"
+			case "groq":
+				envVars["GROQ_API_KEY"] = "test-key"
+			case "fireworks":
+				envVars["FIREWORKS_API_KEY"] = "test-key"
+			case "deepseek":
+				envVars["DEEPSEEK_API_KEY"] = "test-key"
+			case "cerebras":
+				envVars["CEREBRAS_API_KEY"] = "test-key"
+			case "together":
+				envVars["TOGETHER_API_KEY"] = "test-key"
+			case "huggingface":
+				envVars["HF_TOKEN"] = "test-token"
+			case "moonshot":
+				envVars["MOONSHOT_API_KEY"] = "test-key"
+			case "vercel":
+				envVars["AI_GATEWAY_API_KEY"] = "test-key"
+			case "opencode-zen":
+				envVars["OPENCODE_API_KEY"] = "test-key"
 			}
 
 			modelConfig := AutoModelConfig(t.Context(), "", environment.NewMapEnvProvider(envVars), nil, nil)
@@ -330,6 +549,20 @@ func TestAutoModelConfig_IntegrationWithDefaultModels(t *testing.T) {
 			assert.Equal(t, provider, modelConfig.Provider)
 		})
 	}
+
+	// opencode-go shares OPENCODE_API_KEY with opencode-zen, so it can never be
+	// auto-selected when the env var is set (zen wins due to cloudProviders
+	// ordering). Test it via a user-specified default model instead.
+	t.Run("opencode-go", func(t *testing.T) {
+		t.Parallel()
+
+		modelConfig := AutoModelConfig(t.Context(), "", environment.NewMapEnvProvider(map[string]string{
+			"OPENCODE_API_KEY": "test-key",
+		}), &latest.ModelConfig{Provider: "opencode-go", Model: DefaultModels["opencode-go"]}, nil)
+
+		assert.Equal(t, "opencode-go", modelConfig.Provider)
+		assert.Equal(t, DefaultModels["opencode-go"], modelConfig.Model)
+	})
 
 	// Test dmr provider (no API keys)
 	t.Run("dmr", func(t *testing.T) {
@@ -352,38 +585,194 @@ func TestAvailableProviders_PrecedenceOrder(t *testing.T) {
 		"OPENAI_API_KEY":    "test-key",
 		"GOOGLE_API_KEY":    "test-key",
 		"MISTRAL_API_KEY":   "test-key",
+		"OPENCODE_API_KEY":  "test-key",
 	})
 	providers := AvailableProviders(t.Context(), "", env)
 	assert.Equal(t, "anthropic", providers[0])
 
 	// No anthropic - openai should win
 	env = environment.NewMapEnvProvider(map[string]string{
-		"OPENAI_API_KEY":  "test-key",
-		"GOOGLE_API_KEY":  "test-key",
-		"MISTRAL_API_KEY": "test-key",
+		"OPENAI_API_KEY":   "test-key",
+		"GOOGLE_API_KEY":   "test-key",
+		"MISTRAL_API_KEY":  "test-key",
+		"OPENCODE_API_KEY": "test-key",
 	})
 	providers = AvailableProviders(t.Context(), "", env)
 	assert.Equal(t, "openai", providers[0])
 
 	// No anthropic or openai - google should win
 	env = environment.NewMapEnvProvider(map[string]string{
-		"GOOGLE_API_KEY":  "test-key",
-		"MISTRAL_API_KEY": "test-key",
+		"GOOGLE_API_KEY":   "test-key",
+		"MISTRAL_API_KEY":  "test-key",
+		"OPENCODE_API_KEY": "test-key",
 	})
 	providers = AvailableProviders(t.Context(), "", env)
 	assert.Equal(t, "google", providers[0])
 
 	// No anthropic, openai, or google - mistral should win
 	env = environment.NewMapEnvProvider(map[string]string{
-		"MISTRAL_API_KEY": "test-key",
+		"MISTRAL_API_KEY":    "test-key",
+		"OPENROUTER_API_KEY": "test-key",
+		"OPENCODE_API_KEY":   "test-key",
 	})
 	providers = AvailableProviders(t.Context(), "", env)
 	assert.Equal(t, "mistral", providers[0])
+
+	// No higher-priority providers - openrouter should win before opencode
+	env = environment.NewMapEnvProvider(map[string]string{
+		"OPENROUTER_API_KEY": "test-key",
+		"OPENCODE_API_KEY":   "test-key",
+	})
+	providers = AvailableProviders(t.Context(), "", env)
+	assert.Equal(t, "openrouter", providers[0])
+
+	// openrouter wins over baseten
+	env = environment.NewMapEnvProvider(map[string]string{
+		"OPENROUTER_API_KEY": "test-key",
+		"BASETEN_API_KEY":    "test-key",
+	})
+	providers = AvailableProviders(t.Context(), "", env)
+	assert.Equal(t, "openrouter", providers[0])
+
+	// baseten wins over opencode
+	env = environment.NewMapEnvProvider(map[string]string{
+		"BASETEN_API_KEY":  "test-key",
+		"OPENCODE_API_KEY": "test-key",
+	})
+	providers = AvailableProviders(t.Context(), "", env)
+	assert.Equal(t, "baseten", providers[0])
+
+	// baseten wins over ovhcloud
+	env = environment.NewMapEnvProvider(map[string]string{
+		"BASETEN_API_KEY":               "test-key",
+		"OVH_AI_ENDPOINTS_ACCESS_TOKEN": "test-token",
+	})
+	providers = AvailableProviders(t.Context(), "", env)
+	assert.Equal(t, "baseten", providers[0])
+
+	// ovhcloud wins over groq
+	env = environment.NewMapEnvProvider(map[string]string{
+		"OVH_AI_ENDPOINTS_ACCESS_TOKEN": "test-token",
+		"GROQ_API_KEY":                  "test-key",
+	})
+	providers = AvailableProviders(t.Context(), "", env)
+	assert.Equal(t, "ovhcloud", providers[0])
+
+	// groq wins over fireworks
+	env = environment.NewMapEnvProvider(map[string]string{
+		"GROQ_API_KEY":      "test-key",
+		"FIREWORKS_API_KEY": "test-key",
+	})
+	providers = AvailableProviders(t.Context(), "", env)
+	assert.Equal(t, "groq", providers[0])
+
+	// fireworks wins over deepseek
+	env = environment.NewMapEnvProvider(map[string]string{
+		"FIREWORKS_API_KEY": "test-key",
+		"DEEPSEEK_API_KEY":  "test-key",
+	})
+	providers = AvailableProviders(t.Context(), "", env)
+	assert.Equal(t, "fireworks", providers[0])
+
+	// deepseek wins over cerebras
+	env = environment.NewMapEnvProvider(map[string]string{
+		"DEEPSEEK_API_KEY": "test-key",
+		"CEREBRAS_API_KEY": "test-key",
+	})
+	providers = AvailableProviders(t.Context(), "", env)
+	assert.Equal(t, "deepseek", providers[0])
+
+	// cerebras wins over together
+	env = environment.NewMapEnvProvider(map[string]string{
+		"CEREBRAS_API_KEY": "test-key",
+		"TOGETHER_API_KEY": "test-key",
+	})
+	providers = AvailableProviders(t.Context(), "", env)
+	assert.Equal(t, "cerebras", providers[0])
+
+	// together wins over huggingface
+	env = environment.NewMapEnvProvider(map[string]string{
+		"TOGETHER_API_KEY": "test-key",
+		"HF_TOKEN":         "test-token",
+	})
+	providers = AvailableProviders(t.Context(), "", env)
+	assert.Equal(t, "together", providers[0])
+
+	// huggingface wins over moonshot
+	env = environment.NewMapEnvProvider(map[string]string{
+		"HF_TOKEN":         "test-token",
+		"MOONSHOT_API_KEY": "test-key",
+	})
+	providers = AvailableProviders(t.Context(), "", env)
+	assert.Equal(t, "huggingface", providers[0])
+
+	// moonshot wins over vercel
+	env = environment.NewMapEnvProvider(map[string]string{
+		"MOONSHOT_API_KEY":   "test-key",
+		"AI_GATEWAY_API_KEY": "test-key",
+	})
+	providers = AvailableProviders(t.Context(), "", env)
+	assert.Equal(t, "moonshot", providers[0])
+
+	// vercel wins over amazon-bedrock
+	env = environment.NewMapEnvProvider(map[string]string{
+		"AI_GATEWAY_API_KEY": "test-key",
+		"AWS_ACCESS_KEY_ID":  "test-key",
+	})
+	providers = AvailableProviders(t.Context(), "", env)
+	assert.Equal(t, "vercel", providers[0])
+
+	// Only OPENCODE_API_KEY set - opencode-zen should win (higher priority than opencode-go)
+	env = environment.NewMapEnvProvider(map[string]string{
+		"OPENCODE_API_KEY": "test-key",
+	})
+	providers = AvailableProviders(t.Context(), "", env)
+	assert.Equal(t, "opencode-zen", providers[0])
 
 	// No keys at all - dmr should be selected
 	env = environment.NewNoEnvProvider()
 	providers = AvailableProviders(t.Context(), "", env)
 	assert.Equal(t, "dmr", providers[0])
+}
+
+func TestAvailableProviders_ChatGPTLogin(t *testing.T) {
+	t.Parallel()
+
+	// A ChatGPT sign-in (served as the virtual CHATGPT_OAUTH_TOKEN variable)
+	// makes the chatgpt provider available.
+	var env environment.Provider = environment.NewMapEnvProvider(map[string]string{
+		"CHATGPT_OAUTH_TOKEN": "access-token",
+	})
+	providers := AvailableProviders(t.Context(), "", env)
+	assert.Equal(t, "chatgpt", providers[0])
+
+	// An explicit OPENAI_API_KEY keeps priority so adding a sign-in never
+	// changes auto-selection for existing API-key users.
+	env = environment.NewMapEnvProvider(map[string]string{
+		"OPENAI_API_KEY":      "test-key",
+		"CHATGPT_OAUTH_TOKEN": "access-token",
+	})
+	providers = AvailableProviders(t.Context(), "", env)
+	assert.Equal(t, "openai", providers[0])
+
+	// The sign-in wins over lower-priority providers.
+	env = environment.NewMapEnvProvider(map[string]string{
+		"CHATGPT_OAUTH_TOKEN": "access-token",
+		"MISTRAL_API_KEY":     "test-key",
+	})
+	providers = AvailableProviders(t.Context(), "", env)
+	assert.Equal(t, "chatgpt", providers[0])
+}
+
+func TestAutoModelConfig_ChatGPT(t *testing.T) {
+	t.Parallel()
+
+	env := environment.NewMapEnvProvider(map[string]string{"CHATGPT_OAUTH_TOKEN": "access-token"})
+
+	modelConfig := AutoModelConfig(t.Context(), "", env, nil, nil)
+
+	assert.Equal(t, "chatgpt", modelConfig.Provider)
+	assert.Equal(t, DefaultModels["chatgpt"], modelConfig.Model)
 }
 
 func TestAutoModelConfig_UserDefaultModel(t *testing.T) {
@@ -659,8 +1048,10 @@ func TestAutoModelFallbackError(t *testing.T) {
 		err := &AutoModelFallbackError{}
 		msg := err.Error()
 		assert.Contains(t, msg, "No model is currently available")
+		assert.Contains(t, msg, "docker agent setup")
 		assert.Contains(t, msg, "docker model pull")
 		assert.Contains(t, msg, "ANTHROPIC_API_KEY")
+		assert.Contains(t, msg, environment.ModelSetupDocsURL)
 		assert.NotContains(t, msg, "Could not initialize")
 	})
 
@@ -703,3 +1094,64 @@ type stubPullError struct {
 func (e *stubPullError) Error() string { return e.fullDetail }
 
 func (e *stubPullError) ModelPullErrorSummary() string { return e.summary }
+
+func TestProviderAPIKeyEnvVars(t *testing.T) {
+	t.Parallel()
+
+	vars := ProviderAPIKeyEnvVars()
+
+	// Sorted and deduplicated for reproducibility.
+	assert.True(t, slices.IsSorted(vars), "env vars must be sorted, got %v", vars)
+	assert.Equal(t, slices.Compact(slices.Clone(vars)), vars, "env vars must be deduplicated")
+
+	// The dedicated single-secret model API keys must be present.
+	for _, name := range []string{
+		"OPENAI_API_KEY",
+		"ANTHROPIC_API_KEY",
+		"GOOGLE_API_KEY",
+		"MISTRAL_API_KEY",
+		"OPENROUTER_API_KEY",
+		"XAI_API_KEY",
+		"NEBIUS_API_KEY",
+	} {
+		assert.Contains(t, vars, name)
+	}
+
+	// Non-secret detection/mode flags and multi-variable credential sets must
+	// never be exposed as forwardable API keys.
+	for _, name := range []string{
+		"GOOGLE_GENAI_USE_VERTEXAI",
+		"GEMINI_API_KEY",
+		"AWS_ACCESS_KEY_ID",
+		"AWS_PROFILE",
+		"AWS_ROLE_ARN",
+		"AWS_BEARER_TOKEN_BEDROCK",
+	} {
+		assert.NotContains(t, vars, name)
+	}
+
+	// Broad, general-purpose tokens must not be forwarded as model credentials.
+	assert.NotContains(t, vars, "GITHUB_TOKEN")
+
+	// The ChatGPT OAuth access token is a subscription credential, not an
+	// API key, and must never be forwarded into isolated environments.
+	assert.NotContains(t, vars, chatgpt.TokenEnvVar)
+}
+
+func TestCloudProviderEnvVars(t *testing.T) {
+	t.Parallel()
+
+	providers := CloudProviderEnvVars()
+
+	// Must mirror the auto-selection table: same providers, same priority
+	// order, same detection variables.
+	assert.Len(t, providers, len(cloudProviders))
+	for i, p := range providers {
+		assert.Equal(t, cloudProviders[i].name, p.Provider)
+		assert.Equal(t, cloudProviders[i].envVars, p.EnvVars)
+	}
+
+	// Mutating the returned slices must not corrupt the package table.
+	providers[0].EnvVars[0] = "MUTATED"
+	assert.NotEqual(t, "MUTATED", cloudProviders[0].envVars[0])
+}

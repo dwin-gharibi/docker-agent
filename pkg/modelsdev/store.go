@@ -28,6 +28,10 @@ const (
 	refreshInterval = 24 * time.Hour
 )
 
+// fetcher fetches the models.dev catalog. If etag is non-empty it is sent as
+// If-None-Match; a 304 response returns (nil, etag, nil) to indicate no change.
+type fetcher func(ctx context.Context, etag string) (*Database, string, error)
+
 // Store manages access to the models.dev data.
 // All methods are safe for concurrent use.
 //
@@ -36,7 +40,11 @@ const (
 type Store struct {
 	cacheFile     string
 	knownProvider func(string) bool
-	mu            sync.Mutex
+	// fetch retrieves the catalog from the network. It defaults to
+	// fetchFromAPI and is overridable via WithFetcher so tests can stub the
+	// network out without mutating package-level state.
+	fetch fetcher
+	mu    sync.Mutex
 	// db is the authoritative catalog from the full (fetch-eligible) load path.
 	db *Database
 	// cacheDB is a cache-only snapshot served to fetch-disallowed lookups. It is
@@ -53,6 +61,7 @@ type Opt func(*storeOptions)
 type storeOptions struct {
 	cacheFile     string
 	knownProvider func(string) bool
+	fetch         fetcher
 }
 
 // WithCache overrides the path of the on-disk cache file used by the Store.
@@ -60,6 +69,16 @@ type storeOptions struct {
 func WithCache(path string) Opt {
 	return func(o *storeOptions) {
 		o.cacheFile = path
+	}
+}
+
+// WithFetcher overrides the function used to fetch the catalog from the
+// network. It is primarily a test seam: callers can stub the network out
+// (and observe whether a fetch was attempted) without mutating package-level
+// state, which keeps such tests safe to run in parallel.
+func WithFetcher(fn fetcher) Opt {
+	return func(o *storeOptions) {
+		o.fetch = fn
 	}
 }
 
@@ -106,9 +125,14 @@ func NewStore(opts ...Opt) (*Store, error) {
 		return nil, fmt.Errorf("failed to create cache directory: %w", err)
 	}
 
+	fetch := options.fetch
+	if fetch == nil {
+		fetch = fetchFromAPI
+	}
 	return &Store{
 		cacheFile:     cacheFile,
 		knownProvider: options.knownProvider,
+		fetch:         fetch,
 	}, nil
 }
 
@@ -117,7 +141,7 @@ func NewStore(opts ...Opt) (*Store, error) {
 // from the network or touches the filesystem, making it suitable for
 // tests and any scenario where the provider data is already known.
 func NewDatabaseStore(db *Database) *Store {
-	return &Store{db: db}
+	return &Store{db: db, fetch: fetchFromAPI}
 }
 
 // GetDatabase returns the models.dev database, fetching from cache or API as needed.
@@ -143,21 +167,30 @@ func (s *Store) getDatabase(ctx context.Context, allowFetch bool) (*Database, er
 		// network. Kept out of s.db so it can never satisfy a later
 		// fetch-eligible lookup for a known provider.
 		if s.cacheDB == nil {
-			db, err := loadDatabase(ctx, s.cacheFile, false)
-			if err != nil {
-				return nil, err
-			}
-			s.cacheDB = db
+			s.cacheDB, _ = loadDatabase(ctx, s.cacheFile, false, s.fetcher())
 		}
 		return s.cacheDB, nil
 	}
 
-	db, err := loadDatabase(ctx, s.cacheFile, true)
-	if err != nil {
-		return nil, err
+	db, authoritative := loadDatabase(ctx, s.cacheFile, true, s.fetcher())
+	// Only memoize a result that came from the on-disk cache or a live fetch.
+	// The embedded fallback snapshot is deliberately NOT pinned, so a later
+	// lookup retries the fetch once the network (or cache) recovers instead of
+	// serving the build-time snapshot for the Store's entire lifetime.
+	if authoritative {
+		s.db = db
 	}
-	s.db = db
 	return db, nil
+}
+
+// fetcher returns the Store's catalog fetcher, defaulting to fetchFromAPI when
+// unset. The constructors always populate s.fetch, but defaulting here guards
+// against a zero-value or partially-constructed Store panicking on a nil call.
+func (s *Store) fetcher() fetcher {
+	if s.fetch != nil {
+		return s.fetch
+	}
+	return fetchFromAPI
 }
 
 // getProvider returns a specific provider by ID. A provider the Store's
@@ -216,23 +249,31 @@ func (s *Store) GetModel(ctx context.Context, id ID) (*Model, error) {
 //
 // When allowFetch is false the network is never touched: a fresh cache is
 // returned as-is, a stale cache is returned regardless of age, and a missing
-// cache yields an empty database. This lets lookups for providers models.dev
-// cannot know about resolve locally without a doomed outbound call.
-func loadDatabase(ctx context.Context, cacheFile string, allowFetch bool) (*Database, error) {
+// cache falls back to the snapshot embedded at build time. This lets lookups
+// for providers models.dev cannot know about resolve locally without a doomed
+// outbound call, while still offering a real catalog on a cold cache.
+//
+// loadDatabase always returns a non-nil database. The second return value is
+// true when the database came from the on-disk cache or a live fetch, and
+// false when it fell back to the snapshot embedded at build time. Callers use
+// this to avoid memoizing the fallback so a later lookup can retry once the
+// cache or network recovers.
+func loadDatabase(ctx context.Context, cacheFile string, allowFetch bool, fetch fetcher) (db *Database, authoritative bool) {
 	// Try to load from cache first
 	cached, err := loadFromCache(cacheFile)
 	if err == nil && (!allowFetch || time.Since(cached.LastRefresh) < refreshInterval) {
-		return &cached.Database, nil
+		return &cached.Database, true
 	}
 
 	if !allowFetch {
 		// No fresh cache and fetching is disallowed: use a stale cache if we
-		// have one, otherwise serve an empty catalog so the caller resolves to
-		// "provider not found" with no network call.
+		// have one, otherwise fall back to the snapshot baked into the binary
+		// so the caller still resolves against a real catalog with no network
+		// call.
 		if cached != nil {
-			return &cached.Database, nil
+			return &cached.Database, true
 		}
-		return &Database{}, nil
+		return embeddedSnapshot(), false
 	}
 
 	// Cache is stale or doesn't exist — try a conditional fetch with the ETag.
@@ -241,14 +282,18 @@ func loadDatabase(ctx context.Context, cacheFile string, allowFetch bool) (*Data
 		etag = cached.ETag
 	}
 
-	database, newETag, fetchErr := fetchFromAPI(ctx, etag)
+	database, newETag, fetchErr := fetch(ctx, etag)
 	if fetchErr != nil {
 		// If API fetch fails but we have cached data, use it regardless of age.
 		if cached != nil {
 			slog.DebugContext(ctx, "API fetch failed, using stale cache", "error", fetchErr)
-			return &cached.Database, nil
+			return &cached.Database, true
 		}
-		return nil, fmt.Errorf("failed to fetch from API and no cached data available: %w", fetchErr)
+		// No cache either — fall back to the snapshot embedded at build time
+		// instead of failing outright, so a fresh binary on a machine that
+		// can't reach models.dev still has a usable catalog.
+		slog.DebugContext(ctx, "API fetch failed and no cache available, using embedded snapshot", "error", fetchErr)
+		return embeddedSnapshot(), false
 	}
 
 	// database is nil when the server returned 304 Not Modified.
@@ -258,7 +303,7 @@ func loadDatabase(ctx context.Context, cacheFile string, allowFetch bool) (*Data
 		if saveErr := saveToCache(cacheFile, &cached.Database, cached.ETag); saveErr != nil {
 			slog.WarnContext(ctx, "Failed to update cache timestamp", "error", saveErr)
 		}
-		return &cached.Database, nil
+		return &cached.Database, true
 	}
 
 	// Save the fresh data to cache.
@@ -266,7 +311,7 @@ func loadDatabase(ctx context.Context, cacheFile string, allowFetch bool) (*Data
 		slog.WarnContext(ctx, "Failed to save to cache", "error", saveErr)
 	}
 
-	return database, nil
+	return database, true
 }
 
 // fetchFromAPI fetches the models.dev database.

@@ -1,0 +1,13 @@
+{{- /* Resolve relative Markdown links (../section/page/index.md) to page
+     URLs, the same way the docs.docker.com link render hook resolves the
+     mounted copy of this content. refLinksErrorLevel is ERROR, so a link
+     to a missing page fails the build here before it breaks downstream.
+     Everything else (external, mailto, in-page anchors) passes through. */ -}}
+{{- $url := .Destination -}}
+{{- if or (strings.HasPrefix $url "http") (strings.HasPrefix $url "mailto:") (strings.HasPrefix $url "#") -}}
+<a href="{{ $url | safeURL }}"{{ with .Title }} title="{{ . }}"{{ end }}>{{ .Text | safeHTML }}</a>
+{{- else if strings.Contains $url ".md" -}}
+<a href="{{ relref .Page $url }}"{{ with .Title }} title="{{ . }}"{{ end }}>{{ .Text | safeHTML }}</a>
+{{- else -}}
+<a href="{{ $url | safeURL }}"{{ with .Title }} title="{{ . }}"{{ end }}>{{ .Text | safeHTML }}</a>
+{{- end -}}

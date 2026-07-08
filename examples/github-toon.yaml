@@ -1,6 +1,6 @@
 agents:
   root:
-    model: anthropic/claude-sonnet-4-0
+    model: anthropic/claude-sonnet-4-5
     description: GitHub Agent - Help with GitHub using MCP tools
     instruction: You are a helpful assistant that can help with all things GitHub
     toolsets:

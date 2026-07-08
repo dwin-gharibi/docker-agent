@@ -5,13 +5,11 @@
 //
 // The package currently provides:
 //
+//   - Dispatcher: runs tool-call batches, including approval flow, hook
+//     dispatch, tracing, telemetry, and event emission.
 //   - LoopDetector: detects consecutive identical tool-call batches so the
 //     runtime can break degenerate loops where the model is not making
 //     progress.
 //   - ResolveModelOverride: extracts the per-toolset model override that
 //     should apply to the next LLM turn from a batch of tool calls.
-//
-// Future extractions (approval flow, hooks dispatch, tool handler
-// registry) belong here so that the runtime keeps shrinking toward
-// pure orchestration.
 package toolexec

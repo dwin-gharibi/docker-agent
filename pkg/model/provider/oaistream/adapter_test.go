@@ -128,6 +128,39 @@ data: [DONE]
 	assert.ErrorIs(t, err, io.EOF)
 }
 
+func TestStreamAdapter_ContentChunkWithUsageIsNotTerminal(t *testing.T) {
+	t.Parallel()
+
+	// Baseten attaches usage to ordinary content chunks. The adapter must expose
+	// the content delta without inventing a stop finish reason; otherwise the
+	// runtime returns before appending the content and reports an empty response.
+	sseData := `data: {"id":"c1","object":"chat.completion.chunk","created":1,"model":"test","choices":[{"index":0,"delta":{"role":"assistant","content":"Hi"},"finish_reason":null}],"usage":{"prompt_tokens":10,"completion_tokens":1,"total_tokens":11}}
+
+data: {"id":"c1","object":"chat.completion.chunk","created":1,"model":"test","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":1,"total_tokens":11}}
+
+data: [DONE]
+
+`
+
+	stream := newTestStream(t, sseData)
+	adapter := NewStreamAdapter(stream, true)
+	defer adapter.Close()
+
+	resp, err := adapter.Recv()
+	require.NoError(t, err)
+	require.Len(t, resp.Choices, 1)
+	assert.Equal(t, "Hi", resp.Choices[0].Delta.Content)
+	assert.Empty(t, resp.Choices[0].FinishReason)
+	require.NotNil(t, resp.Usage)
+	assert.Equal(t, int64(10), resp.Usage.InputTokens)
+	assert.Equal(t, int64(1), resp.Usage.OutputTokens)
+
+	resp, err = adapter.Recv()
+	require.NoError(t, err)
+	require.Len(t, resp.Choices, 1)
+	assert.Equal(t, "stop", string(resp.Choices[0].FinishReason))
+}
+
 func TestStreamAdapter_NoReasoningContent(t *testing.T) {
 	t.Parallel()
 

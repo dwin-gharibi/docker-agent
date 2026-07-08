@@ -57,7 +57,7 @@ func (a *StreamAdapter) Recv() (chat.MessageStreamResponse, error) {
 		choice := &openaiResponse.Choices[i]
 
 		finishReasonStr := choice.FinishReason
-		if a.trackUsage && (finishReasonStr == "stop" || finishReasonStr == "length") {
+		if a.trackUsage && !openaiResponse.JSON.Usage.Valid() && (finishReasonStr == "stop" || finishReasonStr == "length") {
 			finishReasonStr = ""
 		}
 
@@ -154,23 +154,18 @@ func (a *StreamAdapter) Recv() (chat.MessageStreamResponse, error) {
 			}
 		}
 
-		// Use the tracked finish reason instead of hardcoding stop
-		finishReason := a.lastFinishReason
-		if finishReason == chat.FinishReasonNull || finishReason == "" {
-			finishReason = chat.FinishReasonStop
-		}
-		// OPENAI returns the usage without a finish reason or a choice, so we fake it here
-		// and create a new choice for the last event in the stream
+		// OpenAI returns usage in a final chunk with no choices. Some compatible
+		// providers (Baseten) also attach usage to normal content chunks; those
+		// chunks must keep flowing through as content and must not be converted
+		// into a synthetic stop before the runtime sees the delta.
 		if len(openaiResponse.Choices) == 0 {
+			finishReason := a.lastFinishReason
+			if finishReason == chat.FinishReasonNull || finishReason == "" {
+				finishReason = chat.FinishReasonStop
+			}
 			response.Choices = append(response.Choices, chat.MessageStreamChoice{
 				FinishReason: finishReason,
 			})
-		} else {
-			// Other openai-compatible providers DO return a choice with finish reason...
-			response.Choices[0].FinishReason = finishReason
-		}
-		if finishReason == chat.FinishReasonStop {
-			return response, nil
 		}
 	}
 

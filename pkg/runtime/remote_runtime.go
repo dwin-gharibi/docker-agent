@@ -45,10 +45,10 @@ type RemoteRuntime struct {
 	pendingModelOverride string
 
 	// resolvedDefault caches the team's default agent name fetched from the
-	// server, so [CurrentAgentName] stays an O(1) field read after the first
-	// call when no specific agent has been selected.
-	resolvedDefault     string
-	resolvedDefaultOnce sync.Once
+	// server after a successful lookup, so [CurrentAgentName] stays an O(1)
+	// field read when no specific agent has been selected.
+	resolvedDefault   string
+	resolvedDefaultMu sync.Mutex
 }
 
 // RemoteRuntimeOption is a function for configuring the RemoteRuntime
@@ -101,14 +101,22 @@ func (r *RemoteRuntime) resolvedAgent(ctx context.Context) (string, latest.Agent
 // When no specific agent has been selected, it falls back to the first agent
 // declared by the remote team config. The remote lookup happens at most once;
 // the result is cached so subsequent calls are O(1).
-func (r *RemoteRuntime) CurrentAgentName() string {
+func (r *RemoteRuntime) CurrentAgentName(ctx context.Context) string {
 	if r.currentAgent != "" {
 		return r.currentAgent
 	}
-	r.resolvedDefaultOnce.Do(func() {
-		r.resolvedDefault, _ = r.resolvedAgent(context.Background())
-	})
-	return r.resolvedDefault
+	r.resolvedDefaultMu.Lock()
+	defer r.resolvedDefaultMu.Unlock()
+	if r.resolvedDefault != "" {
+		return r.resolvedDefault
+	}
+	// First successful call performs and caches the remote lookup; detach
+	// cancellation so a cancelled caller cannot poison the cached default.
+	name, _ := r.resolvedAgent(context.WithoutCancel(ctx))
+	if name != "" {
+		r.resolvedDefault = name
+	}
+	return name
 }
 
 func (r *RemoteRuntime) CurrentAgentInfo(ctx context.Context) CurrentAgentInfo {
@@ -126,8 +134,8 @@ func (r *RemoteRuntime) CurrentAgentInfo(ctx context.Context) CurrentAgentInfo {
 // fetch the team config (network error, auth failure, missing remote) is
 // propagated rather than silently accepted — the whole point of this check
 // is closing that silent-breakage gap.
-func (r *RemoteRuntime) SetCurrentAgent(agentName string) error {
-	cfg, err := r.client.GetAgent(context.Background(), r.agentFilename)
+func (r *RemoteRuntime) SetCurrentAgent(ctx context.Context, agentName string) error {
+	cfg, err := r.client.GetAgent(ctx, r.agentFilename)
 	if err != nil {
 		return fmt.Errorf("validate agent %q against remote team: %w", agentName, err)
 	}
@@ -142,7 +150,7 @@ func (r *RemoteRuntime) SetCurrentAgent(agentName string) error {
 		return fmt.Errorf("agent %q not found in remote team", agentName)
 	}
 	r.currentAgent = agentName
-	slog.Debug("Switched current agent (remote)", "agent", agentName)
+	slog.DebugContext(ctx, "Switched current agent (remote)", "agent", agentName)
 	return nil
 }
 
@@ -318,21 +326,21 @@ func (r *RemoteRuntime) Run(ctx context.Context, sess *session.Session) ([]sessi
 
 // Steer enqueues a user message for mid-turn injection into the running
 // agent loop on the remote server.
-func (r *RemoteRuntime) Steer(msg QueuedMessage) error {
+func (r *RemoteRuntime) Steer(ctx context.Context, msg QueuedMessage) error {
 	if r.sessionID == "" {
 		return errors.New("no active session")
 	}
-	return r.client.SteerSession(context.Background(), r.sessionID, []api.Message{
+	return r.client.SteerSession(ctx, r.sessionID, []api.Message{
 		{Content: msg.Content, MultiContent: msg.MultiContent},
 	})
 }
 
 // FollowUp enqueues a message for end-of-turn processing on the remote server.
-func (r *RemoteRuntime) FollowUp(msg QueuedMessage) error {
+func (r *RemoteRuntime) FollowUp(ctx context.Context, msg QueuedMessage) error {
 	if r.sessionID == "" {
 		return errors.New("no active session")
 	}
-	return r.client.FollowUpSession(context.Background(), r.sessionID, []api.Message{
+	return r.client.FollowUpSession(ctx, r.sessionID, []api.Message{
 		{Content: msg.Content, MultiContent: msg.MultiContent},
 	})
 }
@@ -450,14 +458,16 @@ func (r *RemoteRuntime) handleOAuthElicitation(ctx context.Context, req *Elicita
 	defer cancel()
 
 	slog.DebugContext(ctx, "Creating OAuth callback server")
-	callbackServer, err := mcp.NewCallbackServer()
+	callbackServer, err := mcp.NewCallbackServer(ctx)
 	if err != nil {
 		slog.ErrorContext(ctx, "Failed to create callback server", "error", err)
 		_ = r.client.ResumeElicitation(ctx, r.sessionID, "decline", nil)
 		return fmt.Errorf("failed to create callback server: %w", err)
 	}
 	defer func() {
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		// Detach from ctx's cancellation (the request may be done) but
+		// keep its trace context for the shutdown.
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer shutdownCancel()
 		if err := callbackServer.Shutdown(shutdownCtx); err != nil {
 			slog.ErrorContext(ctx, "Failed to shutdown callback server", "error", err)
@@ -595,14 +605,20 @@ func (r *RemoteRuntime) AvailableModels(ctx context.Context) []ModelChoice {
 // turn replaces the queued ref; an empty string clears it.
 func (r *RemoteRuntime) SetAgentModel(_ context.Context, _, modelRef string) error {
 	r.pendingMu.Lock()
+	defer r.pendingMu.Unlock()
 	r.pendingModelOverride = modelRef
-	r.pendingMu.Unlock()
 	return nil
 }
 
 // CycleAgentThinkingLevel is unsupported on remote runtimes; the server owns
 // model configuration including thinking-effort selection.
 func (r *RemoteRuntime) CycleAgentThinkingLevel(context.Context, string) (effort.Level, error) {
+	return "", ErrUnsupported
+}
+
+// SetAgentThinkingLevel is unsupported on remote runtimes; the server owns
+// model configuration including thinking-effort selection.
+func (r *RemoteRuntime) SetAgentThinkingLevel(context.Context, string, effort.Level) (effort.Level, error) {
 	return "", ErrUnsupported
 }
 
@@ -669,7 +685,7 @@ func (r *RemoteRuntime) ExecuteMCPPrompt(ctx context.Context, promptName string,
 }
 
 // TitleGenerator is not supported on remote runtimes (titles are generated server-side).
-func (r *RemoteRuntime) TitleGenerator() *sessiontitle.Generator {
+func (r *RemoteRuntime) TitleGenerator(context.Context) *sessiontitle.Generator {
 	return nil
 }
 
@@ -685,6 +701,10 @@ func (r *RemoteRuntime) TogglePause(ctx context.Context) (bool, error) {
 // observed server-side and surface through the run-stream events rather
 // than via an out-of-band callback.
 func (r *RemoteRuntime) OnToolsChanged(func(Event)) {}
+
+// OnBackgroundEvent is a no-op for remote runtimes; background agent tasks
+// run server-side and their events are not forwarded out-of-band.
+func (r *RemoteRuntime) OnBackgroundEvent(func(Event)) {}
 
 // Close is a no-op for remote runtimes.
 func (r *RemoteRuntime) Close() error {

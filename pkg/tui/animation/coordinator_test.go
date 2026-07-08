@@ -10,18 +10,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func resetGlobalCoordinator(t *testing.T) {
-	t.Helper()
-	globalCoordinator.mu.Lock()
-	globalCoordinator.active = 0
-	globalCoordinator.frame = 0
-	globalCoordinator.mu.Unlock()
-}
-
-func getActiveCount() int32 {
-	globalCoordinator.mu.Lock()
-	defer globalCoordinator.mu.Unlock()
-	return globalCoordinator.active
+func getActiveCount(c *Coordinator) int32 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.active
 }
 
 func runCmdWithTimeout(t *testing.T, cmd tea.Cmd) tea.Msg {
@@ -57,51 +49,54 @@ func runTickCmd(t *testing.T, cmd tea.Cmd) TickMsg {
 }
 
 func TestGlobalCoordinatorLifecycle(t *testing.T) {
-	resetGlobalCoordinator(t)
+	t.Parallel()
+	c := &Coordinator{}
 
 	// No active animations = no tick
-	require.Nil(t, StartTick())
+	require.Nil(t, c.StartTick())
 
 	// First registration starts tick
-	firstTick := StartTickIfFirst()
+	firstTick := c.StartTickIfFirst()
 	tickMsg := runTickCmd(t, firstTick)
 	assert.Equal(t, 1, tickMsg.Frame)
 
 	// Subsequent tick continues
-	nextTick := StartTick()
+	nextTick := c.StartTick()
 	tickMsg = runTickCmd(t, nextTick)
 	assert.Equal(t, 2, tickMsg.Frame)
 
 	// Second StartTickIfFirst registers but doesn't return tick (not first)
-	cmd := StartTickIfFirst()
+	cmd := c.StartTickIfFirst()
 	require.Nil(t, cmd)
-	assert.Equal(t, int32(2), getActiveCount())
+	assert.Equal(t, int32(2), getActiveCount(c))
 
 	// Unregister one, still active
-	Unregister()
-	require.True(t, HasActive())
-	require.NotNil(t, StartTick())
+	c.Unregister()
+	require.True(t, c.HasActive())
+	require.NotNil(t, c.StartTick())
 
 	// Unregister last one
-	Unregister()
-	require.False(t, HasActive())
-	require.Nil(t, StartTick())
+	c.Unregister()
+	require.False(t, c.HasActive())
+	require.Nil(t, c.StartTick())
 }
 
 func TestUnregisterNeverGoesNegative(t *testing.T) {
-	resetGlobalCoordinator(t)
+	t.Parallel()
+	c := &Coordinator{}
 
 	// Multiple unregisters when already at 0
-	Unregister()
-	Unregister()
-	Unregister()
+	c.Unregister()
+	c.Unregister()
+	c.Unregister()
 
-	assert.Equal(t, int32(0), getActiveCount())
-	require.False(t, HasActive())
+	assert.Equal(t, int32(0), getActiveCount(c))
+	require.False(t, c.HasActive())
 }
 
 func TestConcurrentRegisterUnregister(t *testing.T) {
-	resetGlobalCoordinator(t)
+	t.Parallel()
+	c := &Coordinator{}
 
 	const goroutines = 100
 	const opsPerGoroutine = 100
@@ -114,7 +109,7 @@ func TestConcurrentRegisterUnregister(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for range opsPerGoroutine {
-				Register()
+				c.Register()
 			}
 		}()
 	}
@@ -124,7 +119,7 @@ func TestConcurrentRegisterUnregister(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for range opsPerGoroutine {
-				Unregister()
+				c.Unregister()
 			}
 		}()
 	}
@@ -134,12 +129,13 @@ func TestConcurrentRegisterUnregister(t *testing.T) {
 	// Should have exactly goroutines * opsPerGoroutine registers
 	// minus whatever unregisters succeeded (capped at 0)
 	// Final count should be >= 0
-	count := getActiveCount()
+	count := getActiveCount(c)
 	assert.GreaterOrEqual(t, count, int32(0), "active count should never be negative")
 }
 
 func TestConcurrentStartTickIfFirst(t *testing.T) {
-	resetGlobalCoordinator(t)
+	t.Parallel()
+	c := &Coordinator{}
 
 	const goroutines = 50
 	var wg sync.WaitGroup
@@ -151,7 +147,7 @@ func TestConcurrentStartTickIfFirst(t *testing.T) {
 	for range goroutines {
 		go func() {
 			defer wg.Done()
-			cmd := StartTickIfFirst()
+			cmd := c.StartTickIfFirst()
 			cmds <- cmd
 		}()
 	}
@@ -170,5 +166,5 @@ func TestConcurrentStartTickIfFirst(t *testing.T) {
 	// Exactly one should have started the tick
 	assert.Equal(t, 1, ticksStarted, "exactly one goroutine should start the tick")
 	// All should have registered
-	assert.Equal(t, int32(goroutines), getActiveCount())
+	assert.Equal(t, int32(goroutines), getActiveCount(c))
 }

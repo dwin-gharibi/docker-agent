@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -46,9 +47,9 @@ type Runtime interface {
 	// CurrentAgentInfo returns information about the currently active agent
 	CurrentAgentInfo(ctx context.Context) CurrentAgentInfo
 	// CurrentAgentName returns the name of the currently active agent
-	CurrentAgentName() string
+	CurrentAgentName(ctx context.Context) string
 	// SetCurrentAgent sets the currently active agent for subsequent user messages
-	SetCurrentAgent(agentName string) error
+	SetCurrentAgent(ctx context.Context, agentName string) error
 	// CurrentAgentTools returns the tools for the active agent
 	CurrentAgentTools(ctx context.Context) ([]tools.Tool, error)
 	// CurrentAgentToolsetStatuses returns lifecycle status for each toolset of
@@ -116,15 +117,15 @@ type Runtime interface {
 
 	// TitleGenerator returns a generator for automatic session titles, or nil
 	// if the runtime does not support local title generation (e.g. remote runtimes).
-	TitleGenerator() *sessiontitle.Generator
+	TitleGenerator(ctx context.Context) *sessiontitle.Generator
 
 	// Steer enqueues a user message for urgent mid-turn injection into the
 	// running agent loop. Returns an error if the queue is full or steering
 	// is not available.
-	Steer(msg QueuedMessage) error
+	Steer(ctx context.Context, msg QueuedMessage) error
 	// FollowUp enqueues a message for end-of-turn processing. Each follow-up
 	// gets a full undivided agent turn. Returns an error if the queue is full.
-	FollowUp(msg QueuedMessage) error
+	FollowUp(ctx context.Context, msg QueuedMessage) error
 
 	// SetAgentModel sets a model override for the named agent.
 	// modelRef can be:
@@ -143,6 +144,14 @@ type Runtime interface {
 	// support thinking-effort selection.
 	CycleAgentThinkingLevel(ctx context.Context, agentName string) (effort.Level, error)
 
+	// SetAgentThinkingLevel sets the named agent's thinking-effort level to
+	// the requested value, applies it as a runtime model override, and
+	// returns the applied level. The level must be one the current model
+	// supports. Returns [ErrUnsupported] for runtimes that can't switch
+	// models (e.g. remote runtimes) or for models that don't support
+	// thinking-effort selection.
+	SetAgentThinkingLevel(ctx context.Context, agentName string, level effort.Level) (effort.Level, error)
+
 	// AvailableModels returns the models the user can pick from in the
 	// /model picker. Returns nil for runtimes that don't expose model
 	// switching; see SupportsModelSwitching for a cheap pre-check.
@@ -159,6 +168,13 @@ type Runtime interface {
 	// ToolListChanged notification). Runtimes that don't emit such events
 	// can implement this as a no-op.
 	OnToolsChanged(handler func(Event))
+
+	// OnBackgroundEvent registers a handler invoked outside of any RunStream
+	// for events surfaced from detached background work (e.g. token usage
+	// from background agent tasks started via run_background_agent), which
+	// has no live event channel of its own. Runtimes that don't run local
+	// background work can implement this as a no-op.
+	OnBackgroundEvent(handler func(Event))
 
 	// QueueStatus returns the current depth and capacity of message queues
 	QueueStatus() QueueStatus
@@ -197,6 +213,7 @@ type ModelStore interface {
 
 // LocalRuntime manages the execution of agents
 type LocalRuntime struct {
+	ctx                       func() context.Context
 	toolMap                   map[string]ToolHandlerFunc
 	team                      *team.Team
 	agents                    *agentRouter
@@ -268,8 +285,26 @@ type LocalRuntime struct {
 	// exactly ONE message after the model stops and stop-hooks have run.
 	followUpQueue MessageQueue
 
+	// activeRootStreams tracks top-level RunStream loops. Recalls use this to
+	// preserve mid-turn steering while still waking the embedder once the parent
+	// stream has gone idle.
+	activeRootStreams atomic.Int32
+
+	// recallHandler wakes embedders (TUI/App) when a tool recall arrives after
+	// the active RunStream has gone idle. Protected by recallMu because tool
+	// callbacks can fire from background goroutines.
+	recallMu      sync.RWMutex
+	recallHandler RecallHandler
+
 	// onToolsChanged is called when an MCP toolset reports a tool list change.
 	onToolsChanged func(Event)
+
+	// onBackgroundEvent is called for events surfaced from detached
+	// background work (e.g. background agent tasks). Protected by
+	// backgroundEventMu because background tasks read it from their own
+	// goroutines.
+	backgroundEventMu sync.RWMutex
+	onBackgroundEvent func(Event)
 
 	bgAgents *agenttool.Handler
 
@@ -305,6 +340,11 @@ type LocalRuntime struct {
 	// cannot stall the sidebar's "Loading tools…" state forever. Defaults to
 	// defaultToolListTimeout; overridden via WithToolListTimeout.
 	toolListTimeout time.Duration
+
+	// toolStartTimeout bounds how long EmitStartupInfo waits for a single
+	// toolset to start before skipping it for the startup sidebar pass.
+	// Defaults to defaultToolStartTimeout; overridden via WithToolStartTimeout.
+	toolStartTimeout time.Duration
 
 	// pauseMu guards pauseCh.
 	pauseMu sync.Mutex
@@ -473,6 +513,19 @@ func WithToolListTimeout(d time.Duration) Opt {
 	}
 }
 
+// WithToolStartTimeout overrides how long EmitStartupInfo waits for a single
+// toolset to start before skipping it. Defaults to defaultToolStartTimeout.
+// A non-positive value is ignored so the default stands. Tests pass a short
+// timeout to exercise the skip path (a toolset whose Start() blocks) without
+// a real-time wait.
+func WithToolStartTimeout(d time.Duration) Opt {
+	return func(r *LocalRuntime) {
+		if d > 0 {
+			r.toolStartTimeout = d
+		}
+	}
+}
+
 // WithRetryOnRateLimit enables automatic retry with backoff for HTTP 429 (rate limit)
 // errors when no fallback models are available. When enabled, the runtime will honor
 // the Retry-After header from the provider's response to determine wait time before
@@ -531,19 +584,20 @@ func WithHooksRegistry(reg *hooks.Registry) Opt {
 // the configured (or default in-memory) session store; pass
 // [WithSessionStore] to override and [WithEventObserver] to layer
 // additional observers (telemetry, audit, ...).
-func New(agents *team.Team, opts ...Opt) (Runtime, error) {
-	return NewLocalRuntime(agents, opts...)
+func New(ctx context.Context, agents *team.Team, opts ...Opt) (Runtime, error) {
+	return NewLocalRuntime(ctx, agents, opts...)
 }
 
 // NewLocalRuntime creates a new LocalRuntime without the persistence wrapper.
 // This is useful for testing or when persistence is handled externally.
-func NewLocalRuntime(agents *team.Team, opts ...Opt) (*LocalRuntime, error) {
+func NewLocalRuntime(ctx context.Context, agents *team.Team, opts ...Opt) (*LocalRuntime, error) {
 	defaultAgent, err := agents.DefaultAgent()
 	if err != nil {
 		return nil, err
 	}
 
 	r := &LocalRuntime{
+		ctx:                    func() context.Context { return context.WithoutCancel(ctx) },
 		toolMap:                make(map[string]ToolHandlerFunc),
 		team:                   agents,
 		agents:                 newAgentRouter(agents, defaultAgent.Name()),
@@ -560,6 +614,7 @@ func NewLocalRuntime(agents *team.Team, opts ...Opt) (*LocalRuntime, error) {
 		providerRegistry:       provider.DefaultRegistry(),
 		maxOverflowCompactions: defaultMaxOverflowCompactions,
 		toolListTimeout:        defaultToolListTimeout,
+		toolStartTimeout:       defaultToolStartTimeout,
 		dmrModelLister:         dmr.ListModels,
 	}
 	r.bgAgents = agenttool.NewHandler(r)
@@ -626,7 +681,15 @@ func NewLocalRuntime(agents *team.Team, opts ...Opt) (*LocalRuntime, error) {
 	}
 
 	if r.modelsStore == nil {
-		r.modelsStore = &lazyModelStore{}
+		// Precedence: an explicit WithModelStore (already set above) wins; then a
+		// store carried on the ModelSwitcherConfig (the team loader shares the
+		// one it warmed so the first /model open skips the cold catalog parse);
+		// otherwise a lazy store constructed on first use.
+		if r.modelSwitcherCfg != nil && r.modelSwitcherCfg.ModelsStore != nil {
+			r.modelsStore = r.modelSwitcherCfg.ModelsStore
+		} else {
+			r.modelsStore = &lazyModelStore{}
+		}
 	}
 
 	// Validate that the current agent exists and has a model
@@ -636,7 +699,7 @@ func NewLocalRuntime(agents *team.Team, opts ...Opt) (*LocalRuntime, error) {
 		return nil, err
 	}
 
-	if defaultAgent.Model(context.TODO()) == nil && !defaultAgent.HasHarness() {
+	if defaultAgent.Model(ctx) == nil && !defaultAgent.HasHarness() {
 		return nil, fmt.Errorf("agent %s has no valid model", defaultAgent.Name())
 	}
 
@@ -657,12 +720,21 @@ func NewLocalRuntime(agents *team.Team, opts ...Opt) (*LocalRuntime, error) {
 		r.observers = append([]EventObserver{obs}, r.observers...)
 	}
 
-	slog.Debug("Creating new runtime", "agent", r.agents.Name(), "available_agents", agents.Size())
+	slog.DebugContext(ctx, "Creating new runtime", "agent", r.agents.Name(), "available_agents", agents.Size())
 
 	return r, nil
 }
 
-func (r *LocalRuntime) CurrentAgentName() string {
+func (r *LocalRuntime) CurrentAgentName(context.Context) string {
+	return r.currentAgentName()
+}
+
+// currentAgentName is the context-free internal accessor. LocalRuntime
+// resolves the active agent purely from in-memory state, so its internal
+// callers (event callbacks, logging) use this directly; the exported
+// context-taking method exists to satisfy the Runtime interface, whose
+// remote implementation needs a context for its one-time lookup.
+func (r *LocalRuntime) currentAgentName() string {
 	return r.agents.Name()
 }
 
@@ -680,7 +752,7 @@ func (r *LocalRuntime) CurrentAgentInfo(context.Context) CurrentAgentInfo {
 	}
 }
 
-func (r *LocalRuntime) SetCurrentAgent(agentName string) error {
+func (r *LocalRuntime) SetCurrentAgent(_ context.Context, agentName string) error {
 	return r.agents.SetValidated(agentName)
 }
 
@@ -747,7 +819,7 @@ type AgentConfigInfo struct {
 // already-started toolsets (never starting one), so it is safe to call for any
 // agent whether or not it has run. Unknown agents yield the zero value, so the
 // modal omits the corresponding sections.
-func (r *LocalRuntime) AgentConfigInfo(agentName string) AgentConfigInfo {
+func (r *LocalRuntime) AgentConfigInfo(ctx context.Context, agentName string) AgentConfigInfo {
 	a, err := r.team.Agent(agentName)
 	if err != nil || a == nil {
 		return AgentConfigInfo{}
@@ -784,7 +856,7 @@ func (r *LocalRuntime) AgentConfigInfo(agentName string) AgentConfigInfo {
 		NumHistoryItems:         a.NumHistoryItems(),
 		MaxConsecutiveToolCalls: a.MaxConsecutiveToolCalls(),
 		Options:                 agentOptionFlags(a, cfg, hasCfg),
-		Toolsets:                toolsetDetails(a, cfg, hasCfg),
+		Toolsets:                toolsetDetails(ctx, a, cfg, hasCfg),
 		IsCurrent:               r.agents != nil && r.agents.Name() == agentName,
 	}
 	if hasCfg {
@@ -833,7 +905,7 @@ func configSkillNames(cfg latest.AgentConfig) []string {
 // combining the side-effect-free lifecycle status with tool names: live names
 // for started toolsets, otherwise the declared `tools:` allow-list keyed by the
 // same name the registry assigns (cmp.Or(name, type)).
-func toolsetDetails(a *agent.Agent, cfg latest.AgentConfig, hasCfg bool) []ToolsetDetail {
+func toolsetDetails(ctx context.Context, a *agent.Agent, cfg latest.AgentConfig, hasCfg bool) []ToolsetDetail {
 	toolSets := a.ToolSets()
 	if len(toolSets) == 0 {
 		return nil
@@ -850,7 +922,7 @@ func toolsetDetails(a *agent.Agent, cfg latest.AgentConfig, hasCfg bool) []Tools
 			Kind:  status.Kind,
 			State: toolsetStateBucket(status.State),
 		}
-		if live, ok := startedToolNames(ts); ok {
+		if live, ok := startedToolNames(ctx, ts); ok {
 			info.Tools = live
 		} else if names, ok := declared[status.Name]; ok {
 			info.Tools = names
@@ -880,12 +952,12 @@ func toolsetStateBucket(s lifecycle.State) ToolsetState {
 // caller can fall back to the declared allow-list. context.TODO is safe here:
 // the toolset is already started, so listing returns its cached tools without
 // a cancellable round-trip.
-func startedToolNames(ts tools.ToolSet) ([]string, bool) {
+func startedToolNames(ctx context.Context, ts tools.ToolSet) ([]string, bool) {
 	s, ok := tools.As[*tools.StartableToolSet](ts)
 	if !ok || !s.IsStarted() {
 		return nil, false
 	}
-	tl, err := s.Tools(context.TODO())
+	tl, err := s.Tools(ctx)
 	if err != nil {
 		return nil, false
 	}
@@ -984,23 +1056,30 @@ func (r *LocalRuntime) AgentToolsetStatuses(name string) []tools.ToolsetStatus {
 //   - no toolset matches name (matching uses the same logic as the
 //     /tools dialog: the toolset's Name() if any, otherwise its
 //     description),
-//   - the toolset is not supervisor-backed (no Restartable capability),
+//   - no matching toolset is supervisor-backed (no Restartable capability),
 //   - the supervisor itself returned an error (timeout, classified
 //     transport failure, etc.).
+//
+// Display names are not guaranteed unique (a YAML name: can shadow a
+// built-in), so non-restartable matches are skipped rather than aborting:
+// the first restartable toolset with the given name wins.
 func (r *LocalRuntime) RestartToolset(ctx context.Context, name string) error {
 	a := r.CurrentAgent()
 	if a == nil {
 		return errors.New("no active agent")
 	}
+	found := false
 	for _, ts := range a.ToolSets() {
 		if nameFor(ts, tools.DescribeToolSet(ts)) != name {
 			continue
 		}
-		restartable, ok := tools.As[tools.Restartable](ts)
-		if !ok {
-			return fmt.Errorf("toolset %q does not support restart", name)
+		found = true
+		if restartable, ok := tools.As[tools.Restartable](ts); ok {
+			return restartable.Restart(ctx)
 		}
-		return restartable.Restart(ctx)
+	}
+	if found {
+		return fmt.Errorf("toolset %q does not support restart", name)
 	}
 	return fmt.Errorf("toolset %q not found", name)
 }
@@ -1185,15 +1264,12 @@ func (r *LocalRuntime) ExecuteMCPPrompt(ctx context.Context, promptName string, 
 }
 
 // TitleGenerator returns a title generator for automatic session title generation.
-func (r *LocalRuntime) TitleGenerator() *sessiontitle.Generator {
+func (r *LocalRuntime) TitleGenerator(ctx context.Context) *sessiontitle.Generator {
 	a := r.CurrentAgent()
 	if a == nil {
 		return nil
 	}
-	// Title-gen setup happens before any session ctx exists; the resulting
-	// generator carries its own ctx when actually invoked. context.TODO is
-	// the right marker here.
-	models := a.TitleModels(context.TODO())
+	models := a.TitleModels(ctx)
 	if len(models) == 0 {
 		return nil
 	}
@@ -1202,11 +1278,11 @@ func (r *LocalRuntime) TitleGenerator() *sessiontitle.Generator {
 
 // getAgentModelID returns the model ID for an agent. The zero ID is
 // returned when no model is configured.
-func getAgentModelID(a *agent.Agent) modelsdev.ID {
+func getAgentModelID(ctx context.Context, a *agent.Agent) modelsdev.ID {
 	if a == nil {
 		return modelsdev.ID{}
 	}
-	if model := a.Model(context.TODO()); model != nil {
+	if model := a.Model(ctx); model != nil {
 		return model.ID()
 	}
 	return modelsdev.ID{}
@@ -1215,7 +1291,7 @@ func getAgentModelID(a *agent.Agent) modelsdev.ID {
 // getEffectiveModelID returns the currently active model ID for an agent, accounting
 // for any active fallback cooldown. During a cooldown period, this returns the fallback
 // model ID instead of the configured primary model, so the UI reflects the actual model in use.
-func (r *LocalRuntime) getEffectiveModelID(a *agent.Agent) modelsdev.ID {
+func (r *LocalRuntime) getEffectiveModelID(ctx context.Context, a *agent.Agent) modelsdev.ID {
 	cooldownState := r.fallback.cooldowns.Get(a.Name())
 	if cooldownState != nil {
 		fallbacks := a.FallbackModels()
@@ -1223,14 +1299,14 @@ func (r *LocalRuntime) getEffectiveModelID(a *agent.Agent) modelsdev.ID {
 			return fallbacks[cooldownState.fallbackIndex].ID()
 		}
 	}
-	return getAgentModelID(a)
+	return getAgentModelID(ctx, a)
 }
 
 // agentDetailsFromTeam converts team agent info to AgentDetails for events.
 // It accounts for active fallback cooldowns, returning the effective model
 // instead of the configured model when a fallback is in effect.
 func (r *LocalRuntime) agentDetailsFromTeam(ctx context.Context) []AgentDetails {
-	agentsInfo := r.team.AgentsInfo()
+	agentsInfo := r.team.AgentsInfo(ctx)
 	details := make([]AgentDetails, len(agentsInfo))
 	for i, info := range agentsInfo {
 		providerName := info.Provider
@@ -1365,14 +1441,36 @@ func (r *LocalRuntime) emitToolsChanged() {
 	if r.onToolsChanged == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), toolsChangedTimeout)
+	ctx, cancel := context.WithTimeout(r.ctx(), toolsChangedTimeout)
 	defer cancel()
 	a := r.CurrentAgent()
 	agentTools, err := a.StartedTools(ctx)
 	if err != nil {
 		return
 	}
-	r.onToolsChanged(ToolsetInfo(len(agentTools), false, r.CurrentAgentName()))
+	r.onToolsChanged(ToolsetInfo(len(agentTools), false, r.currentAgentName()))
+}
+
+// OnBackgroundEvent registers a handler that receives events surfaced from
+// detached background work — today the TokenUsageEvents of background agent
+// tasks (run_background_agent), whose sub-sessions run on their own goroutine
+// with no live event channel. This lets the UI keep per-agent context
+// accounting for background agents.
+func (r *LocalRuntime) OnBackgroundEvent(handler func(Event)) {
+	r.backgroundEventMu.Lock()
+	defer r.backgroundEventMu.Unlock()
+	r.onBackgroundEvent = handler
+}
+
+// emitBackgroundEvent forwards an event from detached background work to the
+// registered handler, if any.
+func (r *LocalRuntime) emitBackgroundEvent(event Event) {
+	r.backgroundEventMu.RLock()
+	handler := r.onBackgroundEvent
+	r.backgroundEventMu.RUnlock()
+	if handler != nil {
+		handler(event)
+	}
 }
 
 // emitAgentAndTeamInfo sends the AgentInfo and TeamInfo events that drive the
@@ -1380,14 +1478,24 @@ func (r *LocalRuntime) emitToolsChanged() {
 // aborted (e.g. the context was cancelled). Shared by EmitStartupInfo and
 // EmitAgentInfo so both render identical model labels.
 func (r *LocalRuntime) emitAgentAndTeamInfo(ctx context.Context, a *agent.Agent, send func(Event) bool) bool {
-	modelLabel := r.getEffectiveModelID(a).String()
+	modelID := r.getEffectiveModelID(ctx, a)
+	modelLabel := modelID.String()
+	contextLimit := r.contextLimitForAgentModel(ctx, a, modelID)
 	if a.HasHarness() {
-		modelLabel = agentModelLabel(a)
+		modelLabel = agentModelLabel(ctx, a)
+		contextLimit = 0
 	}
-	if !send(AgentInfo(a.Name(), modelLabel, a.Description(), a.WelcomeMessage())) {
+	if !send(AgentInfo(a.Name(), modelLabel, a.Description(), a.WelcomeMessage(), contextLimit)) {
 		return false
 	}
-	return send(TeamInfo(r.agentDetailsFromTeam(ctx), r.CurrentAgentName()))
+	return send(TeamInfo(r.agentDetailsFromTeam(ctx), r.currentAgentName()))
+}
+
+func (r *LocalRuntime) contextLimitForAgentModel(ctx context.Context, a *agent.Agent, modelID modelsdev.ID) int64 {
+	if a == nil || modelID.IsZero() {
+		return 0
+	}
+	return r.effectiveContextLimit(ctx, a, r.resolveContextLimit(ctx, a.Model(ctx), modelID))
 }
 
 // EmitAgentInfo implements [Runtime.EmitAgentInfo]: it refreshes the agent and
@@ -1429,7 +1537,7 @@ func (r *LocalRuntime) EmitStartupInfo(ctx context.Context, sess *session.Sessio
 
 	// Emit agent and team information immediately for fast sidebar display.
 	// Use getEffectiveModelID to account for active fallback cooldowns.
-	modelID := r.getEffectiveModelID(a)
+	modelID := r.getEffectiveModelID(ctx, a)
 	if !r.emitAgentAndTeamInfo(ctx, a, send) {
 		return
 	}
@@ -1443,7 +1551,7 @@ func (r *LocalRuntime) EmitStartupInfo(ctx context.Context, sess *session.Sessio
 	// sub-sessions won't emit their own events, so the parent must include
 	// their costs.
 	if sess != nil && (sess.InputTokens > 0 || sess.OutputTokens > 0) {
-		contextLimit := r.resolveContextLimit(ctx, a.Model(ctx), modelID)
+		contextLimit := r.contextLimitForAgentModel(ctx, a, modelID)
 		usage := SessionUsage(sess, contextLimit)
 		usage.Cost = sess.TotalCost()
 
@@ -1472,7 +1580,7 @@ func (r *LocalRuntime) EmitStartupInfo(ctx context.Context, sess *session.Sessio
 			break
 		}
 
-		send(NewTokenUsageEvent(sess.ID, r.CurrentAgentName(), usage))
+		send(NewTokenUsageEvent(sess.ID, r.currentAgentName(), usage))
 	}
 
 	// Tool loading can be slow (MCP servers need to start). Mark the
@@ -1503,12 +1611,12 @@ func (r *LocalRuntime) emitToolsProgressively(ctx context.Context, a *agent.Agen
 
 	// If no toolsets, emit final state immediately
 	if totalToolsets == 0 {
-		send(ToolsetInfo(0, false, r.CurrentAgentName()))
+		send(ToolsetInfo(0, false, r.currentAgentName()))
 		return
 	}
 
 	// Emit initial loading state
-	if !send(ToolsetInfo(0, true, r.CurrentAgentName())) {
+	if !send(ToolsetInfo(0, true, r.currentAgentName())) {
 		return
 	}
 
@@ -1528,8 +1636,19 @@ func (r *LocalRuntime) emitToolsProgressively(ctx context.Context, a *agent.Agen
 		// can fire the targeted re-auth notice. Start() is a no-op when the
 		// toolset is already healthy, so calling it unconditionally is safe.
 		if startable, ok := toolset.(*tools.StartableToolSet); ok {
-			if err := startable.Start(ctx); err != nil {
+			if err := startToolsetWithTimeout(ctx, startable, r.toolStartTimeout); err != nil {
 				desc := tools.DescribeToolSet(startable.ToolSet)
+				// A start that outlived its deadline (e.g. an MCP container
+				// stuck behind a wedged Docker daemon) is reported directly:
+				// the abandoned Start goroutine has not returned, so the
+				// once-per-streak guard below has recorded nothing and would
+				// silently swallow the warning.
+				if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+					slog.WarnContext(ctx, "Toolset start timed out; skipping",
+						"agent", a.Name(), "toolset", desc, "timeout", r.toolStartTimeout)
+					a.AddToolWarning(fmt.Sprintf("%s is taking too long to start (>%s) — it keeps starting in the background and its tools appear once it is ready", desc, r.toolStartTimeout))
+					continue
+				}
 				// IsAuthorizationRequired must be checked BEFORE
 				// ShouldReportFailure: this is the first — expected —
 				// failure of a deferred-OAuth toolset, and consuming the
@@ -1590,13 +1709,13 @@ func (r *LocalRuntime) emitToolsProgressively(ctx context.Context, a *agent.Agen
 		totalTools += len(ts)
 
 		// Emit progress update - still loading unless this is the last toolset
-		if !send(ToolsetInfo(totalTools, !isLast, r.CurrentAgentName())) {
+		if !send(ToolsetInfo(totalTools, !isLast, r.currentAgentName())) {
 			return
 		}
 	}
 
 	// Emit final state (not loading)
-	send(ToolsetInfo(totalTools, false, r.CurrentAgentName()))
+	send(ToolsetInfo(totalTools, false, r.currentAgentName()))
 }
 
 // listToolsWithTimeout enumerates a toolset's tools under a bounded deadline.
@@ -1634,8 +1753,42 @@ func listToolsWithTimeout(ctx context.Context, toolset tools.ToolSet, timeout ti
 	}
 }
 
+// startToolsetWithTimeout starts a toolset under a bounded deadline, mirroring
+// listToolsWithTimeout. The deadline must be enforced by racing the call
+// against the timeout (not only via the context): the MCP connector detaches
+// the context it is handed with context.WithoutCancel, so a wedged initialize
+// handshake (e.g. Docker failing to start the server container) would ignore a
+// ctx deadline and block startup forever. On timeout it returns the context
+// error; the orphaned goroutine sends into a buffered channel and exits if the
+// call ever returns.
+//
+// The abandoned goroutine keeps holding the StartableToolSet's single-flight
+// lock, so later Start/Stop calls on the same toolset wait for the original
+// attempt rather than racing it — if it eventually completes, the toolset
+// becomes usable on the next turn; if it never does, the TUI shutdown safety
+// net still bounds the exit path.
+func startToolsetWithTimeout(ctx context.Context, toolset *tools.StartableToolSet, timeout time.Duration) error {
+	if timeout <= 0 {
+		timeout = defaultToolStartTimeout
+	}
+	startCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	done := make(chan error, 1) // buffered so a late send never blocks
+	go func() {
+		done <- toolset.Start(startCtx)
+	}()
+
+	select {
+	case <-startCtx.Done():
+		return startCtx.Err()
+	case err := <-done:
+		return err
+	}
+}
+
 func (r *LocalRuntime) Resume(_ context.Context, req ResumeRequest) {
-	slog.Debug("Resuming runtime", "agent", r.CurrentAgentName(), "type", req.Type, "reason", req.Reason)
+	slog.Debug("Resuming runtime", "agent", r.currentAgentName(), "type", req.Type, "reason", req.Reason)
 
 	// Defensive validation:
 	//
@@ -1646,7 +1799,7 @@ func (r *LocalRuntime) Resume(_ context.Context, req ResumeRequest) {
 	if !IsValidResumeType(req.Type) {
 		slog.Warn(
 			"Invalid resume type received; ignoring resume request",
-			"agent", r.CurrentAgentName(),
+			"agent", r.currentAgentName(),
 			"confirmation_type", req.Type,
 			"valid_types", ValidResumeTypes(),
 		)
@@ -1660,11 +1813,11 @@ func (r *LocalRuntime) Resume(_ context.Context, req ResumeRequest) {
 	// canceled, or shutting down).
 	select {
 	case r.resumeChan <- req:
-		slog.Debug("Resume signal sent", "agent", r.CurrentAgentName())
+		slog.Debug("Resume signal sent", "agent", r.currentAgentName())
 	default:
 		slog.Debug(
 			"Resume channel not ready; resume signal dropped",
-			"agent", r.CurrentAgentName(),
+			"agent", r.currentAgentName(),
 			"confirmation_type", req.Type,
 		)
 	}
@@ -1673,8 +1826,8 @@ func (r *LocalRuntime) Resume(_ context.Context, req ResumeRequest) {
 // Steer enqueues a user message for urgent mid-turn injection into the
 // running agent loop. The message will be picked up after the current batch
 // of tool calls finishes but before the loop checks whether to stop.
-func (r *LocalRuntime) Steer(msg QueuedMessage) error {
-	if !r.steerQueue.Enqueue(context.Background(), msg) {
+func (r *LocalRuntime) Steer(ctx context.Context, msg QueuedMessage) error {
+	if !r.steerQueue.Enqueue(ctx, msg) {
 		return errors.New("steer queue full")
 	}
 	return nil
@@ -1683,9 +1836,35 @@ func (r *LocalRuntime) Steer(msg QueuedMessage) error {
 // FollowUp enqueues a message to be processed after the current agent turn
 // finishes. Unlike Steer, follow-ups are popped one at a time and each gets
 // a full undivided agent turn.
-func (r *LocalRuntime) FollowUp(msg QueuedMessage) error {
-	if !r.followUpQueue.Enqueue(context.Background(), msg) {
+func (r *LocalRuntime) FollowUp(ctx context.Context, msg QueuedMessage) error {
+	if !r.followUpQueue.Enqueue(ctx, msg) {
 		return errors.New("follow-up queue full")
+	}
+	return nil
+}
+
+// SetRecallHandler registers an embedder-owned wake-up path for tool recalls.
+// When unset, recalls fall back to the steer queue and are consumed by the next
+// active RunStream.
+func (r *LocalRuntime) SetRecallHandler(handler RecallHandler) {
+	r.recallMu.Lock()
+	defer r.recallMu.Unlock()
+	r.recallHandler = handler
+}
+
+func (r *LocalRuntime) recall(ctx context.Context, msg QueuedMessage) error {
+	if r.activeRootStreams.Load() > 0 {
+		return r.Steer(ctx, msg)
+	}
+
+	r.recallMu.RLock()
+	handler := r.recallHandler
+	r.recallMu.RUnlock()
+	if handler == nil {
+		return r.Steer(ctx, msg)
+	}
+	if !handler(ctx, msg) {
+		return errors.New("recall handler rejected message")
 	}
 	return nil
 }
@@ -1731,9 +1910,9 @@ func (r *LocalRuntime) Summarize(ctx context.Context, sess *session.Session, add
 //
 // reason is reported to BeforeCompaction / AfterCompaction hooks as
 // CompactionReason. Use [compactionReasonThreshold] for proactive
-// 90%-of-context triggers, [compactionReasonOverflow] for post-overflow
-// auto-recovery, [compactionReasonToolOverflow] for tool-result-driven
-// 90% triggers, or [compactionReasonManual] for user-invoked compactions.
+// threshold-of-context triggers (90% by default, tunable via
+// compaction_threshold), [compactionReasonOverflow] for post-overflow
+// auto-recovery, or [compactionReasonManual] for user-invoked compactions.
 //
 // PreCompact hooks fire first via the legacy [hooks.Input.Source] field
 // ("auto" / "tool_overflow" / "overflow" / "manual"); they may cancel the
@@ -1766,8 +1945,8 @@ func (r *LocalRuntime) compactWithReason(ctx context.Context, sess *session.Sess
 	// Emit a TokenUsageEvent so the sidebar immediately reflects the
 	// compaction: tokens drop to the summary size, context % drops, and
 	// cost increases by the summary generation cost.
-	modelID := r.getEffectiveModelID(a)
-	contextLimit := r.resolveContextLimit(ctx, a.Model(ctx), modelID)
+	modelID := r.getEffectiveModelID(ctx, a)
+	contextLimit := r.effectiveContextLimit(ctx, a, r.resolveContextLimit(ctx, a.Model(ctx), modelID))
 	events.Emit(NewTokenUsageEvent(sess.ID, a.Name(), SessionUsage(sess, contextLimit)))
 }
 

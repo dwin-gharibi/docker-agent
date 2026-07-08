@@ -1,0 +1,30 @@
+{{- /* Upgrade portable GitHub-style alerts (> [!NOTE] etc., see
+     STYLE.md "Callouts") into the site's .callout markup at build time.
+     A <strong> line that is the sole content of the first paragraph is
+     the optional custom title. Same conventions as docs.docker.com. */ -}}
+{{- $styles := dict
+  "note"      (dict "cls" "callout-info"    "label" "Note")
+  "tip"       (dict "cls" "callout-tip"     "label" "Tip")
+  "important" (dict "cls" "callout-info"    "label" "Important")
+  "warning"   (dict "cls" "callout-warning" "label" "Warning")
+  "caution"   (dict "cls" "callout-warning" "label" "Caution")
+-}}
+{{- $style := "" -}}
+{{- if eq .Type "alert" }}{{ $style = index $styles .AlertType }}{{ end -}}
+{{- with $style -}}
+{{- $text := trim $.Text "\n" -}}
+{{- $title := .label -}}
+{{- $titleRE := `^<p><strong>(.+?)</strong></p>\n?` -}}
+{{- with findRESubmatch $titleRE $text 1 -}}
+  {{- $title = index (index . 0) 1 -}}
+  {{- $text = replaceRE $titleRE "" $text -}}
+{{- end -}}
+<div class="callout {{ .cls }}">
+  <div class="callout-title">{{ $title | safeHTML }}</div>
+  {{ $text | safeHTML }}
+</div>
+{{- else -}}
+<blockquote>
+  {{ .Text }}
+</blockquote>
+{{- end -}}

@@ -3,8 +3,12 @@ package root
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/viewport"
@@ -15,25 +19,80 @@ import (
 
 	"github.com/docker/docker-agent/pkg/config"
 	"github.com/docker/docker-agent/pkg/environment"
+	"github.com/docker/docker-agent/pkg/path"
 	"github.com/docker/docker-agent/pkg/tui/components/scrollbar"
 	"github.com/docker/docker-agent/pkg/tui/components/toolcommon"
 	"github.com/docker/docker-agent/pkg/tui/styles"
 )
 
-// defaultAgentPickerRefs is the list of agent refs offered by the picker when
-// the user doesn't pass --agent-picker with an explicit list.
-var defaultAgentPickerRefs = []string{"default", "coder"}
+// agentPickerDefaultsSpec is the --agent-picker sentinel meaning "use the
+// default ref list". It is the flag's NoOptDefVal so a bare --agent-picker
+// resolves the defaults at parse time (including the ~/.agents scan).
+const agentPickerDefaultsSpec = "defaults"
+
+// defaultAgentPickerRefs returns the agent refs offered by the picker when
+// the user doesn't pass --agent-picker with an explicit list: the built-in
+// agents plus any agent config files found in ~/.agents.
+func defaultAgentPickerRefs() []string {
+	refs := []string{"default", "coder"}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return refs
+	}
+	return append(refs, agentRefsInDir(filepath.Join(home, ".agents"))...)
+}
+
+// agentRefsInDir returns the agent config files directly inside dir, sorted
+// by name. Non-regular files (FIFOs, sockets, …) are skipped so a stray
+// special file can't hang the picker when its config is read; symlinks to
+// regular files are kept. A missing or unreadable directory yields nothing.
+func agentRefsInDir(dir string) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var refs []string
+	for _, entry := range entries {
+		if !isConfigFileName(entry.Name()) {
+			continue
+		}
+		ref := filepath.Join(dir, entry.Name())
+		// TOCTOU: the file could be swapped for a special file between this
+		// check and the config read. Acceptable for a single-user CLI — the
+		// check guards against stray FIFOs/sockets, not races.
+		if info, err := os.Stat(ref); err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		refs = append(refs, ref)
+	}
+	return refs
+}
+
+// isConfigFileName reports whether name has an agent config file extension.
+func isConfigFileName(name string) bool {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".yaml", ".yml", ".hcl":
+		return true
+	default:
+		return false
+	}
+}
 
 // errAgentPickerCancelled is returned when the user aborts the picker
 // (Esc / Ctrl-C) without choosing an agent.
 var errAgentPickerCancelled = errors.New("agent selection cancelled")
 
+// errAgentPickerStartBoard is returned when the user chooses to open the
+// Kanban board (`docker agent board`) instead of picking an agent.
+var errAgentPickerStartBoard = errors.New("agent picker: start board")
+
 // agentChoice is a single entry in the agent picker.
 type agentChoice struct {
-	ref         string // agent reference as passed on the command line
-	description string // one-line description loaded from the agent config
-	yaml        string // raw config YAML, shown in the details dialog
-	err         error  // non-nil when the config could not be loaded
+	ref         string   // agent reference as passed on the command line
+	description string   // one-line description loaded from the agent config
+	tags        []string // metadata tags shown as coloured chips
+	yaml        string   // raw config YAML, shown in the details dialog
+	err         error    // non-nil when the config could not be loaded
 }
 
 // loadAgentChoices resolves and loads metadata for each ref so the picker can
@@ -70,36 +129,46 @@ func loadAgentChoices(ctx context.Context, refs []string, env environment.Provid
 		if cfg.Metadata.Description != "" {
 			choice.description = cfg.Metadata.Description
 		}
+		choice.tags = cfg.Metadata.Tags
 		choices = append(choices, choice)
 	}
 	return choices
 }
 
-// selectAgentRef shows a full-screen picker and returns the chosen agent ref.
-// When only a single ref is supplied there is nothing to choose, so it is
-// returned directly without showing any UI.
-func selectAgentRef(ctx context.Context, refs []string, env environment.Provider) (string, error) {
+// selectAgentRef shows a full-screen picker and returns the chosen agent ref
+// along with whether the user wants lean mode. It returns
+// errAgentPickerStartBoard when the user picks the "Open Board" button
+// instead of an agent. The "Lean Mode" checkbox is seeded with initialLean
+// (the effective lean state from flags/user config) so what the user sees
+// always matches what will run; the returned value is authoritative. When
+// only a single ref is supplied there is nothing to choose, so it is
+// returned directly without showing any UI (the board button included).
+func selectAgentRef(ctx context.Context, refs []string, env environment.Provider, initialLean bool) (ref string, lean bool, err error) {
 	if len(refs) == 0 {
-		return "", errors.New("no agent refs to choose from")
+		return "", false, errors.New("no agent refs to choose from")
 	}
 	if len(refs) == 1 {
-		return refs[0], nil
+		return refs[0], initialLean, nil
 	}
 
 	choices := loadAgentChoices(ctx, refs, env)
 	m := newAgentPickerModel(choices)
+	m.leanMode = initialLean
 
 	p := tea.NewProgram(m, tea.WithContext(ctx))
 	final, err := p.Run()
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 
 	result, ok := final.(*agentPickerModel)
 	if !ok || result.cancelled {
-		return "", errAgentPickerCancelled
+		return "", false, errAgentPickerCancelled
 	}
-	return result.choices[result.cursor].ref, nil
+	if result.startBoard {
+		return "", false, errAgentPickerStartBoard
+	}
+	return result.choices[result.cursor].ref, result.leanMode, nil
 }
 
 // agentPickerKeyMap holds the key bindings for the agent picker.
@@ -108,6 +177,8 @@ type agentPickerKeyMap struct {
 	Down    key.Binding
 	Choose  key.Binding
 	Details key.Binding
+	Lean    key.Binding
+	Board   key.Binding
 	Quit    key.Binding
 }
 
@@ -128,6 +199,14 @@ var agentPickerKeys = agentPickerKeyMap{
 		key.WithKeys("?"),
 		key.WithHelp("?", "view yaml"),
 	),
+	Lean: key.NewBinding(
+		key.WithKeys("l"),
+		key.WithHelp("l", "toggle lean mode"),
+	),
+	Board: key.NewBinding(
+		key.WithKeys("b"),
+		key.WithHelp("b", "open board"),
+	),
 	Quit: key.NewBinding(
 		key.WithKeys("esc", "ctrl+c", "q"),
 		key.WithHelp("esc", "cancel"),
@@ -142,21 +221,45 @@ type agentPickerModel struct {
 	height    int
 	cancelled bool
 
+	// leanMode mirrors the "Lean Mode" checkbox: when ticked the chosen
+	// agent runs in the lean TUI instead of the full one. Seeded by the
+	// caller with the effective lean state (off by default).
+	leanMode bool
+
+	// startBoard is set when the user picks the "Open Board" button: the
+	// caller starts `docker agent board` instead of running an agent.
+	startBoard bool
+
+	// offset is the index of the first visible card. The card list is
+	// windowed so a large ~/.agents directory can't grow the panel beyond
+	// the terminal height.
+	offset int
+
 	// showDetails toggles the scrollable YAML dialog overlay for the
 	// currently selected agent.
 	showDetails bool
 	details     viewport.Model
 	detailsBar  *scrollbar.Model
+
+	// lastClickIndex and lastClickTime back double-click detection on the
+	// agent cards: a second left-click on the same card within the threshold
+	// selects it.
+	lastClickIndex int
+	lastClickTime  time.Time
 }
 
 func newAgentPickerModel(choices []agentChoice) *agentPickerModel {
 	vp := viewport.New()
 	vp.FillHeight = true
-	vp.SoftWrap = true
+	// Truncate long lines instead of soft-wrapping them: the config's long
+	// instruction blocks would otherwise wrap across dozens of rows and bloat
+	// the viewer. Horizontal scrolling remains available.
+	vp.SoftWrap = false
 	return &agentPickerModel{
-		choices:    choices,
-		details:    vp,
-		detailsBar: scrollbar.New(),
+		choices:        choices,
+		details:        vp,
+		detailsBar:     scrollbar.New(),
+		lastClickIndex: -1,
 	}
 }
 
@@ -166,11 +269,40 @@ func (m *agentPickerModel) moveUp() {
 	if m.cursor > 0 {
 		m.cursor--
 	}
+	m.clampOffset()
 }
 
 func (m *agentPickerModel) moveDown() {
 	if m.cursor < len(m.choices)-1 {
 		m.cursor++
+	}
+	m.clampOffset()
+}
+
+// visibleCount returns the number of cards shown at once: all of them when
+// they fit (or before the first WindowSizeMsg), otherwise as many as fit the
+// terminal height, at least one. The panel is centred within the terminal,
+// so the bound is the terminal height minus the panel's non-card rows; fit
+// can exceed the number of cards on tall terminals and is clamped.
+func (m *agentPickerModel) visibleCount() int {
+	n := len(m.choices)
+	if m.height <= 0 {
+		return n
+	}
+	stride := agentPickerCardHeight + agentPickerCardGap
+	fit := (m.height - agentPickerPanelOverhead + agentPickerCardGap) / stride
+	return min(n, max(fit, 1))
+}
+
+// clampOffset keeps the visible window within bounds and the cursor inside it.
+func (m *agentPickerModel) clampOffset() {
+	n := m.visibleCount()
+	m.offset = max(min(m.offset, len(m.choices)-n), 0)
+	switch {
+	case m.cursor < m.offset:
+		m.offset = m.cursor
+	case n > 0 && m.cursor >= m.offset+n:
+		m.offset = m.cursor - n + 1
 	}
 }
 
@@ -179,6 +311,7 @@ func (m *agentPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		m.clampOffset()
 		m.resizeDetails()
 		return m, nil
 	case tea.KeyPressMsg:
@@ -188,6 +321,7 @@ func (m *agentPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch {
 			case key.Matches(msg, agentPickerKeys.Quit), key.Matches(msg, agentPickerKeys.Details):
 				m.showDetails = false
+				m.resetClickTracking()
 				return m, nil
 			}
 			var cmd tea.Cmd
@@ -209,10 +343,66 @@ func (m *agentPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, agentPickerKeys.Details):
 			m.openDetails()
 			return m, nil
+		case key.Matches(msg, agentPickerKeys.Lean):
+			m.leanMode = !m.leanMode
+			return m, nil
+		case key.Matches(msg, agentPickerKeys.Board):
+			m.startBoard = true
+			return m, tea.Quit
 		case key.Matches(msg, agentPickerKeys.Choose):
 			return m, tea.Quit
 		}
+	case tea.MouseWheelMsg:
+		if m.showDetails {
+			var cmd tea.Cmd
+			m.details, cmd = m.details.Update(msg)
+			m.syncDetailsBar()
+			return m, cmd
+		}
+		return m, nil
+	case tea.MouseMotionMsg:
+		if !m.showDetails {
+			if i, ok := m.cardAt(msg.X, msg.Y); ok {
+				m.cursor = i
+			}
+		}
+		return m, nil
+	case tea.MouseClickMsg:
+		return m.handleMouseClick(msg)
 	}
+	return m, nil
+}
+
+// handleMouseClick moves the cursor to the clicked card and treats a second
+// left-click on the same card (within the double-click threshold) as a
+// selection. Clicks are ignored while the YAML dialog is open.
+func (m *agentPickerModel) handleMouseClick(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
+	if m.showDetails || msg.Button != tea.MouseLeft {
+		return m, nil
+	}
+	if m.leanCheckboxAt(msg.X, msg.Y) {
+		m.leanMode = !m.leanMode
+		m.resetClickTracking()
+		return m, nil
+	}
+	if m.boardButtonAt(msg.X, msg.Y) {
+		m.startBoard = true
+		return m, tea.Quit
+	}
+	i, ok := m.cardAt(msg.X, msg.Y)
+	if !ok {
+		m.lastClickIndex = -1
+		return m, nil
+	}
+	m.cursor = i
+
+	now := time.Now()
+	if m.lastClickIndex == i && now.Sub(m.lastClickTime) < styles.DoubleClickThreshold {
+		m.lastClickIndex = -1
+		return m, tea.Quit
+	}
+	m.lastClickIndex = i
+	m.lastClickTime = now
 	return m, nil
 }
 
@@ -220,12 +410,13 @@ func (m *agentPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // moves or resizes while scrolling. They shrink only when the terminal is too
 // small to hold the preferred size.
 const (
-	detailsDialogWidth  = 90
-	detailsDialogHeight = 28
+	detailsDialogWidth  = 110
+	detailsDialogHeight = 36
 
 	// detailsChromeRows is the number of rows used by the dialog around the
-	// scrollable content: border (2) + padding (2) + title (1) + help (1).
-	detailsChromeRows = 6
+	// scrollable content: border (2) + padding (2) + title (1) + blank (1) +
+	// help (1).
+	detailsChromeRows = 7
 	// detailsChromeCols is the number of columns used by the dialog around
 	// the content: border (2) + padding (4) + scrollbar (1).
 	detailsChromeCols = 2 + 4 + scrollbar.Width
@@ -266,11 +457,20 @@ func (m *agentPickerModel) openDetails() {
 	if m.cursor < 0 || m.cursor >= len(m.choices) {
 		return
 	}
+	m.resetClickTracking()
 	m.resizeDetails()
 	m.details.SetContent(m.detailsContent(m.choices[m.cursor]))
 	m.details.GotoTop()
 	m.syncDetailsBar()
 	m.showDetails = true
+}
+
+// resetClickTracking clears double-click state so an unrelated later click
+// can't be paired with a stale earlier one (e.g. across opening/closing the
+// details dialog).
+func (m *agentPickerModel) resetClickTracking() {
+	m.lastClickIndex = -1
+	m.lastClickTime = time.Time{}
 }
 
 // detailsContent returns the text shown in the YAML dialog for a choice.
@@ -358,6 +558,7 @@ func (m *agentPickerModel) View() tea.View {
 
 	view := tea.NewView(centered)
 	view.AltScreen = true
+	view.MouseMode = tea.MouseModeAllMotion
 	view.BackgroundColor = styles.Background
 	view.WindowTitle = "Select an agent"
 	return view
@@ -365,17 +566,40 @@ func (m *agentPickerModel) View() tea.View {
 
 // agent picker card dimensions.
 const (
-	agentPickerCardWidth    = 64
+	agentPickerCardWidth    = 70
 	agentPickerMinCardWidth = 24
+
+	// agentPickerCardHeight is the rendered height of a card: 3 content rows
+	// (header + detail + tags) wrapped by one row of vertical padding and a
+	// border on the top and bottom.
+	agentPickerCardHeight = 7
+
+	// agentPickerCardGap is the number of blank rows between adjacent cards.
+	agentPickerCardGap = 0
+
+	// agentPickerCardsTop is the number of rows from the panel's top edge to
+	// the first card: border (1) + padding (1) + title (1) + blank (1) +
+	// subtitle (1) + blank separator (1).
+	agentPickerCardsTop = 6
+	// agentPickerCardsLeft is the number of columns from the panel's left
+	// edge to a card: border (1) + padding (4).
+	agentPickerCardsLeft = 5
+
+	// agentPickerPanelOverhead is the number of panel rows that are not
+	// cards: border (2) + padding (2) + title (1) + blank (1) + subtitle (1)
+	// + blank (1) + blank (1) + checkbox/board row (1) + blank (1) + help (1).
+	// Shared by panelSize and visibleCount so the windowing math can't drift
+	// from the rendered chrome.
+	agentPickerPanelOverhead = 12
 )
 
 // cardWidth returns the card width to use, shrinking to fit narrow terminals.
-// The card is wrapped by the outer panel border (1) + padding (3) on each
+// The card is wrapped by the outer panel border (1) + padding (4) on each
 // side, so it must leave room for that chrome.
 func (m *agentPickerModel) cardWidth() int {
 	w := agentPickerCardWidth
 	if m.width > 0 {
-		if fit := m.width - 2*(1+3); fit < w {
+		if fit := m.width - 2*(1+4); fit < w {
 			w = fit
 		}
 	}
@@ -385,32 +609,174 @@ func (m *agentPickerModel) cardWidth() int {
 	return w
 }
 
-func (m *agentPickerModel) render() string {
-	title := styles.HighlightWhiteStyle.Render("Choose an agent to run")
-	subtitle := styles.MutedStyle.Render("Pick the agent you want to start a session with.")
+// panelOrigin returns the top-left corner of the centered picker panel.
+func (m *agentPickerModel) panelOrigin() (x, y int) {
+	panelWidth, panelHeight := m.panelSize()
+	return max((m.width-panelWidth)/2, 0), max((m.height-panelHeight)/2, 0)
+}
 
-	cards := make([]string, 0, len(m.choices))
+// cardRows returns the number of rows occupied by the stacked visible cards,
+// including the gaps between them.
+func (m *agentPickerModel) cardRows() int {
+	n := m.visibleCount()
+	return n*agentPickerCardHeight + max(n-1, 0)*agentPickerCardGap
+}
+
+// cardAt maps terminal coordinates to the index of the agent card under them.
+// It mirrors the layout produced by render: the panel is centered, and cards
+// are stacked with no gaps below the title/subtitle. The bool is false when
+// the point is outside every card.
+func (m *agentPickerModel) cardAt(x, y int) (int, bool) {
+	originX, originY := m.panelOrigin()
+
 	cardWidth := m.cardWidth()
-	for i, choice := range m.choices {
-		cards = append(cards, m.renderCard(choice, cardWidth, i == m.cursor))
+	relX := x - originX - agentPickerCardsLeft
+	relY := y - originY - agentPickerCardsTop
+	if relX < 0 || relX >= cardWidth || relY < 0 {
+		return 0, false
 	}
-	list := lipgloss.JoinVertical(lipgloss.Left, cards...)
+	// Cards are stacked with a blank gap between them; a click landing in the
+	// gap belongs to no card.
+	stride := agentPickerCardHeight + agentPickerCardGap
+	if relY%stride >= agentPickerCardHeight {
+		return 0, false
+	}
+	i := relY/stride + m.offset
+	if i >= m.offset+m.visibleCount() {
+		return 0, false
+	}
+	return i, true
+}
 
-	help := styles.MutedStyle.Render(
-		strings.Join([]string{
-			"↑↓ move",
-			agentPickerKeys.Choose.Help().Key + " " + agentPickerKeys.Choose.Help().Desc,
-			agentPickerKeys.Details.Help().Key + " " + agentPickerKeys.Details.Help().Desc,
-			agentPickerKeys.Quit.Help().Key + " " + agentPickerKeys.Quit.Help().Desc,
-		}, "   "),
+// bottomRowY returns the screen row holding the lean checkbox and board
+// button: one blank row below the last visible card. Shared by both hit
+// zones so they can't drift apart.
+func (m *agentPickerModel) bottomRowY() int {
+	_, originY := m.panelOrigin()
+	return originY + agentPickerCardsTop + m.cardRows() + 1
+}
+
+// leanCheckboxAt reports whether terminal coordinates land on the "Lean
+// Mode" checkbox. It mirrors the layout produced by render: the checkbox
+// sits on the bottom row, at the cards' left offset.
+func (m *agentPickerModel) leanCheckboxAt(x, y int) bool {
+	if y != m.bottomRowY() {
+		return false
+	}
+	originX, _ := m.panelOrigin()
+	relX := x - originX - agentPickerCardsLeft
+	return relX >= 0 && relX < lipgloss.Width(m.leanCheckbox())
+}
+
+// leanCheckbox renders the "Lean Mode" checkbox line.
+func (m *agentPickerModel) leanCheckbox() string {
+	box := styles.MutedStyle.Render("[ ]")
+	if m.leanMode {
+		box = styles.SuccessStyle.Render("[x]")
+	}
+	return box + " " + styles.SecondaryStyle.Render("Lean Mode")
+}
+
+// agentPickerBoardGap separates the lean checkbox from the board button on
+// the shared bottom row. Shared by render and boardButtonAt so the hit zone
+// can't drift from the rendered layout.
+const agentPickerBoardGap = "   "
+
+// boardButton renders the "Open Board" button. Choosing it starts
+// `docker agent board` instead of running an agent.
+func (m *agentPickerModel) boardButton() string {
+	return styles.SecondaryStyle.Render("[ Open Board ]")
+}
+
+// boardButtonAt reports whether terminal coordinates land on the "Open
+// Board" button. It mirrors the layout produced by render: the button sits
+// on the bottom row, one gap to the right of the lean checkbox.
+func (m *agentPickerModel) boardButtonAt(x, y int) bool {
+	if y != m.bottomRowY() {
+		return false
+	}
+	originX, _ := m.panelOrigin()
+	relX := x - originX - agentPickerCardsLeft - lipgloss.Width(m.leanCheckbox()) - lipgloss.Width(agentPickerBoardGap)
+	return relX >= 0 && relX < lipgloss.Width(m.boardButton())
+}
+
+// panelSize returns the outer dimensions of the rendered picker panel without
+// rendering every card. cardAt relies on it to place hit zones, and it is
+// called on every mouse-motion event, so it must stay cheap: cards all share
+// cardWidth, so only the (variable-width) header lines need measuring.
+func (m *agentPickerModel) panelSize() (w, h int) {
+	title, subtitle, help := m.headerText()
+	contentWidth := max(
+		m.cardWidth(),
+		lipgloss.Width(title),
+		lipgloss.Width(subtitle),
+		lipgloss.Width(m.leanCheckbox())+lipgloss.Width(agentPickerBoardGap)+lipgloss.Width(m.boardButton()),
+		lipgloss.Width(help),
 	)
+	// Horizontal chrome: border (1) + padding (4) on each side.
+	w = contentWidth + 2*(1+4)
+	h = m.cardRows() + agentPickerPanelOverhead
+	return w, h
+}
+
+// headerText returns the (styled) title, subtitle, and help lines shared by
+// render and panelSize so their layout math can't drift apart.
+func (m *agentPickerModel) headerText() (title, subtitle, help string) {
+	title = styles.HighlightWhiteStyle.Render("Choose an agent to run")
+	subtitleText := "Pick the agent you want to start a session with, or double-click a card."
+	if n := m.visibleCount(); n < len(m.choices) {
+		// Pad the indices to the total's width so the subtitle — and thus the
+		// centred panel geometry mouse hit-testing relies on — keeps a
+		// constant width while scrolling.
+		d := len(strconv.Itoa(len(m.choices)))
+		subtitleText = fmt.Sprintf("Pick an agent (%*d–%*d of %d, scroll with ↑↓), or double-click a card.",
+			d, m.offset+1, d, m.offset+n, len(m.choices))
+	}
+	helpText := strings.Join([]string{
+		"↑↓ move",
+		"double-click select",
+		agentPickerKeys.Choose.Help().Key + " " + agentPickerKeys.Choose.Help().Desc,
+		agentPickerKeys.Details.Help().Key + " " + agentPickerKeys.Details.Help().Desc,
+		agentPickerKeys.Lean.Help().Key + " " + agentPickerKeys.Lean.Help().Desc,
+		agentPickerKeys.Board.Help().Key + " " + agentPickerKeys.Board.Help().Desc,
+		agentPickerKeys.Quit.Help().Key + " " + agentPickerKeys.Quit.Help().Desc,
+	}, "   ")
+	// Truncate header lines to the panel's content width so they can't
+	// terminal-wrap on narrow terminals: a wrapped line would shift every row
+	// below it and break the row-based mouse hit-testing.
+	if m.width > 0 {
+		maxWidth := max(m.width-2*(1+4), agentPickerMinCardWidth)
+		subtitleText = toolcommon.TruncateText(subtitleText, maxWidth)
+		helpText = toolcommon.TruncateText(helpText, maxWidth)
+	}
+	subtitle = styles.MutedStyle.Render(subtitleText)
+	help = styles.MutedStyle.Render(helpText)
+	return title, subtitle, help
+}
+
+func (m *agentPickerModel) render() string {
+	title, subtitle, help := m.headerText()
+
+	cardWidth := m.cardWidth()
+	n := m.visibleCount()
+	blocks := make([]string, 0, n*2)
+	for i := m.offset; i < m.offset+n; i++ {
+		if i > m.offset && agentPickerCardGap > 0 {
+			blocks = append(blocks, strings.Repeat("\n", agentPickerCardGap-1))
+		}
+		blocks = append(blocks, m.renderCard(m.choices[i], cardWidth, i == m.cursor))
+	}
+	list := lipgloss.JoinVertical(lipgloss.Left, blocks...)
 
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,
 		title,
+		"",
 		subtitle,
 		"",
 		list,
+		"",
+		m.leanCheckbox()+agentPickerBoardGap+m.boardButton(),
 		"",
 		help,
 	)
@@ -418,7 +784,7 @@ func (m *agentPickerModel) render() string {
 	return styles.BaseStyle.
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(styles.BorderSecondary).
-		Padding(1, 3).
+		Padding(1, 4).
 		Render(content)
 }
 
@@ -427,8 +793,10 @@ func (m *agentPickerModel) renderDetails() string {
 	dw, _ := m.detailsDialogSize()
 	contentWidth := dw - detailsChromeCols + scrollbar.Width
 
-	ref := m.choices[m.cursor].ref
-	title := styles.DialogTitleStyle.Width(contentWidth).Render(toolcommon.TruncateText(ref, contentWidth))
+	// Refs can name files discovered on disk, so sanitize like any other
+	// untrusted text before it reaches the terminal.
+	ref := displayRef(m.choices[m.cursor].ref)
+	title := styles.DialogTitleStyle.Width(contentWidth).Render(truncateDetail(ref, contentWidth))
 
 	// Place the scrollbar immediately to the right of the viewport content.
 	// Reserve the column even when the content fits (empty scrollbar view) so
@@ -444,14 +812,19 @@ func (m *agentPickerModel) renderDetails() string {
 		bar,
 	)
 
-	help := styles.DialogHelpStyle.
+	help := styles.MutedStyle.
 		Width(contentWidth).
-		Render("↑↓ scroll  •  " + percentLabel(m.details.ScrollPercent()) + "   esc/? close")
+		Render(strings.Join([]string{
+			"↑↓ scroll",
+			percentLabel(m.details.ScrollPercent()),
+			"esc/? close",
+		}, "   "))
 
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,
 		title,
 		body,
+		"",
 		help,
 	)
 
@@ -462,6 +835,21 @@ func (m *agentPickerModel) renderDetails() string {
 func percentLabel(frac float64) string {
 	pct := min(max(int(frac*100), 0), 100)
 	return strconv.Itoa(pct) + "%"
+}
+
+// isLocalConfigRef reports whether ref points at a local agent config file
+// (as opposed to a built-in name, OCI image, or URL).
+func isLocalConfigRef(ref string) bool {
+	return !config.IsURLReference(ref) && isConfigFileName(ref)
+}
+
+// displayRef returns the ref as shown to the user: local config paths are
+// shortened with "~", everything else is unchanged.
+func displayRef(ref string) string {
+	if isLocalConfigRef(ref) {
+		return path.ShortenHome(ref)
+	}
+	return ref
 }
 
 func (m *agentPickerModel) renderCard(choice agentChoice, cardWidth int, selected bool) string {
@@ -475,32 +863,76 @@ func (m *agentPickerModel) renderCard(choice agentChoice, cardWidth int, selecte
 	}
 
 	// The marker occupies 2 columns and the card chrome (border + padding)
-	// 4, so the ref text gets cardWidth-6.
-	header := marker + nameStyle.Render(toolcommon.TruncateText(choice.ref, cardWidth-6))
-
-	// Descriptions and load errors can come from arbitrary (including
-	// remote) configs, so collapse them to a single line and truncate to
-	// the card width to keep the layout intact. The detail sits inside the
-	// card's 2-space indent and 1-column horizontal padding on each side.
-	detailWidth := cardWidth - 4
+	// 4, so the title and detail text get cardWidth-6. Titles and details can
+	// come from arbitrary (including remote) configs, so collapse them to a
+	// single line and truncate to fit the card.
+	detailWidth := cardWidth - 6
+	title := displayRef(choice.ref)
 	var detail string
 	switch {
 	case choice.err != nil:
 		detail = styles.ErrorStyle.Render(truncateDetail("failed to load: "+choice.err.Error(), detailWidth))
+	case isLocalConfigRef(choice.ref) && truncateDetail(choice.description, detailWidth) != "":
+		// Local config files show their description as the title; the path is
+		// demoted to the detail line. Descriptions that sanitize to nothing
+		// (whitespace or control characters only) keep the path as title.
+		title = choice.description
+		detail = styles.MutedStyle.Render(truncateDetail(displayRef(choice.ref), detailWidth))
 	case choice.description != "":
 		detail = styles.SecondaryStyle.Render(truncateDetail(choice.description, detailWidth))
 	default:
 		detail = styles.MutedStyle.Render("No description available")
 	}
+	header := marker + nameStyle.Render(truncateDetail(title, detailWidth))
 
-	card := lipgloss.JoinVertical(lipgloss.Left, header, "  "+detail)
+	card := lipgloss.JoinVertical(lipgloss.Left, header, "  "+detail, "  "+renderTags(choice.tags, detailWidth))
 
 	return styles.BaseStyle.
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(borderColor).
 		Width(cardWidth).
-		Padding(0, 1).
+		Padding(1, 1).
 		Render(card)
+}
+
+// tagChipStyles are the rotating colour palette used to render tag chips so
+// adjacent tags are visually distinct.
+var tagChipStyles = []lipgloss.Style{
+	styles.BaseStyle.Foreground(styles.BadgePurple).Bold(true),
+	styles.BaseStyle.Foreground(styles.BadgeCyan).Bold(true),
+	styles.BaseStyle.Foreground(styles.BadgeGreen).Bold(true),
+	styles.BaseStyle.Foreground(styles.Info).Bold(true),
+}
+
+// renderTags renders the agent's metadata tags as coloured chips, collapsed
+// onto a single line and truncated to width so they can't break the card
+// layout. It returns an empty (blank) line when there are no tags, keeping the
+// card height uniform for hit-testing.
+func renderTags(tags []string, width int) string {
+	if len(tags) == 0 || width <= 0 {
+		return ""
+	}
+	chips := make([]string, 0, len(tags))
+	used := 0
+	for i, tag := range tags {
+		tag = stripControl(strings.TrimSpace(tag))
+		if tag == "" {
+			continue
+		}
+		label := "#" + tag
+		// Account for the single-space separator between chips.
+		sep := 0
+		if len(chips) > 0 {
+			sep = 1
+		}
+		if used+sep+lipgloss.Width(label) > width {
+			break
+		}
+		used += sep + lipgloss.Width(label)
+		style := tagChipStyles[i%len(tagChipStyles)]
+		chips = append(chips, style.Render(label))
+	}
+	return strings.Join(chips, " ")
 }
 
 // truncateDetail collapses whitespace (including newlines) into single spaces,
@@ -520,11 +952,11 @@ func prependAgentRef(ref string, args []string) []string {
 }
 
 // parseAgentPickerRefs splits a comma-separated list of agent refs, trims
-// whitespace, and drops empty entries. An empty or all-whitespace input
-// yields the built-in defaults.
+// whitespace, and drops empty entries. An empty/blank input or the
+// "defaults" sentinel yields the default ref list.
 func parseAgentPickerRefs(raw string) []string {
-	if strings.TrimSpace(raw) == "" {
-		return defaultAgentPickerRefs
+	if trimmed := strings.TrimSpace(raw); trimmed == "" || trimmed == agentPickerDefaultsSpec {
+		return defaultAgentPickerRefs()
 	}
 	var refs []string
 	for part := range strings.SplitSeq(raw, ",") {
@@ -533,7 +965,7 @@ func parseAgentPickerRefs(raw string) []string {
 		}
 	}
 	if len(refs) == 0 {
-		return defaultAgentPickerRefs
+		return defaultAgentPickerRefs()
 	}
 	return refs
 }

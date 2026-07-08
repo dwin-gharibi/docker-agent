@@ -11,12 +11,14 @@ import (
 )
 
 func mockHandler(output string) tools.ToolHandler {
-	return func(ctx context.Context, toolCall tools.ToolCall) (*tools.ToolCallResult, error) {
+	return func(ctx context.Context, toolCall tools.ToolCall, _ tools.Runtime) (*tools.ToolCallResult, error) {
 		return tools.ResultSuccess(output), nil
 	}
 }
 
 func TestToon(t *testing.T) {
+	t.Parallel()
+
 	testcases := []struct {
 		name       string
 		toolResult string
@@ -64,7 +66,7 @@ func TestToon(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, resultTools, 1)
 
-			result, err := resultTools[0].Handler(t.Context(), tools.ToolCall{})
+			result, err := resultTools[0].Handler(t.Context(), tools.ToolCall{}, tools.NopRuntime{})
 			require.NoError(t, err)
 			assert.Equal(t, tc.expected, result.Output)
 		})

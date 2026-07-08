@@ -213,6 +213,7 @@ func LoadWithConfig(ctx context.Context, agentSource config.Source, runConfig *c
 
 	expander := js.NewJsExpander(env)
 
+	globalHooks := runConfig.GlobalHooks
 	cliHooks := runConfig.CLIHooks()
 
 	for _, agentConfig := range cfg.Agents {
@@ -237,13 +238,15 @@ func LoadWithConfig(ctx context.Context, agentSource config.Source, runConfig *c
 			agent.WithAddEnvironmentInfo(agentConfig.AddEnvironmentInfo),
 			agent.WithAddDescriptionParameter(agentConfig.AddDescriptionParameter),
 			agent.WithRedactSecrets(agentConfig.RedactSecretsEnabled()),
+			agent.WithSaferShell(agentConfig.SaferShellEnabled()),
 			agent.WithAddPromptFiles(promptFiles),
 			agent.WithMaxIterations(agentConfig.MaxIterations),
 			agent.WithMaxConsecutiveToolCalls(agentConfig.MaxConsecutiveToolCalls),
 			agent.WithMaxOldToolCallTokens(agentConfig.MaxOldToolCallTokens),
 			agent.WithNumHistoryItems(agentConfig.NumHistoryItems),
+			agent.WithSessionCompaction(agentConfig.SessionCompactionEnabled()),
 			agent.WithCommands(expander.ExpandCommands(ctx, agentConfig.Commands)),
-			agent.WithHooks(config.MergeHooks(agentConfig.Hooks, cliHooks)),
+			agent.WithHooks(config.MergeHooks(config.MergeHooks(agentConfig.Hooks, globalHooks), cliHooks)),
 		}
 
 		if agentConfig.Cache != nil && agentConfig.Cache.Enabled {
@@ -263,11 +266,12 @@ func LoadWithConfig(ctx context.Context, agentSource config.Source, runConfig *c
 		} else {
 			models, err := getModelsForAgent(ctx, cfg, &agentConfig, autoModel, dmrFallbackSelectors, runConfig, loadOpts.providerRegistry)
 			if err != nil {
-				// Return auto model fallback errors, DMR not installed errors, and
-				// DMR pull failures directly without wrapping to provide cleaner,
-				// actionable messages.
+				// Return auto model fallback errors, DMR not installed errors,
+				// DMR pull failures, and DMR model-not-available errors directly
+				// without wrapping to provide cleaner, actionable messages.
 				_, isPull := errors.AsType[*dmr.PullFailedError](err)
-				if _, ok := errors.AsType[*config.AutoModelFallbackError](err); ok || errors.Is(err, dmr.ErrNotInstalled) || isPull {
+				_, isNotAvailable := errors.AsType[*dmr.ModelNotAvailableError](err)
+				if _, ok := errors.AsType[*config.AutoModelFallbackError](err); ok || errors.Is(err, dmr.ErrNotInstalled) || isPull || isNotAvailable {
 					return nil, err
 				}
 				return nil, fmt.Errorf("failed to get models: %w", err)
@@ -300,6 +304,20 @@ func LoadWithConfig(ctx context.Context, agentSource config.Source, runConfig *c
 			if titleModel != nil {
 				opts = append(opts, agent.WithTitleModel(titleModel))
 			}
+
+			// A model may delegate session compaction (summary generation) to
+			// another, cheaper/faster model.
+			compactionModel, err := getCompactionModelForAgent(ctx, cfg, &agentConfig, runConfig, loadOpts.providerRegistry)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get compaction model: %w", err)
+			}
+			if compactionModel != nil {
+				opts = append(opts, agent.WithCompactionModel(compactionModel))
+			}
+
+			if threshold := compactionThresholdForAgent(cfg, &agentConfig); threshold != nil {
+				opts = append(opts, agent.WithCompactionThreshold(*threshold))
+			}
 		}
 
 		agentTools, warnings := getToolsForAgent(ctx, &agentConfig, parentDir, runConfig, loadOpts.toolsetRegistry, configName, expander)
@@ -309,7 +327,7 @@ func LoadWithConfig(ctx context.Context, agentSource config.Source, runConfig *c
 
 		// Add skills toolset if skills are enabled
 		if agentConfig.Skills.Enabled() {
-			loadedSkills := skills.Load(agentConfig.Skills.Sources)
+			loadedSkills := skills.Load(ctx, agentConfig.Skills.Sources)
 			loadedSkills = filterSkillsByName(loadedSkills, agentConfig.Skills.Include)
 			// Inline skills are defined in the agent config itself; they are
 			// always exposed and never subject to the include filter.
@@ -591,6 +609,78 @@ func getTitleModelForAgent(ctx context.Context, cfg *latest.Config, a *latest.Ag
 		return nil, fmt.Errorf("failed to create title model '%s': %w", titleRef, err)
 	}
 	return model, nil
+}
+
+// getCompactionModelForAgent resolves the dedicated compaction (summary
+// generation) model for an agent, if any. It returns the model named by the
+// `compaction_model` field of the first of the agent's configured models that
+// sets it, or nil when none do. It mirrors getTitleModelForAgent: the value may
+// be a named model from the models section or an inline "provider/model" spec.
+func getCompactionModelForAgent(ctx context.Context, cfg *latest.Config, a *latest.AgentConfig, runConfig *config.RuntimeConfig, providerRegistry *provider.Registry) (provider.Provider, error) {
+	var compactionRef string
+	for name := range strings.SplitSeq(a.Model, ",") {
+		if modelCfg, ok := cfg.Models[name]; ok && modelCfg.CompactionModel != "" {
+			compactionRef = modelCfg.CompactionModel
+			break
+		}
+	}
+	if compactionRef == "" {
+		return nil, nil
+	}
+
+	modelsStore, modelsStoreErr := runConfig.ModelsDevStore()
+
+	modelCfg, exists := cfg.Models[compactionRef]
+	if !exists {
+		parsed, err := latest.ParseModelRef(compactionRef)
+		if err != nil {
+			return nil, fmt.Errorf("compaction model '%s' not found in configuration and is not a valid provider/model format", compactionRef)
+		}
+		modelCfg = parsed
+	}
+	modelCfg.Name = compactionRef
+
+	maxTokens := &defaultMaxTokens
+	if modelCfg.MaxTokens != nil {
+		maxTokens = modelCfg.MaxTokens
+	} else if modelsStoreErr == nil {
+		m, err := modelsStore.GetModel(ctx, modelsdev.NewID(modelCfg.Provider, modelCfg.Model))
+		if err == nil {
+			maxTokens = &m.Limit.Output
+		}
+	}
+
+	opts := []options.Opt{
+		options.WithGateway(runConfig.ModelsGateway),
+		options.WithStructuredOutput(a.StructuredOutput),
+		options.WithProviders(cfg.Providers),
+	}
+	if maxTokens != nil {
+		opts = append(opts, options.WithMaxTokens(*maxTokens))
+	}
+	if modelsStoreErr == nil {
+		opts = append(opts, options.WithModelsDevStore(modelsStore))
+	}
+
+	model, err := providerRegistry.NewWithModels(ctx, &modelCfg, cfg.Models, runConfig.EnvProvider(), opts...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create compaction model '%s': %w", compactionRef, err)
+	}
+	return model, nil
+}
+
+// compactionThresholdForAgent resolves the proactive-compaction threshold for
+// an agent, or nil when neither the agent nor its models set one (the
+// compaction package default then applies). The `compaction_threshold` of the
+// first of the agent's configured models that sets it wins (mirroring
+// getCompactionModelForAgent); the agent-level value is the fallback.
+func compactionThresholdForAgent(cfg *latest.Config, a *latest.AgentConfig) *float64 {
+	for name := range strings.SplitSeq(a.Model, ",") {
+		if modelCfg, ok := cfg.Models[name]; ok && modelCfg.CompactionThreshold != nil {
+			return modelCfg.CompactionThreshold
+		}
+	}
+	return a.CompactionThreshold
 }
 
 // getToolsForAgent returns the tool definitions for an agent based on its

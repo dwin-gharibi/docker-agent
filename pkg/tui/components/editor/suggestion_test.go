@@ -11,6 +11,8 @@ import (
 )
 
 func TestApplySuggestionOverlay(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name         string
 		suggestion   string
@@ -122,6 +124,8 @@ func TestApplySuggestionOverlayScrolledView(t *testing.T) {
 // TestApplySuggestionOverlayWithVariousLineCount tests suggestion overlay positioning
 // with 0, 1, 2, 3, and 4 lines of text in the editor.
 func TestApplySuggestionOverlayWithVariousLineCount(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name            string
 		textareaText    string
@@ -231,6 +235,8 @@ func TestApplySuggestionOverlayWithVariousLineCount(t *testing.T) {
 // TestApplySuggestionOverlayWithMultiLineSuggestion tests that multi-line suggestions
 // are rendered correctly starting from the target line.
 func TestApplySuggestionOverlayWithMultiLineSuggestion(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name           string
 		textareaText   string
@@ -303,6 +309,8 @@ func TestApplySuggestionOverlayWithMultiLineSuggestion(t *testing.T) {
 
 // TestIsCursorAtEnd tests the isCursorAtEnd helper function.
 func TestIsCursorAtEnd(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name       string
 		value      string
@@ -402,6 +410,8 @@ func TestIsCursorAtEnd(t *testing.T) {
 
 // TestExtractLineText tests the extractLineText helper function.
 func TestExtractLineText(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name     string
 		line     string

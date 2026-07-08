@@ -7,17 +7,19 @@ const (
 	// treePrefixWidth is the width of tree-structure prefixes like "├ " and "└ ".
 	treePrefixWidth = 2
 
-	// rowShortcutWidth is the fixed width of a roster row's leading
-	// shortcut/spinner cell ("^N" or a spinner frame) plus its trailing space.
-	rowShortcutWidth = 3
+	// agentMarkerWidth is the fixed width of an agent line's leading marker cell
+	// (the ▶ current-agent / spinner glyph plus a trailing space). Non-current
+	// agents pad this column so their names stay aligned.
+	agentMarkerWidth = 2
 
-	// rowIndentWidth is the indent of a roster row's second line (the
-	// provider/model), aligning the model under the agent name on line 1.
-	rowIndentWidth = 3
+	// agentShortcutWidth is the fixed width of an agent line's trailing "^N"
+	// switch-shortcut column, kept constant so the shortcuts align at the right
+	// edge whether or not a given agent has one.
+	agentShortcutWidth = 2
 
 	// rowGlyphOnlyMinWidth is the content-column breakpoint (near MinWidth) below
-	// which a roster row's line-1 thinking gauge collapses to a single cell so
-	// the name column keeps usable room. The model always stays on line 2.
+	// which an agent line's thinking gauge collapses to a single cell so the name
+	// column keeps usable room.
 	rowGlyphOnlyMinWidth = 22
 
 	// starClickWidth is the clickable area width for the star indicator.
@@ -29,6 +31,10 @@ const (
 
 	// minGap is the minimum gap between elements when laying out side-by-side.
 	minGap = 2
+
+	// defaultSectionGap is the default number of blank lines between sidebar
+	// sections in vertical mode (the "normal" section spacing).
+	defaultSectionGap = 2
 
 	// DefaultWidth is the default sidebar width in vertical mode.
 	DefaultWidth = 40

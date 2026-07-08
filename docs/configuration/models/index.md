@@ -1,10 +1,11 @@
 ---
 title: "Model Configuration"
 description: "Complete reference for defining models with providers, parameters, and reasoning settings."
-permalink: /configuration/models/
+keywords: docker agent, ai agents, configuration, yaml, model configuration
+linkTitle: "Model Config"
+weight: 40
+canonical: https://docs.docker.com/ai/docker-agent/configuration/models/
 ---
-
-# Model Configuration
 
 _Complete reference for defining models with providers, parameters, and reasoning settings._
 
@@ -17,9 +18,9 @@ models:
     first_available: [list] # Optional: candidate model refs, tried in order by available credentials.
                             # Mutually exclusive with other model settings.
     provider: string # Required unless using first_available. One of: openai, anthropic, google, amazon-bedrock,
-                     # dmr, mistral, xai, nebius, minimax, requesty, azure, ollama,
-                     # github-copilot, or a named provider defined under the top-level
-                     # `providers:` section.
+                     # dmr, mistral, xai, nebius, nvidia, minimax, baseten, ovhcloud, groq, fireworks, deepseek, cerebras, together, huggingface, moonshot, vercel, cloudflare-workers-ai, cloudflare-ai-gateway, requesty, openrouter,
+                     # azure, ollama, github-copilot, or a named provider defined
+                     # under the top-level `providers:` section.
     model: string # Required: model identifier
     temperature: float # Optional: 0.0–2.0 (provider-dependent; e.g. Anthropic caps at 1.0)
     max_tokens: integer # Optional: response length limit
@@ -33,8 +34,15 @@ models:
     parallel_tool_calls: boolean # Optional: allow parallel tool calls
     track_usage: boolean # Optional: track token usage
     routing: [list] # Optional: rule-based model routing
+    capabilities: # Optional: override attachment capabilities
+      image: boolean # Optional: whether the model accepts image attachments
+      pdf: boolean # Optional: whether the model accepts PDF attachments
     provider_opts: # Optional: provider-specific options
       key: value
+    title_model: string # Optional: model used for session-title generation
+    compaction_model: string # Optional: model used for session-compaction (summary generation)
+    compaction_threshold: float # Optional: context-window fraction that triggers auto-compaction (0–1, default: 0.9)
+    bypass_models_gateway: boolean # Optional: skip the models gateway for this model
 ```
 
 ## Properties Reference
@@ -42,7 +50,7 @@ models:
 | Property              | Type       | Required | Description                                                                           |
 | --------------------- | ---------- | -------- | ------------------------------------------------------------------------------------- |
 | `first_available`     | array      | ✗        | Candidate model references tried in order; selects the first whose credentials are configured. Mutually exclusive with other model settings. |
-| `provider`            | string     | ✓/✗      | Required for regular model definitions; omitted for `first_available` selectors. Provider: `openai`, `anthropic`, `google`, `amazon-bedrock`, `dmr`, `mistral`, `xai`, `nebius`, `minimax`, `requesty`, `azure`, `ollama`, `github-copilot`, or any [named provider]({{ '/providers/custom/' | relative_url }}). |
+| `provider`            | string     | ✓/✗      | Required for regular model definitions; omitted for `first_available` selectors. Provider: `openai`, `anthropic`, `google`, `amazon-bedrock`, `dmr`, `mistral`, `xai`, `nebius`, `nvidia`, `minimax`, `baseten`, `ovhcloud`, `groq`, `fireworks`, `deepseek`, `cerebras`, `together`, `huggingface`, `moonshot`, `vercel`, `cloudflare-workers-ai`, `cloudflare-ai-gateway`, `requesty`, `openrouter`, `azure`, `ollama`, `github-copilot`, `chatgpt`, or any [named provider](../../providers/custom/index.md). |
 | `model`               | string     | ✓/✗      | Required for regular model definitions; omitted for `first_available` selectors. Model name (e.g., `gpt-4o`, `claude-sonnet-4-5`, `gemini-3.5-flash`) |
 | `temperature`         | float      | ✗        | Sampling randomness. Range is provider-dependent — typically `0.0–2.0` (Anthropic caps at `1.0`). `0.0` is deterministic. |
 | `max_tokens`          | int        | ✗        | Maximum response length in tokens                                                     |
@@ -55,9 +63,53 @@ models:
 | `task_budget`         | int/object | ✗        | Total token budget for an agentic task (forwarded to Anthropic; see [Task Budget](#task-budget)). |
 | `parallel_tool_calls` | boolean    | ✗        | Allow model to call multiple tools at once                                            |
 | `track_usage`         | boolean    | ✗        | Track and report token usage for this model                                           |
-| `routing`             | array      | ✗        | Rule-based routing to different models. See [Model Routing]({{ '/configuration/routing/' | relative_url }}). |
+| `routing`             | array      | ✗        | Rule-based routing to different models. See [Model Routing](../routing/index.md). |
+| `capabilities`        | object     | ✗        | Override attachment capabilities for this model. See [Attachment Capability Overrides](#attachment-capability-overrides). |
 | `provider_opts`       | object     | ✗        | Provider-specific options (see provider pages)                                        |
 | `title_model`         | string     | ✗        | Model used for session-title generation. Can be a named model from the `models:` section or an inline `provider/model` string. When omitted, the agent's primary model generates titles. Cannot be combined with `first_available`. |
+| `compaction_model`    | string     | ✗        | Model used for session compaction (summary generation). Can be a named model or an inline `provider/model` string. When omitted, the primary model compacts. Cannot be combined with `first_available`. See [Delegating Session Compaction](#delegating-session-compaction). |
+| `compaction_threshold` | float     | ✗        | Fraction of the context window at which proactive auto-compaction triggers for agents running this model. Must be greater than `0` and at most `1`. Takes precedence over the agent-level `compaction_threshold`. Cannot be combined with `first_available`. Default: `0.9`. |
+| `bypass_models_gateway` | boolean  | ✗        | When `true`, this model connects directly to its provider even when a models gateway (`--models-gateway` / `CAGENT_MODELS_GATEWAY`) is configured. See [Gateway Bypass](#gateway-bypass). |
+
+## Attachment Capability Overrides
+
+For custom OpenAI-compatible providers, local models (Ollama, DMR), and any
+model the built-in catalogue does not describe, docker-agent cannot
+auto-detect whether the endpoint accepts image or PDF attachments. When the
+model is absent from the catalogue, docker-agent logs a diagnostic and falls
+back to text-only, silently dropping attachments.
+
+Declare `capabilities` to make the model's attachment support authoritative
+and skip the catalogue lookup entirely:
+
+```yaml
+models:
+  llava-local:
+    provider: ollama
+    model: llava
+    capabilities:
+      image: true   # accepts image attachments
+      pdf: false    # does not accept PDFs
+
+  proxy-vision:
+    provider: vision-proxy
+    model: gpt-4o
+    capabilities:
+      image: true
+      pdf: true
+```
+
+| Field                  | Type    | Description                                       |
+| ---------------------- | ------- | ------------------------------------------------- |
+| `capabilities.image`   | boolean | Whether the model accepts image attachments       |
+| `capabilities.pdf`     | boolean | Whether the model accepts PDF attachments         |
+
+The flags must match what the endpoint actually accepts. Claiming a modality
+that the endpoint does not support leads to a provider-side API error. When
+`capabilities` is omitted the behaviour is unchanged (catalogue lookup then
+conservative text-only fallback).
+
+See [`examples/capability-overrides.yaml`](https://github.com/docker/docker-agent/blob/main/examples/capability-overrides.yaml) for a complete example.
 
 ## Delegating Session-Title Generation
 
@@ -73,11 +125,100 @@ The value can be a named entry from the `models` stanza or an inline
 `provider/model` string. When omitted, the agent's primary model generates
 titles.
 
-<div class="callout callout-warning" markdown="1">
-<div class="callout-title">Constraint
-</div>
-  <p><code>title_model</code> cannot be combined with <code>first_available</code> model selection — the combination is rejected at validation time.</p>
-</div>
+> [!WARNING]
+> **Constraint**
+>
+> `title_model` cannot be combined with `first_available` model selection — the combination is rejected at validation time.
+
+## Delegating Session Compaction
+
+The `compaction_model` field lets a heavyweight primary model hand off the expensive
+compaction (summary generation) call to a smaller, faster model:
+
+```yaml
+models:
+  primary:
+    provider: anthropic
+    model: claude-sonnet-4-5
+    compaction_model: fast
+  fast:
+    provider: anthropic
+    model: claude-haiku-4-5
+```
+
+The value can be a named entry from the `models` stanza or an inline
+`provider/model` string. When omitted, the primary model compacts.
+
+If the compaction model has a **smaller context window** than the primary,
+docker-agent triggers compaction against the smaller window so the summary
+call can always ingest the full conversation. Pair the primary with a
+compaction model whose window is at least as large to keep the proactive
+trigger aligned with the primary's window.
+
+By default the proactive trigger fires when the estimated token usage crosses
+**90%** of the context window. The `compaction_threshold` field tunes that
+fraction (greater than `0`, at most `1`): lower values compact earlier and
+keep requests smaller, higher values compact later and keep more verbatim
+history. It can be set on the model (as above, taking precedence) or on the
+agent, and automatic compaction can be disabled entirely per agent with
+`session_compaction: false` — see [Agent Config](../agents/index.md#properties-reference).
+
+```yaml
+models:
+  primary:
+    provider: anthropic
+    model: claude-sonnet-4-5
+    compaction_model: fast
+    # Compact at 80% of the window instead of the default 90%.
+    compaction_threshold: 0.8
+```
+
+> [!WARNING]
+> **Constraint**
+>
+> `compaction_model` cannot be combined with `first_available` model selection — the combination is rejected at validation time.
+
+See [`examples/compaction_model.yaml`](https://github.com/docker/docker-agent/blob/main/examples/compaction_model.yaml)
+and [`examples/compaction_threshold.yaml`](https://github.com/docker/docker-agent/blob/main/examples/compaction_threshold.yaml)
+for complete examples.
+
+## Gateway Bypass
+
+When a models gateway (`--models-gateway` / `CAGENT_MODELS_GATEWAY`) is configured,
+all models route through it by default. Set `bypass_models_gateway: true` on a
+specific model to make it connect directly to its provider instead:
+
+```yaml
+models:
+  gateway-model:
+    provider: openai
+    model: gpt-5
+
+  direct-model:
+    provider: anthropic
+    model: claude-sonnet-4-5
+    bypass_models_gateway: true  # uses ANTHROPIC_API_KEY directly
+```
+
+The bypassed model authenticates with the provider's own credentials
+(`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `token_key`, etc.) rather than the
+gateway's short-lived token. The rest of the agent's models continue routing
+through the gateway as before.
+
+Bypass is propagated transparently through router models: a bypass-flagged routing
+model passes the flag to all of its routed targets automatically.
+
+> [!WARNING]
+> **Security note**
+>
+> On an untrusted config, a malicious `base_url` combined with `bypass_models_gateway: true` could route provider credentials to an attacker-controlled endpoint. Only enable this on configs you control.
+
+> [!WARNING]
+> **Constraint**
+>
+> `bypass_models_gateway: true` cannot be combined with `first_available` — the combination is rejected at validation time.
+
+See [`examples/bypass_models_gateway.yaml`](https://github.com/docker/docker-agent/blob/main/examples/bypass_models_gateway.yaml) for a complete example.
 
 ## First Available Models
 
@@ -192,7 +333,7 @@ thinking_budget: none # or 0
 
 Models that always reason (OpenAI o-series, gpt-5, Gemini 3) fall back to the API default and still reason internally.
 
-See the [Thinking / Reasoning guide]({{ '/guides/thinking/' | relative_url }}) for per-provider details, including AWS Bedrock and Docker Model Runner.
+See the [Thinking / Reasoning guide](../../guides/thinking/index.md) for per-provider details, including AWS Bedrock and Docker Model Runner.
 
 ## Task Budget
 
@@ -243,7 +384,7 @@ Setting `task_budget: 0` (or omitting the field) disables the feature — the
 model falls back to the provider's default behavior.
 
 Like other inheritable model settings, `task_budget` can also be declared on a
-[provider definition]({{ '/providers/custom/' | relative_url }}) and is
+[provider definition](../../providers/custom/index.md) and is
 inherited by every model that references that provider.
 
 See [`examples/task_budget.yaml`](https://github.com/docker/docker-agent/blob/main/examples/task_budget.yaml) for a complete example.
@@ -265,7 +406,7 @@ models:
 
 ## Thinking Display (Anthropic)
 
-For Anthropic Claude models, `thinking_display` controls whether thinking blocks are returned in responses when thinking is enabled. Claude Opus 4.7 hides thinking content by default (`omitted`); set this provider option to receive summarized thinking:
+For Anthropic Claude models, `thinking_display` controls whether thinking blocks are returned in responses when thinking is enabled. Newer Claude models (Opus 4.7+, Fable 5) hide thinking content by default (`omitted`); docker-agent requests `summarized` thinking by default for adaptive/effort-based budgets so reasoning stays visible. Set this provider option to override:
 
 ```yaml
 models:
@@ -274,15 +415,15 @@ models:
     model: claude-opus-4-7
     thinking_budget: adaptive
     provider_opts:
-      thinking_display: summarized # "summarized", "display", or "omitted"
+      thinking_display: omitted # "summarized", "display", or "omitted"
 ```
 
-See the [Anthropic provider page]({{ '/providers/anthropic/#thinking-display' | relative_url }}) for details.
+See the [Anthropic provider page](../../providers/anthropic/index.md#thinking-display) for details.
 
 ## Custom HTTP Headers
 
 For OpenAI-compatible providers (`openai`, `github-copilot`, `mistral`, `xai`,
-`nebius`, `minimax`, `ollama`, and any custom provider using the OpenAI API),
+`nebius`, `nvidia`, `minimax`, `baseten`, `ovhcloud`, `groq`, `fireworks`, `deepseek`, `cerebras`, `together`, `huggingface`, `moonshot`, `vercel`, `cloudflare-workers-ai`, `cloudflare-ai-gateway`, `requesty`, `openrouter`, `ollama`, and any custom provider using the OpenAI API),
 `provider_opts.http_headers` adds arbitrary HTTP headers to every outgoing
 request:
 
@@ -299,7 +440,7 @@ models:
 
 Header names are matched case-insensitively. The `github-copilot` provider
 automatically sets `Copilot-Integration-Id: copilot-developer-cli` — see the
-[GitHub Copilot provider page]({{ '/providers/github-copilot/' | relative_url }})
+[GitHub Copilot provider page](../../providers/github-copilot/index.md)
 for details.
 
 ## Examples by Provider
@@ -330,6 +471,11 @@ models:
     provider_opts:
       region: us-east-1
 
+  # OpenRouter
+  openrouter:
+    provider: openrouter
+    model: meta-llama/llama-3.3-70b-instruct
+
   # Docker Model Runner (local)
   local:
     provider: dmr
@@ -337,7 +483,7 @@ models:
     max_tokens: 8192
 ```
 
-For detailed provider setup, see the [Model Providers]({{ '/providers/overview/' | relative_url }}) section.
+For detailed provider setup, see the [Model Providers](../../providers/overview/index.md) section.
 
 ## Custom Endpoints
 
@@ -366,7 +512,19 @@ models:
     token_key: INTERNAL_API_KEY
 ```
 
-See [Local Models]({{ '/providers/local/' | relative_url }}) for more examples of custom endpoints.
+The `model` and `base_url` fields accept `${env.VAR}` (or `${VAR}`) references, which are substituted from the environment when the model is loaded. This keeps the model id or endpoint out of the config when it is supplied by the environment, e.g. a Docker Compose / DMR setup:
+
+```yaml
+models:
+  nemotron3:
+    provider: dmr
+    model: "${env.NEMOTRON3_MODEL}"
+    base_url: "${env.DMR_BASE_URL}"
+```
+
+See [Variable Expansion in Config Fields](../overview/index.md#variable-expansion-in-config-fields) for the full set of fields and supported syntaxes.
+
+See [Local Models](../../providers/local/index.md) for more examples of custom endpoints.
 
 ## Inheriting from Provider Definitions
 
@@ -393,4 +551,4 @@ models:
     thinking_budget: 1024  # Overrides provider default
 ```
 
-See [Provider Definitions]({{ '/providers/custom/' | relative_url }}) for the full list of inheritable properties.
+See [Provider Definitions](../../providers/custom/index.md) for the full list of inheritable properties.

@@ -25,9 +25,11 @@ import (
 	"github.com/docker/docker-agent/pkg/telemetry/genai"
 	"github.com/docker/docker-agent/pkg/tools"
 	bgagent "github.com/docker/docker-agent/pkg/tools/builtin/agent"
+	"github.com/docker/docker-agent/pkg/tools/builtin/backgroundjobs"
 	"github.com/docker/docker-agent/pkg/tools/builtin/handoff"
 	"github.com/docker/docker-agent/pkg/tools/builtin/modelpicker"
-	"github.com/docker/docker-agent/pkg/tools/builtin/shell"
+	"github.com/docker/docker-agent/pkg/tools/builtin/sessioncontext"
+	"github.com/docker/docker-agent/pkg/tools/builtin/sessionplan"
 	"github.com/docker/docker-agent/pkg/tools/builtin/skills"
 	"github.com/docker/docker-agent/pkg/tools/builtin/transfertask"
 	mcptools "github.com/docker/docker-agent/pkg/tools/mcp"
@@ -41,6 +43,11 @@ func (r *LocalRuntime) registerDefaultTools() {
 	r.toolMap[modelpicker.ToolNameChangeModel] = r.handleChangeModel
 	r.toolMap[modelpicker.ToolNameRevertModel] = r.handleRevertModel
 	r.toolMap[skills.ToolNameRunSkill] = r.handleRunSkill
+	r.toolMap[sessionplan.ToolNameWriteSessionPlan] = r.handleWriteSessionPlan
+	r.toolMap[sessionplan.ToolNameReadSessionPlan] = r.handleReadSessionPlan
+	r.toolMap[sessionplan.ToolNameExitPlanMode] = r.handleExitPlanMode
+	r.toolMap[sessioncontext.ToolNameListSessions] = r.handleListSessions
+	r.toolMap[sessioncontext.ToolNameReadSession] = r.handleReadSession
 
 	r.bgAgents.RegisterHandlers(func(name string, fn func(context.Context, *session.Session, tools.ToolCall) (*tools.ToolCallResult, error)) {
 		r.toolMap[name] = func(ctx context.Context, sess *session.Session, tc tools.ToolCall, _ EventSink) (*tools.ToolCallResult, error) {
@@ -216,10 +223,19 @@ func (r *LocalRuntime) finalizeEventChannel(ctx context.Context, sess *session.S
 // the response, executes any tool calls, and loops until the model signals stop
 // or the iteration limit is reached.
 func (r *LocalRuntime) RunStream(ctx context.Context, sess *session.Session) <-chan Event {
-	slog.DebugContext(ctx, "Starting runtime stream", "agent", r.CurrentAgentName(), "session_id", sess.ID)
+	slog.DebugContext(ctx, "Starting runtime stream", "agent", r.currentAgentName(), "session_id", sess.ID)
 	events := make(chan Event, defaultEventChannelCapacity)
+	rootStream := !sess.IsSubSession()
+	if rootStream {
+		r.activeRootStreams.Add(1)
+	}
 
-	go r.runStreamLoop(ctx, sess, events)
+	go func() {
+		if rootStream {
+			defer r.activeRootStreams.Add(-1)
+		}
+		r.runStreamLoop(ctx, sess, events)
+	}()
 	return r.observe(ctx, sess, events)
 }
 
@@ -234,7 +250,7 @@ func (r *LocalRuntime) runStreamLoop(ctx context.Context, sess *session.Session,
 	// back to the originating session. Plumbing happens in
 	// pkg/httpclient/userAgentTransport, gated on `X-Cagent-Forward`.
 	ctx = httpclient.ContextWithSessionID(ctx, sess.ID)
-	r.telemetry.RecordSessionStart(ctx, r.CurrentAgentName(), sess.ID)
+	r.telemetry.RecordSessionStart(ctx, r.currentAgentName(), sess.ID)
 
 	// Seed `gen_ai.conversation.id` into baggage at the session
 	// boundary. Every span the runtime, providers, MCP client, RAG,
@@ -268,11 +284,11 @@ func (r *LocalRuntime) runStreamLoop(ctx context.Context, sess *session.Session,
 	// OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental.
 	sessionAttrs := []attribute.KeyValue{
 		attribute.String(genai.AttrConversationID, sess.ID),
-		attribute.String(genai.AttrAgentNameRuntime, r.CurrentAgentName()),
+		attribute.String(genai.AttrAgentNameRuntime, r.currentAgentName()),
 	}
 	if genai.EmitLegacyAttributes() {
 		sessionAttrs = append(sessionAttrs,
-			attribute.String("agent", r.CurrentAgentName()),
+			attribute.String("agent", r.currentAgentName()),
 			attribute.String("session.id", sess.ID),
 		)
 	}
@@ -387,7 +403,7 @@ func (r *LocalRuntime) runStreamLoop(ctx context.Context, sess *session.Session,
 	ls.loopDetector = toolexec.NewLoopDetector(loopThreshold,
 		bgagent.ToolNameViewBackgroundAgent,
 		bgagent.ToolNameListBackgroundAgents,
-		shell.ToolNameViewBackgroundJob,
+		backgroundjobs.ToolNameViewBackgroundJob,
 	)
 
 	for {
@@ -405,9 +421,13 @@ func (r *LocalRuntime) runStreamLoop(ctx context.Context, sess *session.Session,
 		a = r.resolveSessionAgent(sess)
 
 		// Clear per-tool model override on agent switch so it doesn't
-		// leak from one agent's toolset into another agent's turn.
+		// leak from one agent's toolset into another agent's turn. Also
+		// reset prevTurnMadeToolCalls so a new agent's empty first turn is
+		// judged on its own merits, not silenced by the previous agent's
+		// tool activity.
 		if a.Name() != ls.prevAgentName {
 			ls.toolModelOverride = ""
+			ls.prevTurnMadeToolCalls = false
 			ls.prevAgentName = a.Name()
 		}
 
@@ -480,8 +500,14 @@ func (r *LocalRuntime) runStreamLoop(ctx context.Context, sess *session.Session,
 		// only when context_size isn't supplied; we keep the explicit call
 		// here because m is also passed to [computeMessageCost] for
 		// per-turn cost computation.
-		contextLimit := r.resolveContextLimit(ctx, model, modelID)
-		if contextLimit > 0 && r.sessionCompaction && compaction.ShouldCompact(sess.InputTokens, sess.OutputTokens, 0, contextLimit) {
+		// resolveContextLimit yields the primary model's window; effectiveContextLimit
+		// caps it to the dedicated compaction model's (smaller) window when one is
+		// configured, so the session operates within a budget the summary call can
+		// always ingest. The capped value drives both the proactive compaction
+		// trigger and the UI context gauge (issue #3241); it equals the primary
+		// window unless a smaller compaction model is configured.
+		contextLimit := r.effectiveContextLimit(ctx, a, r.resolveContextLimit(ctx, model, modelID))
+		if contextLimit > 0 && r.sessionCompactionEnabled(a) && compaction.ShouldCompact(sess.InputTokens, sess.OutputTokens, 0, contextLimit, a.CompactionThreshold()) {
 			r.compactWithReason(ctx, sess, "", compactionReasonThreshold, sink)
 		}
 
@@ -550,6 +576,47 @@ type loopState struct {
 	sessionStartMsgs    []chat.Message
 	userPromptMsgs      []chat.Message
 	exitReason          string
+	// prevTurnMadeToolCalls reports whether the immediately preceding
+	// turn emitted tool calls. Used to classify an empty trailing turn:
+	// a clean stop right after tool work is benign (the model already
+	// did its job and has nothing left to say — common at the tail of a
+	// fork-skill sequence), not the rate-limit / token-cap case the
+	// empty-response warning would otherwise imply. Reset on agent switch
+	// so it never carries across agents.
+	prevTurnMadeToolCalls bool
+}
+
+// emptyTurnWarning classifies an empty assistant turn (no content, no tool
+// calls) and returns the user-facing warning message, or "" when the turn is
+// benign and should stay silent. Known cases:
+//   - benign: a clean stop (finish_reason "stop") right after a tool-call turn
+//     — the model already did its work and had nothing left to say (common at
+//     the tail of a fork-skill sequence, e.g. commit / open-pr). The real
+//     answer is the previous assistant message, so a UI warning would be noise.
+//     Only "stop" qualifies: a "length" finish after tool calls means the reply
+//     was truncated by the output token limit and must still warn.
+//   - reasoning-only: thinking-mode models (e.g. Qwen3 via
+//     openai_chatcompletions) that stream only reasoning tokens and then stop
+//     or hit the output token limit, leaving visible content empty (see #3145).
+//   - otherwise: an empty stream from a rate-limited or token-capped provider.
+//
+// Refusals are handled separately by the caller and never reach here.
+func emptyTurnWarning(res streamResult, prevTurnMadeToolCalls bool, modelID string, reason chat.FinishReason) string {
+	switch {
+	case reason == chat.FinishReasonStop && prevTurnMadeToolCalls:
+		return ""
+	case strings.TrimSpace(res.ReasoningContent) != "":
+		return fmt.Sprintf(
+			"Model %s produced only reasoning and no reply (stop reason: %s). "+
+				"Thinking-mode models can emit reasoning tokens without a final answer; "+
+				"the reasoning is not used as the response.",
+			modelID, reason)
+	default:
+		return fmt.Sprintf(
+			"Model %s returned an empty response (stop reason: %s). "+
+				"This usually means the provider rate-limited the request or the output token limit was reached.",
+			modelID, reason)
+	}
 }
 
 // runTurn performs one iteration of the run-stream loop, from
@@ -717,6 +784,28 @@ func (r *LocalRuntime) runTurn(
 	if res.FinishReason == chat.FinishReasonRefusal {
 		slog.WarnContext(ctx, "Model refused to respond", "agent", a.Name(), "model", modelID.String(), "session_id", sess.ID)
 		events.Emit(Warning(fmt.Sprintf("Model %s refused to respond (stop reason: refusal).", modelID.String()), a.Name()))
+	} else if strings.TrimSpace(res.Content) == "" && len(res.Calls) == 0 {
+		// Surface otherwise-silent empty turns. recordAssistantMessage skips a
+		// turn with no content and no tool calls, which previously left the user
+		// staring at silence with no explanation. See emptyTurnWarning for the
+		// classification of the known causes.
+		reason := res.FinishReason
+		if reason == "" {
+			reason = chat.FinishReasonNull
+		}
+		warning := emptyTurnWarning(res, ls.prevTurnMadeToolCalls, modelID.String(), reason)
+		if warning == "" {
+			// Benign trailing stop after tool work: log at debug for
+			// traceability without alarming the user or noising up WARN logs.
+			slog.DebugContext(ctx, "Empty trailing turn after tool calls (benign natural stop)",
+				"agent", a.Name(), "model", modelID.String(),
+				"finish_reason", string(reason), "session_id", sess.ID)
+		} else {
+			slog.WarnContext(ctx, "Empty assistant turn",
+				"agent", a.Name(), "model", modelID.String(),
+				"finish_reason", string(reason), "reasoning_length", len(res.ReasoningContent), "session_id", sess.ID)
+			events.Emit(Warning(warning, a.Name()))
+		}
 	}
 
 	msgUsage := r.recordAssistantMessage(sess, a, res, agentTools, modelID.String(), msgCost, events)
@@ -787,6 +876,12 @@ func (r *LocalRuntime) runTurn(
 		endReason = turnEndReasonHookBlocked
 		return turnExit
 	}
+
+	// Record whether this turn made tool calls so the next iteration can
+	// classify a trailing empty turn as a benign post-tool stop rather than
+	// a rate-limit / token-cap event. Set after processToolCalls so it
+	// reflects the turn just completed.
+	ls.prevTurnMadeToolCalls = len(res.Calls) > 0
 
 	// Record per-toolset model override for the next LLM turn.
 	ls.toolModelOverride = toolexec.ResolveModelOverride(res.Calls, agentTools)
@@ -1005,8 +1100,9 @@ func usageHasTokens(usage *chat.Usage) bool {
 
 // compactIfNeeded estimates the token impact of tool results added since
 // messageCountBefore and triggers proactive compaction when the estimated
-// total exceeds 90% of the context window. This prevents sending an
-// oversized request on the next iteration.
+// total crosses the agent's compaction threshold (90% of the context window
+// by default). This prevents sending an oversized request on the next
+// iteration.
 func (r *LocalRuntime) compactIfNeeded(
 	ctx context.Context,
 	sess *session.Session,
@@ -1015,7 +1111,10 @@ func (r *LocalRuntime) compactIfNeeded(
 	messageCountBefore int,
 	events EventSink,
 ) {
-	if !r.sessionCompaction || contextLimit <= 0 {
+	// contextLimit is the effective budget (primary window, capped to a smaller
+	// dedicated compaction model's window when configured) computed by
+	// runStreamLoop, so this site fires consistently with the pre-turn trigger.
+	if !r.sessionCompactionEnabled(a) || contextLimit <= 0 {
 		return
 	}
 
@@ -1024,21 +1123,35 @@ func (r *LocalRuntime) compactIfNeeded(
 	// never enters this session's prompt, so counting it here would
 	// attribute phantom tokens to a small parent conversation and
 	// trigger a compaction that wipes it (see issue #2871).
-	newMessages := sess.OwnMessages()[messageCountBefore:]
+	//
+	// The estimator is calibrated against the provider-reported usage
+	// already recorded on this session's assistant messages, so the
+	// heuristic guess for the fresh tool results tracks the provider's
+	// actual tokenizer instead of a fixed chars-per-token ratio.
+	ownMessages := sess.OwnMessages()
+	estimator := compaction.NewEstimator(func(yield func(*chat.Message) bool) {
+		for i := range ownMessages {
+			if !yield(&ownMessages[i].Message) {
+				return
+			}
+		}
+	})
+	newMessages := ownMessages[messageCountBefore:]
 	var addedTokens int64
-	for _, msg := range newMessages {
-		addedTokens += compaction.EstimateMessageTokens(&msg.Message)
+	for i := range newMessages {
+		addedTokens += estimator.EstimateMessageTokens(&newMessages[i].Message)
 	}
 
-	if !compaction.ShouldCompact(sess.InputTokens, sess.OutputTokens, addedTokens, contextLimit) {
+	if !compaction.ShouldCompact(sess.InputTokens, sess.OutputTokens, addedTokens, contextLimit, a.CompactionThreshold()) {
 		return
 	}
 
-	slog.InfoContext(ctx, "Proactive compaction: tool results pushed estimated context past 90%% threshold",
+	slog.InfoContext(ctx, "Proactive compaction: tool results pushed estimated context past the compaction threshold",
 		"agent", a.Name(),
 		"input_tokens", sess.InputTokens,
 		"output_tokens", sess.OutputTokens,
 		"added_estimated_tokens", addedTokens,
+		"estimator_scale", estimator.Scale(),
 		"estimated_total", sess.InputTokens+sess.OutputTokens+addedTokens,
 		"context_limit", contextLimit,
 	)

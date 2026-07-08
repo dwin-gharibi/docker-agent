@@ -95,16 +95,22 @@ func TestElicitationBridge_RestoreAndCloseWaitsForInflightSenders(t *testing.T) 
 	parent := make(chan Event, 1)
 	b.swap(current)
 
-	sendStarted := make(chan struct{})
 	sendDone := make(chan error, 1)
 	go func() {
-		close(sendStarted)
 		sendDone <- b.send(Error("inflight"))
 	}()
-	<-sendStarted
 
-	// Give the sender a moment to grab the RLock and park on the channel.
-	time.Sleep(20 * time.Millisecond)
+	// Wait until the sender holds the read lock: TryLock fails only while
+	// another lock is held, and the sender is the only other lock user.
+	// From that point on, restoreAndClose's write lock (and therefore the
+	// close) cannot possibly precede the parked send.
+	require.Eventually(t, func() bool {
+		if b.mu.TryLock() {
+			b.mu.Unlock()
+			return false
+		}
+		return true
+	}, time.Second, time.Microsecond, "sender never acquired the read lock")
 
 	closed := make(chan struct{})
 	go func() {
@@ -112,11 +118,9 @@ func TestElicitationBridge_RestoreAndCloseWaitsForInflightSenders(t *testing.T) 
 		close(closed)
 	}()
 
-	select {
-	case <-closed:
-		t.Fatal("channel closed while a send was still in flight")
-	case <-time.After(50 * time.Millisecond):
-	}
+	// The teardown ordering itself is verified below: the parked send must
+	// complete without a send-on-closed-channel panic, which is only
+	// possible if restoreAndClose waited for the read lock.
 
 	select {
 	case ev := <-current:
@@ -305,7 +309,7 @@ func TestRunStreamClosesChannelAndRestoresElicitationOnEarlyReturn(t *testing.T)
 			},
 		}),
 	)
-	rt, err := NewLocalRuntime(team.New(team.WithAgents(root)),
+	rt, err := NewLocalRuntime(t.Context(), team.New(team.WithAgents(root)),
 		WithSessionCompaction(false),
 		WithModelStore(mockModelStore{}),
 	)
@@ -350,7 +354,7 @@ func newElicitationTestRuntime(t *testing.T) *LocalRuntime {
 
 	prov := &mockProvider{id: "test/mock-model"}
 	root := agent.New("root", "test", agent.WithModel(prov))
-	rt, err := NewLocalRuntime(team.New(team.WithAgents(root)), WithModelStore(mockModelStore{}))
+	rt, err := NewLocalRuntime(t.Context(), team.New(team.WithAgents(root)), WithModelStore(mockModelStore{}))
 	require.NoError(t, err)
 	return rt
 }

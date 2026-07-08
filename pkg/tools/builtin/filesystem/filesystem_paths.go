@@ -47,7 +47,7 @@ type pathRoot struct {
 // Recognised tokens:
 //   - "." resolves to workingDir.
 //   - "~" or a leading "~/" resolves against the user's home directory.
-//   - "$VAR" / "${VAR}" expands environment variables.
+//   - "${env.VAR}" / "${VAR}" / "$VAR" expands environment variables.
 //   - Any other relative path is resolved against workingDir.
 //   - Absolute paths are kept as-is.
 func newPathRootSet(workingDir string, tokens []string) (*pathRootSet, error) {
@@ -128,7 +128,9 @@ func expandPathToken(workingDir, token string) (string, error) {
 	if original == "" {
 		return "", errors.New("path entry must not be empty")
 	}
-	token = os.ExpandEnv(original)
+	// Accept the JS-template `${env.VAR}` form as an alias for `${VAR}` so the
+	// canonical syntax used elsewhere in the config also resolves here (#2615).
+	token = os.ExpandEnv(pathx.NormalizeEnvRefs(original))
 	if strings.TrimSpace(token) == "" {
 		return "", fmt.Errorf("path entry %q expands to an empty string (undefined environment variable?)", original)
 	}

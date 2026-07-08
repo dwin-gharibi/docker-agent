@@ -1,22 +1,24 @@
 package tui
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	neturl "net/url"
 	"os"
-	"os/exec"
-	goruntime "runtime"
+	"path/filepath"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/atotto/clipboard"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/docker/docker-agent/pkg/app"
 	"github.com/docker/docker-agent/pkg/browser"
+	"github.com/docker/docker-agent/pkg/effort"
 	"github.com/docker/docker-agent/pkg/evaluation"
+	"github.com/docker/docker-agent/pkg/modelinfo"
 	"github.com/docker/docker-agent/pkg/runtime"
 	"github.com/docker/docker-agent/pkg/session"
 	"github.com/docker/docker-agent/pkg/shellpath"
@@ -42,8 +44,7 @@ func (m *appModel) handleBranchFromEdit(msg messages.BranchFromEditMsg) (tea.Mod
 	if msg.ParentSessionID == "" {
 		return m, notification.ErrorCmd("No parent session for branch")
 	}
-
-	ctx := context.Background()
+	ctx := m.ctx()
 
 	parent, err := store.GetSession(ctx, msg.ParentSessionID)
 	if err != nil {
@@ -114,8 +115,7 @@ func (m *appModel) handleForkSession() (tea.Model, tea.Cmd) {
 	if spawner == nil {
 		return m, notification.ErrorCmd("Session spawning not available")
 	}
-
-	ctx := context.Background()
+	ctx := m.ctx()
 
 	// Fork the session and clone all messages.
 	forkedSession, err := session.BranchSession(currentSession, len(currentSession.Messages))
@@ -154,15 +154,15 @@ func (m *appModel) handleToggleSessionStar(sessionID string) (tea.Model, tea.Cmd
 	if currentSess != nil && currentSess.ID == sessionID {
 		currentSess.Starred = !currentSess.Starred
 		m.chatPage.SetSessionStarred(currentSess.Starred)
-		if err := store.UpdateSession(context.Background(), currentSess); err != nil {
+		if err := store.UpdateSession(m.ctx(), currentSess); err != nil {
 			return m, notification.ErrorCmd(fmt.Sprintf("Failed to save session: %v", err))
 		}
 	} else {
-		sess, err := store.GetSession(context.Background(), sessionID)
+		sess, err := store.GetSession(m.ctx(), sessionID)
 		if err != nil {
 			return m, notification.ErrorCmd(fmt.Sprintf("Failed to load session: %v", err))
 		}
-		if err := store.SetSessionStarred(context.Background(), sessionID, !sess.Starred); err != nil {
+		if err := store.SetSessionStarred(m.ctx(), sessionID, !sess.Starred); err != nil {
 			return m, notification.ErrorCmd(fmt.Sprintf("Failed to update session: %v", err))
 		}
 	}
@@ -170,7 +170,7 @@ func (m *appModel) handleToggleSessionStar(sessionID string) (tea.Model, tea.Cmd
 }
 
 func (m *appModel) handleSetSessionTitle(title string) (tea.Model, tea.Cmd) {
-	if err := m.application.UpdateSessionTitle(context.Background(), title); err != nil {
+	if err := m.application.UpdateSessionTitle(m.ctx(), title); err != nil {
 		if errors.Is(err, app.ErrTitleGenerating) {
 			return m, notification.WarningCmd("Title is being generated, please wait")
 		}
@@ -187,7 +187,7 @@ func (m *appModel) handleRegenerateTitle() (tea.Model, tea.Cmd) {
 	if len(sess.GetLastUserMessages(1)) == 0 {
 		return m, notification.ErrorCmd("Cannot regenerate title: no user message in session")
 	}
-	if err := m.application.RegenerateSessionTitle(context.Background()); err != nil {
+	if err := m.application.RegenerateSessionTitle(m.ctx()); err != nil {
 		if errors.Is(err, app.ErrTitleGenerating) {
 			return m, notification.WarningCmd("Title is being generated, please wait")
 		}
@@ -202,8 +202,7 @@ func (m *appModel) handleDeleteSession(sessionID string) (tea.Model, tea.Cmd) {
 	if store == nil {
 		return m, notification.ErrorCmd("No session store configured")
 	}
-
-	if err := store.DeleteSession(context.Background(), sessionID); err != nil {
+	if err := store.DeleteSession(m.ctx(), sessionID); err != nil {
 		return m, notification.ErrorCmd("Failed to delete session: " + err.Error())
 	}
 
@@ -218,7 +217,7 @@ func (m *appModel) handleEvalSession(filename string) (tea.Model, tea.Cmd) {
 }
 
 func (m *appModel) handleExportSession(filename string) (tea.Model, tea.Cmd) {
-	exportFile, err := m.application.ExportHTML(context.Background(), filename)
+	exportFile, err := m.application.ExportHTML(m.ctx(), filename)
 	if err != nil {
 		return m, notification.ErrorCmd(fmt.Sprintf("Failed to export session: %v", err))
 	}
@@ -253,7 +252,7 @@ func (m *appModel) handleUndoSnapshot() (tea.Model, tea.Cmd) {
 	if m.chatPage.IsWorking() {
 		return m, notification.WarningCmd("Wait for the current response to finish before undoing")
 	}
-	result, err := m.application.UndoLastSnapshot(context.Background())
+	result, err := m.application.UndoLastSnapshot(m.ctx())
 	if err != nil {
 		if errors.Is(err, app.ErrNothingToUndo) {
 			return m, notification.InfoCmd("No snapshot to undo")
@@ -276,7 +275,7 @@ func (m *appModel) handleResetSnapshot(keep int) (tea.Model, tea.Cmd) {
 	if m.chatPage.IsWorking() {
 		return m, notification.WarningCmd("Wait for the current response to finish before resetting")
 	}
-	result, err := m.application.ResetSnapshot(context.Background(), keep)
+	result, err := m.application.ResetSnapshot(m.ctx(), keep)
 	if err != nil {
 		if errors.Is(err, app.ErrNothingToUndo) {
 			return m, notification.InfoCmd("Nothing to reset")
@@ -329,13 +328,19 @@ func (m *appModel) handleSwitchAgent(agentName string) (tea.Model, tea.Cmd) {
 }
 
 // handleShowAgentDetails opens the read-only agent-details dialog for the named
-// agent, looking it up in the available-agents roster.
+// agent, looking it up in the available-agents roster. The agent's latest
+// token-usage snapshot (if it has run) rides along so the dialog can show its
+// context usage.
 func (m *appModel) handleShowAgentDetails(agentName string) (tea.Model, tea.Cmd) {
 	for _, agent := range m.sessionState.AvailableAgents() {
 		if agent.Name == agentName {
-			cfg := m.application.AgentConfigInfo(agentName)
+			cfg := m.application.AgentConfigInfo(m.ctx(), agentName)
+			var usage *runtime.Usage
+			if u, ok := m.sessionState.AgentUsage(agentName); ok {
+				usage = &u
+			}
 			return m, core.CmdHandler(dialog.OpenDialogMsg{
-				Model: dialog.NewAgentDetailsDialog(agent, cfg),
+				Model: dialog.NewAgentDetailsDialog(agent, cfg, usage),
 			})
 		}
 	}
@@ -425,16 +430,14 @@ func (m *appModel) handleToggleSplitDiff() (tea.Model, tea.Cmd) {
 // config without blocking the UI. Errors are logged but otherwise ignored
 // because losing the persistence is non-fatal.
 func persistSplitDiffView(enabled bool) {
-	cfg, err := userconfig.Load()
+	err := userconfig.Update(func(cfg *userconfig.Config) error {
+		if cfg.Settings == nil {
+			cfg.Settings = &userconfig.Settings{}
+		}
+		cfg.Settings.SplitDiffView = &enabled
+		return nil
+	})
 	if err != nil {
-		slog.Warn("Failed to load userconfig for split diff toggle", "error", err)
-		return
-	}
-	if cfg.Settings == nil {
-		cfg.Settings = &userconfig.Settings{}
-	}
-	cfg.Settings.SplitDiffView = &enabled
-	if err := cfg.Save(); err != nil {
 		slog.Warn("Failed to persist split diff setting to userconfig", "error", err)
 	}
 }
@@ -448,6 +451,42 @@ func (m *appModel) handleShowCostDialog() (tea.Model, tea.Cmd) {
 	})
 }
 
+// handleShowContextDialog computes the context breakdown in a tea.Cmd
+// goroutine: the computation lists the agent's tools, which may start
+// not-yet-started toolsets (e.g. MCP servers) and block for a while, so it
+// must not run inside the Update loop. The dialog opens when the data is
+// ready.
+func (m *appModel) handleShowContextDialog() (tea.Model, tea.Cmd) {
+	appRef := m.application
+	ctx := m.ctx()
+	return m, func() tea.Msg {
+		breakdown, err := appRef.ContextBreakdown(ctx)
+		switch {
+		case errors.Is(err, runtime.ErrUnsupported):
+			return notification.ShowMsg{
+				Text: "Context breakdown is not supported with remote runtimes",
+				Type: notification.TypeInfo,
+			}
+		case err != nil:
+			return notification.ShowMsg{
+				Text: fmt.Sprintf("Failed to compute context breakdown: %v", err),
+				Type: notification.TypeError,
+			}
+		}
+		return dialog.OpenDialogMsg{Model: dialog.NewContextDialog(breakdown)}
+	}
+}
+
+// handleDropAttachedFile removes an attached file from the current session
+// so it stops being shared with sub-agents and skill prompts.
+func (m *appModel) handleDropAttachedFile(path string) (tea.Model, tea.Cmd) {
+	dropped, err := m.application.DropAttachedFile(m.ctx(), path)
+	if err != nil {
+		return m, notification.ErrorCmd(fmt.Sprintf("Failed to drop attachment: %v", err))
+	}
+	return m, notification.SuccessCmd(fmt.Sprintf("Dropped %s from the session context.", filepath.Base(dropped)))
+}
+
 func (m *appModel) handleShowPermissionsDialog() (tea.Model, tea.Cmd) {
 	perms := m.application.PermissionsInfo()
 	sess := m.application.Session()
@@ -458,7 +497,7 @@ func (m *appModel) handleShowPermissionsDialog() (tea.Model, tea.Cmd) {
 }
 
 func (m *appModel) handleShowToolsDialog() (tea.Model, tea.Cmd) {
-	agentTools, err := m.application.CurrentAgentTools(context.Background())
+	agentTools, err := m.application.CurrentAgentTools(m.ctx())
 	if err != nil {
 		return m, notification.ErrorCmd(fmt.Sprintf("Failed to load tools: %v", err))
 	}
@@ -489,7 +528,7 @@ func (m *appModel) handleRestartToolset(name string) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(
 		notification.InfoCmd(fmt.Sprintf("Restarting toolset %q…", name)),
 		func() tea.Msg {
-			if err := appRef.RestartToolset(context.Background(), name); err != nil {
+			if err := appRef.RestartToolset(m.ctx(), name); err != nil {
 				return notification.ShowMsg{
 					Text: fmt.Sprintf("Failed to restart %q: %v", name, err),
 					Type: notification.TypeError,
@@ -516,7 +555,7 @@ func (m *appModel) handleShowMCPPromptInput(promptName string, promptInfo any) (
 }
 
 func (m *appModel) handleMCPPrompt(promptName string, arguments map[string]string) (tea.Model, tea.Cmd) {
-	promptContent, err := m.application.ExecuteMCPPrompt(context.Background(), promptName, arguments)
+	promptContent, err := m.application.ExecuteMCPPrompt(m.ctx(), promptName, arguments)
 	if err != nil {
 		return m, notification.ErrorCmd(fmt.Sprintf("Error executing MCP prompt '%s': %v", promptName, err))
 	}
@@ -526,15 +565,24 @@ func (m *appModel) handleMCPPrompt(promptName string, arguments map[string]strin
 // --- Model picker ---
 
 func (m *appModel) handleOpenModelPicker() (tea.Model, tea.Cmd) {
+	start := time.Now()
+	defer func() {
+		slog.Debug("TUI model picker open handled", "duration", time.Since(start))
+	}()
 	if !m.application.SupportsModelSwitching() {
 		return m, notification.InfoCmd("Model switching is not supported with remote runtimes")
 	}
-	models := m.application.AvailableModels(context.Background())
+	loadStart := time.Now()
+	models := m.application.AvailableModels(m.ctx())
+	slog.Debug("TUI model picker available models loaded", "duration", time.Since(loadStart), "models", len(models))
 	if len(models) == 0 {
 		return m, notification.InfoCmd("No models available for selection")
 	}
+	dialogStart := time.Now()
+	modelDialog := dialog.NewModelPickerDialog(models)
+	slog.Debug("TUI model picker dialog built", "duration", time.Since(dialogStart), "models", len(models))
 	return m, core.CmdHandler(dialog.OpenDialogMsg{
-		Model: dialog.NewModelPickerDialog(models),
+		Model: modelDialog,
 	})
 }
 
@@ -545,7 +593,7 @@ func (m *appModel) handleCycleThinkingLevel() (tea.Model, tea.Cmd) {
 	if !m.application.SupportsModelSwitching() {
 		return m, notification.InfoCmd("Thinking levels can't be changed with remote runtimes")
 	}
-	if _, err := m.application.CycleAgentThinkingLevel(context.Background()); err != nil {
+	if _, err := m.application.CycleAgentThinkingLevel(m.ctx()); err != nil {
 		if errors.Is(err, runtime.ErrUnsupported) {
 			return m, notification.InfoCmd("Current model does not support thinking levels")
 		}
@@ -554,8 +602,53 @@ func (m *appModel) handleCycleThinkingLevel() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// handleSetThinkingLevel applies the /effort command: it sets the current
+// model's reasoning-effort level to the requested value. An empty level
+// opens the effort picker dialog; unsupported levels surface the model's
+// supported list via the runtime error.
+func (m *appModel) handleSetThinkingLevel(level string) (tea.Model, tea.Cmd) {
+	if !m.application.SupportsModelSwitching() {
+		return m, notification.InfoCmd("Thinking levels can't be changed with remote runtimes")
+	}
+	if level == "" {
+		return m.openEffortPicker()
+	}
+	parsed, ok := effort.Parse(level)
+	if !ok {
+		return m, notification.ErrorCmd(fmt.Sprintf("Unknown effort level %q (valid: none, minimal, low, medium, high, xhigh, max)", level))
+	}
+	applied, err := m.application.SetAgentThinkingLevel(m.ctx(), parsed)
+	if err != nil {
+		if errors.Is(err, runtime.ErrUnsupported) {
+			return m, notification.InfoCmd("Current model does not support thinking levels")
+		}
+		return m, notification.ErrorCmd(fmt.Sprintf("Failed to set thinking level: %v", err))
+	}
+	return m, notification.SuccessCmd("Reasoning effort set to " + applied.String())
+}
+
+// openEffortPicker opens the effort picker dialog listing the thinking-effort
+// levels supported by the current agent's model (/effort without arguments).
+// The sidebar's thinking label doubles as the support signal: it is empty
+// exactly when the runtime reports no selectable thinking configuration.
+func (m *appModel) openEffortPicker() (tea.Model, tea.Cmd) {
+	agent := m.sessionState.GetCurrentAgent()
+	if agent.Thinking == "" {
+		return m, notification.InfoCmd("Current model does not support thinking levels")
+	}
+	levels := modelinfo.SupportedThinkingLevels(agent.Provider, agent.Model)
+	// "off" maps onto none; adaptive/token labels leave no level marked current.
+	current, ok := effort.Parse(agent.Thinking)
+	if !ok && agent.Thinking == "off" {
+		current = effort.None
+	}
+	return m, core.CmdHandler(dialog.OpenDialogMsg{
+		Model: dialog.NewEffortPickerDialog(levels, current),
+	})
+}
+
 func (m *appModel) handleChangeModel(modelRef string) (tea.Model, tea.Cmd) {
-	if err := m.application.SetCurrentAgentModel(context.Background(), modelRef); err != nil {
+	if err := m.application.SetCurrentAgentModel(m.ctx(), modelRef); err != nil {
 		return m, notification.ErrorCmd(fmt.Sprintf("Failed to change model: %v", err))
 	}
 	if modelRef == "" {
@@ -573,8 +666,17 @@ func (m *appModel) handleOpenThemePicker() (tea.Model, tea.Cmd) {
 	}
 	currentTheme := styles.CurrentTheme()
 	currentRef := currentTheme.Ref
+	autoEnabled := styles.AutoThemeEnabled()
 
-	var choices []dialog.ThemeChoice
+	// The auto entry resolves to the configured light/dark pair at apply
+	// time. While it is active, the resolved concrete theme is not marked
+	// current so only one entry carries the badge.
+	choices := []dialog.ThemeChoice{{
+		Ref:       styles.AutoThemeRef,
+		Name:      styles.AutoThemeDisplayName,
+		IsCurrent: autoEnabled,
+		IsBuiltin: true,
+	}}
 	for _, ref := range themeRefs {
 		theme, loadErr := styles.LoadTheme(ref)
 		if loadErr != nil {
@@ -587,7 +689,7 @@ func (m *appModel) handleOpenThemePicker() (tea.Model, tea.Cmd) {
 		choices = append(choices, dialog.ThemeChoice{
 			Ref:       ref,
 			Name:      name,
-			IsCurrent: ref == currentRef,
+			IsCurrent: !autoEnabled && ref == currentRef,
 			IsDefault: ref == styles.DefaultThemeRef,
 			IsBuiltin: styles.IsBuiltinTheme(ref),
 		})
@@ -598,26 +700,47 @@ func (m *appModel) handleOpenThemePicker() (tea.Model, tea.Cmd) {
 }
 
 func (m *appModel) handleChangeTheme(themeRef string) (tea.Model, tea.Cmd) {
-	if styles.GetPersistedThemeRef() == themeRef {
+	selectingAuto := themeRef == styles.AutoThemeRef
+	if styles.GetPersistedThemeRef() == themeRef && styles.AutoThemeEnabled() == selectingAuto {
 		return m, nil
 	}
-	theme, err := styles.LoadTheme(themeRef)
+	theme, err := styles.LoadTheme(styles.ResolveThemeRef(themeRef))
 	if err != nil {
 		return m, notification.ErrorCmd(fmt.Sprintf("Failed to load theme: %v", err))
 	}
+	wasAuto := styles.AutoThemeEnabled()
+	styles.SetAutoThemeEnabled(selectingAuto)
 	styles.ApplyTheme(theme)
 	m.invalidateCachesForThemeChange()
 
 	if err := styles.SaveThemeToUserConfig(themeRef); err != nil {
 		slog.Warn("Failed to save theme to user config", "theme", themeRef, "error", err)
 	}
-	return m, tea.Sequence(
-		notification.SuccessCmd("Theme changed to "+theme.Name),
+
+	displayName := theme.Name
+	if selectingAuto {
+		displayName = styles.AutoThemeDisplayName
+	}
+	cmds := []tea.Cmd{
+		notification.SuccessCmd("Theme changed to " + displayName),
 		core.CmdHandler(messages.ThemeChangedMsg{}),
-	)
+	}
+	// Keep terminal color-scheme reporting (DEC mode 2031) in sync with the
+	// auto selection: enable it and re-query the polarity when auto is picked
+	// mid-session, reset it when a concrete theme replaces auto.
+	switch {
+	case selectingAuto && !m.lightDarkModeSet:
+		m.lightDarkModeSet = true
+		cmds = append(cmds, tea.Raw(ansi.SetModeLightDark), tea.RequestBackgroundColor)
+	case !selectingAuto && wasAuto && m.lightDarkModeSet:
+		m.lightDarkModeSet = false
+		cmds = append(cmds, tea.Raw(ansi.ResetModeLightDark))
+	}
+	return m, tea.Sequence(cmds...)
 }
 
 func (m *appModel) handleThemePreview(themeRef string) (tea.Model, tea.Cmd) {
+	themeRef = styles.ResolveThemeRef(themeRef)
 	if current := styles.CurrentTheme(); current != nil && current.Ref == themeRef {
 		return m, nil
 	}
@@ -644,6 +767,9 @@ func (m *appModel) invalidateCachesForThemeChange() {
 
 func (m *appModel) applyThemeChanged() (tea.Model, tea.Cmd) {
 	m.invalidateCachesForThemeChange()
+	// Re-target the file watcher: theme changes (picker selection, preview,
+	// hot reload) can move the active theme to a different backing file.
+	m.watchCurrentTheme()
 	return m, tea.Batch(
 		m.updateDialogCmd(messages.ThemeChangedMsg{}),
 		m.updateChatCmd(messages.ThemeChangedMsg{}),
@@ -663,10 +789,116 @@ func (m *appModel) handleThemeFileChanged(themeRef string) (tea.Model, tea.Cmd) 
 	)
 }
 
+// --- Layout customization ---
+
+// handleOpenCustomizeDialog opens the /custom layout dialog.
+func (m *appModel) handleOpenCustomizeDialog() (tea.Model, tea.Cmd) {
+	if m.hideSidebar {
+		return m, notification.InfoCmd("Sidebar is disabled; there is no layout to customize")
+	}
+	return m, core.CmdHandler(dialog.OpenDialogMsg{
+		Model: dialog.NewCustomizeDialog(m.layoutSettings),
+	})
+}
+
+// applyLayoutSettings applies the given layout to every chat page (all tabs
+// share the same layout) and optionally persists it to the user config.
+func (m *appModel) applyLayoutSettings(settings messages.LayoutSettings, persist bool) (tea.Model, tea.Cmd) {
+	settings.SidebarPosition = messages.ParseSidebarPosition(string(settings.SidebarPosition))
+	settings.SectionSpacing = messages.ParseSectionSpacing(string(settings.SectionSpacing))
+	m.layoutSettings = settings
+
+	var cmds []tea.Cmd
+	for _, page := range m.chatPages {
+		if cmd := page.SetLayoutSettings(settings); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+	cmds = append(cmds, m.resizeAll())
+
+	if persist {
+		if err := saveLayoutToUserConfig(settings); err != nil {
+			slog.Warn("Failed to save layout to user config", "error", err)
+			cmds = append(cmds, notification.WarningCmd("Layout applied but could not be saved"))
+		} else {
+			cmds = append(cmds, notification.SuccessCmd("Layout updated"))
+		}
+	}
+
+	return m, tea.Batch(cmds...)
+}
+
+// layoutSettingsFromConfig converts persisted layout settings to their runtime form.
+func layoutSettingsFromConfig(l userconfig.LayoutSettings) messages.LayoutSettings {
+	return messages.LayoutSettings{
+		SidebarPosition: messages.ParseSidebarPosition(l.SidebarPosition),
+		SectionSpacing:  messages.ParseSectionSpacing(l.SectionSpacing),
+		HideUsage:       l.HideUsage,
+		HideAgents:      l.HideAgents,
+		HideTools:       l.HideTools,
+		HideTodos:       l.HideTodos,
+	}
+}
+
+// saveLayoutToUserConfig persists layout settings to the user config file.
+// Default settings clear the layout entry to keep the config file minimal.
+func saveLayoutToUserConfig(s messages.LayoutSettings) error {
+	return userconfig.Update(func(cfg *userconfig.Config) error {
+		if cfg.Settings == nil {
+			cfg.Settings = &userconfig.Settings{}
+		}
+
+		if s == (messages.LayoutSettings{SidebarPosition: messages.SidebarRight, SectionSpacing: messages.SpacingNormal}) {
+			cfg.Settings.Layout = nil
+			return nil
+		}
+
+		position := string(s.SidebarPosition)
+		if s.SidebarPosition == messages.SidebarRight {
+			position = ""
+		}
+		spacing := string(s.SectionSpacing)
+		if s.SectionSpacing == messages.SpacingNormal {
+			spacing = ""
+		}
+		cfg.Settings.Layout = &userconfig.LayoutSettings{
+			SidebarPosition: position,
+			SectionSpacing:  spacing,
+			HideUsage:       s.HideUsage,
+			HideAgents:      s.HideAgents,
+			HideTools:       s.HideTools,
+			HideTodos:       s.HideTodos,
+		}
+		return nil
+	})
+}
+
+// handleColorSchemeChange reacts to a terminal light/dark report (a DEC mode
+// 2031 event or an OSC 11 response). The polarity is always recorded so a
+// later switch to the auto theme starts from the freshest value; the theme
+// itself only changes while the auto theme is active.
+func (m *appModel) handleColorSchemeChange(dark bool) (tea.Model, tea.Cmd) {
+	styles.SetTerminalDark(dark)
+	if !styles.AutoThemeEnabled() {
+		return m, nil
+	}
+	resolved := styles.ResolveThemeRef(styles.AutoThemeRef)
+	if current := styles.CurrentTheme(); current != nil && current.Ref == resolved {
+		return m, nil
+	}
+	theme, err := styles.LoadTheme(resolved)
+	if err != nil {
+		slog.Warn("Failed to load auto theme for terminal background change", "theme", resolved, "error", err)
+		return m, nil
+	}
+	styles.ApplyTheme(theme)
+	return m, core.CmdHandler(messages.ThemeChangedMsg{})
+}
+
 // --- Miscellaneous ---
 
 func (m *appModel) handleOpenURL(url string) (tea.Model, tea.Cmd) {
-	if err := browser.Open(context.Background(), url); err != nil {
+	if err := browser.Open(m.ctx(), url); err != nil {
 		slog.Warn("Failed to open URL", "url", url, "error", err)
 		return m, notification.ErrorCmd("Failed to open URL in browser")
 	}
@@ -674,7 +906,7 @@ func (m *appModel) handleOpenURL(url string) (tea.Model, tea.Cmd) {
 }
 
 func (m *appModel) handleAgentCommand(command string) (tea.Model, tea.Cmd) {
-	ctx := context.Background()
+	ctx := m.ctx()
 
 	// Inspect the command before resolving so we can detect /commands that
 	// switch to a sub-agent. For those, we switch first and only then send
@@ -776,7 +1008,7 @@ func (m *appModel) handleStartSpeak() (tea.Model, tea.Cmd) {
 
 	ch := make(chan string, 100)
 	m.transcriptCh = ch
-	err := m.transcriber.Start(context.Background(), func(delta string) {
+	err := m.transcriber.Start(m.ctx(), func(delta string) {
 		select {
 		case ch <- delta:
 		default:
@@ -828,7 +1060,7 @@ func (m *appModel) closeTranscriptCh() {
 }
 
 func (m *appModel) handleElicitationResponse(action tools.ElicitationAction, content map[string]any) (tea.Model, tea.Cmd) {
-	if err := m.application.ResumeElicitation(context.Background(), action, content); err != nil {
+	if err := m.application.ResumeElicitation(m.ctx(), action, content); err != nil {
 		slog.Error("Failed to resume elicitation", "action", action, "error", err)
 		return m, notification.ErrorCmd("Failed to complete server request: " + err.Error())
 	}
@@ -836,7 +1068,7 @@ func (m *appModel) handleElicitationResponse(action tools.ElicitationAction, con
 }
 
 func (m *appModel) startShell() (tea.Model, tea.Cmd) {
-	cmd := newInteractiveShellCmd("Type 'exit' to return to " + m.appName)
+	cmd := shellpath.InteractiveShellCmd("Type 'exit' to return to " + m.appName)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -847,30 +1079,4 @@ func (m *appModel) startShell() (tea.Model, tea.Cmd) {
 		cmd.Dir = runner.WorkingDir
 	}
 	return m, tea.ExecProcess(cmd, nil)
-}
-
-// newInteractiveShellCmd returns a command that launches the user's preferred
-// interactive shell. The command is owned by tea.ExecProcess, not by any
-// request-scoped context, so exec.Command is intentional.
-func newInteractiveShellCmd(exitMsg string) *exec.Cmd {
-	if goruntime.GOOS != "windows" {
-		shell := shellpath.DetectUnixShell()
-		return execCmd(shell, "-i", "-c", `echo -e "\n`+exitMsg+`"; exec `+shell)
-	}
-
-	psArgs := []string{"-NoLogo", "-NoExit", "-Command", `Write-Host ""; Write-Host "` + exitMsg + `"`}
-	if path, err := exec.LookPath("pwsh.exe"); err == nil {
-		return execCmd(path, psArgs...)
-	}
-	if path, err := exec.LookPath("powershell.exe"); err == nil {
-		return execCmd(path, psArgs...)
-	}
-	// Use absolute path to cmd.exe to prevent PATH hijacking (CWE-426).
-	return execCmd(shellpath.WindowsCmdExe(), "/K", "echo. & echo "+exitMsg)
-}
-
-// execCmd is a thin wrapper around exec.Command used for interactive
-// processes whose lifecycle is owned by tea.ExecProcess (not a context).
-func execCmd(name string, args ...string) *exec.Cmd {
-	return exec.Command(name, args...) //nolint:noctx // owned by tea.ExecProcess
 }

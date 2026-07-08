@@ -310,6 +310,15 @@ body {
   margin-bottom: 4px;
 }
 
+/* Remove the default <details> triangle marker */
+.sidebar-section > summary {
+  list-style: none;
+}
+.sidebar-section > summary::marker,
+.sidebar-section > summary::-webkit-details-marker {
+  display: none;
+}
+
 .sidebar-heading {
   padding: 10px 20px 6px;
   font-size: 0.65rem;
@@ -318,6 +327,44 @@ body {
   letter-spacing: 0.1em;
   color: var(--text-muted);
   user-select: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+/* Chevron that rotates open */
+.sidebar-heading::after {
+  content: '';
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 4px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath d='M2 3.5 L5 6.5 L8 3.5' stroke='%23999' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-size: contain;
+  transition: transform 0.2s ease;
+  transform: rotate(-90deg);
+  flex-shrink: 0;
+}
+
+details.sidebar-section[open] > summary.sidebar-heading::after {
+  transform: rotate(0deg);
+}
+
+.sidebar-subheading {
+  padding: 8px 20px 4px 24px;
+  font-size: 0.6rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  user-select: none;
+  opacity: 0.75;
+}
+
+.sidebar-link.sidebar-link--sub {
+  padding-left: 32px;
 }
 
 .sidebar-link {
@@ -388,13 +435,17 @@ body {
 
 /* ===== Table of Contents (right sidebar) =====
  * Layout, font sizes and colors mirror docs.docker.com's right-column
- * \"Edit this page\" + \"Table of contents\" pattern. */
+ * \"Edit this page\" + \"Table of contents\" pattern.
+ * Sticky (not fixed) so it stays in the .main flex row and can never
+ * overlap the footer below; shown only at the ≥1280px breakpoint. */
 .toc-aside {
-  position: fixed;
+  display: none;
+  position: sticky;
   top: var(--header-height);
-  right: 0;
+  align-self: flex-start;
+  flex-shrink: 0;
   width: var(--toc-width);
-  height: calc(100vh - var(--header-height));
+  max-height: calc(100vh - var(--header-height));
   padding: 24px 24px 32px 16px;
   overflow-y: auto;
   scrollbar-width: thin;
@@ -499,9 +550,16 @@ body {
 }
 
 @media (min-width: 1280px) {
+  .main {
+    display: flex;
+    align-items: flex-start;
+  }
   .content {
-    margin-left: 48px;
-    margin-right: calc(var(--toc-width) + 48px);
+    flex: 1;
+    min-width: 0;
+  }
+  .toc-aside {
+    display: block;
   }
 }
 
@@ -616,7 +674,7 @@ body {
 
 /* Rouge / highlighter-rouge overrides */
 .content pre[class*="language-"],
-.content code[class*="language-"],
+.content pre code[class*="language-"],
 .content .highlighter-rouge pre.highlight,
 .content .highlighter-rouge pre.highlight code {
   background: var(--bg-code-block);
@@ -751,14 +809,30 @@ body {
   color: var(--text-secondary);
 }
 
+/* ===== Preview banner =====
+ * github.io tracks main and may document unreleased features; the
+ * banner points readers at the stable docs on docs.docker.com. */
+.preview-banner {
+  margin-bottom: 24px;
+  padding: 10px 16px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-lg);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+.preview-banner a { color: var(--accent); }
+
 /* ===== Callouts / Admonitions =====
  * docs.docker.com-style: rounded panel with a filled, circular icon
- * badge in the upper-left and a strong title. Authors keep using the
- * existing Markdown:
- *   <div class="callout callout-tip" markdown="1">
- *   <div class="callout-title">…</div>
- *   <p>…</p>
- *   </div>
+ * badge in the upper-left and a strong title. Authored as portable
+ * GFM alerts in Markdown:
+ *   > [!TIP]
+ *   > **Optional title**
+ *   >
+ *   > Body text.
+ * js/app.js upgrades the rendered blockquotes into this markup.
  */
 .callout {
   position: relative;
@@ -1547,10 +1621,6 @@ body {
 }
 
 /* ===== Responsive ===== */
-@media (max-width: 1280px) {
-  .toc-aside { display: none; }
-}
-
 @media (max-width: 1024px) {
   .sidebar {
     transform: translateX(-100%);

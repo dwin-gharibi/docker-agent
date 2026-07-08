@@ -1,7 +1,7 @@
 package gateway
 
 import (
-	"os"
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -32,16 +32,17 @@ var testCatalog = Catalog{
 	},
 }
 
-func TestMain(m *testing.M) {
-	// Override the production catalogOnce so that tests never hit the network.
-	catalogOnce = func() (Catalog, error) {
-		return testCatalog, nil
-	}
-	os.Exit(m.Run())
+// testContext returns a context carrying a static loader that serves
+// testCatalog, so the package functions never hit the network and tests stay
+// parallel-safe (no shared global).
+func testContext(t *testing.T) context.Context {
+	t.Helper()
+	return WithLoader(t.Context(), NewStaticLoader(testCatalog))
 }
 
 func TestRequiredEnvVars_local(t *testing.T) {
-	secrets, err := RequiredEnvVars(t.Context(), "github-official")
+	t.Parallel()
+	secrets, err := RequiredEnvVars(testContext(t), "github-official")
 	require.NoError(t, err)
 
 	assert.Len(t, secrets, 1)
@@ -50,21 +51,24 @@ func TestRequiredEnvVars_local(t *testing.T) {
 }
 
 func TestRequiredEnvVars_remote(t *testing.T) {
-	secrets, err := RequiredEnvVars(t.Context(), "apify")
+	t.Parallel()
+	secrets, err := RequiredEnvVars(testContext(t), "apify")
 	require.NoError(t, err)
 
 	assert.Empty(t, secrets)
 }
 
 func TestServerSpec_local(t *testing.T) {
-	server, err := ServerSpec(t.Context(), "fetch")
+	t.Parallel()
+	server, err := ServerSpec(testContext(t), "fetch")
 	require.NoError(t, err)
 
 	assert.Equal(t, "server", server.Type)
 }
 
 func TestServerSpec_remote(t *testing.T) {
-	server, err := ServerSpec(t.Context(), "apify")
+	t.Parallel()
+	server, err := ServerSpec(testContext(t), "apify")
 	require.NoError(t, err)
 
 	assert.Equal(t, "remote", server.Type)
@@ -73,13 +77,15 @@ func TestServerSpec_remote(t *testing.T) {
 }
 
 func TestServerSpec_notFound(t *testing.T) {
-	_, err := ServerSpec(t.Context(), "nonexistent")
+	t.Parallel()
+	_, err := ServerSpec(testContext(t), "nonexistent")
 	require.Error(t, err)
 
 	assert.Contains(t, err.Error(), "not found in MCP catalog")
 }
 
 func TestParseServerRef(t *testing.T) {
+	t.Parallel()
 	assert.Equal(t, "github-official", ParseServerRef("docker:github-official"))
 	assert.Equal(t, "github-official", ParseServerRef("github-official"))
 }

@@ -26,7 +26,7 @@ import (
 )
 
 // NewBM25FromConfig creates a BM25 strategy from configuration
-func NewBM25FromConfig(_ context.Context, cfg latest.RAGStrategyConfig, buildCtx BuildContext, events chan<- types.Event) (*Config, error) {
+func NewBM25FromConfig(ctx context.Context, cfg latest.RAGStrategyConfig, buildCtx BuildContext, events chan<- types.Event) (*Config, error) {
 	// Get optional parameters with defaults
 	k1 := GetParam(cfg.Params, "k1", 1.5)
 	bParam := GetParam(cfg.Params, "b", 0.75)
@@ -52,7 +52,7 @@ func NewBM25FromConfig(_ context.Context, cfg latest.RAGStrategyConfig, buildCtx
 
 	// Create BM25-specific database (no vectors needed).
 	// Pass strategy type as table prefix so multiple strategies can share the same DB file.
-	db, err := newBM25DB(dbPath, cfg.Type)
+	db, err := newBM25DB(ctx, dbPath, cfg.Type)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create database: %w", err)
 	}
@@ -556,7 +556,7 @@ func (s *BM25Strategy) indexFile(ctx context.Context, filePath string) error {
 		return fmt.Errorf("failed to delete old documents: %w", err)
 	}
 
-	chunks, err := chunk.ProcessFile(s.docProcessor, filePath)
+	chunks, err := chunk.ProcessFile(ctx, s.docProcessor, filePath)
 	if err != nil {
 		return fmt.Errorf("failed to process file: %w", err)
 	}

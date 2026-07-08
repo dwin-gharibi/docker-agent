@@ -170,7 +170,7 @@ agents:
 			wantErr: "",
 		},
 		{
-			name: "sudo_askpass on non-shell toolset is rejected",
+			name: "sudo_askpass on unsupported toolset is rejected",
 			config: `
 agents:
   root:
@@ -180,6 +180,81 @@ agents:
         sudo_askpass: true
 `,
 			wantErr: "sudo_askpass can only be used with type 'shell'",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var cfg latest.Config
+			err := yaml.Unmarshal([]byte(tt.config), &cfg)
+
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), tt.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestToolset_Validate_Recall(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		config  string
+		wantErr string
+	}{
+		{
+			name: "recall on background jobs is allowed",
+			config: `
+agents:
+  root:
+    model: "openai/gpt-4"
+    toolsets:
+      - type: background_jobs
+        recall: true
+`,
+			wantErr: "",
+		},
+		{
+			name: "recall false on background jobs is allowed",
+			config: `
+agents:
+  root:
+    model: "openai/gpt-4"
+    toolsets:
+      - type: background_jobs
+        recall: false
+`,
+			wantErr: "",
+		},
+		{
+			name: "recall on shell toolset is rejected",
+			config: `
+agents:
+  root:
+    model: "openai/gpt-4"
+    toolsets:
+      - type: shell
+        recall: true
+`,
+			wantErr: "recall can only be used with type 'background_jobs'",
+		},
+		{
+			name: "recall on non-background-jobs toolset is rejected",
+			config: `
+agents:
+  root:
+    model: "openai/gpt-4"
+    toolsets:
+      - type: filesystem
+        recall: true
+`,
+			wantErr: "recall can only be used with type 'background_jobs'",
 		},
 	}
 

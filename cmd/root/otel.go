@@ -29,7 +29,7 @@ import (
 	"github.com/docker/docker-agent/pkg/version"
 )
 
-const AppName = "docker-agent"
+const AppName = version.AppName
 
 // initOTelSDK initializes OpenTelemetry SDK with OTLP exporter
 func initOTelSDK(ctx context.Context) (err error) {
@@ -48,15 +48,20 @@ func initOTelSDK(ctx context.Context) (err error) {
 
 	mp, err := newMeterProvider(ctx, res, endpoint)
 	if err != nil {
-		_ = shutdownTracerProvider(tp)
+		_ = shutdownTracerProvider(ctx, tp)
 		return fmt.Errorf("failed to create meter provider: %w", err)
 	}
 	otel.SetMeterProvider(mp)
 
 	lp, err := newLoggerProvider(ctx, res, endpoint)
 	if err != nil {
-		_ = mp.Shutdown(context.Background())
-		_ = shutdownTracerProvider(tp)
+		// Detach from ctx's cancellation but keep its trace context so
+		// cleanup still runs if ctx is already done. Bound it so a slow
+		// exporter can't block the failure path indefinitely.
+		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_ = mp.Shutdown(shutdownCtx)
+		_ = shutdownTracerProvider(ctx, tp)
 		return fmt.Errorf("failed to create logger provider: %w", err)
 	}
 	global.SetLoggerProvider(lp)
@@ -91,7 +96,9 @@ func initOTelSDK(ctx context.Context) (err error) {
 		// sharing a single timeout meant a stuck logs endpoint silently
 		// dropped buffered metrics and spans.
 		shutdown := func(fn func(context.Context) error) {
-			c, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			// ctx is already cancelled here (we waited on ctx.Done()), so
+			// detach from its cancellation while keeping its trace context.
+			c, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 			defer cancel()
 			_ = fn(c)
 		}
@@ -218,8 +225,10 @@ func logExporterOptions(endpoint string) []otlploghttp.Option {
 	return []otlploghttp.Option{otlploghttp.WithEndpointURL(signalEndpointURL(endpoint, "/v1/logs"))}
 }
 
-func shutdownTracerProvider(tp *trace.TracerProvider) error {
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+func shutdownTracerProvider(ctx context.Context, tp *trace.TracerProvider) error {
+	// Detach from ctx's cancellation but keep its trace context so the
+	// final flush still runs when ctx is already done.
+	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	return tp.Shutdown(shutdownCtx)
 }

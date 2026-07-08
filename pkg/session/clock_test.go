@@ -7,49 +7,33 @@ import (
 	"github.com/docker/docker-agent/pkg/chat"
 )
 
-// setNowForTest installs a fixed clock for the duration of t and restores the
-// previous clock on cleanup. Tests use this to assert on CreatedAt fields
-// without flakiness.
-//
-// The clock is a package-level variable, so tests using this helper MUST NOT
-// call t.Parallel(): two parallel tests would race on nowFn.
-func setNowForTest(t *testing.T, fixed time.Time) {
-	t.Helper()
-	prev := nowFn
-	nowFn = func() time.Time { return fixed }
-	t.Cleanup(func() { nowFn = prev })
+// fixedClock returns a clock func that always reports t. Used to make
+// CreatedAt assertions deterministic without touching any global state, so
+// these tests are safe to run in parallel.
+func fixedClock(t time.Time) func() time.Time {
+	return func() time.Time { return t }
 }
 
-// setIDForTest installs a deterministic ID generator for the duration of t and
-// restores the previous generator on cleanup. The supplied IDs are returned
-// in order; running out triggers t.Fatalf.
-//
-// Like setNowForTest, this helper mutates a package-level variable and is not
-// safe to use with t.Parallel(). Additionally, the installed generator calls
-// t.Fatalf if exhausted, which is only valid on the test goroutine — do not
-// use this helper if production code under test may call New() from a
-// background goroutine.
-func setIDForTest(t *testing.T, ids ...string) {
+// stubIDs returns an ID generator that yields the supplied IDs in order and
+// fails the test if exhausted.
+func stubIDs(t *testing.T, ids ...string) func() string {
 	t.Helper()
-	prev := newIDFn
 	i := 0
-	newIDFn = func() string {
+	return func() string {
 		if i >= len(ids) {
-			t.Fatalf("setIDForTest: ran out of IDs after %d calls", i)
+			t.Fatalf("stubIDs: ran out of IDs after %d calls", i)
 		}
 		id := ids[i]
 		i++
 		return id
 	}
-	t.Cleanup(func() { newIDFn = prev })
 }
 
 func TestNew_UsesInjectedClockAndID(t *testing.T) {
+	t.Parallel()
 	fixed := time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)
-	setNowForTest(t, fixed)
-	setIDForTest(t, "test-session-1")
 
-	s := New()
+	s := New(WithClock(fixedClock(fixed)), WithIDGen(stubIDs(t, "test-session-1")))
 
 	if s.ID != "test-session-1" {
 		t.Errorf("ID = %q, want %q", s.ID, "test-session-1")
@@ -63,20 +47,19 @@ func TestNew_UsesInjectedClockAndID(t *testing.T) {
 }
 
 func TestNew_WithIDOverridesGenerator(t *testing.T) {
-	setIDForTest(t, "should-not-be-used")
-
-	s := New(WithID("explicit-id"))
+	t.Parallel()
+	s := New(WithIDGen(stubIDs(t)), WithID("explicit-id"))
 
 	if s.ID != "explicit-id" {
 		t.Errorf("ID = %q, want %q", s.ID, "explicit-id")
 	}
 }
 
-func TestUserMessage_UsesInjectedClock(t *testing.T) {
+func TestUserMessageAt_UsesProvidedClock(t *testing.T) {
+	t.Parallel()
 	fixed := time.Date(2024, 6, 15, 12, 0, 0, 0, time.UTC)
-	setNowForTest(t, fixed)
 
-	msg := UserMessage("hello")
+	msg := UserMessageAt(fixed, "hello")
 
 	if msg.Message.Role != chat.MessageRoleUser {
 		t.Errorf("Role = %v, want user", msg.Message.Role)
@@ -89,11 +72,11 @@ func TestUserMessage_UsesInjectedClock(t *testing.T) {
 	}
 }
 
-func TestSystemMessage_UsesInjectedClock(t *testing.T) {
+func TestSystemMessageAt_UsesProvidedClock(t *testing.T) {
+	t.Parallel()
 	fixed := time.Date(2024, 6, 15, 12, 0, 0, 0, time.UTC)
-	setNowForTest(t, fixed)
 
-	msg := SystemMessage("you are a helpful assistant")
+	msg := SystemMessageAt(fixed, "you are a helpful assistant")
 
 	if msg.Message.Role != chat.MessageRoleSystem {
 		t.Errorf("Role = %v, want system", msg.Message.Role)
@@ -103,11 +86,11 @@ func TestSystemMessage_UsesInjectedClock(t *testing.T) {
 	}
 }
 
-func TestImplicitUserMessage_IsImplicitAndUsesClock(t *testing.T) {
+func TestImplicitUserMessageAt_IsImplicitAndUsesClock(t *testing.T) {
+	t.Parallel()
 	fixed := time.Date(2024, 6, 15, 12, 0, 0, 0, time.UTC)
-	setNowForTest(t, fixed)
 
-	msg := ImplicitUserMessage("delegated task")
+	msg := ImplicitUserMessageAt(fixed, "delegated task")
 
 	if !msg.Implicit {
 		t.Error("Implicit = false, want true")
@@ -117,15 +100,35 @@ func TestImplicitUserMessage_IsImplicitAndUsesClock(t *testing.T) {
 	}
 }
 
-func TestDuration_DeterministicWithInjectedClock(t *testing.T) {
+func TestWithMessageOptions_UseInjectedClock(t *testing.T) {
+	t.Parallel()
+	fixed := time.Date(2024, 3, 4, 5, 6, 7, 0, time.UTC)
+	want := fixed.Format(time.RFC3339)
+
+	s := New(
+		WithClock(fixedClock(fixed)),
+		WithUserMessage("user"),
+		WithSystemMessage("system"),
+		WithImplicitUserMessage("implicit"),
+	)
+
+	if len(s.Messages) != 3 {
+		t.Fatalf("len(Messages) = %d, want 3", len(s.Messages))
+	}
+	for i, item := range s.Messages {
+		if item.Message.Message.CreatedAt != want {
+			t.Errorf("Messages[%d].CreatedAt = %q, want %q", i, item.Message.Message.CreatedAt, want)
+		}
+	}
+}
+
+func TestDuration_DeterministicWithExplicitTimestamps(t *testing.T) {
+	t.Parallel()
 	t0 := time.Date(2024, 1, 1, 10, 0, 0, 0, time.UTC)
 	s := New()
 
-	setNowForTest(t, t0)
-	s.AddMessage(UserMessage("first"))
-
-	setNowForTest(t, t0.Add(5*time.Second))
-	s.AddMessage(UserMessage("second"))
+	s.AddMessage(UserMessageAt(t0, "first"))
+	s.AddMessage(UserMessageAt(t0.Add(5*time.Second), "second"))
 
 	got := s.Duration()
 	want := 5 * time.Second

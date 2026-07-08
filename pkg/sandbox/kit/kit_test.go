@@ -93,9 +93,26 @@ func TestBuild_RebuildsCleanDir(t *testing.T) {
 	t.Setenv("HOME", hostHome)
 	t.Chdir(t.TempDir())
 
+	// A local agent YAML gives us a stable, offline AgentRef. A bare
+	// string like "stable-ref" would resolve as an OCI reference and
+	// block on a real registry pull — seconds of network latency for a
+	// test that only cares that the same ref maps to the same kit dir.
+	workspace := t.TempDir()
+	yamlPath := filepath.Join(workspace, "agent.yaml")
+	require.NoError(t, os.WriteFile(yamlPath, []byte(`agents:
+  root:
+    model: openai/gpt-5
+    description: tester
+    instruction: hello
+models:
+  openai/gpt-5:
+    provider: openai
+    model: gpt-5
+`), 0o600))
+
 	cacheDir := t.TempDir()
 	res1, err := Build(t.Context(), Options{
-		AgentRef: "stable-ref",
+		AgentRef: yamlPath,
 		HostHome: hostHome,
 		HostCwd:  t.TempDir(),
 		CacheDir: cacheDir,
@@ -107,7 +124,7 @@ func TestBuild_RebuildsCleanDir(t *testing.T) {
 	require.NoError(t, os.WriteFile(stale, []byte("stale"), 0o600))
 
 	res2, err := Build(t.Context(), Options{
-		AgentRef: "stable-ref",
+		AgentRef: yamlPath,
 		HostHome: hostHome,
 		HostCwd:  t.TempDir(),
 		CacheDir: cacheDir,

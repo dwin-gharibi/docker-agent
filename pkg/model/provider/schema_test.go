@@ -58,6 +58,7 @@ func parseFunctionParameters(t *testing.T, schemaJSON string) map[string]any {
 }
 
 func TestEmptyMapSchemaForGemini(t *testing.T) {
+	t.Parallel()
 	schema, err := gemini.ConvertParametersToSchema(map[string]any{})
 	require.NoError(t, err)
 
@@ -67,6 +68,7 @@ func TestEmptyMapSchemaForGemini(t *testing.T) {
 }
 
 func TestEmptySchemaForGemini(t *testing.T) {
+	t.Parallel()
 	parameters := parseFunctionParameters(t, "{}")
 
 	schema, err := gemini.ConvertParametersToSchema(parameters)
@@ -78,6 +80,7 @@ func TestEmptySchemaForGemini(t *testing.T) {
 }
 
 func TestNilSchemaForGemini(t *testing.T) {
+	t.Parallel()
 	schema, err := gemini.ConvertParametersToSchema(nil)
 	require.NoError(t, err)
 
@@ -87,6 +90,7 @@ func TestNilSchemaForGemini(t *testing.T) {
 }
 
 func TestSchemaForGemini(t *testing.T) {
+	t.Parallel()
 	parameters := parseFunctionParameters(t, schemaJSON)
 
 	schema, err := gemini.ConvertParametersToSchema(parameters)
@@ -128,7 +132,82 @@ func TestSchemaForGemini(t *testing.T) {
 }`, string(schemaJSON))
 }
 
+// TestNonStringEnumSchemaForGemini makes sure non-string enum values are
+// converted to strings. genai.Schema declares enum as []string and the Gemini
+// API rejects non-string enum values, so schemas like the GitHub MCP
+// issue_write tool ("enum": [true]) would otherwise fail.
+// See https://github.com/docker/docker-agent/issues/3477
+func TestNonStringEnumSchemaForGemini(t *testing.T) {
+	t.Parallel()
+	parameters := parseFunctionParameters(t, `
+{
+    "type": "object",
+    "properties": {
+      "issue_fields": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "delete": {
+              "type": "boolean",
+              "enum": [true],
+              "description": "Unset the field"
+            },
+            "priority": {
+              "type": "number",
+              "enum": [1, 2.5]
+            },
+            "state": {
+              "anyOf": [
+                {"type": "string", "enum": ["open", null]},
+                {"type": "number", "enum": [0]}
+              ]
+            }
+          }
+        }
+      }
+    }
+}`)
+
+	schema, err := gemini.ConvertParametersToSchema(parameters)
+	require.NoError(t, err)
+
+	schemaJSON, err := json.Marshal(schema)
+	require.NoError(t, err)
+	assert.JSONEq(t, `
+{
+    "type": "object",
+    "properties": {
+      "issue_fields": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "delete": {
+              "type": "boolean",
+              "enum": ["true"],
+              "description": "Unset the field"
+            },
+            "priority": {
+              "type": "number",
+              "enum": ["1", "2.5"]
+            },
+            "state": {
+              "type": "object",
+              "anyOf": [
+                {"type": "string", "enum": ["open"]},
+                {"type": "number", "enum": ["0"]}
+              ]
+            }
+          }
+        }
+      }
+    }
+}`, string(schemaJSON))
+}
+
 func TestEmptyMapSchemaForAnthropic(t *testing.T) {
+	t.Parallel()
 	shema, err := anthropic.ConvertParametersToSchema(map[string]any{})
 	require.NoError(t, err)
 
@@ -138,6 +217,7 @@ func TestEmptyMapSchemaForAnthropic(t *testing.T) {
 }
 
 func TestNilSchemaForAnthropic(t *testing.T) {
+	t.Parallel()
 	shema, err := anthropic.ConvertParametersToSchema(nil)
 	require.NoError(t, err)
 
@@ -147,6 +227,7 @@ func TestNilSchemaForAnthropic(t *testing.T) {
 }
 
 func TestSchemaForAnthropic(t *testing.T) {
+	t.Parallel()
 	parameters := parseFunctionParameters(t, schemaJSON)
 	shema, err := anthropic.ConvertParametersToSchema(parameters)
 	require.NoError(t, err)
@@ -188,6 +269,7 @@ func TestSchemaForAnthropic(t *testing.T) {
 // OpenAI and LM Studio accept.
 // See https://github.com/docker/docker-agent/issues/278
 func TestEmptyMapSchemaForOpenai(t *testing.T) {
+	t.Parallel()
 	schema, _, err := openai.ConvertParametersToSchema(map[string]any{})
 	require.NoError(t, err)
 
@@ -197,6 +279,7 @@ func TestEmptyMapSchemaForOpenai(t *testing.T) {
 }
 
 func TestNilSchemaForOpenai(t *testing.T) {
+	t.Parallel()
 	schema, _, err := openai.ConvertParametersToSchema(nil)
 	require.NoError(t, err)
 
@@ -206,6 +289,7 @@ func TestNilSchemaForOpenai(t *testing.T) {
 }
 
 func TestSchemaForOpenai(t *testing.T) {
+	t.Parallel()
 	parameters := parseFunctionParameters(t, schemaJSON)
 
 	schema, _, err := openai.ConvertParametersToSchema(parameters)
@@ -246,6 +330,7 @@ func TestSchemaForOpenai(t *testing.T) {
 }
 
 func TestEmptyMapSchemaForDMR(t *testing.T) {
+	t.Parallel()
 	schema, err := dmr.ConvertParametersToSchema(map[string]any{})
 	require.NoError(t, err)
 
@@ -255,6 +340,7 @@ func TestEmptyMapSchemaForDMR(t *testing.T) {
 }
 
 func TestNilSchemaForDMR(t *testing.T) {
+	t.Parallel()
 	schema, err := dmr.ConvertParametersToSchema(nil)
 	require.NoError(t, err)
 
@@ -264,6 +350,7 @@ func TestNilSchemaForDMR(t *testing.T) {
 }
 
 func TestSchemaForDMR(t *testing.T) {
+	t.Parallel()
 	parameters := parseFunctionParameters(t, schemaJSON)
 
 	schema, err := dmr.ConvertParametersToSchema(parameters)

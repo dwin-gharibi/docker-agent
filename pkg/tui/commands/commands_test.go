@@ -98,6 +98,15 @@ func TestParseSlashCommand_OtherCommands(t *testing.T) {
 		assert.True(t, ok)
 	})
 
+	t.Run("custom command", func(t *testing.T) {
+		t.Parallel()
+		cmd := parser.Parse("/custom")
+		require.NotNil(t, cmd)
+		msg := cmd()
+		_, ok := msg.(messages.OpenCustomizeDialogMsg)
+		assert.True(t, ok)
+	})
+
 	t.Run("undo command", func(t *testing.T) {
 		t.Parallel()
 		cmd := parser.Parse("/undo")
@@ -123,6 +132,54 @@ func TestParseSlashCommand_OtherCommands(t *testing.T) {
 		msg := cmd()
 		_, ok := msg.(messages.ShowSkillsDialogMsg)
 		assert.True(t, ok)
+	})
+
+	t.Run("context command", func(t *testing.T) {
+		t.Parallel()
+		cmd := parser.Parse("/context")
+		require.NotNil(t, cmd)
+		msg := cmd()
+		_, ok := msg.(messages.ShowContextDialogMsg)
+		assert.True(t, ok)
+	})
+
+	t.Run("drop command with path", func(t *testing.T) {
+		t.Parallel()
+		cmd := parser.Parse("/drop notes.md")
+		require.NotNil(t, cmd)
+		msg := cmd()
+		dropMsg, ok := msg.(messages.DropAttachedFileMsg)
+		require.True(t, ok)
+		assert.Equal(t, "notes.md", dropMsg.Path)
+	})
+
+	t.Run("drop command without path opens the context dialog", func(t *testing.T) {
+		t.Parallel()
+		cmd := parser.Parse("/drop")
+		require.NotNil(t, cmd)
+		msg := cmd()
+		_, ok := msg.(messages.ShowContextDialogMsg)
+		assert.True(t, ok)
+	})
+
+	t.Run("effort command with level", func(t *testing.T) {
+		t.Parallel()
+		cmd := parser.Parse("/effort high")
+		require.NotNil(t, cmd)
+		msg := cmd()
+		setMsg, ok := msg.(messages.SetThinkingLevelMsg)
+		require.True(t, ok)
+		assert.Equal(t, "high", setMsg.Level)
+	})
+
+	t.Run("effort command without level", func(t *testing.T) {
+		t.Parallel()
+		cmd := parser.Parse("/effort")
+		require.NotNil(t, cmd)
+		msg := cmd()
+		setMsg, ok := msg.(messages.SetThinkingLevelMsg)
+		require.True(t, ok)
+		assert.Empty(t, setMsg.Level)
 	})
 
 	t.Run("unknown command returns nil", func(t *testing.T) {

@@ -2,6 +2,7 @@ package environment
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -41,13 +42,14 @@ func TestOnePasswordProvider_Get(t *testing.T) {
 			wantFound: false,
 		},
 		{
-			name:   "failed resolution reports not found",
+			name:   "failed resolution yields empty value but stays found",
 			stored: map[string]string{"API_KEY": "op://vault/item/field"},
 			resolve: func(context.Context, string) (string, bool) {
 				return "", false
 			},
 			lookup:    "API_KEY",
-			wantFound: false,
+			wantValue: "",
+			wantFound: true,
 		},
 	}
 
@@ -77,6 +79,117 @@ func TestOnePasswordProvider_Get(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestOnePasswordProvider_CachesResolvedReferences(t *testing.T) {
+	t.Parallel()
+
+	var calls int
+	provider := &OnePasswordProvider{
+		provider: NewMapEnvProvider(map[string]string{"API_KEY": "op://vault/item/field"}),
+		resolve: func(context.Context, string) (string, bool) {
+			calls++
+			return "resolved-secret", true
+		},
+	}
+
+	for range 3 {
+		value, found := provider.Get(t.Context(), "API_KEY")
+		assert.True(t, found)
+		assert.Equal(t, "resolved-secret", value)
+	}
+
+	assert.Equal(t, 1, calls, "reference should only be resolved once")
+}
+
+func TestOnePasswordProvider_CachesFailedResolutions(t *testing.T) {
+	t.Parallel()
+
+	var calls int
+	provider := &OnePasswordProvider{
+		provider: NewMapEnvProvider(map[string]string{"API_KEY": "op://vault/item/field"}),
+		resolve: func(context.Context, string) (string, bool) {
+			calls++
+			return "", false
+		},
+	}
+
+	for range 3 {
+		value, found := provider.Get(t.Context(), "API_KEY")
+		assert.True(t, found)
+		assert.Empty(t, value)
+	}
+
+	assert.Equal(t, 1, calls, "failed resolution should only be attempted once")
+}
+
+func TestOnePasswordProvider_DoesNotCacheContextCancelledFailures(t *testing.T) {
+	t.Parallel()
+
+	var calls int
+	provider := &OnePasswordProvider{
+		provider: NewMapEnvProvider(map[string]string{"API_KEY": "op://vault/item/field"}),
+		resolve: func(ctx context.Context, _ string) (string, bool) {
+			calls++
+			if ctx.Err() != nil {
+				return "", false
+			}
+			return "resolved-secret", true
+		},
+	}
+
+	// A first lookup under a cancelled context must not poison the cache.
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	value, found := provider.Get(cancelled, "API_KEY")
+	assert.True(t, found)
+	assert.Empty(t, value)
+
+	// A subsequent lookup with a healthy context should retry and succeed.
+	value, found = provider.Get(t.Context(), "API_KEY")
+	assert.True(t, found)
+	assert.Equal(t, "resolved-secret", value)
+	assert.Equal(t, 2, calls, "cancelled failure must not be cached")
+}
+
+func TestOnePasswordProvider_ConcurrentLookups(t *testing.T) {
+	t.Parallel()
+
+	var mu sync.Mutex
+	calls := map[string]int{}
+	provider := &OnePasswordProvider{
+		provider: NewMapEnvProvider(map[string]string{
+			"A": "op://vault/a/field",
+			"B": "op://vault/b/field",
+		}),
+		resolve: func(_ context.Context, reference string) (string, bool) {
+			mu.Lock()
+			calls[reference]++
+			mu.Unlock()
+			return "value-for-" + reference, true
+		},
+	}
+
+	var wg sync.WaitGroup
+	for range 20 {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			value, found := provider.Get(t.Context(), "A")
+			assert.True(t, found)
+			assert.Equal(t, "value-for-op://vault/a/field", value)
+		}()
+		go func() {
+			defer wg.Done()
+			value, found := provider.Get(t.Context(), "B")
+			assert.True(t, found)
+			assert.Equal(t, "value-for-op://vault/b/field", value)
+		}()
+	}
+	wg.Wait()
+
+	assert.Equal(t, 1, calls["op://vault/a/field"], "reference A should resolve once")
+	assert.Equal(t, 1, calls["op://vault/b/field"], "reference B should resolve once")
 }
 
 func TestNewOnePasswordProvider_AlwaysWraps(t *testing.T) {

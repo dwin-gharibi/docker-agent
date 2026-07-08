@@ -23,6 +23,8 @@ func todoToolSet(t *testing.T) tools.ToolSet {
 }
 
 func TestTrimMessagesWithToolCalls(t *testing.T) {
+	t.Parallel()
+
 	messages := []chat.Message{
 		{
 			Role:    chat.MessageRoleUser,
@@ -82,6 +84,8 @@ func TestTrimMessagesWithToolCalls(t *testing.T) {
 }
 
 func TestGetMessagesWithToolCalls(t *testing.T) {
+	t.Parallel()
+
 	testAgent := &agent.Agent{}
 
 	s := New()
@@ -123,6 +127,8 @@ func TestGetMessagesWithToolCalls(t *testing.T) {
 }
 
 func TestGetMessagesWithSummary(t *testing.T) {
+	t.Parallel()
+
 	testAgent := &agent.Agent{}
 
 	s := New()
@@ -169,7 +175,45 @@ func TestGetMessagesWithSummary(t *testing.T) {
 	assert.Equal(t, 3, userAssistantMessages, "should only include messages after summary")
 }
 
+func TestLastSummary(t *testing.T) {
+	t.Parallel()
+
+	s := New()
+	assert.Empty(t, s.LastSummary(), "fresh session has no summary")
+
+	s.AddMessage(NewAgentMessage("", &chat.Message{Role: chat.MessageRoleUser, Content: "hi"}))
+	s.Messages = append(s.Messages, Item{Summary: "first summary"})
+	s.AddMessage(NewAgentMessage("", &chat.Message{Role: chat.MessageRoleUser, Content: "more"}))
+	s.Messages = append(s.Messages, Item{Summary: "second summary"})
+
+	assert.Equal(t, "second summary", s.LastSummary(), "most recent summary wins")
+}
+
+// TestSummaryMessageContentMatchesGetMessages pins the contract consumers
+// (e.g. the runtime context breakdown) rely on: the synthetic summary
+// message in GetMessages output equals SummaryMessageContent(LastSummary()).
+func TestSummaryMessageContentMatchesGetMessages(t *testing.T) {
+	t.Parallel()
+
+	s := New()
+	s.Messages = append(s.Messages, Item{Summary: "what happened before"})
+
+	messages := s.GetMessages(&agent.Agent{})
+	require.NotEmpty(t, messages)
+
+	want := SummaryMessageContent(s.LastSummary())
+	found := false
+	for _, msg := range messages {
+		if msg.Role == chat.MessageRoleUser && msg.Content == want {
+			found = true
+		}
+	}
+	assert.True(t, found, "GetMessages output must contain the exact SummaryMessageContent string")
+}
+
 func TestGetMessages_Instructions(t *testing.T) {
+	t.Parallel()
+
 	testAgent := agent.New("root", "instructions")
 
 	s := New()
@@ -181,6 +225,8 @@ func TestGetMessages_Instructions(t *testing.T) {
 }
 
 func TestGetMessages_CacheControl(t *testing.T) {
+	t.Parallel()
+
 	testAgent := agent.New("root", "instructions", agent.WithToolSets(todoToolSet(t)))
 
 	s := New()
@@ -195,6 +241,8 @@ func TestGetMessages_CacheControl(t *testing.T) {
 }
 
 func TestGetMessages_CacheControlWithSummary(t *testing.T) {
+	t.Parallel()
+
 	// Caching contract pinned by this test:
 	//
 	//   - The last invariant system message gets a cache-control marker.
@@ -311,6 +359,91 @@ func TestGetLastUserMessages(t *testing.T) {
 		assert.Len(t, msgs, 2)
 		assert.Equal(t, "First", msgs[0])
 		assert.Equal(t, "Third", msgs[1])
+	})
+}
+
+func TestMessageUnmarshalJSONAgentNameCompat(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "current key",
+			input: `{"agent_name":"root","message":{"role":"user","content":"hi"}}`,
+			want:  "root",
+		},
+		{
+			name:  "legacy key",
+			input: `{"agentName":"root","message":{"role":"user","content":"hi"}}`,
+			want:  "root",
+		},
+		{
+			name:  "current key wins over legacy",
+			input: `{"agent_name":"new","agentName":"old","message":{"role":"user","content":"hi"}}`,
+			want:  "new",
+		},
+		{
+			name:  "legacy wins over empty current key",
+			input: `{"agent_name":"","agentName":"old","message":{"role":"user","content":"hi"}}`,
+			want:  "old",
+		},
+		{
+			name:  "no agent name",
+			input: `{"message":{"role":"user","content":"hi"}}`,
+			want:  "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var msg Message
+			require.NoError(t, json.Unmarshal([]byte(tt.input), &msg))
+			assert.Equal(t, tt.want, msg.AgentName)
+			assert.Equal(t, "hi", msg.Message.Content)
+		})
+	}
+
+	t.Run("null leaves receiver untouched", func(t *testing.T) {
+		t.Parallel()
+
+		msg := Message{AgentName: "root", Message: chat.Message{Content: "hi"}}
+		require.NoError(t, json.Unmarshal([]byte(`null`), &msg))
+		assert.Equal(t, "root", msg.AgentName)
+		assert.Equal(t, "hi", msg.Message.Content)
+	})
+
+	t.Run("legacy session document", func(t *testing.T) {
+		t.Parallel()
+
+		// Mirrors a pre-rename session export as loaded by the evaluation package.
+		legacy := `{
+			"id": "41b179a2-ed19-4ae2-a45d-95775aaa90f7",
+			"messages": [
+				{"message": {"agentName": "", "message": {"role": "user", "content": "How many files?"}}},
+				{"message": {"agentName": "root", "message": {"role": "assistant", "content": "Two."}}}
+			]
+		}`
+
+		var sess Session
+		require.NoError(t, json.Unmarshal([]byte(legacy), &sess))
+		require.Len(t, sess.Messages, 2)
+		assert.Empty(t, sess.Messages[0].Message.AgentName)
+		assert.Equal(t, "root", sess.Messages[1].Message.AgentName)
+		assert.Equal(t, "Two.", sess.Messages[1].Message.Message.Content)
+	})
+
+	t.Run("marshal emits agent_name", func(t *testing.T) {
+		t.Parallel()
+
+		out, err := json.Marshal(Message{AgentName: "root"})
+		require.NoError(t, err)
+		assert.Contains(t, string(out), `"agent_name":"root"`)
+		assert.NotContains(t, string(out), "agentName")
 	})
 }
 
@@ -523,6 +656,8 @@ func TestSanitizeToolCalls(t *testing.T) {
 }
 
 func TestGetMessages_SanitizesOrphanedToolCalls(t *testing.T) {
+	t.Parallel()
+
 	testAgent := &agent.Agent{}
 
 	s := New()

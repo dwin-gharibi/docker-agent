@@ -27,19 +27,21 @@ func openMemoryStore(t *testing.T) *SQLiteSessionStore {
 	t.Cleanup(func() { _ = db.Close() })
 	db.SetMaxOpenConns(1)
 
-	store, err := NewSQLiteSessionStoreFromDB(db)
+	store, err := NewSQLiteSessionStoreFromDB(t.Context(), db)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
 	return store
 }
 
 func TestNewSQLiteSessionStoreFromDB_NilDB(t *testing.T) {
-	_, err := NewSQLiteSessionStoreFromDB(nil)
+	t.Parallel()
+	_, err := NewSQLiteSessionStoreFromDB(t.Context(), nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "nil")
 }
 
 func TestNewSQLiteSessionStoreFromDB_RunsMigrations(t *testing.T) {
+	t.Parallel()
 	store := openMemoryStore(t)
 
 	// The applied migration list should be the full production list. We don't
@@ -55,6 +57,7 @@ func TestNewSQLiteSessionStoreFromDB_RunsMigrations(t *testing.T) {
 }
 
 func TestNewSQLiteSessionStoreFromDB_RoundTripWithMessages(t *testing.T) {
+	t.Parallel()
 	store := openMemoryStore(t)
 	ctx := t.Context()
 

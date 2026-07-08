@@ -86,7 +86,12 @@ func StartHTTPServer(ctx context.Context, agentFilename, agentName string, runCo
 
 	select {
 	case <-ctx.Done():
-		return httpServer.Shutdown(context.Background())
+		// ctx is done; detach from its cancellation but keep its trace
+		// context so the graceful shutdown can still run. Bound it so a
+		// hung client connection can't block shutdown indefinitely.
+		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		return httpServer.Shutdown(shutdownCtx)
 	case err := <-errCh:
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
@@ -206,13 +211,13 @@ func CreateToolHandler(t *team.Team, agentName string) func(context.Context, *mc
 			session.WithNonInteractive(true),
 		)
 
-		rt, err := runtime.New(t,
+		rt, err := runtime.New(ctx, t,
 			runtime.WithCurrentAgent(agentName),
 			runtime.WithNonInteractive(true),
 			// See pkg/a2a/adapter.go for rationale — without this
 			// the runtime's startSpan is a no-op when cagent runs as
 			// an MCP server, so all our runtime.* spans go silent.
-			runtime.WithTracer(otel.Tracer("cagent")),
+			runtime.WithTracer(otel.Tracer(version.AppName)),
 		)
 		if err != nil {
 			return nil, ToolOutput{}, fmt.Errorf("failed to create runtime: %w", err)

@@ -26,6 +26,8 @@ import (
 // ExchangeCodeForToken stores the client_id and client_secret on the
 // returned OAuthToken so they are available for subsequent refresh calls.
 func TestExchangeCodeForToken_PreservesClientCredentials(t *testing.T) {
+	t.Parallel()
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := r.ParseForm(); err != nil {
 			t.Fatal(err)
@@ -63,6 +65,8 @@ func TestExchangeCodeForToken_PreservesClientCredentials(t *testing.T) {
 // TestRefreshAccessToken_PreservesClientCredentials verifies that
 // RefreshAccessToken carries the client credentials through to the new token.
 func TestRefreshAccessToken_PreservesClientCredentials(t *testing.T) {
+	t.Parallel()
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := r.ParseForm(); err != nil {
 			t.Fatal(err)
@@ -107,6 +111,8 @@ func TestRefreshAccessToken_PreservesClientCredentials(t *testing.T) {
 // oauthTransport.getValidToken method sends the stored client credentials
 // when silently refreshing an expired token.
 func TestGetValidToken_UsesStoredCredentialsForRefresh(t *testing.T) {
+	t.Parallel()
+
 	var receivedClientID, receivedClientSecret string
 
 	// Use a mux so we can reference srv.URL in closures (srv is assigned before handlers run).
@@ -187,6 +193,8 @@ func TestGetValidToken_UsesStoredCredentialsForRefresh(t *testing.T) {
 // refresh uses the discovered auth server rather than assuming the MCP
 // server URL also hosts the OAuth metadata.
 func TestGetValidToken_UsesStoredAuthServerForRefresh(t *testing.T) {
+	t.Parallel()
+
 	var refreshRequests int
 
 	authMux := http.NewServeMux()
@@ -258,6 +266,8 @@ func TestGetValidToken_UsesStoredAuthServerForRefresh(t *testing.T) {
 // TestOAuthTokenClientCredentials_JSONRoundTrip verifies that ClientID and
 // ClientSecret survive JSON serialization (important for keyring storage).
 func TestOAuthTokenClientCredentials_JSONRoundTrip(t *testing.T) {
+	t.Parallel()
+
 	token := &OAuthToken{
 		AccessToken:  "at",
 		TokenType:    "Bearer",
@@ -293,6 +303,8 @@ func TestOAuthTokenClientCredentials_JSONRoundTrip(t *testing.T) {
 // TestOAuthTokenClientCredentials_OmittedWhenEmpty verifies the omitempty
 // tag works so tokens without client credentials don't leak empty fields.
 func TestOAuthTokenClientCredentials_OmittedWhenEmpty(t *testing.T) {
+	t.Parallel()
+
 	token := &OAuthToken{
 		AccessToken: "at",
 		TokenType:   "Bearer",
@@ -320,6 +332,8 @@ func TestOAuthTokenClientCredentials_OmittedWhenEmpty(t *testing.T) {
 // no client credentials were stored (legacy tokens), the refresh still
 // sends whatever was provided (empty string), matching the old behavior.
 func TestRefreshAccessToken_SendsEmptyClientIDWhenNotStored(t *testing.T) {
+	t.Parallel()
+
 	var receivedForm url.Values
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -354,7 +368,9 @@ func TestRefreshAccessToken_SendsEmptyClientIDWhenNotStored(t *testing.T) {
 // TestCallbackServer_RejectsCallbackBeforeStateSet verifies that a callback
 // arriving before SetExpectedState is called is rejected (CSRF protection).
 func TestCallbackServer_RejectsCallbackBeforeStateSet(t *testing.T) {
-	cs, err := NewCallbackServer()
+	t.Parallel()
+
+	cs, err := NewCallbackServer(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -385,6 +401,8 @@ func TestCallbackServer_RejectsCallbackBeforeStateSet(t *testing.T) {
 // this was supported, we would silently store an empty bearer token and
 // every subsequent request to the MCP server would be rejected with 401.
 func TestExchangeCodeForToken_SlackNestedResponse(t *testing.T) {
+	t.Parallel()
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -433,6 +451,8 @@ func TestExchangeCodeForToken_SlackNestedResponse(t *testing.T) {
 // as a meaningful error rather than being silently accepted as an empty
 // token.
 func TestExchangeCodeForToken_SlackOkFalse(t *testing.T) {
+	t.Parallel()
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -455,6 +475,8 @@ func TestExchangeCodeForToken_SlackOkFalse(t *testing.T) {
 // missing any access_token (top-level or nested) is rejected with an
 // explicit error instead of silently producing an empty bearer token.
 func TestExchangeCodeForToken_MissingAccessToken(t *testing.T) {
+	t.Parallel()
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -479,6 +501,8 @@ func TestExchangeCodeForToken_MissingAccessToken(t *testing.T) {
 // to the generic HTTP status text, which hides useful provider-specific
 // detail such as scope mismatches or payload complaints.
 func TestOAuthTransport_RetryFailureExposesResponseBody(t *testing.T) {
+	t.Parallel()
+
 	const errBody = `{"jsonrpc":"2.0","id":null,"error":{"code":-32000,"message":"insufficient_scope: missing users:read"}}`
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -546,6 +570,8 @@ func TestOAuthTransport_RetryFailureExposesResponseBody(t *testing.T) {
 // MCP SDK because our transport was swallowing the body. We couldn't
 // surface the single line that actually tells the user what to do.
 func TestOAuthTransport_NonRetryFailureExposesResponseBody(t *testing.T) {
+	t.Parallel()
+
 	const errBody = `{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"App is not enabled for Slack MCP server access."}}`
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -600,6 +626,8 @@ func TestOAuthTransport_NonRetryFailureExposesResponseBody(t *testing.T) {
 // scopes is discarded (removed from the store and not returned), so the
 // next authenticated request triggers a fresh OAuth flow.
 func TestGetValidToken_DiscardsTokenWhenScopesNoLongerCovered(t *testing.T) {
+	t.Parallel()
+
 	store := NewInMemoryTokenStore()
 	if err := store.StoreToken("https://mcp.example.com", &OAuthToken{
 		AccessToken:     "stale-at",
@@ -632,6 +660,8 @@ func TestGetValidToken_DiscardsTokenWhenScopesNoLongerCovered(t *testing.T) {
 // path: a stored token whose RequestedScopes cover every configured scope
 // is returned unchanged (no re-auth, no refresh).
 func TestGetValidToken_ReturnsTokenWhenScopesSatisfied(t *testing.T) {
+	t.Parallel()
+
 	store := NewInMemoryTokenStore()
 	if err := store.StoreToken("https://mcp.example.com", &OAuthToken{
 		AccessToken:     "good-at",
@@ -661,6 +691,8 @@ func TestGetValidToken_ReturnsTokenWhenScopesSatisfied(t *testing.T) {
 // sufficient, so an upgrade doesn't forcibly invalidate every existing
 // user's session.
 func TestGetValidToken_LeavesLegacyTokenAlone(t *testing.T) {
+	t.Parallel()
+
 	store := NewInMemoryTokenStore()
 	if err := store.StoreToken("https://mcp.example.com", &OAuthToken{
 		AccessToken: "legacy-at",
@@ -702,6 +734,8 @@ func TestGetValidToken_LeavesLegacyTokenAlone(t *testing.T) {
 // elicitation was synchronously waiting on a TUI prompt that hadn't been
 // rendered yet.
 func TestOAuthTransport_NonInteractiveCtxSkipsElicitation(t *testing.T) {
+	t.Parallel()
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("WWW-Authenticate", `Bearer resource="https://example.test/.well-known/oauth-protected-resource"`)
 		w.WriteHeader(http.StatusUnauthorized)
@@ -749,6 +783,8 @@ func TestOAuthTransport_NonInteractiveCtxSkipsElicitation(t *testing.T) {
 // TestInitialize_OAuthDefersWhenElicitationBridgeNotReady which exercises
 // the same invariant through the full Initialize → Connect → OAuth flow.
 func TestRequestElicitation_NoHandlerReturnsAuthRequired(t *testing.T) {
+	t.Parallel()
+
 	var c sessionClient
 
 	// No SetElicitationHandler call: the handler stays nil, simulating the
@@ -767,6 +803,8 @@ func TestRequestElicitation_NoHandlerReturnsAuthRequired(t *testing.T) {
 // string out of whatever the server returns so it can be shown as a TUI
 // warning, falling back gracefully instead of leaking opaque JSON.
 func TestExtractServerMessage(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name string
 		body string
@@ -815,6 +853,8 @@ func TestExtractServerMessage(t *testing.T) {
 }
 
 func TestOAuthTransportAllowPrivateIPsControlsOAuthClient(t *testing.T) {
+	t.Parallel()
+
 	authMux := http.NewServeMux()
 	authSrv := httptest.NewServer(authMux)
 	defer authSrv.Close()
@@ -932,6 +972,8 @@ func TestHostScopedHeaderTransport_NormalizesRequestPort(t *testing.T) {
 }
 
 func TestOAuthTransportCoalescesConcurrentAuthorization(t *testing.T) {
+	t.Parallel()
+
 	authMux := http.NewServeMux()
 	authSrv := httptest.NewServer(authMux)
 	defer authSrv.Close()
@@ -1036,15 +1078,8 @@ func TestOAuthTransportCoalescesConcurrentAuthorization(t *testing.T) {
 		errCh <- err
 	}()
 
-	deadline := time.After(time.Second)
-	for unauthenticatedRequests.Load() < 2 {
-		select {
-		case <-deadline:
-			t.Fatalf("second request did not reach 401 path; unauthenticated requests = %d", unauthenticatedRequests.Load())
-		default:
-			time.Sleep(10 * time.Millisecond)
-		}
-	}
+	require.Eventually(t, func() bool { return unauthenticatedRequests.Load() >= 2 },
+		time.Second, 10*time.Millisecond, "second request did not reach 401 path")
 
 	close(finishElicitation)
 
@@ -1063,6 +1098,8 @@ func TestOAuthTransportCoalescesConcurrentAuthorization(t *testing.T) {
 }
 
 func TestExchangeCodeForTokenWithResourceSendsResource(t *testing.T) {
+	t.Parallel()
+
 	var gotResource string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := r.ParseForm(); err != nil {
@@ -1103,6 +1140,8 @@ func TestExchangeCodeForTokenWithResourceSendsResource(t *testing.T) {
 //     widely-deployed "append" form, then the OIDC equivalents,
 //   - URL already pointing at a /.well-known/ endpoint: pass through.
 func TestMetadataDiscoveryURLs(t *testing.T) {
+	t.Parallel()
+
 	t.Run("origin only", func(t *testing.T) {
 		got, err := metadataDiscoveryURLs("https://auth.example.com")
 		require.NoError(t, err)
@@ -1168,6 +1207,8 @@ func TestMetadataDiscoveryURLs(t *testing.T) {
 // pick the spec-compliant one before giving up and returning default
 // (i.e. broken) metadata.
 func TestGetAuthorizationServerMetadata_RFC8414PathAware(t *testing.T) {
+	t.Parallel()
+
 	mux := http.NewServeMux()
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
@@ -1201,6 +1242,8 @@ func TestGetAuthorizationServerMetadata_RFC8414PathAware(t *testing.T) {
 // fallback path: many widely-deployed auth servers serve metadata at the
 // "append" URL only, so that variant must still be tried and accepted.
 func TestGetAuthorizationServerMetadata_AppendFormStillWorks(t *testing.T) {
+	t.Parallel()
+
 	mux := http.NewServeMux()
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
@@ -1228,6 +1271,8 @@ func TestGetAuthorizationServerMetadata_AppendFormStillWorks(t *testing.T) {
 // wins. Without this, RFC 8414 §3.1 ordering regresses servers whose
 // path-aware endpoint returns anything other than 404.
 func TestGetAuthorizationServerMetadata_NonFatalCandidateStatus(t *testing.T) {
+	t.Parallel()
+
 	mux := http.NewServeMux()
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
@@ -1258,6 +1303,8 @@ func TestGetAuthorizationServerMetadata_NonFatalCandidateStatus(t *testing.T) {
 // probe surfaces an error instead of silently returning fabricated
 // default metadata that will fail later in the OAuth handshake.
 func TestGetAuthorizationServerMetadata_AllUnreachableSurfacesError(t *testing.T) {
+	t.Parallel()
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
@@ -1274,6 +1321,8 @@ func TestGetAuthorizationServerMetadata_AllUnreachableSurfacesError(t *testing.T
 // doesn't expose discovery metadata", which is OK and we should fall
 // back to fabricated defaults rather than erroring out.
 func TestGetAuthorizationServerMetadata_All404FallsBackToDefaults(t *testing.T) {
+	t.Parallel()
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.NotFound(w, nil)
 	}))
@@ -1396,6 +1445,8 @@ func newUnmanagedTestTransport(t *testing.T, baseURL, redirectURI string, captur
 // with authorize_url + state, the client (test stub) replies with
 // {code, state}, and docker-agent exchanges the code at the token endpoint.
 func TestUnmanagedOAuthFlow_DriveFlow_ExchangesCodeForToken(t *testing.T) {
+	t.Parallel()
+
 	srv := newUnmanagedOAuthTestServer(t)
 	defer srv.Close()
 
@@ -1463,6 +1514,8 @@ func TestUnmanagedOAuthFlow_DriveFlow_ExchangesCodeForToken(t *testing.T) {
 // instance; without it the auth screen prompts for the instance. Regression
 // test for issue #3148.
 func TestInitialize_CustomHeadersReachOAuthDiscovery(t *testing.T) {
+	t.Parallel()
+
 	srv := newUnmanagedOAuthTestServer(t)
 	defer srv.Close()
 
@@ -1497,6 +1550,8 @@ func TestInitialize_CustomHeadersReachOAuthDiscovery(t *testing.T) {
 // loop iteration, which is exactly what would cause the dismissed
 // dialog to re-appear immediately.
 func TestUnmanagedOAuthFlow_ElicitationDeclineReturnsSentinel(t *testing.T) {
+	t.Parallel()
+
 	srv := newUnmanagedOAuthTestServer(t)
 	defer srv.Close()
 
@@ -1542,6 +1597,8 @@ func TestUnmanagedOAuthFlow_ElicitationDeclineReturnsSentinel(t *testing.T) {
 // ONE elicitation is sent (no re-pop), and every concurrent roundtrip
 // returns OAuthDeclinedError.
 func TestUnmanagedOAuthFlow_ElicitationDeclineLatchesAgainstConcurrentRoundTrips(t *testing.T) {
+	t.Parallel()
+
 	srv := newUnmanagedOAuthTestServer(t)
 	defer srv.Close()
 
@@ -1602,6 +1659,8 @@ func TestUnmanagedOAuthFlow_ElicitationDeclineLatchesAgainstConcurrentRoundTrips
 // docker-agent generated and embedded in the authorize URL, the flow
 // aborts WITHOUT calling the token endpoint.
 func TestUnmanagedOAuthFlow_DriveFlow_RejectsStateMismatch(t *testing.T) {
+	t.Parallel()
+
 	srv := newUnmanagedOAuthTestServer(t)
 	defer srv.Close()
 
@@ -1635,6 +1694,8 @@ func TestUnmanagedOAuthFlow_DriveFlow_RejectsStateMismatch(t *testing.T) {
 // reply shape is still honored — no error, token stored verbatim, no
 // /token request from docker-agent.
 func TestUnmanagedOAuthFlow_DriveFlow_AcceptsLegacyAccessTokenReply(t *testing.T) {
+	t.Parallel()
+
 	srv := newUnmanagedOAuthTestServer(t)
 	defer srv.Close()
 
@@ -1672,6 +1733,8 @@ func TestUnmanagedOAuthFlow_DriveFlow_AcceptsLegacyAccessTokenReply(t *testing.T
 // NOT include authorize_url/state, the client returns an access token, and
 // docker-agent stores it directly.
 func TestUnmanagedOAuthFlow_LegacyMode_NoAuthorizeURLInElicitation(t *testing.T) {
+	t.Parallel()
+
 	srv := newUnmanagedOAuthTestServer(t)
 	defer srv.Close()
 
@@ -1710,6 +1773,8 @@ func TestUnmanagedOAuthFlow_LegacyMode_NoAuthorizeURLInElicitation(t *testing.T)
 // authorize_url is rejected — there is no stored PKCE verifier to exchange
 // the code with, so the flow cannot complete.
 func TestUnmanagedOAuthFlow_LegacyMode_RejectsCodeStateReply(t *testing.T) {
+	t.Parallel()
+
 	srv := newUnmanagedOAuthTestServer(t)
 	defer srv.Close()
 
@@ -1743,6 +1808,8 @@ func TestUnmanagedOAuthFlow_LegacyMode_RejectsCodeStateReply(t *testing.T) {
 // delivers {code, state} directly into the waiting flow, which then
 // exchanges the code at the token endpoint as on the regular drive-flow.
 func TestUnmanagedOAuthFlow_DriveFlow_AcceptsDirectCallback(t *testing.T) {
+	t.Parallel()
+
 	srv := newUnmanagedOAuthTestServer(t)
 	defer srv.Close()
 
@@ -1827,6 +1894,8 @@ func TestUnmanagedOAuthFlow_DriveFlow_AcceptsDirectCallback(t *testing.T) {
 // error (e.g. user denied consent) via the direct-callback path. The
 // flow must abort cleanly without hitting the token endpoint.
 func TestUnmanagedOAuthFlow_DriveFlow_DirectCallbackError(t *testing.T) {
+	t.Parallel()
+
 	srv := newUnmanagedOAuthTestServer(t)
 	defer srv.Close()
 
@@ -1895,6 +1964,8 @@ func TestUnmanagedOAuthFlow_DriveFlow_DirectCallbackError(t *testing.T) {
 // ctx error so the agent loop can complete cleanly and the
 // per-session streaming lock can be released.
 func TestUnmanagedOAuthFlow_DriveFlow_AbortsOnParentCtxCancellation(t *testing.T) {
+	t.Parallel()
+
 	srv := newUnmanagedOAuthTestServer(t)
 	defer srv.Close()
 
@@ -1964,9 +2035,7 @@ func TestUnmanagedOAuthFlow_DriveFlow_AbortsOnParentCtxCancellation(t *testing.T
 // level would stay held, and every subsequent message from that session
 // would return 409 / ErrSessionBusy until a process restart.
 func TestUnmanagedOAuthFlow_DriveFlow_TimesOutWhenNoReplyArrives(t *testing.T) {
-	original := unmanagedOAuthWaitTimeout
-	unmanagedOAuthWaitTimeout = 200 * time.Millisecond
-	t.Cleanup(func() { unmanagedOAuthWaitTimeout = original })
+	t.Parallel()
 
 	srv := newUnmanagedOAuthTestServer(t)
 	defer srv.Close()
@@ -1983,6 +2052,9 @@ func TestUnmanagedOAuthFlow_DriveFlow_TimesOutWhenNoReplyArrives(t *testing.T) {
 		return tools.ElicitationResult{Action: tools.ElicitationActionDecline}
 	}
 	transport, _ := newUnmanagedTestTransport(t, srv.URL, redirectURI, capture)
+	// Short per-transport wait so the timeout fires quickly; no global
+	// mutation, so this test stays parallel-safe.
+	transport.waitTimeout = 200 * time.Millisecond
 
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL, strings.NewReader("{}"))
 	require.NoError(t, err)
@@ -2007,6 +2079,8 @@ func TestUnmanagedOAuthFlow_DriveFlow_TimesOutWhenNoReplyArrives(t *testing.T) {
 // uses. Strict authorization servers like Miro reject registrations that
 // omit refresh_token.
 func TestRegisterClient_GrantTypesIncludeRefreshToken(t *testing.T) {
+	t.Parallel()
+
 	var registrationBody map[string]any
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -2040,6 +2114,8 @@ func TestRegisterClient_GrantTypesIncludeRefreshToken(t *testing.T) {
 // order: per-toolset RemoteOAuthConfig.CallbackRedirectURL overrides the
 // runtime-wide --mcp-oauth-redirect-uri.
 func TestUnmanagedRedirectURI_PerToolsetTakesPrecedence(t *testing.T) {
+	t.Parallel()
+
 	transport := &oauthTransport{
 		unmanagedOAuthRedirectURI: "https://global.example/cb",
 		oauthConfig: &latest.RemoteOAuthConfig{
@@ -2145,6 +2221,8 @@ func newTransportWithStaleToken(t *testing.T, baseURL string) *oauthTransport {
 // token endpoint exactly once to refresh it, and replay the request with the
 // new bearer so the caller sees a 200 response.
 func TestRoundTrip_ServerInvalidTokenEvictsAndRefreshes(t *testing.T) {
+	t.Parallel()
+
 	srv, tokenCalls := newInvalidTokenTestServer(t)
 
 	var oauthSuccessFired atomic.Bool
@@ -2175,6 +2253,8 @@ func TestRoundTrip_ServerInvalidTokenEvictsAndRefreshes(t *testing.T) {
 // token-endpoint refresh fails, a non-interactive context returns
 // IsAuthorizationRequired and the stale token is evicted from the store.
 func TestRoundTrip_ServerInvalidToken_RefreshFails_DefersWhenNonInteractive(t *testing.T) {
+	t.Parallel()
+
 	var tokenCalls atomic.Int32
 	mux := http.NewServeMux()
 	srv := httptest.NewServer(mux)
@@ -2243,6 +2323,8 @@ func TestRoundTrip_ServerInvalidToken_RefreshFails_DefersWhenNonInteractive(t *t
 // that when the stored token has no refresh_token, a non-interactive context
 // returns IsAuthorizationRequired without hitting the token endpoint.
 func TestRoundTrip_ServerInvalidToken_NoRefreshToken_NonInteractive(t *testing.T) {
+	t.Parallel()
+
 	mux := http.NewServeMux()
 	var tokenCalls atomic.Int32
 
@@ -2293,6 +2375,8 @@ func TestRoundTrip_ServerInvalidToken_NoRefreshToken_NonInteractive(t *testing.T
 // interactive OAuth flow unchanged — it must NOT treat the first-contact
 // 401 as an invalid_token rejection.
 func TestRoundTrip_FirstContact401Unchanged(t *testing.T) {
+	t.Parallel()
+
 	srv := newUnmanagedOAuthTestServer(t)
 
 	var elicitCalls atomic.Int32
@@ -2326,6 +2410,8 @@ func TestRoundTrip_FirstContact401Unchanged(t *testing.T) {
 // token and hit 401 + invalid_token simultaneously, exactly one refresh
 // is issued and all N requests eventually succeed with the fresh token.
 func TestRoundTrip_ConcurrentInvalidToken_RefreshesOnce(t *testing.T) {
+	t.Parallel()
+
 	srv, tokenCalls := newInvalidTokenTestServer(t)
 
 	transport := newTransportWithStaleToken(t, srv.URL)
@@ -2372,6 +2458,8 @@ func TestRoundTrip_ConcurrentInvalidToken_RefreshesOnce(t *testing.T) {
 // revoked app access, etc.) where the server rejects the bearer for a reason
 // that isn't a stale/revoked token we can silently refresh.
 func TestRoundTrip_Bare401WithAttachedTokenUnchanged(t *testing.T) {
+	t.Parallel()
+
 	var tokenCalls atomic.Int32
 	mux := http.NewServeMux()
 	srv := httptest.NewServer(mux)
@@ -2436,6 +2524,8 @@ func TestRoundTrip_Bare401WithAttachedTokenUnchanged(t *testing.T) {
 // must be observed by all subsequently-queued goroutines so that exactly ONE
 // elicitation dialog is popped and all callers surface OAuthDeclinedError.
 func TestRoundTrip_ConcurrentInvalidToken_NoRefresh_StickyDecline(t *testing.T) {
+	t.Parallel()
+
 	var tokenCalls atomic.Int32
 	mux := http.NewServeMux()
 	srv := httptest.NewUnstartedServer(mux)
@@ -2539,6 +2629,8 @@ func TestRoundTrip_ConcurrentInvalidToken_NoRefresh_StickyDecline(t *testing.T) 
 // produces a well-formed URL with exactly one '?' regardless of whether the
 // auth endpoint already contains a query string. Regression test for #3229.
 func TestBuildAuthorizationURL(t *testing.T) {
+	t.Parallel()
+
 	const (
 		clientID      = "test-client"
 		redirectURI   = "https://example.com/callback"
