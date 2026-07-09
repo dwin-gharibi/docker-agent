@@ -127,9 +127,11 @@ func runeIndexToDisplayWidth(s string, runeIdx int) int {
 // text (message-level and code-block copy), which a switch would reject as
 // duplicate cases.
 var uiAffordanceLines = []string{
-	types.AssistantMessageCopyLabel,
+	types.MessageCopyLabel,
 	markdown.CodeBlockCopyIcon,
 	types.UserMessageEditLabel,
+	// Editable user messages render both labels on one action row.
+	types.UserMessageEditLabel + types.MessageActionSeparator + types.MessageCopyLabel,
 	types.ErrorRetryLabel,
 	"[-] collapse",
 }

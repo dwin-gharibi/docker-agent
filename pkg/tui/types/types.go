@@ -25,9 +25,12 @@ const (
 )
 
 const (
-	UserMessageEditLabel      = "✎"
-	AssistantMessageCopyLabel = "⎘ copy"
-	ErrorRetryLabel           = "↻ retry"
+	UserMessageEditLabel = "✎ edit"
+	MessageCopyLabel     = "⎘ copy"
+	ErrorRetryLabel      = "↻ retry"
+	// MessageActionSeparator joins adjacent action labels (e.g. edit + copy)
+	// on a message's hover-action row.
+	MessageActionSeparator = "  "
 	// CopiedFeedbackLabel transiently replaces a clicked copy label. It must
 	// keep the exact display width of the copy labels so the swap never
 	// shifts the layout of the line it happens on.

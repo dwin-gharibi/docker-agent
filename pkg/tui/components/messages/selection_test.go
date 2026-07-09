@@ -207,7 +207,7 @@ func TestCopiedFeedbackLabelWidthMatchesCopyLabels(t *testing.T) {
 	t.Parallel()
 
 	want := ansi.StringWidth(types.CopiedFeedbackLabel)
-	assert.Equal(t, want, ansi.StringWidth(types.AssistantMessageCopyLabel),
+	assert.Equal(t, want, ansi.StringWidth(types.MessageCopyLabel),
 		"copied feedback must keep the message copy label width")
 	assert.Equal(t, want, ansi.StringWidth(markdown.CodeBlockCopyIcon),
 		"copied feedback must keep the code block copy label width")
@@ -216,7 +216,7 @@ func TestCopiedFeedbackLabelWidthMatchesCopyLabels(t *testing.T) {
 func TestApplyCopiedFlashSwapsLabel(t *testing.T) {
 	t.Parallel()
 
-	line := "        " + types.AssistantMessageCopyLabel
+	line := "        " + types.MessageCopyLabel
 	m := newSelectionModel([]string{line})
 	m.lineOffsets = []int{0}
 
@@ -225,7 +225,7 @@ func TestApplyCopiedFlashSwapsLabel(t *testing.T) {
 
 	plain := ansi.Strip(out[0])
 	assert.Contains(t, plain, types.CopiedFeedbackLabel)
-	assert.NotContains(t, plain, types.AssistantMessageCopyLabel)
+	assert.NotContains(t, plain, types.MessageCopyLabel)
 	assert.Equal(t, ansi.StringWidth(line), ansi.StringWidth(out[0]), "swap must preserve line width")
 
 	// Expiry with a stale sequence keeps the flash; the right one clears it.
@@ -242,7 +242,7 @@ func TestApplyCopiedFlashSwapsLabel(t *testing.T) {
 func TestApplyCopiedFlashOffscreenIsNoop(t *testing.T) {
 	t.Parallel()
 
-	line := "        " + types.AssistantMessageCopyLabel
+	line := "        " + types.MessageCopyLabel
 	m := newSelectionModel([]string{line})
 	m.lineOffsets = []int{0}
 	m.copiedFlash = &copiedFlash{msgIdx: 0, localLine: 0, seq: 1}
@@ -271,7 +271,7 @@ func TestClickOnCopyLabelFlashesCopied(t *testing.T) {
 	found := false
 	for i, rendered := range m.renderedLines {
 		plain := ansi.Strip(rendered)
-		if before, _, ok := strings.Cut(plain, types.AssistantMessageCopyLabel); ok {
+		if before, _, ok := strings.Cut(plain, types.MessageCopyLabel); ok {
 			line = i
 			col = ansi.StringWidth(before)
 			found = true
@@ -286,10 +286,10 @@ func TestClickOnCopyLabelFlashesCopied(t *testing.T) {
 
 	out := ansi.Strip(m.View())
 	assert.Contains(t, out, types.CopiedFeedbackLabel)
-	assert.NotContains(t, out, types.AssistantMessageCopyLabel)
+	assert.NotContains(t, out, types.MessageCopyLabel)
 
 	// Once expired, the label comes back.
 	m.handleCopiedFlashExpired(copiedFlashExpiredMsg{Seq: m.copiedFlash.seq})
 	out = ansi.Strip(m.View())
-	assert.Contains(t, out, types.AssistantMessageCopyLabel)
+	assert.Contains(t, out, types.MessageCopyLabel)
 }

@@ -65,7 +65,7 @@ func (m *model) applyCopiedFlash(lines []string, viewportStartLine int) []string
 		return lines
 	}
 
-	label := types.AssistantMessageCopyLabel
+	label := types.MessageCopyLabel
 	if f.codeBlock {
 		label = markdown.CodeBlockCopyIcon
 	}

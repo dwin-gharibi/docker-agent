@@ -33,7 +33,7 @@ func TestExtractSelectedTextStripsPaddingAndAffordances(t *testing.T) {
 	t.Parallel()
 
 	m := newSelectionModel([]string{
-		"                                       " + types.AssistantMessageCopyLabel,
+		"                                       " + types.MessageCopyLabel,
 		"  Here is the code:                    ",
 		"",
 		"                          " + markdown.CodeBlockCopyIcon,
@@ -103,7 +103,7 @@ func TestExtractSelectedTextOnAffordanceOnlySelectionIsEmpty(t *testing.T) {
 	t.Parallel()
 
 	m := newSelectionModel([]string{
-		"                                       " + types.AssistantMessageCopyLabel,
+		"                                       " + types.MessageCopyLabel,
 	})
 	m.selectRange(0, 0, 0, 79)
 
@@ -131,9 +131,10 @@ func TestIsUIAffordanceLine(t *testing.T) {
 		line string
 		want bool
 	}{
-		{types.AssistantMessageCopyLabel, true},
+		{types.MessageCopyLabel, true},
 		{markdown.CodeBlockCopyIcon, true},
 		{types.UserMessageEditLabel, true},
+		{types.UserMessageEditLabel + types.MessageActionSeparator + types.MessageCopyLabel, true},
 		{types.ErrorRetryLabel, true},
 		{"[-] collapse", true},
 		{"[+] expand 12 more lines", true},

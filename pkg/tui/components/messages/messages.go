@@ -159,7 +159,7 @@ type model struct {
 	inlineEditOriginal      string         // Original content (for cancel)
 	inlineEditPrevSelection int            // Previous selection index before entering inline edit (-1 = was not in selection mode)
 
-	// Hover state for showing copy button on assistant messages
+	// Hover state for showing action labels (copy, edit) on messages
 	hoveredMessageIndex int // Index of message under mouse (-1 = none)
 
 	// Transient "copied" confirmation over the last clicked copy label
@@ -458,11 +458,12 @@ func (m *model) handleMouseMotion(msg tea.MouseMotionMsg) (layout.Model, tea.Cmd
 		return m, cmd
 	}
 
-	// Track hovered message for showing copy button on assistant messages
+	// Track hovered message for showing the action labels (copy, edit)
 	line, col := m.mouseToLineCol(msg.X, msg.Y)
 	newHovered := -1
 	if msgIdx, _ := m.globalLineToMessageLine(line); msgIdx >= 0 && msgIdx < len(m.messages) {
-		if m.messages[msgIdx].Type == types.MessageTypeAssistant {
+		switch m.messages[msgIdx].Type {
+		case types.MessageTypeAssistant, types.MessageTypeUser:
 			newHovered = msgIdx
 		}
 	}
@@ -1939,13 +1940,14 @@ func (m *model) codeBlockAt(msgIdx, localLine, col int) (string, bool) {
 	return target.Content, true
 }
 
-// isCopyLabelClick checks if the click is on the copy label of an assistant message.
+// isCopyLabelClick checks if the click is on the copy label of a message.
 func (m *model) isCopyLabelClick(msgIdx, localLine, col int) bool {
 	if msgIdx < 0 || msgIdx >= len(m.messages) {
 		return false
 	}
-	msg := m.messages[msgIdx]
-	if msg.Type != types.MessageTypeAssistant {
+	switch m.messages[msgIdx].Type {
+	case types.MessageTypeAssistant, types.MessageTypeUser:
+	default:
 		return false
 	}
 	// Only clickable when hovered or selected
@@ -1962,13 +1964,13 @@ func (m *model) isCopyLabelClick(msgIdx, localLine, col int) bool {
 	}
 
 	plainLine := ansi.Strip(item.lines[localLine])
-	before, _, ok := strings.Cut(plainLine, types.AssistantMessageCopyLabel)
+	before, _, ok := strings.Cut(plainLine, types.MessageCopyLabel)
 	if !ok {
 		return false
 	}
 
 	labelStart := ansi.StringWidth(before)
-	labelEnd := labelStart + ansi.StringWidth(types.AssistantMessageCopyLabel)
+	labelEnd := labelStart + ansi.StringWidth(types.MessageCopyLabel)
 	return col >= labelStart && col < labelEnd
 }
 

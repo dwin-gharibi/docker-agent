@@ -53,11 +53,11 @@ func TestChat_CopyAssistantMessageToClipboard(t *testing.T) {
 		WaitFor(tuitest.Contains("2 + 2 equals 4."))
 
 	d.MoveMouseToText("2 + 2 equals 4.").
-		WaitFor(tuitest.Contains(types.AssistantMessageCopyLabel)).
-		ClickText(types.AssistantMessageCopyLabel).
+		WaitFor(tuitest.Contains(types.MessageCopyLabel)).
+		ClickText(types.MessageCopyLabel).
 		WaitForClipboard("2 + 2 equals 4.").
 		// The clicked label transiently reads "copied" instead of "⎘ copy".
-		WaitFor(tuitest.Not(tuitest.Contains(types.AssistantMessageCopyLabel))).
+		WaitFor(tuitest.Not(tuitest.Contains(types.MessageCopyLabel))).
 		WaitFor(tuitest.Contains(types.CopiedFeedbackLabel))
 }
 
