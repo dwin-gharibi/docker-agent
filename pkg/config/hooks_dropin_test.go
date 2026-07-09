@@ -59,6 +59,23 @@ pre_tool_use:
 	assert.Equal(t, "echo stop", hooks.Stop[0].Command)
 }
 
+// Single-mapping hook events must work in drop-ins like in settings.hooks,
+// and strict parsing must keep rejecting typo'd fields inside the mapping.
+func TestReadHookDropIn_SingleMapping(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	writeHookDropIn(t, dir, "10-notify.yaml", "stop:\n  type: command\n  command: echo done\n")
+	hooks, err := readHookDropIn(filepath.Join(dir, "10-notify.yaml"))
+	require.NoError(t, err)
+	require.Len(t, hooks.Stop, 1)
+	assert.Equal(t, "echo done", hooks.Stop[0].Command)
+
+	writeHookDropIn(t, dir, "20-typo.yaml", "stop:\n  type: command\n  commannd: typo\n")
+	_, err = readHookDropIn(filepath.Join(dir, "20-typo.yaml"))
+	require.Error(t, err)
+}
+
 func TestLoadHookDropIns_SkipsMalformedFiles(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

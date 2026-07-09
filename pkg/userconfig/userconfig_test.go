@@ -1074,6 +1074,48 @@ func TestConfig_SandboxAllowlistRoundTrip(t *testing.T) {
 	assert.Equal(t, original.SandboxAllowlist, loaded.SandboxAllowlist)
 }
 
+// Regression test for docker/docker-agent#3536: a hand-written config using
+// the single-mapping hook form must not fail the whole config load, which
+// silently dropped aliases and reset every setting.
+func TestConfig_SingleMappingHooksKeepAliases(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "config.yaml")
+
+	content := `version: v1
+aliases:
+  default:
+    path: /Users/blabla/dev/tools/cagent/agent.yaml
+settings:
+  theme: catppuccin-mocha
+  hooks:
+    on_user_input:
+      type: command
+      command: terminal-notifier -message "needs input"
+    stop:
+      type: command
+      command: terminal-notifier -message "completed"
+`
+	require.NoError(t, os.WriteFile(configFile, []byte(content), 0o600))
+
+	cfg, err := loadFrom(configFile, "")
+	require.NoError(t, err)
+
+	alias, ok := cfg.GetAlias("default")
+	require.True(t, ok, "alias must survive a config with single-mapping hooks")
+	assert.Equal(t, "/Users/blabla/dev/tools/cagent/agent.yaml", alias.Path)
+
+	require.NotNil(t, cfg.Settings)
+	assert.Equal(t, "catppuccin-mocha", cfg.Settings.Theme)
+
+	hooks := cfg.Settings.GlobalHooks()
+	require.NotNil(t, hooks)
+	require.Len(t, hooks.OnUserInput, 1)
+	require.Len(t, hooks.Stop, 1)
+	assert.Equal(t, "command", hooks.OnUserInput[0].Type)
+}
+
 func TestConfig_HooksRoundTrip(t *testing.T) {
 	t.Parallel()
 

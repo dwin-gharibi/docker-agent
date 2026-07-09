@@ -117,6 +117,15 @@ agents:
           command: "./scripts/alert.sh"
 ```
 
+Each event takes a list of hooks. A single hook can also be written directly
+as a mapping, without the list dash:
+
+```yaml
+stop:
+  type: command
+  command: "./scripts/log-response.sh"
+```
+
 ## Global (user-level) hooks
 
 Global hooks let you apply the same hook configuration to every agent you run. Define them in your user config file at `~/.config/cagent/config.yaml` under `settings.hooks`:
