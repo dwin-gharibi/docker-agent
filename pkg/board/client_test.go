@@ -60,6 +60,31 @@ func TestStreamEventsIdleWatchdogAbortsSilentStream(t *testing.T) {
 	assert.Equal(t, eventStreamStarted, got[0].Type)
 }
 
+func TestStreamEventsHeartbeatLinesResetWatchdog(t *testing.T) {
+	old := streamIdleTimeout
+	streamIdleTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { streamIdleTimeout = old })
+
+	socket := serveUnix(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f := w.(http.Flusher)
+		for range 4 {
+			fmt.Fprint(w, ": ping\n")
+			f.Flush()
+			time.Sleep(20 * time.Millisecond) //nolint:forbidigo // heartbeat cadence is under test
+		}
+		fmt.Fprint(w, "data: {\"type\":\"stream_stopped\"}\n\n")
+		f.Flush()
+		<-r.Context().Done()
+	}))
+
+	c := newClient(socket, "sess-1")
+	err := c.StreamEvents(t.Context(), 0, func(ev event) bool {
+		assert.Equal(t, eventStreamStopped, ev.Type)
+		return false
+	})
+	require.NoError(t, err)
+}
+
 // Without any heartbeat from the server (an older docker-agent), the watchdog
 // stays unarmed: a quiet stream is left alone and events keep flowing.
 func TestStreamEventsNoHeartbeatNoWatchdog(t *testing.T) {

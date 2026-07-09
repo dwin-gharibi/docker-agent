@@ -87,6 +87,7 @@ type client struct {
 // unix socket and targets the given session id.
 func newClient(socket, session string) *client {
 	transport := &http.Transport{
+		DisableKeepAlives: true,
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			var d net.Dialer
 			return d.DialContext(ctx, "unix", socket)
@@ -149,8 +150,7 @@ func (c *client) Followup(ctx context.Context, idempotencyKey, message string) e
 	if resp.StatusCode != http.StatusAccepted {
 		return fmt.Errorf("followup: %s", resp.Status)
 	}
-	// Drain so the connection can be reused; the body only reports whether
-	// the delivery was a duplicate, which the board does not care about.
+	// Drain the small response body before closing it.
 	_, _ = io.Copy(io.Discard, resp.Body)
 	return nil
 }
@@ -201,6 +201,7 @@ func (c *client) StreamEvents(ctx context.Context, since uint64, onEvent func(ev
 	var seq uint64
 	for scanner.Scan() {
 		line := scanner.Text()
+		resetWatchdog()
 		if strings.HasPrefix(line, ":") {
 			// Heartbeat comment: the server sends them, so silence now means
 			// a hung transport. Arm the watchdog on the first one.
@@ -212,7 +213,6 @@ func (c *client) StreamEvents(ctx context.Context, since uint64, onEvent func(ev
 			}
 			continue
 		}
-		resetWatchdog()
 		if id, ok := strings.CutPrefix(line, "id:"); ok {
 			seq, _ = strconv.ParseUint(strings.TrimSpace(id), 10, 64)
 			continue

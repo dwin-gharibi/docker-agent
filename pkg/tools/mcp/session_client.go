@@ -343,8 +343,8 @@ func (c *sessionClient) handleSamplingWithToolsRequest(ctx context.Context, req 
 // requests carrying a tools array from the MCP server.
 func (c *sessionClient) SetSamplingWithToolsHandler(handler tools.SamplingWithToolsHandler) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.samplingWithToolsHandler = handler
-	c.mu.Unlock()
 }
 
 // applySamplingHandlerOpts wires the SDK CreateMessage* callback into opts.

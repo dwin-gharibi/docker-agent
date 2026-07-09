@@ -624,8 +624,13 @@ func (s *Server) sessionEvents(c echo.Context) error {
 	var writeMu sync.Mutex
 
 	heartbeatCtx, stopHeartbeat := context.WithCancel(c.Request().Context())
-	defer stopHeartbeat()
+	heartbeatDone := make(chan struct{})
+	defer func() {
+		stopHeartbeat()
+		<-heartbeatDone
+	}()
 	go func() {
+		defer close(heartbeatDone)
 		ticker := time.NewTicker(s.heartbeatInterval)
 		defer ticker.Stop()
 		for {

@@ -464,7 +464,7 @@ func splitTitle(title string, width int) (string, string) {
 			candidate = line1 + " " + word
 		}
 		if line1 != "" && lipgloss.Width(candidate) > width {
-			return line1, toolcommon.TruncateText(strings.Join(words[i:], " "), width)
+			return toolcommon.TruncateText(line1, width), toolcommon.TruncateText(strings.Join(words[i:], " "), width)
 		}
 		line1 = candidate
 	}

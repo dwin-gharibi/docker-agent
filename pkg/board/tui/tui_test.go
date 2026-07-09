@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -480,6 +481,10 @@ func TestSplitTitle(t *testing.T) {
 	l1, l2 = splitTitle("A somewhat longer card title", 10)
 	assert.Equal(t, "A somewhat", l1)
 	assert.NotEmpty(t, l2)
+
+	l1, l2 = splitTitle(strings.Repeat("x", 30)+" tail", 10)
+	assert.LessOrEqual(t, lipgloss.Width(l1), 10)
+	assert.LessOrEqual(t, lipgloss.Width(l2), 10)
 }
 
 func TestColorizeDiffKeepsLineCount(t *testing.T) {
