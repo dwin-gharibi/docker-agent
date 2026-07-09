@@ -216,6 +216,8 @@ Change the AI model during a session with `/model` or <kbd>Ctrl</kbd>+<kbd>M</kb
 
 When a models gateway is configured (`--models-gateway`) and it exposes an OpenAI-style `/v1/models` endpoint, the picker lists the models actually served by the gateway (merged with the models defined in the agent config). When the gateway doesn't expose `/v1/models`, the picker falls back to the regular catalog.
 
+The picker's catalog entries come from [models.dev](https://models.dev) and are cached locally for a day. Press <kbd>Ctrl</kbd>+<kbd>R</kbd> in the picker to force model discovery to run again, including a refetch of the models.dev catalog.
+
 > [!TIP]
 > Use model switching to try a more capable model for complex tasks, or a cheaper one for simple queries — without modifying your YAML config.
 

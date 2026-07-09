@@ -586,6 +586,26 @@ func (m *appModel) handleOpenModelPicker() (tea.Model, tea.Cmd) {
 	})
 }
 
+func (m *appModel) handleRefreshModelPicker() (tea.Model, tea.Cmd) {
+	if err := m.application.RefreshModelsCatalog(m.ctx()); err != nil {
+		if !errors.Is(err, runtime.ErrUnsupported) {
+			return m, notification.ErrorCmd(fmt.Sprintf("Failed to refresh models catalog: %v", err))
+		}
+		// The runtime may discover models without models.dev (for example via a
+		// gateway); unsupported catalog refresh must not block that discovery.
+	}
+
+	models := m.application.AvailableModels(m.ctx())
+	if len(models) == 0 {
+		return m, notification.InfoCmd("No models available for selection")
+	}
+	modelDialog := dialog.NewModelPickerDialog(models)
+	return m, tea.Batch(
+		notification.SuccessCmd("Models refreshed"),
+		core.CmdHandler(dialog.OpenDialogMsg{Model: modelDialog}),
+	)
+}
+
 // handleCycleThinkingLevel advances the current agent's thinking-effort level
 // (shift+tab). On success the new level is reflected in the sidebar via the
 // re-emitted agent info; only failures surface a notification.

@@ -163,6 +163,8 @@ func (d *modelPickerDialog) Update(msg tea.Msg) (layout.Model, tea.Cmd) {
 		case key.Matches(msg, d.keyMap.Enter):
 			cmd := d.handleSelection()
 			return d, cmd
+		case key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+r"))):
+			return d, core.CmdHandler(messages.RefreshModelPickerMsg{})
 		default:
 			cmd := d.handleInputChange(msg)
 			return d, cmd
@@ -384,7 +386,7 @@ func (d *modelPickerDialog) View() string {
 		AddSeparator().
 		AddContent(details).
 		AddSpace().
-		AddHelpKeys("↑/↓", "navigate", "enter", "select", "esc", "cancel").
+		AddHelpKeys("↑/↓", "navigate", "enter", "select", "ctrl+r", "refresh", "esc", "cancel").
 		Build()
 	contentBuildDuration := time.Since(contentBuildStart)
 

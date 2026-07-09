@@ -15,6 +15,10 @@ type (
 	// OpenModelPickerMsg opens the model picker dialog.
 	OpenModelPickerMsg struct{}
 
+	// RefreshModelPickerMsg forces a refresh of model discovery and reopens
+	// the model picker with the updated choices.
+	RefreshModelPickerMsg struct{}
+
 	// ChangeModelMsg changes the model for the current agent.
 	ChangeModelMsg struct{ ModelRef string }
 

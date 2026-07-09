@@ -1215,6 +1215,9 @@ func (m *appModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case messages.OpenModelPickerMsg:
 		return m.handleOpenModelPicker()
 
+	case messages.RefreshModelPickerMsg:
+		return m.handleRefreshModelPicker()
+
 	case messages.ChangeModelMsg:
 		return m.handleChangeModel(msg.ModelRef)
 

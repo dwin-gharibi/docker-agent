@@ -51,3 +51,11 @@ func (l *lazyModelStore) GetDatabase(ctx context.Context) (*modelsdev.Database, 
 	}
 	return st.GetDatabase(ctx)
 }
+
+func (l *lazyModelStore) Refresh(ctx context.Context) error {
+	st, err := l.load()
+	if err != nil {
+		return err
+	}
+	return st.Refresh(ctx)
+}

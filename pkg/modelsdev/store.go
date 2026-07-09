@@ -183,6 +183,47 @@ func (s *Store) getDatabase(ctx context.Context, allowFetch bool) (*Database, er
 	return db, nil
 }
 
+// Refresh forces a catalog fetch, bypassing the refresh interval. The ETag
+// of the on-disk cache is still sent so an unchanged catalog costs only a
+// cheap 304 round-trip. On success the catalog replaces the in-memory copies
+// and the on-disk cache. A memory-only store (no cache file, e.g. one built
+// with NewDatabaseStore) keeps serving its pre-populated database.
+func (s *Store) Refresh(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.cacheFile == "" {
+		return nil
+	}
+
+	var etag string
+	cached, err := loadFromCache(s.cacheFile)
+	if err == nil {
+		etag = cached.ETag
+	}
+
+	db, newETag, err := s.fetcher()(ctx, etag)
+	if err != nil {
+		return fmt.Errorf("failed to refresh models.dev catalog: %w", err)
+	}
+
+	// db is nil when the server returned 304 Not Modified: the cached catalog
+	// is already current, so only its LastRefresh timestamp needs bumping.
+	if db == nil {
+		if cached == nil {
+			return nil
+		}
+		db = &cached.Database
+		newETag = cached.ETag
+	}
+	if saveErr := saveToCache(s.cacheFile, db, newETag); saveErr != nil {
+		slog.WarnContext(ctx, "Failed to save refreshed catalog to cache", "error", saveErr)
+	}
+	s.db = db
+	s.cacheDB = nil
+	return nil
+}
+
 // fetcher returns the Store's catalog fetcher, defaulting to fetchFromAPI when
 // unset. The constructors always populate s.fetch, but defaulting here guards
 // against a zero-value or partially-constructed Store panicking on a nil call.
