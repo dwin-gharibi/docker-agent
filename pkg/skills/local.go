@@ -43,8 +43,10 @@ type localSearchPath struct {
 //
 //  1. Global directories (under $HOME).
 //  2. .claude/skills under cwd (Claude project format, flat).
-//  3. .agents/skills in each ancestor of cwd up to $HOME — or the enclosing
-//     git root when cwd is outside $HOME — down to cwd (closest wins).
+//  3. .github/skills (GitHub Copilot format) and .agents/skills in each
+//     ancestor of cwd up to $HOME — or the enclosing git root when cwd is
+//     outside $HOME — down to cwd (closest wins; .agents/skills overrides
+//     .github/skills at the same level).
 func localSearchPaths() []localSearchPath {
 	if kit := os.Getenv(KitDirEnv); kit != "" {
 		return []localSearchPath{{filepath.Join(kit, KitSkillsSubdir), true}}
@@ -63,7 +65,10 @@ func localSearchPaths() []localSearchPath {
 
 	searchPaths = append(searchPaths, localSearchPath{filepath.Join(cwd, ".claude", "skills"), false})
 	for _, dir := range projectSearchDirs(cwd) {
-		searchPaths = append(searchPaths, localSearchPath{filepath.Join(dir, ".agents", "skills"), false})
+		searchPaths = append(searchPaths,
+			localSearchPath{filepath.Join(dir, ".github", "skills"), false},
+			localSearchPath{filepath.Join(dir, ".agents", "skills"), false},
+		)
 	}
 	return searchPaths
 }
@@ -102,8 +107,9 @@ func homeSkillSearchPaths(home string) []localSearchPath {
 	}
 }
 
-// projectSearchDirs returns the directories to scan for repo-local
-// .agents/skills, ordered from the topmost ancestor down to cwd (inclusive).
+// projectSearchDirs returns the directories to scan for repo-local skill
+// roots (.github/skills, .agents/skills), ordered from the topmost ancestor
+// down to cwd (inclusive).
 // Ordering matters: later (deeper) entries override skills from parents, so a
 // project subdirectory can shadow a skill defined higher up.
 //

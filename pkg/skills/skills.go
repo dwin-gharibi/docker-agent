@@ -66,8 +66,10 @@ func (s Skill) IsFork() bool {
 //
 // Project locations (under cwd, closest wins):
 //   - .claude/skills/ (flat, only at cwd)
-//   - .agents/skills/ (flat, scanned from each ancestor up to $HOME — or the
+//   - .github/skills/ (flat, scanned from each ancestor up to $HOME — or the
 //     enclosing git root outside $HOME — down to cwd)
+//   - .agents/skills/ (flat, same ancestor scan; overrides .github/skills at
+//     the same level)
 //
 // The returned slice is sorted by skill name for deterministic ordering.
 func Load(ctx context.Context, sources []string) []Skill {
