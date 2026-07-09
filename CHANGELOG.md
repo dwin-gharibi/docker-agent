@@ -3,6 +3,37 @@
 All notable changes to this project will be documented in this file.
 
 
+## [v1.103.0] - 2026-07-09
+
+This release polishes the agent picker UI, adds context-usage gauge warning states, improves config handling, and expands sandbox template tooling.
+
+## What's New
+- Adds warning and compacting states to the context-usage gauge: color escalates (orange ≥75%, red ≥95%) as usage approaches the auto-compaction threshold, and displays "compacting…" while a compaction runs (applies to both the main TUI sidebar and lean TUI status line)
+- Installs the latest `docker-mcp` plugin in the sandbox template image so agents running in that environment have MCP tooling available out of the box
+- Adds a hint when a config key requires a newer schema version, guiding users to bump the top-level `version` field instead of seeing a generic "unknown key" error
+- Adds `WithModelOptions` passthrough in `teamloader` for provider-agnostic HTTP transport wrapping
+
+## Bug Fixes
+- Fixes config parsing failure when a hook event list is written as a single mapping instead of a sequence, which previously caused aliases and settings to be silently dropped
+
+## Technical Changes
+- Refactors agent picker status bars to use `dialog.RenderHelpKeys`, removing duplicated key-rendering logic
+- Extracts `fitHelpPairs` and adds regression tests for details help wrapping
+- Polishes agent picker visuals: more compact cards (height 7 → 5) and tightened layout
+- Simplifies the Dockerfile
+### Pull Requests
+
+- [#3089](https://github.com/docker/docker-agent/pull/3089) - feat(teamloader): add WithModelOptions passthrough for provider-agnostic HTTP transport wrapping
+- [#3537](https://github.com/docker/docker-agent/pull/3537) - feat(tui): add warning/compacting states to the context-usage gauge
+- [#3541](https://github.com/docker/docker-agent/pull/3541) - docs: update CHANGELOG.md for v1.102.0
+- [#3543](https://github.com/docker/docker-agent/pull/3543) - style(tui): polish agent picker layout, cards, and status bars
+- [#3544](https://github.com/docker/docker-agent/pull/3544) - docs: sync documentation with recent code changes
+- [#3545](https://github.com/docker/docker-agent/pull/3545) - feat: install latest docker-mcp plugin in sbx template
+- [#3546](https://github.com/docker/docker-agent/pull/3546) - fix(config): accept a single mapping for hook event lists
+- [#3549](https://github.com/docker/docker-agent/pull/3549) - feat(teamloader): add WithModelOptions passthrough for provider-agnostic HTTP transport wrapping
+- [#3550](https://github.com/docker/docker-agent/pull/3550) - feat(config): hint when a config key requires a newer schema version
+
+
 ## [v1.102.0] - 2026-07-08
 
 This release brings significant enhancements to the Kanban board (drag & drop, card management, shell access, sandbox fixes), a new ChatGPT provider, TUI layout customization, and numerous stability and usability fixes across the board, session management, and copy/paste experience.
@@ -4625,3 +4656,5 @@ This release improves the terminal user interface with better error handling and
 [v1.101.0]: https://github.com/docker/docker-agent/releases/tag/v1.101.0
 
 [v1.102.0]: https://github.com/docker/docker-agent/releases/tag/v1.102.0
+
+[v1.103.0]: https://github.com/docker/docker-agent/releases/tag/v1.103.0
