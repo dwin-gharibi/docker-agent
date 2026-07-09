@@ -971,6 +971,28 @@ func TestHostScopedHeaderTransport_NormalizesRequestPort(t *testing.T) {
 	assert.False(t, baseCalled, "must not fall through to the header-less branch")
 }
 
+func TestResourceMetadataFromWWWAuth_PrefersResourceMetadataParam(t *testing.T) {
+	t.Parallel()
+
+	const header = `Bearer realm="agentic-platform-mcp", resource="https://mcp.example.test/api/mcp/remote", resource_metadata="https://mcp.example.test/.well-known/oauth-protected-resource"`
+
+	assert.Equal(t,
+		"https://mcp.example.test/.well-known/oauth-protected-resource",
+		resourceMetadataFromWWWAuth(header),
+	)
+}
+
+func TestResourceMetadataFromWWWAuth_FallsBackToLegacyResourceParam(t *testing.T) {
+	t.Parallel()
+
+	const header = `Bearer resource="https://mcp.example.test/.well-known/oauth-protected-resource"`
+
+	assert.Equal(t,
+		"https://mcp.example.test/.well-known/oauth-protected-resource",
+		resourceMetadataFromWWWAuth(header),
+	)
+}
+
 func TestOAuthTransportCoalescesConcurrentAuthorization(t *testing.T) {
 	t.Parallel()
 

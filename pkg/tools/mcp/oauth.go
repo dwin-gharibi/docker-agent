@@ -29,8 +29,10 @@ import (
 	"github.com/docker/docker-agent/pkg/tools"
 )
 
-// resourceMetadataFromWWWAuth extracts resource metadata URL from WWW-Authenticate header
-var re = regexp.MustCompile(`resource="([^"]+)"`)
+// resourceMetadataFromWWWAuth extracts resource metadata URL from WWW-Authenticate header.
+var resourceMetadataRe = regexp.MustCompile(`(?i)(?:^|[,\s])resource_metadata\s*=\s*(?:"([^"]+)"|([^,\s]+))`)
+
+var resourceRe = regexp.MustCompile(`(?i)(?:^|[,\s])resource\s*=\s*(?:"([^"]+)"|([^,\s]+))`)
 
 // errorCodeRe extracts the RFC 6750 error= parameter from a WWW-Authenticate header.
 var errorCodeRe = regexp.MustCompile(`error="([^"]+)"`)
@@ -276,11 +278,21 @@ func createDefaultMetadata(authServerURL string) *AuthorizationServerMetadata {
 }
 
 func resourceMetadataFromWWWAuth(wwwAuth string) string {
+	if resourceMetadata := wwwAuthParam(resourceMetadataRe, wwwAuth); resourceMetadata != "" {
+		return resourceMetadata
+	}
+	return wwwAuthParam(resourceRe, wwwAuth)
+}
+
+func wwwAuthParam(re *regexp.Regexp, wwwAuth string) string {
 	matches := re.FindStringSubmatch(wwwAuth)
-	if len(matches) == 2 {
+	if len(matches) != 3 {
+		return ""
+	}
+	if matches[1] != "" {
 		return matches[1]
 	}
-	return ""
+	return matches[2]
 }
 
 // callbackRedirectURLFrom is a nil-safe accessor for the optional
