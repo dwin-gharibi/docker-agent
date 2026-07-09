@@ -3,6 +3,7 @@ package modelsdev
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -43,8 +44,9 @@ type Store struct {
 	// fetch retrieves the catalog from the network. It defaults to
 	// fetchFromAPI and is overridable via WithFetcher so tests can stub the
 	// network out without mutating package-level state.
-	fetch fetcher
-	mu    sync.Mutex
+	fetch     fetcher
+	refreshMu sync.Mutex
+	mu        sync.Mutex
 	// db is the authoritative catalog from the full (fetch-eligible) load path.
 	db *Database
 	// cacheDB is a cache-only snapshot served to fetch-disallowed lookups. It is
@@ -189,12 +191,13 @@ func (s *Store) getDatabase(ctx context.Context, allowFetch bool) (*Database, er
 // and the on-disk cache. A memory-only store (no cache file, e.g. one built
 // with NewDatabaseStore) keeps serving its pre-populated database.
 func (s *Store) Refresh(ctx context.Context) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if s.cacheFile == "" {
-		return nil
+		return errors.New("models.dev catalog refresh is unavailable for an in-memory store")
 	}
+
+	// Serialize refreshes without blocking catalog readers during network I/O.
+	s.refreshMu.Lock()
+	defer s.refreshMu.Unlock()
 
 	var etag string
 	cached, err := loadFromCache(s.cacheFile)
@@ -211,11 +214,16 @@ func (s *Store) Refresh(ctx context.Context) error {
 	// is already current, so only its LastRefresh timestamp needs bumping.
 	if db == nil {
 		if cached == nil {
-			return nil
+			return errors.New("models.dev returned not modified without a cached catalog")
 		}
 		db = &cached.Database
 		newETag = cached.ETag
 	}
+
+	// Keep file replacement and in-memory installation atomic with respect to
+	// normal store loads, but never hold this lock during the network request.
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if saveErr := saveToCache(s.cacheFile, db, newETag); saveErr != nil {
 		slog.WarnContext(ctx, "Failed to save refreshed catalog to cache", "error", saveErr)
 	}

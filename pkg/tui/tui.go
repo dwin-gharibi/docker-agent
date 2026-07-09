@@ -1216,7 +1216,12 @@ func (m *appModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleOpenModelPicker()
 
 	case messages.RefreshModelPickerMsg:
-		return m.handleRefreshModelPicker()
+		_, closeCmd := m.dialogMgr.Update(dialog.CloseDialogMsg{})
+		model, refreshCmd := m.handleRefreshModelPicker(msg.Query)
+		return model, tea.Batch(closeCmd, refreshCmd)
+
+	case messages.ModelPickerRefreshedMsg:
+		return m.handleModelPickerRefreshed(msg)
 
 	case messages.ChangeModelMsg:
 		return m.handleChangeModel(msg.ModelRef)

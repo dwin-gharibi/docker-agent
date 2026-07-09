@@ -258,6 +258,66 @@ func TestRefreshFetchError(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestRefreshInMemoryStoreReturnsError(t *testing.T) {
+	t.Parallel()
+
+	store := NewDatabaseStore(&Database{})
+	assert.Error(t, store.Refresh(t.Context()))
+}
+
+func TestRefreshNotModifiedWithoutCacheReturnsError(t *testing.T) {
+	t.Parallel()
+
+	store, err := NewStore(
+		WithCache(filepath.Join(t.TempDir(), "models_dev.json")),
+		WithFetcher(func(context.Context, string) (*Database, string, error) {
+			return nil, "", nil
+		}),
+	)
+	require.NoError(t, err)
+	assert.Error(t, store.Refresh(t.Context()))
+}
+
+func TestRefreshDoesNotBlockReadersDuringFetch(t *testing.T) {
+	t.Parallel()
+
+	cacheFile := filepath.Join(t.TempDir(), "models_dev.json")
+	writeCache(t, cacheFile, Database{Providers: map[string]Provider{
+		"openai": {Models: map[string]Model{"gpt-4o": {Name: "GPT-4o"}}},
+	}})
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	store, err := NewStore(WithCache(cacheFile), WithFetcher(func(context.Context, string) (*Database, string, error) {
+		close(started)
+		<-release
+		return &Database{}, "", nil
+	}))
+	require.NoError(t, err)
+
+	// Warm the authoritative in-memory database before refreshing.
+	_, err = store.GetDatabase(t.Context())
+	require.NoError(t, err)
+
+	refreshDone := make(chan error, 1)
+	go func() { refreshDone <- store.Refresh(t.Context()) }()
+	<-started
+
+	readDone := make(chan struct{})
+	go func() {
+		_, _ = store.GetDatabase(t.Context())
+		close(readDone)
+	}()
+	select {
+	case <-readDone:
+	case <-time.After(time.Second):
+		t.Fatal("GetDatabase blocked behind the refresh network request")
+	}
+
+	close(release)
+	require.NoError(t, <-refreshDone)
+}
+
 func TestResolveModelAlias(t *testing.T) {
 	t.Parallel()
 

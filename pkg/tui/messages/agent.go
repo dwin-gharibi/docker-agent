@@ -1,5 +1,7 @@
 package messages
 
+import "github.com/docker/docker-agent/pkg/runtime"
+
 // Agent messages control agent switching, commands, and model selection.
 type (
 	// SwitchAgentMsg switches to a different agent.
@@ -17,7 +19,15 @@ type (
 
 	// RefreshModelPickerMsg forces a refresh of model discovery and reopens
 	// the model picker with the updated choices.
-	RefreshModelPickerMsg struct{}
+	RefreshModelPickerMsg struct{ Query string }
+
+	// ModelPickerRefreshedMsg carries the asynchronously refreshed choices.
+	ModelPickerRefreshedMsg struct {
+		Models           []runtime.ModelChoice
+		Query            string
+		Err              error
+		CatalogRefreshed bool
+	}
 
 	// ChangeModelMsg changes the model for the current agent.
 	ChangeModelMsg struct{ ModelRef string }

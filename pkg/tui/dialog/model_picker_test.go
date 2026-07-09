@@ -122,7 +122,8 @@ func TestModelPickerRefreshShortcut(t *testing.T) {
 
 	_, cmd := d.Update(tea.KeyPressMsg{Code: 'r', Mod: tea.ModCtrl})
 	require.NotNil(t, cmd)
-	assert.IsType(t, messages.RefreshModelPickerMsg{}, cmd())
+	msg := cmd()
+	assert.Equal(t, messages.RefreshModelPickerMsg{}, msg)
 	assert.Empty(t, d.textInput.Value())
 	assert.Contains(t, d.View(), "refresh")
 }
@@ -155,7 +156,8 @@ func TestModelPickerRefreshShortcutWorksWithSearch(t *testing.T) {
 	_, cmd := d.Update(tea.KeyPressMsg{Code: 'r', Mod: tea.ModCtrl})
 	assert.Equal(t, "m", d.textInput.Value())
 	require.NotNil(t, cmd)
-	assert.IsType(t, messages.RefreshModelPickerMsg{}, cmd())
+	msg := cmd()
+	assert.Equal(t, messages.RefreshModelPickerMsg{Query: "m"}, msg)
 }
 
 func TestModelPickerSorting(t *testing.T) {

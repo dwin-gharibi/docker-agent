@@ -586,22 +586,47 @@ func (m *appModel) handleOpenModelPicker() (tea.Model, tea.Cmd) {
 	})
 }
 
-func (m *appModel) handleRefreshModelPicker() (tea.Model, tea.Cmd) {
-	if err := m.application.RefreshModelsCatalog(m.ctx()); err != nil {
-		if !errors.Is(err, runtime.ErrUnsupported) {
-			return m, notification.ErrorCmd(fmt.Sprintf("Failed to refresh models catalog: %v", err))
-		}
-		// The runtime may discover models without models.dev (for example via a
-		// gateway); unsupported catalog refresh must not block that discovery.
+func (m *appModel) handleRefreshModelPicker(query string) (tea.Model, tea.Cmd) {
+	if !m.application.SupportsModelSwitching() {
+		return m, notification.InfoCmd("Model switching is not supported with remote runtimes")
 	}
 
-	models := m.application.AvailableModels(m.ctx())
-	if len(models) == 0 {
+	ctx := m.ctx()
+	return m, tea.Batch(
+		notification.InfoCmd("Refreshing models…"),
+		func() tea.Msg {
+			err := m.application.RefreshModelsCatalog(ctx)
+			catalogRefreshed := err == nil
+			if errors.Is(err, runtime.ErrUnsupported) {
+				err = nil
+			}
+			if err != nil {
+				return messages.ModelPickerRefreshedMsg{Query: query, Err: err}
+			}
+			return messages.ModelPickerRefreshedMsg{
+				Models:           m.application.AvailableModels(ctx),
+				Query:            query,
+				CatalogRefreshed: catalogRefreshed,
+			}
+		},
+	)
+}
+
+func (m *appModel) handleModelPickerRefreshed(msg messages.ModelPickerRefreshedMsg) (tea.Model, tea.Cmd) {
+	if msg.Err != nil {
+		return m, notification.ErrorCmd(fmt.Sprintf("Failed to refresh models catalog: %v", msg.Err))
+	}
+	if len(msg.Models) == 0 {
 		return m, notification.InfoCmd("No models available for selection")
 	}
-	modelDialog := dialog.NewModelPickerDialog(models)
+
+	modelDialog := dialog.NewModelPickerDialogWithQuery(msg.Models, msg.Query)
+	toast := "Model list reloaded"
+	if msg.CatalogRefreshed {
+		toast = "Models refreshed"
+	}
 	return m, tea.Batch(
-		notification.SuccessCmd("Models refreshed"),
+		notification.SuccessCmd(toast),
 		core.CmdHandler(dialog.OpenDialogMsg{Model: modelDialog}),
 	)
 }
