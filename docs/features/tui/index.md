@@ -145,13 +145,13 @@ Harness-backed agents (e.g. `claude-code`) show the harness type as their model 
 
 ### Context-Usage Gauge
 
-The context-usage gauge (the fill bar and percentage shown in the sidebar token-usage section and in the lean TUI status line) color-escalates as the active session approaches the auto-compaction threshold:
+The context percentage shown in the sidebar token-usage section, and the fill bar in the lean TUI status line, both color-escalate as the active session approaches the auto-compaction threshold:
 
-| Gauge color | When it appears |
-| ----------- | --------------- |
-| Green (normal) | Usage is below 75% of the configured compaction threshold |
-| Orange (warning) | Usage reaches 75% of the compaction threshold |
-| Red (critical) | Usage reaches 95% of the compaction threshold |
+| State   | Color  | Trigger |
+| ------- | ------ | ------- |
+| Normal  | (default) | Usage below 75% of the compaction threshold |
+| Warning | Orange | Usage at or above 75% of the compaction threshold |
+| Critical | Red   | Usage at or above 95% of the compaction threshold |
 
 While a compaction is running the percentage is replaced by a **"compacting…"** indicator; token counts remain visible in the lean TUI status line.
 
