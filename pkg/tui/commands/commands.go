@@ -386,14 +386,14 @@ func builtInSessionCommands() []Item {
 func builtInSettingsCommands() []Item {
 	return []Item{
 		{
-			ID:           "settings.customize",
-			Label:        "Customize Layout",
-			SlashCommand: "/custom",
-			Description:  "Customize the layout: sidebar position, section spacing, and visible sections",
+			ID:           "settings.open",
+			Label:        "Settings",
+			SlashCommand: "/settings",
+			Description:  "Open settings: layout visuals and message send behavior",
 			Category:     "Settings",
 			Immediate:    true,
 			Execute: func(string) tea.Cmd {
-				return core.CmdHandler(messages.OpenCustomizeDialogMsg{})
+				return core.CmdHandler(messages.OpenSettingsDialogMsg{})
 			},
 		},
 		{

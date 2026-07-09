@@ -285,7 +285,7 @@ func TestQueueFlow_BusyAgent_QueuesMessage(t *testing.T) {
 	p := newTestChatPage(t)
 	// newTestChatPage already sets working=true
 
-	// Send first explicitly queued message (Ctrl+q) while busy
+	// Send first explicitly queued message while busy
 	msg1 := messages.SendMsg{Content: "first message", Queue: true}
 	_, cmd := p.handleSendMsg(msg1)
 
@@ -603,9 +603,10 @@ func TestSteerFlow_BusyAgent_SteersMessage(t *testing.T) {
 	assert.Equal(t, "extra context", steered[0].Content)
 }
 
-// TestSteerFlow_ExplicitQueue_SkipsSteering verifies the Ctrl+q path: a
-// Queue-flagged send while busy goes to the local queue and never touches
-// the runtime steer queue.
+// TestSteerFlow_ExplicitQueue_SkipsSteering verifies the internal Queue
+// flag (used by fallbacks such as a rejected steer): a Queue-flagged send
+// while busy goes to the local queue and never touches the runtime steer
+// queue.
 func TestSteerFlow_ExplicitQueue_SkipsSteering(t *testing.T) {
 	t.Parallel()
 
@@ -620,6 +621,33 @@ func TestSteerFlow_ExplicitQueue_SkipsSteering(t *testing.T) {
 	require.Len(t, p.messageQueue, 1)
 	assert.Equal(t, "for later", p.messageQueue[0].content)
 	assert.Empty(t, rt.steered())
+}
+
+// TestSteerFlow_QueueSendMode_QueuesPlainSend verifies the /settings switch:
+// with the send mode set to queue, a plain send while busy goes to the local
+// queue instead of the runtime steer queue.
+func TestSteerFlow_QueueSendMode_QueuesPlainSend(t *testing.T) {
+	t.Parallel()
+
+	rt := &steerRecordingRuntime{}
+	sess := session.New()
+	p := New(t.Context(), app.New(t.Context(), rt, sess), service.NewSessionState(sess), WithSendMode(messages.SendModeQueue)).(*chatPage)
+	p.working = true
+
+	_, cmd := p.handleSendMsg(messages.SendMsg{Content: "for later"})
+
+	require.NotNil(t, cmd)
+	require.Len(t, p.messageQueue, 1)
+	assert.Equal(t, "for later", p.messageQueue[0].content)
+	assert.Empty(t, rt.steered())
+
+	// Switching back to steer mid-session restores steering.
+	p.SetSendMode(messages.SendModeSteer)
+	_, cmd = p.handleSendMsg(messages.SendMsg{Content: "right away"})
+	require.NotNil(t, cmd)
+	assert.IsType(t, steerSentMsg{}, cmd())
+	require.Len(t, rt.steered(), 1)
+	assert.Equal(t, "right away", rt.steered()[0].Content)
 }
 
 // TestSteerFlow_SteerRejected_FallsBackToQueue verifies that a steer

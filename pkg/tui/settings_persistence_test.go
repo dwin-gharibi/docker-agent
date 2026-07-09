@@ -11,9 +11,9 @@ import (
 	"github.com/docker/docker-agent/pkg/userconfig"
 )
 
-// setupLayoutConfigTest isolates the user config in a temp dir. Tests using
+// setupSettingsConfigTest isolates the user config in a temp dir. Tests using
 // it must not be parallel: the config dir override is process-global.
-func setupLayoutConfigTest(t *testing.T) {
+func setupSettingsConfigTest(t *testing.T) {
 	t.Helper()
 	paths.SetConfigDir(t.TempDir())
 	t.Cleanup(func() { paths.SetConfigDir("") })
@@ -50,43 +50,45 @@ func TestLayoutSettingsFromConfig(t *testing.T) {
 	}, got)
 }
 
-func TestSaveLayoutToUserConfig_RoundTrip(t *testing.T) {
-	setupLayoutConfigTest(t)
+func TestSaveSettingsToUserConfig_RoundTrip(t *testing.T) {
+	setupSettingsConfigTest(t)
 
 	saved := messages.LayoutSettings{
 		SidebarPosition: messages.SidebarLeft,
 		SectionSpacing:  messages.SpacingRelaxed,
 		HideTools:       true,
 	}
-	require.NoError(t, saveLayoutToUserConfig(saved))
+	require.NoError(t, saveSettingsToUserConfig(saved, messages.SendModeQueue))
 
 	assert.Equal(t, saved, layoutSettingsFromConfig(userconfig.Get().GetLayout()))
+	assert.Equal(t, messages.SendModeQueue, messages.ParseSendMode(userconfig.Get().GetBusySendMode()))
 }
 
-func TestSaveLayoutToUserConfig_DefaultsClearEntry(t *testing.T) {
-	setupLayoutConfigTest(t)
+func TestSaveSettingsToUserConfig_DefaultsClearEntry(t *testing.T) {
+	setupSettingsConfigTest(t)
 
-	require.NoError(t, saveLayoutToUserConfig(messages.LayoutSettings{
+	require.NoError(t, saveSettingsToUserConfig(messages.LayoutSettings{
 		SidebarPosition: messages.SidebarTop,
-	}))
-	require.NoError(t, saveLayoutToUserConfig(messages.LayoutSettings{
+	}, messages.SendModeQueue))
+	require.NoError(t, saveSettingsToUserConfig(messages.LayoutSettings{
 		SidebarPosition: messages.SidebarRight,
 		SectionSpacing:  messages.SpacingNormal,
-	}))
+	}, messages.SendModeSteer))
 
 	cfg, err := userconfig.Load()
 	require.NoError(t, err)
 	assert.Nil(t, cfg.GetSettings().Layout, "default layout clears the config entry")
+	assert.Empty(t, cfg.GetSettings().GetBusySendMode(), "the default send mode is not written out")
 }
 
-func TestSaveLayoutToUserConfig_OmitsDefaultPosition(t *testing.T) {
-	setupLayoutConfigTest(t)
+func TestSaveSettingsToUserConfig_OmitsDefaultPosition(t *testing.T) {
+	setupSettingsConfigTest(t)
 
-	require.NoError(t, saveLayoutToUserConfig(messages.LayoutSettings{
+	require.NoError(t, saveSettingsToUserConfig(messages.LayoutSettings{
 		SidebarPosition: messages.SidebarRight,
 		SectionSpacing:  messages.SpacingNormal,
 		HideUsage:       true,
-	}))
+	}, messages.SendModeSteer))
 
 	cfg, err := userconfig.Load()
 	require.NoError(t, err)

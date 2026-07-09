@@ -36,10 +36,6 @@ type KeyMap struct {
 	// configurable default.
 	EditorSend    key.Binding
 	EditorNewline key.Binding
-	// EditorQueue submits the editor content as an explicitly queued
-	// message, held until the agent finishes its current turn instead of
-	// being steered into the ongoing stream (issue #3547).
-	EditorQueue key.Binding
 }
 
 var (
@@ -100,7 +96,6 @@ func DefaultKeyMap() KeyMap {
 		HistorySearch:         key.NewBinding(key.WithKeys("ctrl+r"), key.WithHelp("Ctrl+r", "history search")),
 		EditorSend:            key.NewBinding(key.WithKeys("enter"), key.WithHelp("Enter", "send message")),
 		EditorNewline:         key.NewBinding(key.WithKeys("ctrl+j"), key.WithHelp("Ctrl+j", "insert newline")),
-		EditorQueue:           key.NewBinding(key.WithKeys("ctrl+q"), key.WithHelp("Ctrl+q", "queue message")),
 	}
 }
 
@@ -132,7 +127,6 @@ func actionMapFor(keys *KeyMap) []actionEntry {
 		{"history_search", &keys.HistorySearch, "history search"},
 		{"editor_send", &keys.EditorSend, "send message"},
 		{"editor_newline", &keys.EditorNewline, "insert newline"},
-		{"editor_queue", &keys.EditorQueue, "queue message"},
 	}
 }
 

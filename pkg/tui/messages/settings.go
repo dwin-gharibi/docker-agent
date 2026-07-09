@@ -78,19 +78,43 @@ type LayoutSettings struct {
 	HideTodos       bool
 }
 
-// Layout customization messages.
+// SendMode identifies what happens to a plain send while the agent is
+// working: steered into the ongoing stream or held in the local queue.
+type SendMode string
+
+const (
+	// SendModeSteer injects busy sends into the ongoing stream so the agent
+	// picks them up mid-turn. This is the default.
+	SendModeSteer SendMode = "steer"
+	// SendModeQueue holds busy sends until the current turn ends.
+	SendModeQueue SendMode = "queue"
+)
+
+// ParseSendMode normalizes a raw send mode string, falling back to
+// SendModeSteer for empty or unknown values so persisted configs can never
+// break message sending.
+func ParseSendMode(raw string) SendMode {
+	if SendMode(raw) == SendModeQueue {
+		return SendModeQueue
+	}
+	return SendModeSteer
+}
+
+// Settings dialog messages.
 type (
-	// OpenCustomizeDialogMsg opens the layout customization dialog.
-	OpenCustomizeDialogMsg struct{}
+	// OpenSettingsDialogMsg opens the settings dialog (/settings).
+	OpenSettingsDialogMsg struct{}
 
 	// PreviewLayoutMsg applies layout settings live without persisting them.
 	PreviewLayoutMsg struct {
 		Layout LayoutSettings
 	}
 
-	// ApplyLayoutMsg applies layout settings and persists them to the user config.
-	ApplyLayoutMsg struct {
-		Layout LayoutSettings
+	// ApplySettingsMsg applies the settings chosen in the dialog and
+	// persists them to the user config.
+	ApplySettingsMsg struct {
+		Layout   LayoutSettings
+		SendMode SendMode
 	}
 
 	// CancelLayoutPreviewMsg restores the layout that was active before a preview.

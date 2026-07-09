@@ -98,12 +98,12 @@ func TestParseSlashCommand_OtherCommands(t *testing.T) {
 		assert.True(t, ok)
 	})
 
-	t.Run("custom command", func(t *testing.T) {
+	t.Run("settings command", func(t *testing.T) {
 		t.Parallel()
-		cmd := parser.Parse("/custom")
+		cmd := parser.Parse("/settings")
 		require.NotNil(t, cmd)
 		msg := cmd()
-		_, ok := msg.(messages.OpenCustomizeDialogMsg)
+		_, ok := msg.(messages.OpenSettingsDialogMsg)
 		assert.True(t, ok)
 	})
 

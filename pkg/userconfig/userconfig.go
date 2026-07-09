@@ -92,8 +92,12 @@ type Settings struct {
 	// ignored with a logged warning so a bad entry never breaks the TUI.
 	Keybindings []Keybinding `yaml:"keybindings,omitempty"`
 	// Layout customizes the TUI chat layout (sidebar position and which
-	// sidebar sections are visible). Managed via the /custom command.
+	// sidebar sections are visible). Managed via the /settings command.
 	Layout *LayoutSettings `yaml:"layout,omitempty"`
+	// BusySendMode controls what happens to messages sent while the agent is
+	// working: "steer" (default) injects them into the ongoing stream,
+	// "queue" holds them until the current turn ends. Managed via /settings.
+	BusySendMode string `yaml:"busy_send_mode,omitempty"`
 	// Extra preserves settings keys this version does not know about (e.g.
 	// written by a newer docker-agent) across a load/save round trip.
 	Extra map[string]any `yaml:",inline"`
@@ -125,6 +129,15 @@ func (s *Settings) GetLayout() LayoutSettings {
 		return LayoutSettings{}
 	}
 	return *s.Layout
+}
+
+// GetBusySendMode returns the raw busy-send mode ("steer", "queue", or ""
+// when unset; unknown values are normalized by the TUI layer).
+func (s *Settings) GetBusySendMode() string {
+	if s == nil {
+		return ""
+	}
+	return s.BusySendMode
 }
 
 // Keybinding maps a single TUI action to the key combinations that trigger it.

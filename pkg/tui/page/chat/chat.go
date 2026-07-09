@@ -152,6 +152,9 @@ type Page interface {
 	// SetLayoutSettings applies layout customization (sidebar position,
 	// section spacing, and section visibility) and relayouts the page.
 	SetLayoutSettings(settings msgtypes.LayoutSettings) tea.Cmd
+	// SetSendMode sets what happens to messages sent while the agent is
+	// working: steer into the ongoing stream or queue until the turn ends.
+	SetSendMode(mode msgtypes.SendMode)
 }
 
 // queuedMessage represents a message waiting to be sent to the agent
@@ -178,6 +181,7 @@ type chatPage struct {
 	leanMode       bool
 	hideSidebar    bool
 	layoutSettings msgtypes.LayoutSettings
+	sendMode       msgtypes.SendMode
 
 	msgCancel       context.CancelFunc
 	streamCancelled bool
@@ -370,6 +374,14 @@ func WithLayoutSettings(settings msgtypes.LayoutSettings) PageOption {
 	}
 }
 
+// WithSendMode sets the initial behavior of messages sent while the agent
+// is working: steer into the ongoing stream or queue until the turn ends.
+func WithSendMode(mode msgtypes.SendMode) PageOption {
+	return func(p *chatPage) {
+		p.sendMode = mode
+	}
+}
+
 // sectionVisibility maps layout settings to the sidebar's visibility config.
 func sectionVisibility(settings msgtypes.LayoutSettings) sidebar.SectionVisibility {
 	return sidebar.SectionVisibility{
@@ -459,7 +471,7 @@ func (p *chatPage) Update(msg tea.Msg) (layout.Model, tea.Cmd) {
 		return p.handleSendMsg(msg)
 
 	case steerSentMsg:
-		return p, notification.InfoCmd("Message sent to the working agent · Ctrl+q queues instead")
+		return p, notification.InfoCmd("Message sent to the working agent · /settings to queue instead")
 
 	case steerFailedMsg:
 		// The steer queue rejected the message (full, or the stream just
@@ -802,12 +814,13 @@ func (p *chatPage) handleSendMsg(msg msgtypes.SendMsg) (layout.Model, tea.Cmd) {
 		return p, cmd
 	}
 
-	// While the agent is working, the default is to steer: the message is
-	// injected into the ongoing stream so the agent picks it up mid-turn
-	// without breaking the stream (issue #3547). Explicitly queued messages
-	// (Ctrl+q) wait for the turn to end. Fork-mode skills always queue —
-	// they spawn their own stream, which cannot attach to the running one.
-	if msg.Queue || p.app == nil || p.isForkSkillCommand(msg.Content) {
+	// While the agent is working, the configured send mode decides the
+	// default: steer injects the message into the ongoing stream so the
+	// agent picks it up mid-turn without breaking the stream (issue #3547);
+	// queue holds it until the turn ends. Queue-flagged messages (internal
+	// fallbacks) always queue, and so do fork-mode skills — they spawn
+	// their own stream, which cannot attach to the running one.
+	if msg.Queue || p.app == nil || p.sendMode == msgtypes.SendModeQueue || p.isForkSkillCommand(msg.Content) {
 		cmd := p.enqueueMessage(msg)
 		return p, cmd
 	}
@@ -1174,6 +1187,11 @@ func (p *chatPage) SetLayoutSettings(settings msgtypes.LayoutSettings) tea.Cmd {
 		return nil
 	}
 	return p.SetSize(p.width, p.height)
+}
+
+// SetSendMode sets the behavior of messages sent while the agent is working.
+func (p *chatPage) SetSendMode(mode msgtypes.SendMode) {
+	p.sendMode = mode
 }
 
 // handleSidebarClickType checks what was clicked in the sidebar area.

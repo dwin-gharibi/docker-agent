@@ -14,9 +14,9 @@ import (
 )
 
 const (
-	customizeWidthPercent = 50
-	customizeMinWidth     = 52
-	customizeMaxWidth     = 60
+	settingsWidthPercent = 50
+	settingsMinWidth     = 52
+	settingsMaxWidth     = 60
 
 	// previewMaxWidth is the widest the layout preview schematic can get.
 	previewMaxWidth = 44
@@ -24,7 +24,17 @@ const (
 	previewMinWidth = 24
 )
 
-// customizeRows enumerates the selectable rows of the customize dialog.
+// settingsTabs enumerates the tabs of the settings dialog.
+const (
+	tabVisuals = iota
+	tabBehavior
+	tabCount
+)
+
+// settingsTabLabels maps tabs to their display labels.
+var settingsTabLabels = [tabCount]string{"Visuals", "Behavior"}
+
+// visualsRows enumerates the selectable rows of the Visuals tab.
 const (
 	rowPosition = iota
 	rowSpacing
@@ -32,7 +42,13 @@ const (
 	rowAgents
 	rowTools
 	rowTodos
-	rowCount
+	visualsRowCount
+)
+
+// behaviorRows enumerates the selectable rows of the Behavior tab.
+const (
+	rowSendMode = iota
+	behaviorRowCount
 )
 
 // sidebarPositions is the ←/→ cycle order of the position selector.
@@ -65,32 +81,73 @@ var spacingLabels = map[messages.SectionSpacing]string{
 	messages.SpacingRelaxed: "Relaxed",
 }
 
-// customizeDialog lets the user customize the TUI layout: sidebar position,
-// spacing between sidebar sections, and which sections are visible. Changes
-// are previewed live (both in the schematic and in the UI behind the dialog);
-// Enter persists them, Esc restores the original layout.
-type customizeDialog struct {
+// sendModes is the ←/→ cycle order of the send-mode switch.
+var sendModes = []messages.SendMode{
+	messages.SendModeSteer,
+	messages.SendModeQueue,
+}
+
+// sendModeOption describes one radio line of the send-mode switch.
+type sendModeOption struct {
+	mode  messages.SendMode
+	label string
+	desc  string
+}
+
+// sendModeOptions lists the send-mode choices with the short description
+// rendered next to each label.
+var sendModeOptions = []sendModeOption{
+	{messages.SendModeSteer, "Steer", "send to the working agent mid-turn"},
+	{messages.SendModeQueue, "Queue", "hold until the current turn ends"},
+}
+
+// settingsDialog lets the user tune the TUI from two tabs: Visuals (sidebar
+// position, section spacing, visible sections — previewed live both in the
+// schematic and in the UI behind the dialog) and Behavior (what happens to
+// messages sent while the agent is working). Enter persists everything, Esc
+// restores the original layout.
+type settingsDialog struct {
 	BaseDialog
 
 	original messages.LayoutSettings
 	current  messages.LayoutSettings
-	selected int
+
+	originalMode messages.SendMode
+	currentMode  messages.SendMode
+
+	// showVisuals gates the Visuals tab; it is false when the sidebar is
+	// disabled (lean mode or --sidebar=false) and there is no layout to tune.
+	showVisuals bool
+
+	tab int
+	// selected tracks the highlighted row per tab so switching tabs
+	// preserves each tab's position.
+	selected [tabCount]int
 }
 
-// NewCustomizeDialog creates the layout customization dialog seeded with the
-// currently active settings.
-func NewCustomizeDialog(current messages.LayoutSettings) Dialog {
+// NewSettingsDialog creates the settings dialog seeded with the currently
+// active values. showVisuals hides the Visuals tab when there is no sidebar
+// to customize.
+func NewSettingsDialog(current messages.LayoutSettings, mode messages.SendMode, showVisuals bool) Dialog {
 	current.SidebarPosition = messages.ParseSidebarPosition(string(current.SidebarPosition))
 	current.SectionSpacing = messages.ParseSectionSpacing(string(current.SectionSpacing))
-	return &customizeDialog{
-		original: current,
-		current:  current,
+	mode = messages.ParseSendMode(string(mode))
+	d := &settingsDialog{
+		original:     current,
+		current:      current,
+		originalMode: mode,
+		currentMode:  mode,
+		showVisuals:  showVisuals,
 	}
+	if !showVisuals {
+		d.tab = tabBehavior
+	}
+	return d
 }
 
-func (d *customizeDialog) Init() tea.Cmd { return nil }
+func (d *settingsDialog) Init() tea.Cmd { return nil }
 
-func (d *customizeDialog) Update(msg tea.Msg) (layout.Model, tea.Cmd) {
+func (d *settingsDialog) Update(msg tea.Msg) (layout.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		cmd := d.SetSize(msg.Width, msg.Height)
@@ -106,26 +163,34 @@ func (d *customizeDialog) Update(msg tea.Msg) (layout.Model, tea.Cmd) {
 	return d, nil
 }
 
-func (d *customizeDialog) handleKey(msg tea.KeyPressMsg) tea.Cmd {
+// rowCount returns the number of selectable rows on the active tab.
+func (d *settingsDialog) rowCount() int {
+	if d.tab == tabBehavior {
+		return behaviorRowCount
+	}
+	return visualsRowCount
+}
+
+func (d *settingsDialog) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	switch msg.String() {
 	case "esc", "q":
 		return d.cancel()
+	case "tab":
+		d.switchTab(+1)
+	case "shift+tab":
+		d.switchTab(-1)
 	case "up", "k", "ctrl+k":
-		if d.selected > 0 {
-			d.selected--
+		if d.selected[d.tab] > 0 {
+			d.selected[d.tab]--
 		}
 	case "down", "j", "ctrl+j":
-		if d.selected < rowCount-1 {
-			d.selected++
+		if d.selected[d.tab] < d.rowCount()-1 {
+			d.selected[d.tab]++
 		}
-	case "shift+tab":
-		d.selected = (d.selected - 1 + rowCount) % rowCount
-	case "tab":
-		d.selected = (d.selected + 1) % rowCount
 	case "home", "g":
-		d.selected = 0
+		d.selected[d.tab] = 0
 	case "end", "G":
-		d.selected = rowCount - 1
+		d.selected[d.tab] = d.rowCount() - 1
 	case "left", "h":
 		return d.changeValue(-1)
 	case "right", "l", "space":
@@ -136,9 +201,25 @@ func (d *customizeDialog) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	return nil
 }
 
-// changeValue cycles the selected row's value by delta and emits a live preview.
-func (d *customizeDialog) changeValue(delta int) tea.Cmd {
-	switch d.selected {
+// switchTab cycles the active tab by delta; a no-op without the Visuals tab.
+func (d *settingsDialog) switchTab(delta int) {
+	if !d.showVisuals {
+		return
+	}
+	d.tab = (d.tab + delta + tabCount) % tabCount
+}
+
+// changeValue cycles the selected row's value by delta. Visuals changes emit
+// a live preview; the send mode only takes effect when applied.
+func (d *settingsDialog) changeValue(delta int) tea.Cmd {
+	if d.tab == tabBehavior {
+		if d.selected[tabBehavior] == rowSendMode {
+			d.currentMode = cycleValue(sendModes, d.currentMode, delta)
+		}
+		return nil
+	}
+
+	switch d.selected[tabVisuals] {
 	case rowPosition:
 		d.current.SidebarPosition = cycleValue(sidebarPositions, d.current.SidebarPosition, delta)
 	case rowSpacing:
@@ -171,18 +252,19 @@ func cycleValue[T comparable](values []T, current T, delta int) T {
 }
 
 // apply closes the dialog and commits the current settings.
-func (d *customizeDialog) apply() tea.Cmd {
-	if d.current == d.original {
+func (d *settingsDialog) apply() tea.Cmd {
+	if d.current == d.original && d.currentMode == d.originalMode {
 		return closeDialogCmd()
 	}
 	return tea.Sequence(
 		closeDialogCmd(),
-		core.CmdHandler(messages.ApplyLayoutMsg{Layout: d.current}),
+		core.CmdHandler(messages.ApplySettingsMsg{Layout: d.current, SendMode: d.currentMode}),
 	)
 }
 
-// cancel closes the dialog and restores the original settings.
-func (d *customizeDialog) cancel() tea.Cmd {
+// cancel closes the dialog and restores the original layout. The send mode
+// never previews, so only layout changes need to be rolled back.
+func (d *settingsDialog) cancel() tea.Cmd {
 	if d.current == d.original {
 		return closeDialogCmd()
 	}
@@ -192,22 +274,60 @@ func (d *customizeDialog) cancel() tea.Cmd {
 	)
 }
 
-func (d *customizeDialog) Position() (row, col int) {
+func (d *settingsDialog) Position() (row, col int) {
 	return d.CenterDialog(d.View())
 }
 
-func (d *customizeDialog) View() string {
-	width := d.ComputeDialogWidth(customizeWidthPercent, customizeMinWidth, customizeMaxWidth)
+func (d *settingsDialog) View() string {
+	width := d.ComputeDialogWidth(settingsWidthPercent, settingsMinWidth, settingsMaxWidth)
 	inner := d.ContentWidth(width, 2)
 
+	content := NewContent(inner).
+		AddTitle("Settings").
+		AddSeparator()
+
+	helpKeys := []string{"↑/↓", "navigate", "←/→", "change"}
+	if d.showVisuals {
+		content.AddSpace().AddContent(d.renderTabBar(inner))
+		helpKeys = append(helpKeys, "tab", "switch tab")
+	}
+
+	if d.tab == tabBehavior {
+		d.renderBehaviorTab(content, inner)
+	} else {
+		d.renderVisualsTab(content, inner)
+	}
+
+	content.
+		AddSpace().
+		AddHelpKeys(append(helpKeys, "enter", "apply", "esc", "cancel")...)
+
+	return styles.DialogStyle.Width(width).Render(content.Build())
+}
+
+// renderTabBar renders the Visuals/Behavior tab labels, highlighting the
+// active one.
+func (d *settingsDialog) renderTabBar(width int) string {
+	tabs := make([]string, 0, tabCount)
+	for i, label := range settingsTabLabels {
+		style := styles.MutedStyle
+		if i == d.tab {
+			style = styles.HighlightWhiteStyle.Underline(true)
+		}
+		tabs = append(tabs, style.Render(label))
+	}
+	return lipgloss.PlaceHorizontal(width, lipgloss.Center, strings.Join(tabs, "    "))
+}
+
+// renderVisualsTab renders the layout preview, the position/spacing
+// selectors, and the section visibility toggles.
+func (d *settingsDialog) renderVisualsTab(content *Content, inner int) {
 	preview := lipgloss.NewStyle().
 		Width(inner).
 		Align(lipgloss.Center).
 		Render(renderLayoutPreview(d.current, inner))
 
-	content := NewContent(inner).
-		AddTitle("Customize Layout").
-		AddSeparator().
+	content.
 		AddSpace().
 		AddContent(preview).
 		AddSpace().
@@ -218,22 +338,44 @@ func (d *customizeDialog) View() string {
 		AddContent(d.renderToggleRow(rowUsage, "Token usage", d.current.HideUsage)).
 		AddContent(d.renderToggleRow(rowAgents, "Agents", d.current.HideAgents)).
 		AddContent(d.renderToggleRow(rowTools, "Tools", d.current.HideTools)).
-		AddContent(d.renderToggleRow(rowTodos, "Todos", d.current.HideTodos)).
-		AddSpace().
-		AddHelpKeys("↑/↓", "navigate", "←/→", "change", "enter", "apply", "esc", "cancel").
-		Build()
+		AddContent(d.renderToggleRow(rowTodos, "Todos", d.current.HideTodos))
+}
 
-	return styles.DialogStyle.Width(width).Render(content)
+// renderBehaviorTab renders the send-mode switch as a radio group: both
+// choices stay visible, ←/→ or space moves the mark between them.
+func (d *settingsDialog) renderBehaviorTab(content *Content, _ int) {
+	content.
+		AddSpace().
+		AddContent(styles.MutedStyle.Render("While agent is working")).
+		AddSpace()
+	for _, opt := range sendModeOptions {
+		content.AddContent(d.renderSendModeOption(opt))
+	}
+}
+
+// renderSendModeOption renders one radio line of the send-mode switch.
+func (d *settingsDialog) renderSendModeOption(opt sendModeOption) string {
+	glyph := "○"
+	labelStyle := styles.PaletteUnselectedActionStyle
+	glyphStyle := styles.SecondaryStyle
+	prefix := "  "
+	if d.currentMode == opt.mode {
+		glyph = "●"
+		labelStyle = styles.PaletteSelectedActionStyle
+		glyphStyle = styles.SecondaryStyle.Foreground(styles.Success)
+		prefix = styles.HighlightWhiteStyle.Render("› ")
+	}
+	return prefix + glyphStyle.Render(glyph) + " " + labelStyle.Render(opt.label) + "   " + styles.MutedStyle.Render(opt.desc)
 }
 
 // renderSelectorRow renders a row with a ‹ value › selector aligned to the right.
-func (d *customizeDialog) renderSelectorRow(row int, label, valueLabel string, width int) string {
+func (d *settingsDialog) renderSelectorRow(row int, label, valueLabel string, width int) string {
 	value := "‹ " + valueLabel + " ›"
 
 	labelStyle := styles.PaletteUnselectedActionStyle
 	valueStyle := styles.SecondaryStyle
 	prefix := "  "
-	if d.selected == row {
+	if d.selected[d.tab] == row {
 		labelStyle = styles.PaletteSelectedActionStyle
 		valueStyle = styles.HighlightWhiteStyle
 		prefix = styles.HighlightWhiteStyle.Render("› ")
@@ -245,7 +387,7 @@ func (d *customizeDialog) renderSelectorRow(row int, label, valueLabel string, w
 }
 
 // renderToggleRow renders a checkbox row for one sidebar section.
-func (d *customizeDialog) renderToggleRow(row int, label string, hidden bool) string {
+func (d *settingsDialog) renderToggleRow(row int, label string, hidden bool) string {
 	check := "[x]"
 	if hidden {
 		check = "[ ]"
@@ -254,7 +396,7 @@ func (d *customizeDialog) renderToggleRow(row int, label string, hidden bool) st
 	labelStyle := styles.PaletteUnselectedActionStyle
 	checkStyle := styles.SecondaryStyle
 	prefix := "  "
-	if d.selected == row {
+	if d.selected[d.tab] == row {
 		labelStyle = styles.PaletteSelectedActionStyle
 		checkStyle = styles.HighlightWhiteStyle
 		prefix = styles.HighlightWhiteStyle.Render("› ")

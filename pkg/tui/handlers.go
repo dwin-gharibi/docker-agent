@@ -789,21 +789,37 @@ func (m *appModel) handleThemeFileChanged(themeRef string) (tea.Model, tea.Cmd) 
 	)
 }
 
-// --- Layout customization ---
+// --- Settings (/settings) ---
 
-// handleOpenCustomizeDialog opens the /custom layout dialog.
-func (m *appModel) handleOpenCustomizeDialog() (tea.Model, tea.Cmd) {
-	if m.hideSidebar {
-		return m, notification.InfoCmd("Sidebar is disabled; there is no layout to customize")
-	}
+// handleOpenSettingsDialog opens the /settings dialog. The Visuals tab is
+// omitted when there is no sidebar to customize (--sidebar=false); lean mode
+// never gets here (it has no overlay support, the message is dropped).
+func (m *appModel) handleOpenSettingsDialog() (tea.Model, tea.Cmd) {
 	return m, core.CmdHandler(dialog.OpenDialogMsg{
-		Model: dialog.NewCustomizeDialog(m.layoutSettings),
+		Model: dialog.NewSettingsDialog(m.layoutSettings, m.sendMode, !m.hideSidebar),
 	})
 }
 
+// handleApplySettings applies the settings chosen in the /settings dialog
+// and persists them to the user config.
+func (m *appModel) handleApplySettings(msg messages.ApplySettingsMsg) (tea.Model, tea.Cmd) {
+	model, cmd := m.applyLayoutSettings(msg.Layout)
+
+	m.sendMode = messages.ParseSendMode(string(msg.SendMode))
+	for _, page := range m.chatPages {
+		page.SetSendMode(m.sendMode)
+	}
+
+	if err := saveSettingsToUserConfig(m.layoutSettings, m.sendMode); err != nil {
+		slog.Warn("Failed to save settings to user config", "error", err)
+		return model, tea.Batch(cmd, notification.WarningCmd("Settings applied but could not be saved"))
+	}
+	return model, tea.Batch(cmd, notification.SuccessCmd("Settings updated"))
+}
+
 // applyLayoutSettings applies the given layout to every chat page (all tabs
-// share the same layout) and optionally persists it to the user config.
-func (m *appModel) applyLayoutSettings(settings messages.LayoutSettings, persist bool) (tea.Model, tea.Cmd) {
+// share the same layout) without persisting it.
+func (m *appModel) applyLayoutSettings(settings messages.LayoutSettings) (tea.Model, tea.Cmd) {
 	settings.SidebarPosition = messages.ParseSidebarPosition(string(settings.SidebarPosition))
 	settings.SectionSpacing = messages.ParseSectionSpacing(string(settings.SectionSpacing))
 	m.layoutSettings = settings
@@ -815,15 +831,6 @@ func (m *appModel) applyLayoutSettings(settings messages.LayoutSettings, persist
 		}
 	}
 	cmds = append(cmds, m.resizeAll())
-
-	if persist {
-		if err := saveLayoutToUserConfig(settings); err != nil {
-			slog.Warn("Failed to save layout to user config", "error", err)
-			cmds = append(cmds, notification.WarningCmd("Layout applied but could not be saved"))
-		} else {
-			cmds = append(cmds, notification.SuccessCmd("Layout updated"))
-		}
-	}
 
 	return m, tea.Batch(cmds...)
 }
@@ -840,12 +847,18 @@ func layoutSettingsFromConfig(l userconfig.LayoutSettings) messages.LayoutSettin
 	}
 }
 
-// saveLayoutToUserConfig persists layout settings to the user config file.
-// Default settings clear the layout entry to keep the config file minimal.
-func saveLayoutToUserConfig(s messages.LayoutSettings) error {
+// saveSettingsToUserConfig persists the dialog settings to the user config
+// file. Default values clear their entries to keep the config file minimal.
+func saveSettingsToUserConfig(s messages.LayoutSettings, mode messages.SendMode) error {
 	return userconfig.Update(func(cfg *userconfig.Config) error {
 		if cfg.Settings == nil {
 			cfg.Settings = &userconfig.Settings{}
+		}
+
+		if mode == messages.SendModeQueue {
+			cfg.Settings.BusySendMode = string(messages.SendModeQueue)
+		} else {
+			cfg.Settings.BusySendMode = ""
 		}
 
 		if s == (messages.LayoutSettings{SidebarPosition: messages.SidebarRight, SectionSpacing: messages.SpacingNormal}) {
