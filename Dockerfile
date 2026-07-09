@@ -82,6 +82,14 @@ apt-get clean
 rm -rf /var/lib/apt/lists/*
 EOF
 USER agent
+# All mcp-gateway releases are prereleases, so "releases/latest" doesn't resolve;
+# fetch the newest tag from the API instead.
+RUN <<EOF
+set -euxo pipefail
+TAG=$(curl -fsSL "https://api.github.com/repos/docker/mcp-gateway/releases?per_page=1" | grep -o '"tag_name": *"[^"]*"' | cut -d '"' -f4)
+mkdir -p ~/.docker/cli-plugins
+curl -fsSL "https://github.com/docker/mcp-gateway/releases/download/${TAG}/docker-mcp-${TARGETOS}-${TARGETARCH}.tar.gz" | tar -C ~/.docker/cli-plugins -xz
+EOF
 ENV DOCKER_AGENT_NO_TOUR=1 \
     DOCKER_AGENT_HIDE_TELEMETRY_BANNER=1
 COPY --from=builder-linux --chmod=0755 /binaries/docker-agent-$TARGETOS-$TARGETARCH /usr/local/bin/docker-agent
