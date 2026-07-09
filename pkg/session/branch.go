@@ -313,6 +313,7 @@ func cloneEvalResultChecks(src EvalResultChecks) EvalResultChecks {
 	}
 	if src.Relevance != nil {
 		relevance := *src.Relevance
+		relevance.Results = slices.Clone(src.Relevance.Results)
 		cp.Relevance = &relevance
 	}
 	return cp
