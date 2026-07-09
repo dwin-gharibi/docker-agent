@@ -70,13 +70,9 @@ COPY --from=builder-cross /binaries .
 
 # Sandbox template for docker/sandboxes, pushed as
 # docker/docker-agent-sbx-templates: layers the binary built above onto the
-# sandboxes shell-docker base (tools stack, tini entrypoint, and
-# com.docker.sandboxes.* labels — including start-docker, which sbx keys DinD
-# setup on), so the template ships the exact same binary as the docker-agent
-# image.
+# sandboxes shell-docker base.
 FROM docker/sandbox-templates:shell-docker AS template
 ARG TARGETOS TARGETARCH
-# The sandboxes tools base ships no editor; agents and users expect vi.
 USER root
 RUN <<EOF
 set -euxo pipefail
@@ -86,9 +82,14 @@ apt-get clean
 rm -rf /var/lib/apt/lists/*
 EOF
 USER agent
-# Skip the first-run getting-started tour offer and welcome/telemetry banner
-# in sandboxes; /getting-started and --tour still work on demand, and
-# telemetry itself stays governed by TELEMETRY_ENABLED.
+# All mcp-gateway releases are prereleases, so "releases/latest" doesn't resolve;
+# fetch the newest tag from the API instead.
+RUN <<EOF
+set -euxo pipefail
+TAG=$(curl -fsSL "https://api.github.com/repos/docker/mcp-gateway/releases?per_page=1" | grep -o '"tag_name": *"[^"]*"' | cut -d '"' -f4)
+mkdir -p ~/.docker/cli-plugins
+curl -fsSL "https://github.com/docker/mcp-gateway/releases/download/${TAG}/docker-mcp-${TARGETOS}-${TARGETARCH}.tar.gz" | tar -C ~/.docker/cli-plugins -xz
+EOF
 ENV DOCKER_AGENT_NO_TOUR=1 \
     DOCKER_AGENT_HIDE_TELEMETRY_BANNER=1
 COPY --from=builder-linux --chmod=0755 /binaries/docker-agent-$TARGETOS-$TARGETARCH /usr/local/bin/docker-agent
