@@ -95,13 +95,6 @@ func (a *App) Columns() []Column {
 	return slices.Clone(a.columns)
 }
 
-// ColumnIndex returns the position of a column in the pipeline, or -1.
-func (a *App) ColumnIndex(colID string) int {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return slices.IndexFunc(a.columns, func(c Column) bool { return c.ID == colID })
-}
-
 // SetColumnPrompt updates a column's prompt and persists it to the user's
 // global config file.
 func (a *App) SetColumnPrompt(colID, prompt string) error {
@@ -180,7 +173,9 @@ func (a *App) MoveColumn(id string, delta int) error {
 
 // RemoveColumn deletes a column by id and persists the change. A column
 // that still holds cards cannot be removed (its cards would silently pile
-// up in the first column), and neither can the last remaining column.
+// up in the first column), and neither can the last remaining column. The
+// cards check is advisory: a card creation or move in flight can still
+// land in the removed column, where the UI rescues it into the first one.
 func (a *App) RemoveColumn(id string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -490,11 +485,16 @@ func (a *App) MoveCard(cardID, colID string) error {
 		return err
 	}
 
-	dstIdx := a.ColumnIndex(colID)
+	// One pipeline snapshot for the whole move: columns can be edited
+	// concurrently from the UI, and re-indexing a fresh snapshot later
+	// could deliver another column's prompt (or panic on a removed one).
+	columns := a.Columns()
+	dstIdx := slices.IndexFunc(columns, func(c Column) bool { return c.ID == colID })
 	if dstIdx < 0 {
 		return fmt.Errorf("unknown column %q", colID)
 	}
-	movedForward := dstIdx > a.ColumnIndex(card.Column)
+	srcIdx := slices.IndexFunc(columns, func(c Column) bool { return c.ID == card.Column })
+	movedForward := dstIdx > srcIdx
 
 	moved, err := a.store.MoveCard(cardID, colID, movedForward)
 	if err != nil {
@@ -504,7 +504,7 @@ func (a *App) MoveCard(cardID, colID string) error {
 	a.onChanged()
 
 	if movedForward {
-		return a.controller.SendPrompt(moved, a.Columns()[dstIdx].Prompt)
+		return a.controller.SendPrompt(moved, columns[dstIdx].Prompt)
 	}
 	return nil
 }

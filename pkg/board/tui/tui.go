@@ -547,7 +547,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.reload()
 		if d, ok := m.dialog.(*columnsDialog); ok {
-			d.setColumns(m.columns)
+			if d.mode == columnsEditing {
+				d.setColumns(m.columns)
+			} else {
+				// The save is asynchronous and the user may have moved on:
+				// refresh without leaving the dialog's current view.
+				d.refreshColumns(m.columns)
+			}
 			d.selectColumn(saved.ID) // the cursor follows the saved column
 		}
 		action := "added to"

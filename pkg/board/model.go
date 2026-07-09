@@ -8,6 +8,8 @@ package board
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
+	"hash/fnv"
 	"os"
 	"path/filepath"
 	"slices"
@@ -37,26 +39,32 @@ var DefaultColumns = []Column{
 // ColumnsFromConfig maps user-configured columns to board columns, falling
 // back to [DefaultColumns] when none are configured. The config file is
 // hand-editable, so entries are normalized instead of trusted: a missing id
-// is derived from the name, an id-less and nameless entry is dropped, and a
-// duplicate id is dropped (card moves address columns by id, so duplicates
-// would be ambiguous).
+// is derived from the name (hashed when the name slugs to nothing, e.g.
+// non-ASCII, so the id stays stable across restarts), an id-less and
+// nameless entry is dropped, and a duplicate id is dropped (card moves
+// address columns by id, so duplicates would be ambiguous).
 func ColumnsFromConfig(cols []userconfig.BoardColumn) []Column {
 	out := make([]Column, 0, len(cols))
 	seen := make(map[string]bool, len(cols))
 	for _, c := range cols {
 		id := strings.TrimSpace(c.ID)
+		name := strings.TrimSpace(c.Name)
 		if id == "" {
-			id = columnID(c.Name)
+			id = columnID(name)
+		}
+		if id == "" && name != "" {
+			h := fnv.New32a()
+			h.Write([]byte(name))
+			id = fmt.Sprintf("col-%08x", h.Sum32())
 		}
 		if id == "" || seen[id] {
 			continue
 		}
 		seen[id] = true
-		name := strings.TrimSpace(c.Name)
 		if name == "" {
 			name = id
 		}
-		out = append(out, Column{ID: id, Name: name, Emoji: c.Emoji, Prompt: c.Prompt})
+		out = append(out, Column{ID: id, Name: name, Emoji: strings.TrimSpace(c.Emoji), Prompt: c.Prompt})
 	}
 	if len(out) == 0 {
 		// Cloned: the caller may edit the pipeline in place.

@@ -457,7 +457,7 @@ func (d *columnsDialog) View(width, _ int) string {
 	return renderDialog("Columns", w,
 		lipgloss.JoinVertical(lipgloss.Left, rows...),
 		"",
-		helpLine(w, "a", "add", "e", "edit", "p", "prompt", "x", "remove", "shift+\u2191\u2193", "reorder", "esc", "close"),
+		helpLine(w, "a", "add", "e", "edit", "p", "prompt", "x", "remove", "shift+\u2191\u2193", "reorder", "\u2191\u2193", "select", "esc", "close"),
 	)
 }
 

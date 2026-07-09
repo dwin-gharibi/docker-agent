@@ -53,18 +53,26 @@ func TestColumnsFromConfig(t *testing.T) {
 	assert.Equal(t, []Column{{ID: "todo", Name: "Todo", Emoji: "📝", Prompt: "do it"}}, cols)
 
 	// Hand-edited configs are normalized: a missing id is derived from the
-	// name, duplicate ids and unusable entries are dropped, and a missing
-	// name falls back to the id.
+	// name, duplicate ids and unusable entries are dropped, a missing name
+	// falls back to the id, and emoji padding is trimmed.
 	cols = ColumnsFromConfig([]userconfig.BoardColumn{
-		{Name: "In Review"},
+		{Name: "In Review", Emoji: " 🔍 "},
 		{ID: "in-review", Name: "Dup"},
 		{Emoji: "🚧"},
 		{ID: " done "},
 	})
 	assert.Equal(t, []Column{
-		{ID: "in-review", Name: "In Review"},
+		{ID: "in-review", Name: "In Review", Emoji: "🔍"},
 		{ID: "done", Name: "done"},
 	}, cols)
+
+	// A name that slugs to nothing (non-ASCII) still gets an id, hashed
+	// from the name so cards stay attached across restarts.
+	hashed := ColumnsFromConfig([]userconfig.BoardColumn{{Name: "レビュー"}})
+	require.Len(t, hashed, 1)
+	assert.NotEmpty(t, hashed[0].ID)
+	assert.Equal(t, "レビュー", hashed[0].Name)
+	assert.Equal(t, hashed, ColumnsFromConfig([]userconfig.BoardColumn{{Name: "レビュー"}}))
 
 	// An entirely unusable config falls back to the defaults.
 	assert.Equal(t, DefaultColumns, ColumnsFromConfig([]userconfig.BoardColumn{{Emoji: "🚧"}}))
