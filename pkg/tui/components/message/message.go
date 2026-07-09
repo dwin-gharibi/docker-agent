@@ -90,6 +90,7 @@ type renderCache struct {
 	selected  bool
 	hovered   bool
 	expanded  bool
+	editable  bool
 	sameAgent bool
 	result    string
 }
@@ -199,7 +200,6 @@ func (mv *messageModel) Render(width int) string {
 	// MessageTypeAssistant placeholder) animate on every tick, so the result is
 	// not cacheable. Everything else is a pure function of the inputs tracked in
 	// renderCache below.
-	// Spinner-driven messages animate every tick and are not cacheable.
 	// Finalized messages skip writing into renderCache so the per-view
 	// retained ANSI string does not pile up across long sessions; the chat
 	// list's bounded LRU still memoizes their rendered output.
@@ -212,6 +212,7 @@ func (mv *messageModel) Render(width int) string {
 			c.selected == mv.selected &&
 			c.hovered == mv.hovered &&
 			c.expanded == mv.expanded &&
+			c.editable == (msg.SessionPosition != nil) &&
 			c.content == msg.Content &&
 			c.sameAgent == mv.sameAgentAsPrevious(msg) {
 			return c.result
@@ -229,6 +230,7 @@ func (mv *messageModel) Render(width int) string {
 			selected:  mv.selected,
 			hovered:   mv.hovered,
 			expanded:  mv.expanded,
+			editable:  msg.SessionPosition != nil,
 			sameAgent: mv.sameAgentAsPrevious(msg),
 			result:    result,
 		}
@@ -424,11 +426,20 @@ func (mv *messageModel) renderAssistantMarkdown(content string, width int) (stri
 // actionRow builds the right-aligned row of click affordances (edit, copy)
 // rendered in place of a message's top padding. When show is false the row is
 // blank so it acts as a stable spacer and hovering never shifts the layout.
+// At very narrow widths leading labels are dropped, then the row is hard-
+// truncated: it must never wrap, as that would change the message height on
+// hover and invalidate click hit-testing until the next full render.
 func actionRow(innerWidth int, show bool, labels ...string) string {
+	innerWidth = max(innerWidth, 0)
 	if !show {
-		return strings.Repeat(" ", max(innerWidth, 0))
+		return strings.Repeat(" ", innerWidth)
 	}
 	joined := strings.Join(labels, types.MessageActionSeparator)
+	for len(labels) > 1 && ansi.StringWidth(joined) > innerWidth {
+		labels = labels[1:]
+		joined = strings.Join(labels, types.MessageActionSeparator)
+	}
+	joined = ansi.Truncate(joined, innerWidth, "")
 	padding := max(innerWidth-ansi.StringWidth(joined), 0)
 	return strings.Repeat(" ", padding) + styles.MutedStyle.Render(joined)
 }

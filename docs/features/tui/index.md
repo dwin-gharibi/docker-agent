@@ -221,7 +221,9 @@ When a models gateway is configured (`--models-gateway`) and it exposes an OpenA
 
 ## Editable Messages
 
-Edit any previous user message to branch the conversation. Click on a past message to modify it — the agent will re-process from that point, while the original session history is preserved. This is great for exploring alternative approaches without losing your work.
+Edit any previous user message to branch the conversation. Hover a past user message and click **✎ edit** (or select it with the keyboard and press <kbd>e</kbd>) to modify it — the agent will re-process from that point, while the original session history is preserved. This is great for exploring alternative approaches without losing your work.
+
+Hovering a user or assistant message also reveals a **⎘ copy** button that copies the message text to the clipboard (<kbd>c</kbd> when a message is selected).
 
 ## Error Recovery
 

@@ -126,6 +126,11 @@ func runeIndexToDisplayWidth(s string, runeIdx int) int {
 // in rendered messages. Built as a slice because some labels share the same
 // text (message-level and code-block copy), which a switch would reject as
 // duplicate cases.
+//
+// Matching is whole-line (after trimming): a drag that covers only part of an
+// affordance row keeps the fragment, and a content line that exactly equals a
+// label is dropped. Both are accepted trade-offs of text matching; a
+// structural fix would record affordance line indices at render time.
 var uiAffordanceLines = []string{
 	types.MessageCopyLabel,
 	markdown.CodeBlockCopyIcon,

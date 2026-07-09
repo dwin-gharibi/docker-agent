@@ -1458,3 +1458,35 @@ func TestClickCopyLabelOnHoveredUserMessageFlashesCopied(t *testing.T) {
 	assert.Contains(t, out, types.CopiedFeedbackLabel)
 	assert.NotContains(t, out, types.MessageCopyLabel)
 }
+
+func TestEditLabelInContentIsNotClickable(t *testing.T) {
+	t.Parallel()
+
+	sessionPos := 0
+	userMsg := &types.Message{
+		Type:            types.MessageTypeUser,
+		Content:         "please click " + types.UserMessageEditLabel + " now",
+		SessionPosition: &sessionPos,
+	}
+	m := hoverActionModel(t, userMsg)
+
+	// Not hovered: the action row is blank, only the content contains the
+	// label text. Clicking it must not open inline edit.
+	line, col := findLabel(t, m, types.UserMessageEditLabel)
+	require.Positive(t, line, "label text should only be found in the content")
+	_, cmd := m.handleMouseClick(tea.MouseClickMsg{X: col, Y: line, Button: tea.MouseLeft})
+	assert.Nil(t, cmd, "content that mimics the edit label must not be clickable")
+
+	// Hovered: the action row (line 0) shows the real label, but the content
+	// occurrence still must not be a click target. Fresh model so the click
+	// above doesn't turn this one into a double-click word selection.
+	m = hoverActionModel(t, userMsg)
+	m.handleMouseMotion(tea.MouseMotionMsg{X: 5, Y: 1})
+	m.View()
+	contentLine := 1 // line 0 is the action row
+	plain := ansi.Strip(m.renderedLines[contentLine])
+	before, _, ok := strings.Cut(plain, types.UserMessageEditLabel)
+	require.True(t, ok)
+	_, cmd = m.handleMouseClick(tea.MouseClickMsg{X: ansi.StringWidth(before), Y: contentLine, Button: tea.MouseLeft})
+	assert.Nil(t, cmd, "edit label text inside message content must not be clickable")
+}
