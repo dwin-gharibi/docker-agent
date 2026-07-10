@@ -166,6 +166,12 @@ docker agent run --sandbox agent.yaml
 6. All tools (shell, filesystem, background jobs, etc.) run inside the VM.
 7. When the session ends, docker-agent exits but does not stop or remove the sandbox VM; both the VM and the kit are kept around so subsequent runs from the same workspace can reuse them. A fresh sandbox is created only when the mount set has changed.
 
+### What the default template includes
+
+The default template (`docker/sandbox-templates:docker-agent`) ships with:
+
+- **`docker-mcp`** CLI plugin — installed at `~/.docker/cli-plugins/docker-mcp`, available out of the box so agents can invoke `docker mcp` commands inside the sandbox without any additional setup.
+
 ## Auto-Kit
 
 The sandbox VM has its own filesystem and `$HOME` — none of the host's `~/.agents/skills/`, `~/.claude/skills/`, project-level `.agents/skills/`, or prompt files like `AGENTS.md` and `CLAUDE.md` are visible inside it. To bridge that gap, docker-agent automatically builds a **kit**: a self-contained directory staged on the host before the sandbox starts and bind-mounted read-only into the VM at the same path.
