@@ -121,8 +121,7 @@ func (p *chatPage) handleRuntimeEvent(msg tea.Msg) (bool, tea.Cmd) {
 		return true, nil
 
 	case *runtime.AgentSwitchingEvent:
-		p.sidebar.SetAgentSwitching(msg.Switching)
-		return true, nil
+		return true, p.sidebar.SetAgentSwitching(msg.Switching, msg.FromAgent, msg.ToAgent)
 
 	case *runtime.ToolsetInfoEvent:
 		p.sidebar.SetSkillsInfo(len(p.app.CurrentAgentSkills()))

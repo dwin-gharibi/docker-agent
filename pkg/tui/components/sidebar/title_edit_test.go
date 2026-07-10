@@ -134,15 +134,18 @@ func TestSidebar_TitleRegenerating(t *testing.T) {
 	assert.False(t, m.titleRegenerating, "should not be regenerating initially")
 	assert.False(t, m.needsSpinner(), "should not need spinner initially")
 
-	// Start regenerating
-	cmd := sb.SetTitleRegenerating(true)
+	// Start regenerating. The spinner registers with the shared animation
+	// coordinator; the returned command carries the first global tick only
+	// when no other animation is running, so assert on the model-local
+	// registration instead: parallel tests may hold coordinator
+	// registrations of their own.
+	_ = sb.SetTitleRegenerating(true)
 	assert.True(t, m.titleRegenerating, "should be regenerating after SetTitleRegenerating(true)")
 	assert.True(t, m.needsSpinner(), "should need spinner when regenerating")
-	// The returned command starts the spinner animation
-	assert.NotNil(t, cmd, "should return a command to start the spinner")
+	assert.True(t, m.spinnerActive, "should register the spinner")
 
 	// Stop regenerating
-	cmd = sb.SetTitleRegenerating(false)
+	cmd := sb.SetTitleRegenerating(false)
 	assert.False(t, m.titleRegenerating, "should not be regenerating after SetTitleRegenerating(false)")
 	assert.False(t, m.needsSpinner(), "should not need spinner after stopping regeneration")
 	assert.Nil(t, cmd, "should return nil command when stopping")
