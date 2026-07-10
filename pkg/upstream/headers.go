@@ -35,21 +35,28 @@ func Handler(next http.Handler) http.Handler {
 }
 
 // NewHeaderTransport wraps an http.RoundTripper to set custom headers on
-// every outbound request. Header values may contain ${headers.NAME}
-// placeholders that are resolved at request time from upstream headers
-// stored in the request context.
-func NewHeaderTransport(base http.RoundTripper, headers map[string]string) http.RoundTripper {
-	return &headerTransport{base: base, headers: headers}
+// every outbound request. The headerFactory is evaluated on each request
+// to allow dynamic resolution of headers (e.g. from the environment).
+// Header values may also contain ${headers.NAME} placeholders that are
+// resolved at request time from upstream headers stored in the request context.
+func NewHeaderTransport(base http.RoundTripper, headerFactory func(context.Context) map[string]string) http.RoundTripper {
+	return &headerTransport{base: base, headerFactory: headerFactory}
 }
 
 type headerTransport struct {
-	base    http.RoundTripper
-	headers map[string]string
+	base          http.RoundTripper
+	headerFactory func(context.Context) map[string]string
 }
 
 func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	req = req.Clone(req.Context())
-	for key, value := range ResolveHeaders(req.Context(), t.headers) {
+	
+	var headers map[string]string
+	if t.headerFactory != nil {
+		headers = t.headerFactory(req.Context())
+	}
+	
+	for key, value := range ResolveHeaders(req.Context(), headers) {
 		req.Header.Set(key, value)
 	}
 	return t.base.RoundTrip(req)

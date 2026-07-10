@@ -111,16 +111,20 @@ func CreateToolSet(ctx context.Context, toolset latest.Toolset, runConfig *confi
 
 	case toolset.Remote.URL != "":
 		expander := js.NewJsExpander(envProvider)
-
-		// TODO: expand headers on each request, not at creation time.
-		headers := expander.ExpandMap(ctx, toolset.Remote.Headers)
 		remoteURL := expander.Expand(ctx, toolset.Remote.URL, nil)
+		
+		var headerFactory func(context.Context) map[string]string
+		if len(toolset.Remote.Headers) > 0 {
+			headerFactory = func(reqCtx context.Context) map[string]string {
+				return expander.ExpandMap(reqCtx, toolset.Remote.Headers)
+			}
+		}
 
 		return NewRemoteToolsetWithAllowPrivateIPs(
 			toolset.Name,
 			remoteURL,
 			toolset.Remote.TransportType,
-			headers,
+			headerFactory,
 			toolset.Remote.OAuth,
 			toolset.AllowPrivateIPsEnabled(),
 			lifecycle.PolicyFromConfig(toolset.Name, toolset.Lifecycle),
@@ -239,25 +243,25 @@ func NewToolsetCommand(name, command string, args, env []string, cwd string, pol
 //
 // The optional policy lets callers tune restart/backoff behaviour;
 // see NewToolsetCommand for the semantics.
-func NewRemoteToolset(name, urlString, transport string, headers map[string]string, oauthConfig *latest.RemoteOAuthConfig, policy ...lifecycle.Policy) *Toolset {
-	return newRemoteToolset(name, urlString, transport, headers, oauthConfig, false, policy...)
+func NewRemoteToolset(name, urlString, transport string, headerFactory func(context.Context) map[string]string, oauthConfig *latest.RemoteOAuthConfig, policy ...lifecycle.Policy) *Toolset {
+	return newRemoteToolset(name, urlString, transport, headerFactory, oauthConfig, false, policy...)
 }
 
 // NewRemoteToolsetWithAllowPrivateIPs creates a new remote MCP toolset and
 // optionally permits OAuth helper requests to dial non-public IP addresses.
 func NewRemoteToolsetWithAllowPrivateIPs(
 	name, urlString, transport string,
-	headers map[string]string,
+	headerFactory func(context.Context) map[string]string,
 	oauthConfig *latest.RemoteOAuthConfig,
 	allowPrivateIPs bool,
 	policy ...lifecycle.Policy,
 ) *Toolset {
-	return newRemoteToolset(name, urlString, transport, headers, oauthConfig, allowPrivateIPs, policy...)
+	return newRemoteToolset(name, urlString, transport, headerFactory, oauthConfig, allowPrivateIPs, policy...)
 }
 
 func newRemoteToolset(
 	name, urlString, transport string,
-	headers map[string]string,
+	headerFactory func(context.Context) map[string]string,
 	oauthConfig *latest.RemoteOAuthConfig,
 	allowPrivateIPs bool,
 	policy ...lifecycle.Policy,
@@ -265,14 +269,13 @@ func newRemoteToolset(
 	slog.Debug("Creating Remote MCP toolset",
 		"url", urlString,
 		"transport", transport,
-		"headers", headers,
 		"allow_private_ips", allowPrivateIPs,
 	)
 
 	desc := buildRemoteDescription(urlString, transport)
 	ts := &Toolset{
 		name:        name,
-		mcpClient:   newRemoteClient(urlString, transport, headers, NewKeyringTokenStore(), oauthConfig, allowPrivateIPs),
+		mcpClient:   newRemoteClient(urlString, transport, headerFactory, NewKeyringTokenStore(), oauthConfig, allowPrivateIPs),
 		logID:       urlString,
 		description: desc,
 	}

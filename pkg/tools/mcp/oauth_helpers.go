@@ -61,9 +61,9 @@ func oauthHTTPClientForAllowPrivateIPs(allowPrivateIPs bool) *http.Client {
 //
 // The returned client is a fresh instance; the shared oauthHTTPClient
 // singleton is never mutated.
-func oauthHTTPClientWithHeaders(rawURL string, headers map[string]string, allowPrivateIPs bool) *http.Client {
+func oauthHTTPClientWithHeaders(rawURL string, headerFactory func(context.Context) map[string]string, allowPrivateIPs bool) *http.Client {
 	base := oauthHTTPClientForAllowPrivateIPs(allowPrivateIPs)
-	if len(headers) == 0 {
+	if headerFactory == nil {
 		return base
 	}
 	u, err := url.Parse(rawURL)
@@ -83,7 +83,7 @@ func oauthHTTPClientWithHeaders(rawURL string, headers map[string]string, allowP
 		CheckRedirect: base.CheckRedirect,
 		Transport: &hostScopedHeaderTransport{
 			host:        hostWithoutDefaultPort(u.Host, u.Scheme),
-			withHeaders: upstream.NewHeaderTransport(inner, headers),
+			withHeaders: upstream.NewHeaderTransport(inner, headerFactory),
 			base:        inner,
 		},
 	}

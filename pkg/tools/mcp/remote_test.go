@@ -81,7 +81,8 @@ func TestRemoteClientCustomHeaders(t *testing.T) {
 		"Authorization": "Bearer custom-token",
 	}
 
-	client := newRemoteClient(server.URL, "sse", expectedHeaders, NewInMemoryTokenStore(), nil, false)
+	headerFactory := func(context.Context) map[string]string { return expectedHeaders }
+	client := newRemoteClient(server.URL, "sse", headerFactory, NewInMemoryTokenStore(), nil, false)
 
 	// Try to initialize (which will make the HTTP request)
 	// We don't care if it succeeds or fails, we just need it to make the request
@@ -130,7 +131,8 @@ func TestRemoteClientHeadersWithStreamable(t *testing.T) {
 		"X-Custom-Auth": "custom-auth-value",
 	}
 
-	client := newRemoteClient(server.URL, "streamable", expectedHeaders, NewInMemoryTokenStore(), nil, false)
+	headerFactory := func(context.Context) map[string]string { return expectedHeaders }
+	client := newRemoteClient(server.URL, "streamable", headerFactory, NewInMemoryTokenStore(), nil, false)
 
 	// Try to initialize
 	_, _ = client.Initialize(t.Context(), nil)
@@ -205,8 +207,8 @@ func TestRemoteClientEmptyHeaders(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// Create remote client with empty headers map
-	client := newRemoteClient(server.URL, "sse", map[string]string{}, NewInMemoryTokenStore(), nil, false)
+	headerFactory := func(context.Context) map[string]string { return map[string]string{} }
+	client := newRemoteClient(server.URL, "sse", headerFactory, NewInMemoryTokenStore(), nil, false)
 
 	_, _ = client.Initialize(t.Context(), nil)
 
@@ -246,8 +248,8 @@ func TestOAuthHTTPClientWithHeaders_ScopesHeadersToMCPHost(t *testing.T) {
 	}))
 	defer thirdParty.Close()
 
-	headers := map[string]string{"X-Grafana-URL": "https://instance.grafana.net/"}
-	client := oauthHTTPClientWithHeaders(mcpServer.URL, headers, true)
+	headerFactory := func(context.Context) map[string]string { return map[string]string{"X-Grafana-URL": "https://instance.grafana.net/"} }
+	client := oauthHTTPClientWithHeaders(mcpServer.URL, headerFactory, true)
 
 	mcpReq, err := http.NewRequestWithContext(t.Context(), http.MethodGet, mcpServer.URL, http.NoBody)
 	require.NoError(t, err)

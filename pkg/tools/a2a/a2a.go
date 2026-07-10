@@ -183,8 +183,13 @@ func (t *Toolset) Start(ctx context.Context) error {
 		base = http.DefaultTransport
 	}
 
-	headers := t.expander.ExpandMap(ctx, t.headers)
-	httpClient.Transport = upstream.NewHeaderTransport(base, headers)
+	var headerFactory func(context.Context) map[string]string
+	if len(t.headers) > 0 {
+		headerFactory = func(reqCtx context.Context) map[string]string {
+			return t.expander.ExpandMap(reqCtx, t.headers)
+		}
+	}
+	httpClient.Transport = upstream.NewHeaderTransport(base, headerFactory)
 
 	client, err := a2aclient.NewFromCard(ctx, card,
 		a2aclient.WithDefaultsDisabled(),

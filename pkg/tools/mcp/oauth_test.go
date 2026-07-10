@@ -927,7 +927,7 @@ func TestOAuthHTTPClientWithHeaders_StripsDefaultPort(t *testing.T) {
 	t.Parallel()
 
 	client := oauthHTTPClientWithHeaders("https://mcp.example.com:443/mcp",
-		map[string]string{"X-Grafana-URL": "https://instance.grafana.net/"}, false)
+		func(context.Context) map[string]string { return map[string]string{"X-Grafana-URL": "https://instance.grafana.net/"} }, false)
 	hst, ok := client.Transport.(*hostScopedHeaderTransport)
 	require.True(t, ok, "expected a host-scoped transport when headers are configured")
 	assert.Equal(t, "mcp.example.com", hst.host,
@@ -1541,8 +1541,10 @@ func TestInitialize_CustomHeadersReachOAuthDiscovery(t *testing.T) {
 	srv := newUnmanagedOAuthTestServer(t)
 	defer srv.Close()
 
-	headers := map[string]string{"X-Grafana-URL": "https://instance.grafana.net/"}
-	client := newRemoteClient(srv.URL, "streamable", headers, NewInMemoryTokenStore(), nil, true)
+	headerFactory := func(context.Context) map[string]string {
+		return map[string]string{"X-Grafana-URL": "https://instance.grafana.net/"}
+	}
+	client := newRemoteClient(srv.URL, "streamable", headerFactory, NewInMemoryTokenStore(), nil, true)
 
 	// Decline the OAuth elicitation: the unmanaged flow reaches the
 	// protected-resource-metadata discovery request (which carries the

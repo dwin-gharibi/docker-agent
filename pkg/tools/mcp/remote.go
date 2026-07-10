@@ -22,7 +22,7 @@ type remoteMCPClient struct {
 
 	url                       string
 	transportType             string
-	headers                   map[string]string
+	headerFactory             func(context.Context) map[string]string
 	tokenStore                OAuthTokenStore
 	managed                   bool
 	unmanagedOAuthRedirectURI string
@@ -32,7 +32,7 @@ type remoteMCPClient struct {
 
 func newRemoteClient(
 	url, transportType string,
-	headers map[string]string,
+	headerFactory func(context.Context) map[string]string,
 	tokenStore OAuthTokenStore,
 	oauthConfig *latest.RemoteOAuthConfig,
 	allowPrivateIPs bool,
@@ -40,7 +40,6 @@ func newRemoteClient(
 	slog.Debug("Creating remote MCP client",
 		"url", url,
 		"transport", transportType,
-		"headers", headers,
 		"allow_private_ips", allowPrivateIPs,
 	)
 
@@ -52,7 +51,7 @@ func newRemoteClient(
 		sessionClient:   sessionClient{serverAddress: sanitizeRemoteAddress(url)},
 		url:             url,
 		transportType:   transportType,
-		headers:         headers,
+		headerFactory:   headerFactory,
 		tokenStore:      tokenStore,
 		oauthConfig:     oauthConfig,
 		allowPrivateIPs: allowPrivateIPs,
@@ -229,7 +228,7 @@ func (c *remoteMCPClient) createHTTPClient() (*http.Client, *oauthTransport, err
 		managed:                   c.managed,
 		unmanagedOAuthRedirectURI: c.unmanagedOAuthRedirectURI,
 		oauthConfig:               c.oauthConfig,
-		oauthHTTPClient:           oauthHTTPClientWithHeaders(c.url, c.headers, c.allowPrivateIPs),
+		oauthHTTPClient:           oauthHTTPClientWithHeaders(c.url, c.headerFactory, c.allowPrivateIPs),
 	}
 
 	// Persist cookies across requests
@@ -250,8 +249,8 @@ func (c *remoteMCPClient) headerTransport() http.RoundTripper {
 		}
 		base = t
 	}
-	if len(c.headers) > 0 {
-		return upstream.NewHeaderTransport(base, c.headers)
+	if c.headerFactory != nil {
+		return upstream.NewHeaderTransport(base, c.headerFactory)
 	}
 	return base
 }
