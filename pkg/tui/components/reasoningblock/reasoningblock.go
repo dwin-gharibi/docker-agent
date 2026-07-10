@@ -107,6 +107,7 @@ type expandedToolView interface {
 type Model struct {
 	id                  string
 	agentName           string
+	showAgentBadge      bool          // render the agent badge above the header
 	contentItems        []contentItem // Ordered sequence of reasoning and tool calls
 	toolEntries         []toolEntry   // All tool entries (referenced by contentItems)
 	expanded            bool
@@ -142,6 +143,15 @@ func (m *Model) ID() string {
 // AgentName returns the agent name for this block.
 func (m *Model) AgentName() string {
 	return m.agentName
+}
+
+// SetShowAgentBadge controls whether the block renders the agent badge above
+// the Thinking header. The messages list enables it when the block does not
+// visually continue content from the same agent (e.g. reasoning that starts a
+// sub-agent's turn right after a transfer_task), mirroring the sender prefix
+// on standard assistant messages.
+func (m *Model) SetShowAgentBadge(show bool) {
+	m.showAgentBadge = show
 }
 
 // SetReasoning sets reasoning content (replaces all content items with a single reasoning item).
@@ -461,10 +471,30 @@ func (m *Model) Update(msg tea.Msg) (layout.Model, tea.Cmd) {
 
 // View renders the block.
 func (m *Model) View() string {
+	var content string
 	if m.expanded {
-		return m.renderExpanded()
+		content = m.renderExpanded()
+	} else {
+		content = m.renderCollapsed()
 	}
-	return m.renderCollapsed()
+	return m.agentBadgePrefix() + content
+}
+
+// rendersAgentBadge reports whether the agent badge actually renders: it
+// must be enabled and the agent name non-empty. Both rendering
+// (agentBadgePrefix) and hit-testing (headerLineIndex) rely on this single
+// condition so they can never diverge.
+func (m *Model) rendersAgentBadge() bool {
+	return m.showAgentBadge && m.agentName != ""
+}
+
+// agentBadgePrefix returns the agent badge line plus a blank separator when
+// enabled, using the same style and spacing as standard assistant messages.
+func (m *Model) agentBadgePrefix() string {
+	if !m.rendersAgentBadge() {
+		return ""
+	}
+	return styles.AgentBadgeStyleFor(m.agentName).MarginLeft(2).Render(m.agentName) + "\n\n"
 }
 
 // SetSize sets the component dimensions.
@@ -737,9 +767,18 @@ func (m *Model) StopAnimation() {
 	}
 }
 
-// IsHeaderLine returns true if the given line index is the header (line 0).
+// headerLineIndex returns the view line index of the Thinking header. The
+// agent badge, when shown, occupies two lines (badge + blank) above it.
+func (m *Model) headerLineIndex() int {
+	if m.rendersAgentBadge() {
+		return 2
+	}
+	return 0
+}
+
+// IsHeaderLine returns true if the given line index is the header line.
 func (m *Model) IsHeaderLine(lineIdx int) bool {
-	return lineIdx == 0
+	return lineIdx == m.headerLineIndex()
 }
 
 // IsToggleLine returns true if clicking this line should toggle the block.

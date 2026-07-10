@@ -1388,6 +1388,7 @@ func (m *model) LoadFromSession(sess *session.Session) tea.Cmd {
 
 		// Create new reasoning block
 		block := reasoningblock.New(nextBlockID(), agentName, m.sessionState)
+		block.SetShowAgentBadge(showReasoningAgentBadge(m.lastMessage(), agentName))
 		block.SetSize(m.contentWidth(), 0)
 
 		blockMsg := &types.Message{
@@ -1690,6 +1691,35 @@ func (m *model) AppendReasoning(agentName, content string) tea.Cmd {
 	return m.addReasoningBlock(agentName, content)
 }
 
+// lastMessage returns the most recently appended message, or nil when empty.
+func (m *model) lastMessage() *types.Message {
+	if len(m.messages) == 0 {
+		return nil
+	}
+	return m.messages[len(m.messages)-1]
+}
+
+// showReasoningAgentBadge reports whether a new reasoning block for agentName
+// should render its agent badge. Mirrors message.sameAgentAsPrevious: the
+// badge is hidden only when the block visually continues content from the
+// same agent (assistant text, reasoning, or tool activity). In particular, a
+// transfer_task tool call is sent by the parent agent, so reasoning from the
+// sub-agent that follows it shows the sub-agent's badge.
+func showReasoningAgentBadge(previous *types.Message, agentName string) bool {
+	if previous == nil || previous.Sender != agentName {
+		return true
+	}
+	switch previous.Type {
+	case types.MessageTypeAssistant,
+		types.MessageTypeAssistantReasoningBlock,
+		types.MessageTypeToolCall,
+		types.MessageTypeToolResult:
+		return false
+	default:
+		return true
+	}
+}
+
 // addReasoningBlock creates a new reasoning block message.
 //
 // Reasoning blocks routinely interleave with an actively streaming assistant
@@ -1710,6 +1740,7 @@ func (m *model) addReasoningBlock(agentName, content string) tea.Cmd {
 	}
 
 	block := reasoningblock.New(nextBlockID(), agentName, m.sessionState)
+	block.SetShowAgentBadge(showReasoningAgentBadge(m.lastMessage(), agentName))
 	block.SetReasoning(content)
 	block.SetSize(m.contentWidth(), 0)
 
