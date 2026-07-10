@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -10,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/docker/docker-agent/pkg/agent"
 	"github.com/docker/docker-agent/pkg/api"
 	"github.com/docker/docker-agent/pkg/chat"
 	"github.com/docker/docker-agent/pkg/concurrent"
@@ -578,4 +581,73 @@ func TestUserMessageOrdinalToItemIndex(t *testing.T) {
 
 	_, err = userMessageOrdinalToItemIndex(sess, 99)
 	require.ErrorIs(t, err, ErrForkOutOfRange)
+}
+
+// TestAddMessage_SQLitePersistedToolResultCappedOnReload pins the read-time
+// backstop for the generic API path: SessionManager.AddMessage persists a
+// tool result through the store without Session.AddMessage's ingest-time
+// cap, so a session reloaded from SQLite carries the unbounded payload.
+// Once the runtime stamps the agent's MaxToolResultTokens onto the session
+// (runtimeForSession), GetMessages — what actually reaches a provider —
+// must bound the result while the persisted history stays as stored.
+func TestAddMessage_SQLitePersistedToolResultCappedOnReload(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	store, err := session.NewSQLiteSessionStore(ctx, filepath.Join(t.TempDir(), "sessions.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+
+	sess := session.New(session.WithUserMessage("run big-tool"))
+	sess.AddMessage(session.NewAgentMessage("root", &chat.Message{
+		Role: chat.MessageRoleAssistant,
+		ToolCalls: []tools.ToolCall{
+			{ID: "tc", Function: tools.FunctionCall{Name: "big_tool", Arguments: "{}"}},
+		},
+	}))
+	require.NoError(t, store.AddSession(ctx, sess))
+
+	sm := NewSessionManager(ctx, config.Sources{}, store, 0, &config.RuntimeConfig{})
+	oversized := "HEAD" + strings.Repeat("x", 100_000) + "TAIL"
+	require.NoError(t, sm.AddMessage(ctx, sess.ID, session.NewAgentMessage("root", &chat.Message{
+		Role:       chat.MessageRoleTool,
+		ToolCallID: "tc",
+		Content:    oversized,
+	})))
+
+	reloaded, err := store.GetSession(ctx, sess.ID)
+	require.NoError(t, err)
+	assert.Equal(t, oversized, storedToolResultContent(t, reloaded, "tc"),
+		"persistence must keep the raw result; only what reaches the provider is capped")
+
+	// runtimeForSession copies the agent's cap onto the session before a run.
+	agt := agent.New("root", "test instruction", agent.WithMaxToolResultTokens(100))
+	reloaded.MaxToolResultTokens = agt.MaxToolResultTokens()
+
+	var got string
+	for _, msg := range reloaded.GetMessages(agt) {
+		if msg.Role == chat.MessageRoleTool && msg.ToolCallID == "tc" {
+			got = msg.Content
+		}
+	}
+	require.NotEmpty(t, got, "tool result must survive sanitizeToolCalls")
+	assert.LessOrEqual(t, len(got)/4, 100, "reloaded result must be bounded by the cap")
+	assert.True(t, strings.HasPrefix(got, "HEAD"), "head must survive middle-out truncation")
+	assert.True(t, strings.HasSuffix(got, "TAIL"), "tail must survive middle-out truncation")
+
+	assert.Equal(t, oversized, storedToolResultContent(t, reloaded, "tc"),
+		"GetMessages must not rewrite the in-memory history either")
+}
+
+func storedToolResultContent(t *testing.T, sess *session.Session, toolCallID string) string {
+	t.Helper()
+
+	for _, msg := range sess.GetAllMessages() {
+		if msg.Message.Role == chat.MessageRoleTool && msg.Message.ToolCallID == toolCallID {
+			return msg.Message.Content
+		}
+	}
+
+	require.Failf(t, "tool result not found", "tool_call_id=%s", toolCallID)
+	return ""
 }

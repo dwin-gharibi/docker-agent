@@ -1,0 +1,31 @@
+# Max Tool Result Tokens Example
+#
+# This example demonstrates `max_tool_result_tokens`, an opt-in cap applied
+# to every textual tool result the moment it enters the session.
+#
+# Tools like shell or filesystem can return enormous outputs (a full build
+# log, a large file dump) that permanently bloat the conversation. With
+# `max_tool_result_tokens` set to a positive value, any tool result larger
+# than the budget is truncated middle-out: the beginning and the end — usually
+# the most informative parts — are kept, and the removed middle is replaced
+# with a clear truncation marker. Tokens are approximated as bytes/4.
+#
+# The cap is disabled by default (unset or 0); -1 also disables it. It
+# complements `max_old_tool_call_tokens`, which replaces *old* results
+# wholesale once a session-wide budget is exhausted: this cap instead bounds
+# *each* result as it is recorded, so even the freshest result never exceeds
+# the limit.
+
+agents:
+  root:
+    model: openai/gpt-5-mini
+    description: An assistant whose tool results are capped at ~2000 tokens each.
+    instruction: |
+      You are a helpful assistant with shell access. Use it to inspect the
+      system when asked. Very large command outputs are truncated in the
+      middle — the beginning and end are always preserved, and a marker shows
+      where content was removed.
+    # Keep at most ~2000 approximate tokens (~8000 bytes) per tool result.
+    max_tool_result_tokens: 2000
+    toolsets:
+      - type: shell

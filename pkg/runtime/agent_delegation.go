@@ -174,6 +174,7 @@ func newSubSession(parent *session.Session, cfg SubSessionConfig, childAgent *ag
 		session.WithMaxIterations(childAgent.MaxIterations()),
 		session.WithMaxConsecutiveToolCalls(childAgent.MaxConsecutiveToolCalls()),
 		session.WithMaxOldToolCallTokens(childAgent.MaxOldToolCallTokens()),
+		session.WithMaxToolResultTokens(childAgent.MaxToolResultTokens()),
 		session.WithTitle(cfg.Title),
 		session.WithToolsApproved(cfg.ToolsApproved),
 		session.WithNonInteractive(cfg.NonInteractive),

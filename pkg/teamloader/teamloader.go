@@ -267,6 +267,7 @@ func LoadWithConfig(ctx context.Context, agentSource config.Source, runConfig *c
 			agent.WithMaxIterations(agentConfig.MaxIterations),
 			agent.WithMaxConsecutiveToolCalls(agentConfig.MaxConsecutiveToolCalls),
 			agent.WithMaxOldToolCallTokens(agentConfig.MaxOldToolCallTokens),
+			agent.WithMaxToolResultTokens(agentConfig.MaxToolResultTokens),
 			agent.WithNumHistoryItems(agentConfig.NumHistoryItems),
 			agent.WithSessionCompaction(agentConfig.SessionCompactionEnabled()),
 			agent.WithCommands(expander.ExpandCommands(ctx, agentConfig.Commands)),

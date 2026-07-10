@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -23,6 +24,10 @@ func defaultNewID() string { return uuid.New().String() }
 const (
 	// toolContentPlaceholder is the text used to replace truncated tool content
 	toolContentPlaceholder = "[content truncated]"
+
+	// toolResultTruncationMarker replaces the removed middle of a tool result
+	// that exceeds MaxToolResultTokens.
+	toolResultTruncationMarker = "\n[...tool result truncated: middle omitted...]\n"
 )
 
 // SafetyPolicy is the per-session safety preference. It is data only:
@@ -185,6 +190,19 @@ type Session struct {
 	// approximateTokens (len/4). Truncation is enabled only when this is positive;
 	// 0 (unset) and -1 both disable truncation (unlimited tool content).
 	MaxOldToolCallTokens int `json:"max_old_tool_call_tokens,omitempty"`
+
+	// MaxToolResultTokens is the maximum number of tokens to keep from each
+	// textual tool result at ingestion. Oversized results are middle-out
+	// truncated by AddMessage: the head and tail are kept and the removed
+	// middle is replaced with toolResultTruncationMarker. The budget covers
+	// every textual payload of the result — Content and inline-text document
+	// parts share it rather than each claiming a full cap. Tokens are
+	// approximated by approximateTokens (len/4). The cap is enabled only when
+	// this is positive; 0 (unset) and -1 both disable it (unbounded results).
+	// GetMessages reapplies the same cap to the copies it returns as a
+	// backstop for results that entered the history without passing through
+	// AddMessage (e.g. persisted via the API/SQLite path and reloaded).
+	MaxToolResultTokens int `json:"max_tool_result_tokens,omitempty"`
 
 	// Starred indicates if this session has been starred by the user
 	Starred bool `json:"starred"`
@@ -565,6 +583,9 @@ func cloneSchemaValue(v any) any {
 func (s *Session) AddMessage(msg *Message) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if msg != nil {
+		capToolResultContent(&msg.Message, s.MaxToolResultTokens)
+	}
 	s.Messages = append(s.Messages, NewMessageItem(msg))
 }
 
@@ -822,6 +843,15 @@ func WithMaxConsecutiveToolCalls(n int) Opt {
 func WithMaxOldToolCallTokens(n int) Opt {
 	return func(s *Session) {
 		s.MaxOldToolCallTokens = n
+	}
+}
+
+// WithMaxToolResultTokens sets the per-tool-result token cap applied at
+// ingestion. Positive values enable middle-out truncation; 0 and -1 disable
+// the cap (unbounded tool results).
+func WithMaxToolResultTokens(n int) Opt {
+	return func(s *Session) {
+		s.MaxToolResultTokens = n
 	}
 }
 
@@ -1357,6 +1387,17 @@ func (s *Session) GetMessages(a *agent.Agent, extraSystemMessages ...chat.Messag
 	messages = normalizeMessageContent(messages)
 	messages = sanitizeToolCalls(messages)
 
+	// Read-time backstop: tool results that entered the history without
+	// passing through AddMessage (e.g. persisted via the API/SQLite path and
+	// reloaded) may still be unbounded, so reapply the cap to the assembled
+	// messages just before they reach a provider. These are snapshot copies
+	// (snapshotItems), so the stored history is never mutated by a read.
+	if s.MaxToolResultTokens > 0 {
+		for i := range messages {
+			capToolResultContent(&messages[i], s.MaxToolResultTokens)
+		}
+	}
+
 	systemCount := 0
 	conversationCount := 0
 	for i := range messages {
@@ -1623,4 +1664,162 @@ func truncateOldToolContent(messages []chat.Message, maxTokens int) []chat.Messa
 	}
 
 	return result
+}
+
+// capToolResultContent applies the opt-in MaxToolResultTokens middle-out cap
+// to a tool-result message, mutating msg in place. A single result-wide
+// budget covers every textual payload a provider can receive from the
+// message — Content plus MultiContent text parts and inline-text documents —
+// so a result carrying many documents stays bounded instead of claiming one
+// full cap per document. The budget is consumed in order — Content first,
+// then MultiContent parts left to right — so payloads past an exhausted
+// budget keep their metadata but lose their text (no proportional sharing).
+// The text part duplicating Content (see chat.BuildToolResultMultiContent)
+// is rewritten in lockstep and charged only once so providers cannot receive
+// the unbounded copy. Document names, MIME types, and non-text parts are
+// preserved; a truncated document's Size is updated to match the kept text.
+//
+// AddMessage applies the cap at ingestion (the primary path); GetMessages
+// reapplies it to its local copies as a read-time backstop for results that
+// entered the history without passing through AddMessage.
+func capToolResultContent(msg *chat.Message, maxTokens int) {
+	if maxTokens <= 0 || msg.Role != chat.MessageRoleTool {
+		return
+	}
+	// Results whose aggregate textual payload approximates within the cap
+	// stay untouched — this also makes the cap idempotent, so the read-time
+	// reapply is a no-op for results already capped at ingestion. Past this
+	// branch maxTokens*4 < aggregate bytes, so the byte conversions below
+	// cannot overflow.
+	if toolResultTextualBytes(msg)/4 <= maxTokens {
+		return
+	}
+
+	remaining := maxTokens * 4
+
+	original := msg.Content
+	msg.Content = truncateMiddleOut(original, maxTokens)
+	// Content may keep up to 3 bytes of len/4 rounding slack beyond the byte
+	// budget; the aggregate still approximates within the cap.
+	remaining = max(remaining-len(msg.Content), 0)
+
+	fit := func(text string) string {
+		kept := truncateMiddleOutBytes(text, remaining)
+		remaining -= len(kept)
+		return kept
+	}
+	contentDuplicateSynced := false
+	for i := range msg.MultiContent {
+		part := &msg.MultiContent[i]
+		switch {
+		case part.Type == chat.MessagePartTypeText && !contentDuplicateSynced && part.Text == original:
+			// The first matching text part is the duplicate emitted by
+			// BuildToolResultMultiContent. Rewrite it in lockstep and charge
+			// it once via Content above; later identical parts are distinct.
+			part.Text = msg.Content
+			contentDuplicateSynced = true
+		case part.Type == chat.MessagePartTypeText:
+			part.Text = fit(part.Text)
+		case part.Type == chat.MessagePartTypeDocument && part.Document != nil && part.Document.Source.InlineText != "":
+			kept := fit(part.Document.Source.InlineText)
+			if kept == part.Document.Source.InlineText {
+				continue
+			}
+			// Copy-on-write so a Document shared with the caller is not
+			// mutated behind its back.
+			doc := *part.Document
+			doc.Source.InlineText = kept
+			doc.Size = int64(len(kept))
+			part.Document = &doc
+		}
+	}
+}
+
+// toolResultTextualBytes sums the bytes of every textual payload a provider
+// can receive from a tool-result message: Content, MultiContent text parts,
+// and inline-text documents. The first text part equal to Content is the
+// duplicate emitted by chat.BuildToolResultMultiContent — providers send
+// either Content or the parts, never both — so it is counted once. Any later
+// identical text parts are distinct payloads and still consume budget.
+func toolResultTextualBytes(msg *chat.Message) int {
+	total := len(msg.Content)
+	contentDuplicateSeen := false
+	for i := range msg.MultiContent {
+		part := &msg.MultiContent[i]
+		switch part.Type {
+		case chat.MessagePartTypeText:
+			if !contentDuplicateSeen && part.Text == msg.Content {
+				contentDuplicateSeen = true
+			} else {
+				total += len(part.Text)
+			}
+		case chat.MessagePartTypeDocument:
+			if part.Document != nil {
+				total += len(part.Document.Source.InlineText)
+			}
+		}
+	}
+	return total
+}
+
+// truncateMiddleOut caps content at maxTokens approximate tokens
+// (approximateTokens, len/4) by keeping the head and the tail and dropping
+// the middle. Content already within the cap is returned unchanged.
+func truncateMiddleOut(content string, maxTokens int) string {
+	if maxTokens <= 0 || approximateTokens(content) <= maxTokens {
+		return content
+	}
+	// Reaching here implies maxTokens < len(content)/4, so the byte budget
+	// cannot overflow.
+	return truncateMiddleOutBytes(content, maxTokens*4)
+}
+
+// truncateMiddleOutBytes keeps content within budget bytes by preserving the
+// head and the tail and dropping the middle. Content within the budget is
+// returned unchanged; a truncated result is always strictly smaller than the
+// input, stays valid UTF-8 (cut points snap to rune starts), and flags the
+// removed middle as clearly as the budget allows:
+//
+//  1. toolResultTruncationMarker between head and tail, when the budget fits
+//     the marker plus at least one complete rune on each side;
+//  2. a bare "..." between whatever head/tail still fits, for budgets too
+//     small for the full marker;
+//  3. the empty string when not even "..." fits — any shorter fragment would
+//     read as complete output rather than as an elision.
+func truncateMiddleOutBytes(content string, budget int) string {
+	if len(content) <= budget {
+		return content
+	}
+
+	if keep := budget - len(toolResultTruncationMarker); keep >= 2 {
+		head, tailStart := middleOutCut(content, keep)
+		if head > 0 && tailStart < len(content) {
+			return content[:head] + toolResultTruncationMarker + content[tailStart:]
+		}
+	}
+
+	const ellipsis = "..."
+	keep := budget - len(ellipsis)
+	if keep < 0 {
+		return ""
+	}
+	head, tailStart := middleOutCut(content, keep)
+	return content[:head] + ellipsis + content[tailStart:]
+}
+
+// middleOutCut splits a keep-byte allowance between a head prefix and a tail
+// suffix of content, snapping both cut points to rune starts so the kept
+// pieces stay valid UTF-8. Snapping only shrinks the pieces, so
+// head + len(content) - tailStart never exceeds keep (either piece may snap
+// to empty). Callers must ensure 0 <= keep < len(content).
+func middleOutCut(content string, keep int) (head, tailStart int) {
+	head = (keep + 1) / 2
+	for head > 0 && !utf8.RuneStart(content[head]) {
+		head--
+	}
+	tailStart = len(content) - keep/2
+	for tailStart < len(content) && !utf8.RuneStart(content[tailStart]) {
+		tailStart++
+	}
+	return head, tailStart
 }

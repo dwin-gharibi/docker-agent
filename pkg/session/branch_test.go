@@ -440,13 +440,15 @@ func TestForkSession(t *testing.T) {
 		// be silently zeroed out, making the fork behave differently from
 		// the parent (tool-call cutoff and old-tool-call truncation budget
 		// would reset to "use built-in default") despite the user having
-		// configured them deliberately.
+		// configured them deliberately. MaxToolResultTokens rides the same
+		// rail.
 		parent := &Session{
 			Title:                   "Parent Title",
 			Messages:                []Item{NewMessageItem(UserMessage("hi"))},
 			MaxIterations:           42,
 			MaxConsecutiveToolCalls: 17,
 			MaxOldToolCallTokens:    9000,
+			MaxToolResultTokens:     4000,
 		}
 
 		forked, err := ForkSession(parent, 1)
@@ -454,5 +456,6 @@ func TestForkSession(t *testing.T) {
 		assert.Equal(t, 42, forked.MaxIterations)
 		assert.Equal(t, 17, forked.MaxConsecutiveToolCalls)
 		assert.Equal(t, 9000, forked.MaxOldToolCallTokens)
+		assert.Equal(t, 4000, forked.MaxToolResultTokens)
 	})
 }

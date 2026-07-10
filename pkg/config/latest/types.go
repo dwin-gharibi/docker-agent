@@ -552,7 +552,13 @@ type AgentConfig struct {
 	MaxIterations           int   `json:"max_iterations,omitempty"`
 	MaxConsecutiveToolCalls int   `json:"max_consecutive_tool_calls,omitempty"`
 	MaxOldToolCallTokens    int   `json:"max_old_tool_call_tokens,omitempty"`
-	NumHistoryItems         int   `json:"num_history_items,omitempty"`
+	// MaxToolResultTokens caps each textual tool result when it enters the
+	// session. Oversized results are middle-out truncated (head and tail kept,
+	// middle replaced with a marker); textual documents attached to the result
+	// share the same budget. Tokens are approximated as len/4.
+	// Disabled by default; only positive values enable the cap.
+	MaxToolResultTokens int `json:"max_tool_result_tokens,omitempty"`
+	NumHistoryItems     int `json:"num_history_items,omitempty"`
 	// SessionCompaction toggles automatic session compaction for this agent:
 	// the proactive threshold trigger and the post-overflow auto-recovery.
 	// Manual /compact stays available regardless. Pointer (tri-state) so

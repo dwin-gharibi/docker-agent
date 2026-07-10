@@ -211,6 +211,7 @@ func (a *Agent) NewSession(ctx context.Context, params acp.NewSessionRequest) (a
 		session.WithMaxIterations(defaultAgent.MaxIterations()),
 		session.WithMaxConsecutiveToolCalls(defaultAgent.MaxConsecutiveToolCalls()),
 		session.WithMaxOldToolCallTokens(defaultAgent.MaxOldToolCallTokens()),
+		session.WithMaxToolResultTokens(defaultAgent.MaxToolResultTokens()),
 		session.WithWorkingDir(workingDir),
 	)
 	sess.Title = "ACP Session " + sess.ID

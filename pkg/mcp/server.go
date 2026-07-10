@@ -206,6 +206,7 @@ func CreateToolHandler(t *team.Team, agentName string) func(context.Context, *mc
 			session.WithMaxIterations(ag.MaxIterations()),
 			session.WithMaxConsecutiveToolCalls(ag.MaxConsecutiveToolCalls()),
 			session.WithMaxOldToolCallTokens(ag.MaxOldToolCallTokens()),
+			session.WithMaxToolResultTokens(ag.MaxToolResultTokens()),
 			session.WithUserMessage(input.Message),
 			session.WithToolsApproved(true),
 			session.WithNonInteractive(true),

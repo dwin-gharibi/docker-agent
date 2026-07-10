@@ -643,6 +643,11 @@
           "description": "Maximum number of tokens to keep from old tool call arguments and results. Older tool calls beyond this budget will have their content replaced with a placeholder. Tokens are approximated as len/4. Truncation is disabled by default; set a positive value to enable it. Set to -1 to disable truncation (unlimited tool content).",
           "minimum": -1
         },
+        "max_tool_result_tokens": {
+          "type": "integer",
+          "description": "Maximum number of tokens to keep from each tool result when it is added to the session. Oversized results are truncated middle-out: the head and tail are kept and the removed middle is replaced with a truncation marker. Textual documents attached to the result share the same budget. Tokens are approximated as len/4. The cap is disabled by default; set a positive value to enable it. 0 and -1 both leave tool results unbounded.",
+          "minimum": -1
+        },
         "num_history_items": {
           "type": "integer",
           "description": "Number of history items to keep",

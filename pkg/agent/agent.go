@@ -46,6 +46,7 @@ type Agent struct {
 	maxIterations           int
 	maxConsecutiveToolCalls int
 	maxOldToolCallTokens    int
+	maxToolResultTokens     int
 	numHistoryItems         int
 	addPromptFiles          []string
 	tools                   []tools.Tool
@@ -128,6 +129,10 @@ func (a *Agent) MaxConsecutiveToolCalls() int {
 
 func (a *Agent) MaxOldToolCallTokens() int {
 	return a.maxOldToolCallTokens
+}
+
+func (a *Agent) MaxToolResultTokens() int {
+	return a.maxToolResultTokens
 }
 
 func (a *Agent) NumHistoryItems() int {

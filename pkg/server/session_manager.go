@@ -356,6 +356,7 @@ func (sm *SessionManager) CreateSession(ctx context.Context, sessionTemplate *se
 		session.WithMaxIterations(sessionTemplate.MaxIterations),
 		session.WithMaxConsecutiveToolCalls(sessionTemplate.MaxConsecutiveToolCalls),
 		session.WithMaxOldToolCallTokens(sessionTemplate.MaxOldToolCallTokens),
+		session.WithMaxToolResultTokens(sessionTemplate.MaxToolResultTokens),
 		session.WithToolsApproved(sessionTemplate.ToolsApproved),
 	)
 
@@ -1050,6 +1051,7 @@ func (sm *SessionManager) runtimeForSession(ctx context.Context, sess *session.S
 	sess.MaxIterations = agt.MaxIterations()
 	sess.MaxConsecutiveToolCalls = agt.MaxConsecutiveToolCalls()
 	sess.MaxOldToolCallTokens = agt.MaxOldToolCallTokens()
+	sess.MaxToolResultTokens = agt.MaxToolResultTokens()
 
 	modelSwitcherCfg := &runtime.ModelSwitcherConfig{
 		Models:             loadResult.Models,
@@ -1443,6 +1445,7 @@ func (sm *SessionManager) SetSessionAgentModel(ctx context.Context, sessionID, m
 		MaxIterations:           sess.MaxIterations,
 		MaxConsecutiveToolCalls: sess.MaxConsecutiveToolCalls,
 		MaxOldToolCallTokens:    sess.MaxOldToolCallTokens,
+		MaxToolResultTokens:     sess.MaxToolResultTokens,
 		InputTokens:             sess.InputTokens,
 		OutputTokens:            sess.OutputTokens,
 		Cost:                    sess.Cost,
