@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/docker/docker-agent/pkg/app"
+	"github.com/docker/docker-agent/pkg/config/types"
 	"github.com/docker/docker-agent/pkg/feedback"
 	mcptools "github.com/docker/docker-agent/pkg/tools/mcp"
 	"github.com/docker/docker-agent/pkg/tui/components/toolcommon"
@@ -499,6 +500,29 @@ func removeByIDs(items []Item, ids map[string]bool) []Item {
 	return out
 }
 
+// newAgentCommandItem builds the command-palette / slash-command Item for a
+// single agent command. SlashCommand and Immediate are set so the command
+// dispatches from the keyboard (not only from the palette); Execute forwards
+// the slash command, with any argument appended, to the agent as an
+// AgentCommandMsg.
+func newAgentCommandItem(commandName string, cmd types.Command) Item {
+	return Item{
+		ID:           "agent.command." + commandName,
+		Label:        commandName,
+		Description:  toolcommon.TruncateText(cmd.DisplayText(), 60),
+		Category:     "Agent Commands",
+		SlashCommand: "/" + commandName,
+		Immediate:    true,
+		Execute: func(arg string) tea.Cmd {
+			input := "/" + commandName
+			if arg = strings.TrimSpace(arg); arg != "" {
+				input += " " + arg
+			}
+			return core.CmdHandler(messages.AgentCommandMsg{Command: input})
+		},
+	}
+}
+
 // newMCPPromptItem builds the command-palette / slash-command Item for a single
 // MCP prompt. SlashCommand and Immediate are set so the prompt dispatches from
 // the keyboard (not only from the palette dialog); Execute maps a non-empty
@@ -592,24 +616,9 @@ func BuildCommandCategories(ctx context.Context, application *app.App) []Categor
 
 	agentCommands := application.CurrentAgentCommands(ctx)
 	if len(agentCommands) > 0 {
-		var commands []Item
+		commands := make([]Item, 0, len(agentCommands))
 		for name, cmd := range agentCommands {
-			commandName := name
-			commands = append(commands, Item{
-				ID:           "agent.command." + commandName,
-				Label:        commandName,
-				Description:  toolcommon.TruncateText(cmd.DisplayText(), 60),
-				Category:     "Agent Commands",
-				SlashCommand: "/" + commandName,
-				Immediate:    true,
-				Execute: func(arg string) tea.Cmd {
-					input := "/" + commandName
-					if arg = strings.TrimSpace(arg); arg != "" {
-						input += " " + arg
-					}
-					return core.CmdHandler(messages.AgentCommandMsg{Command: input})
-				},
-			})
+			commands = append(commands, newAgentCommandItem(name, cmd))
 		}
 
 		categories = append(categories, Category{
