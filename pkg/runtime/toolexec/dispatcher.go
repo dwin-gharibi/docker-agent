@@ -499,11 +499,7 @@ func (c *call) sessionPermissionsAllow() bool {
 		return false
 	}
 	args := ParseToolInput(c.tc.Function.Arguments)
-	checker := permissions.NewCheckerFromRules(
-		perms.Allow,
-		perms.Ask,
-		perms.Deny,
-	)
+	checker := permissions.NewCheckerFromRules(perms.Allow, perms.Ask, perms.Deny)
 	if checker.CheckWithArgs(c.tc.Function.Name, args) != permissions.Allow {
 		return false
 	}
