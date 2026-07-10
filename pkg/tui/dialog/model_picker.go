@@ -29,6 +29,7 @@ type modelPickerDialog struct {
 	models   []runtime.ModelChoice
 	filtered []runtime.ModelChoice
 	errMsg   string // validation error message
+	refresh  key.Binding
 }
 
 // Model picker dialog dimension constants
@@ -80,9 +81,19 @@ var modelPickerLayout = pickerLayout{
 
 // NewModelPickerDialog creates a new model picker dialog.
 func NewModelPickerDialog(models []runtime.ModelChoice) Dialog {
+	return newModelPickerDialog(models, "")
+}
+
+// NewModelPickerDialogWithQuery creates a model picker and restores its filter.
+func NewModelPickerDialogWithQuery(models []runtime.ModelChoice, query string) Dialog {
+	return newModelPickerDialog(models, query)
+}
+
+func newModelPickerDialog(models []runtime.ModelChoice, query string) Dialog {
 	start := time.Now()
 	d := &modelPickerDialog{
 		pickerCore: newPickerCore(modelPickerLayout, "Type to search or enter custom model (provider/model)…"),
+		refresh:    key.NewBinding(key.WithKeys("ctrl+r"), key.WithHelp("ctrl+r", "refresh")),
 	}
 	d.textInput.CharLimit = 100
 
@@ -95,7 +106,7 @@ func NewModelPickerDialog(models []runtime.ModelChoice) Dialog {
 	sortDuration := time.Since(sortStart)
 	d.models = sortedModels
 	filterStart := time.Now()
-	d.filterModels()
+	d.setQuery(query)
 	slog.Debug("Model picker dialog constructed",
 		"duration", time.Since(start),
 		"sort_duration", sortDuration,
@@ -124,6 +135,11 @@ func modelSortKeys(m runtime.ModelChoice) pickerSortKeys {
 }
 
 func (d *modelPickerDialog) Init() tea.Cmd { return textinput.Blink }
+
+func (d *modelPickerDialog) setQuery(query string) {
+	d.textInput.SetValue(query)
+	d.filterModels()
+}
 
 func (d *modelPickerDialog) Update(msg tea.Msg) (layout.Model, tea.Cmd) {
 	// Scrollview handles mouse scrollbar, wheel, and pgup/pgdn/home/end.
@@ -163,6 +179,8 @@ func (d *modelPickerDialog) Update(msg tea.Msg) (layout.Model, tea.Cmd) {
 		case key.Matches(msg, d.keyMap.Enter):
 			cmd := d.handleSelection()
 			return d, cmd
+		case key.Matches(msg, d.refresh):
+			return d, core.CmdHandler(messages.RefreshModelPickerMsg{Query: d.textInput.Value()})
 		default:
 			cmd := d.handleInputChange(msg)
 			return d, cmd
@@ -384,7 +402,7 @@ func (d *modelPickerDialog) View() string {
 		AddSeparator().
 		AddContent(details).
 		AddSpace().
-		AddHelpKeys("↑/↓", "navigate", "enter", "select", "esc", "cancel").
+		AddHelpKeys("↑/↓", "navigate", "enter", "select", d.refresh.Help().Key, d.refresh.Help().Desc, "esc", "cancel").
 		Build()
 	contentBuildDuration := time.Since(contentBuildStart)
 

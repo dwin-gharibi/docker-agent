@@ -188,6 +188,20 @@ func (r *LocalRuntime) SupportsModelSwitching() bool {
 	return r.modelSwitcherCfg != nil
 }
 
+// RefreshModelsCatalog forces a refetch of the models.dev catalog backing
+// the model picker, bypassing the store's refresh interval. It returns
+// [ErrUnsupported] when the runtime's model store cannot refresh (e.g. an
+// in-memory test store).
+func (r *LocalRuntime) RefreshModelsCatalog(ctx context.Context) error {
+	refresher, ok := r.modelsStore.(interface {
+		Refresh(ctx context.Context) error
+	})
+	if !ok {
+		return ErrUnsupported
+	}
+	return refresher.Refresh(ctx)
+}
+
 // CycleAgentThinkingLevel implements [Runtime.CycleAgentThinkingLevel] for
 // LocalRuntime. It reads the agent's current effective model, advances the
 // thinking-effort level by one step through the levels that specific model

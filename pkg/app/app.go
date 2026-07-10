@@ -1190,6 +1190,20 @@ func (a *App) refreshAgentInfo(ctx context.Context) {
 	})
 }
 
+// RefreshModelsCatalog forces a refetch of the models.dev catalog that
+// backs catalog-driven model discovery. Refreshing is an optional
+// runtime capability: only the local runtime exposes it, so remote
+// runtimes report [runtime.ErrUnsupported].
+func (a *App) RefreshModelsCatalog(ctx context.Context) error {
+	refresher, ok := a.runtime.(interface {
+		RefreshModelsCatalog(ctx context.Context) error
+	})
+	if !ok {
+		return runtime.ErrUnsupported
+	}
+	return refresher.RefreshModelsCatalog(ctx)
+}
+
 // AvailableModels returns the list of models available for selection.
 // Returns nil if model switching is not supported.
 func (a *App) AvailableModels(ctx context.Context) []runtime.ModelChoice {

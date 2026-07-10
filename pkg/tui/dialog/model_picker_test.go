@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/docker/docker-agent/pkg/runtime"
+	"github.com/docker/docker-agent/pkg/tui/messages"
 )
 
 func TestModelPickerNavigation(t *testing.T) {
@@ -108,6 +109,55 @@ func TestModelPickerCustomModel(t *testing.T) {
 	require.Len(t, d.filtered, 1, "should have 1 item (custom option)")
 	require.Equal(t, "Custom: openai/gpt-4", d.filtered[0].Name)
 	require.Equal(t, "openai/gpt-4", d.filtered[0].Ref)
+}
+
+func TestModelPickerRefreshShortcut(t *testing.T) {
+	t.Parallel()
+
+	d := NewModelPickerDialog([]runtime.ModelChoice{{
+		Name: "default_model", Ref: "default_model", Provider: "openai", Model: "gpt-4o", IsDefault: true,
+	}}).(*modelPickerDialog)
+	d.Init()
+	d.Update(tea.WindowSizeMsg{Width: 100, Height: 50})
+
+	_, cmd := d.Update(tea.KeyPressMsg{Code: 'r', Mod: tea.ModCtrl})
+	require.NotNil(t, cmd)
+	msg := cmd()
+	assert.Equal(t, messages.RefreshModelPickerMsg{}, msg)
+	assert.Empty(t, d.textInput.Value())
+	assert.Contains(t, d.View(), "refresh")
+}
+
+func TestModelPickerRTypesIntoSearch(t *testing.T) {
+	t.Parallel()
+
+	d := NewModelPickerDialog([]runtime.ModelChoice{{
+		Name: "model_r", Ref: "model_r", Provider: "openai", Model: "gpt-4o",
+	}}).(*modelPickerDialog)
+	d.Init()
+	d.Update(tea.WindowSizeMsg{Width: 100, Height: 50})
+
+	_, cmd := d.Update(tea.KeyPressMsg{Text: "r"})
+	assert.Equal(t, "r", d.textInput.Value())
+	assert.Nil(t, cmd)
+}
+
+func TestModelPickerRefreshShortcutWorksWithSearch(t *testing.T) {
+	t.Parallel()
+
+	d := NewModelPickerDialog([]runtime.ModelChoice{{
+		Name: "model_r", Ref: "model_r", Provider: "openai", Model: "gpt-4o",
+	}}).(*modelPickerDialog)
+	d.Init()
+	d.Update(tea.WindowSizeMsg{Width: 100, Height: 50})
+
+	// Ctrl+R refreshes even when there is an active search.
+	d.Update(tea.KeyPressMsg{Text: "m"})
+	_, cmd := d.Update(tea.KeyPressMsg{Code: 'r', Mod: tea.ModCtrl})
+	assert.Equal(t, "m", d.textInput.Value())
+	require.NotNil(t, cmd)
+	msg := cmd()
+	assert.Equal(t, messages.RefreshModelPickerMsg{Query: "m"}, msg)
 }
 
 func TestModelPickerSorting(t *testing.T) {

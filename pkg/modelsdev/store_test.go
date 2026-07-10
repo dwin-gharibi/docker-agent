@@ -164,6 +164,160 @@ func BenchmarkGetModelFetchDisallowed(b *testing.B) {
 	}
 }
 
+// TestRefreshBypassesFreshCache checks that Refresh forces a fetch even when
+// the on-disk cache is fresh (GetDatabase would not have fetched), replaces
+// the memoized catalog, and rewrites the cache file.
+func TestRefreshBypassesFreshCache(t *testing.T) {
+	t.Parallel()
+
+	cacheFile := filepath.Join(t.TempDir(), "models_dev.json")
+	writeCache(t, cacheFile, Database{Providers: map[string]Provider{
+		"openai": {Models: map[string]Model{"gpt-old": {Name: "GPT Old"}}},
+	}})
+
+	fetched := false
+	store, err := NewStore(WithCache(cacheFile), WithFetcher(func(context.Context, string) (*Database, string, error) {
+		fetched = true
+		return &Database{Providers: map[string]Provider{
+			"openai": {Models: map[string]Model{"gpt-new": {Name: "GPT New"}}},
+		}}, `"etag-2"`, nil
+	}))
+	require.NoError(t, err)
+
+	// Warm the store from the fresh cache: no fetch happens.
+	_, err = store.GetModel(t.Context(), NewID("openai", "gpt-old"))
+	require.NoError(t, err)
+	assert.False(t, fetched, "a fresh cache must not trigger a fetch")
+
+	require.NoError(t, store.Refresh(t.Context()))
+	assert.True(t, fetched, "Refresh must fetch even when the cache is fresh")
+
+	// The memoized catalog now serves the refreshed data.
+	_, err = store.GetModel(t.Context(), NewID("openai", "gpt-new"))
+	require.NoError(t, err)
+	_, err = store.GetModel(t.Context(), NewID("openai", "gpt-old"))
+	require.Error(t, err)
+
+	// And the on-disk cache was rewritten with the fresh catalog and ETag.
+	cached, err := loadFromCache(cacheFile)
+	require.NoError(t, err)
+	assert.Contains(t, cached.Database.Providers["openai"].Models, "gpt-new")
+	assert.Equal(t, `"etag-2"`, cached.ETag)
+}
+
+// TestRefreshNotModifiedKeepsCache checks the 304 path: an unchanged catalog
+// keeps the cached data and only bumps its LastRefresh timestamp.
+func TestRefreshNotModifiedKeepsCache(t *testing.T) {
+	t.Parallel()
+
+	cacheFile := filepath.Join(t.TempDir(), "models_dev.json")
+	data, err := json.Marshal(CachedData{
+		Database: Database{Providers: map[string]Provider{
+			"openai": {Models: map[string]Model{"gpt-4o": {Name: "GPT-4o"}}},
+		}},
+		LastRefresh: time.Now().Add(-48 * time.Hour),
+		ETag:        `"etag-1"`,
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(cacheFile, data, 0o600))
+
+	store, err := NewStore(WithCache(cacheFile), WithFetcher(func(_ context.Context, etag string) (*Database, string, error) {
+		assert.Equal(t, `"etag-1"`, etag, "Refresh must send the cached ETag")
+		return nil, etag, nil // 304 Not Modified
+	}))
+	require.NoError(t, err)
+
+	require.NoError(t, store.Refresh(t.Context()))
+
+	m, err := store.GetModel(t.Context(), NewID("openai", "gpt-4o"))
+	require.NoError(t, err)
+	assert.Equal(t, "GPT-4o", m.Name)
+
+	cached, err := loadFromCache(cacheFile)
+	require.NoError(t, err)
+	assert.WithinDuration(t, time.Now(), cached.LastRefresh, time.Minute, "304 must bump LastRefresh")
+}
+
+// TestRefreshFetchError leaves the store usable on a failed refresh.
+func TestRefreshFetchError(t *testing.T) {
+	t.Parallel()
+
+	cacheFile := filepath.Join(t.TempDir(), "models_dev.json")
+	writeCache(t, cacheFile, Database{Providers: map[string]Provider{
+		"openai": {Models: map[string]Model{"gpt-4o": {Name: "GPT-4o"}}},
+	}})
+
+	_, fetch := trackingFetcher()
+	store, err := NewStore(WithCache(cacheFile), WithFetcher(fetch))
+	require.NoError(t, err)
+
+	require.Error(t, store.Refresh(t.Context()))
+
+	// The cached catalog still serves lookups.
+	_, err = store.GetModel(t.Context(), NewID("openai", "gpt-4o"))
+	require.NoError(t, err)
+}
+
+func TestRefreshInMemoryStoreReturnsError(t *testing.T) {
+	t.Parallel()
+
+	store := NewDatabaseStore(&Database{})
+	assert.Error(t, store.Refresh(t.Context()))
+}
+
+func TestRefreshNotModifiedWithoutCacheReturnsError(t *testing.T) {
+	t.Parallel()
+
+	store, err := NewStore(
+		WithCache(filepath.Join(t.TempDir(), "models_dev.json")),
+		WithFetcher(func(context.Context, string) (*Database, string, error) {
+			return nil, "", nil
+		}),
+	)
+	require.NoError(t, err)
+	assert.Error(t, store.Refresh(t.Context()))
+}
+
+func TestRefreshDoesNotBlockReadersDuringFetch(t *testing.T) {
+	t.Parallel()
+
+	cacheFile := filepath.Join(t.TempDir(), "models_dev.json")
+	writeCache(t, cacheFile, Database{Providers: map[string]Provider{
+		"openai": {Models: map[string]Model{"gpt-4o": {Name: "GPT-4o"}}},
+	}})
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	store, err := NewStore(WithCache(cacheFile), WithFetcher(func(context.Context, string) (*Database, string, error) {
+		close(started)
+		<-release
+		return &Database{}, "", nil
+	}))
+	require.NoError(t, err)
+
+	// Warm the authoritative in-memory database before refreshing.
+	_, err = store.GetDatabase(t.Context())
+	require.NoError(t, err)
+
+	refreshDone := make(chan error, 1)
+	go func() { refreshDone <- store.Refresh(t.Context()) }()
+	<-started
+
+	readDone := make(chan struct{})
+	go func() {
+		_, _ = store.GetDatabase(t.Context())
+		close(readDone)
+	}()
+	select {
+	case <-readDone:
+	case <-time.After(time.Second):
+		t.Fatal("GetDatabase blocked behind the refresh network request")
+	}
+
+	close(release)
+	require.NoError(t, <-refreshDone)
+}
+
 func TestResolveModelAlias(t *testing.T) {
 	t.Parallel()
 
