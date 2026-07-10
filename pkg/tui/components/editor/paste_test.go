@@ -8,9 +8,12 @@ import (
 	"testing"
 
 	"charm.land/bubbles/v2/textarea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/docker/go-units"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/docker/docker-agent/pkg/paths"
 )
 
 func TestHandlePaste_SmallContent(t *testing.T) {
@@ -20,7 +23,7 @@ func TestHandlePaste_SmallContent(t *testing.T) {
 	// Content that's under both limits: few lines and few chars
 	smallContent := "line1\nline2\nline3"
 
-	handled := e.handlePaste(smallContent)
+	_, handled := e.handlePaste(smallContent)
 
 	assert.False(t, handled, "small content should not be handled (return false)")
 	assert.Empty(t, e.attachments, "no attachments should be created for small content")
@@ -37,7 +40,7 @@ func TestHandlePaste_AtLineLimitIsInline(t *testing.T) {
 	}
 	content := strings.Join(lines, "\n")
 
-	handled := e.handlePaste(content)
+	_, handled := e.handlePaste(content)
 
 	assert.False(t, handled, "content at line limit should be inline")
 }
@@ -49,9 +52,60 @@ func TestHandlePaste_AtCharLimitIsInline(t *testing.T) {
 	// Exactly at char limit and under line limit should be inline
 	content := strings.Repeat("x", maxInlinePasteChars)
 
-	handled := e.handlePaste(content)
+	_, handled := e.handlePaste(content)
 
 	assert.False(t, handled, "content at char limit should be inline")
+}
+
+func TestHandlePaste_ReturnsNormalizedContent(t *testing.T) {
+	t.Parallel()
+
+	e := &editor{}
+
+	normalized, handled := e.handlePaste("line1\r\nline2\rline3")
+
+	assert.False(t, handled, "small content should not be handled (return false)")
+	assert.Equal(t, "line1\nline2\nline3", normalized, "CRLF and bare CR should be normalized to LF")
+}
+
+func TestUpdate_PasteInsertsNormalizedLineEndings(t *testing.T) {
+	t.Parallel()
+
+	e := newPasteTestEditor()
+
+	_, _ = e.Update(tea.PasteMsg{Content: "line1\r\nline2\rline3"})
+
+	assert.Equal(t, "line1\nline2\nline3", e.textarea.Value())
+	assert.NotContains(t, e.textarea.Value(), "\r", "no raw CR should reach the textarea")
+	assert.Empty(t, e.attachments, "small paste should stay inline")
+}
+
+func TestUpdate_CRDelimitedPasteOverLineLimitBecomesAttachment(t *testing.T) {
+	// Not parallel: overrides the global data dir used by createPasteAttachment.
+	paths.SetDataDir(t.TempDir())
+	t.Cleanup(func() { paths.SetDataDir("") })
+
+	// BuildKit-style progress records separated by bare CRs, kept under the
+	// char limit so only line classification can collapse the paste.
+	records := make([]string, maxInlinePasteLines+1)
+	for i := range records {
+		records[i] = fmt.Sprintf("#1 record %d", i)
+	}
+	content := strings.Join(records, "\r")
+	require.LessOrEqual(t, len(content), maxInlinePasteChars)
+
+	e := newPasteTestEditor()
+	t.Cleanup(e.Cleanup)
+
+	_, _ = e.Update(tea.PasteMsg{Content: content})
+
+	require.Len(t, e.attachments, 1, "CR-delimited paste over the line limit should be buffered")
+	assert.Equal(t, "@paste-1", e.textarea.Value(), "only the placeholder should be inserted")
+
+	data, err := os.ReadFile(e.attachments[0].path)
+	require.NoError(t, err)
+	assert.Equal(t, strings.ReplaceAll(content, "\r", "\n"), string(data),
+		"attachment should keep every record, with normalized newlines")
 }
 
 func TestHandlePaste_ExceedsLineLimit(t *testing.T) {
@@ -492,7 +546,7 @@ func TestHandlePaste_DragDropSingleFile(t *testing.T) {
 	require.NoError(t, os.WriteFile(file, []byte("PNG"), 0o644))
 
 	e := newPasteTestEditor()
-	handled := e.handlePaste(file)
+	_, handled := e.handlePaste(file)
 
 	assert.True(t, handled, "valid file path should be handled as drag-and-drop")
 	assert.Len(t, e.attachments, 1)
@@ -509,7 +563,7 @@ func TestHandlePaste_DragDropMultipleFiles(t *testing.T) {
 	require.NoError(t, os.WriteFile(file2, []byte("JPG"), 0o644))
 
 	e := newPasteTestEditor()
-	handled := e.handlePaste(file1 + " " + file2)
+	_, handled := e.handlePaste(file1 + " " + file2)
 
 	assert.True(t, handled)
 	assert.Len(t, e.attachments, 2)
@@ -529,7 +583,7 @@ func TestHandlePaste_RollbackOnPartialFailure(t *testing.T) {
 	require.NoError(t, os.WriteFile(bigFile, make([]byte, 5*1024*1024), 0o644))
 
 	e := newPasteTestEditor()
-	handled := e.handlePaste(goodFile + " " + bigFile)
+	_, handled := e.handlePaste(goodFile + " " + bigFile)
 
 	assert.False(t, handled, "should fall through to text paste when any file fails")
 	assert.Empty(t, e.attachments, "partial attachments should be rolled back")
@@ -547,7 +601,7 @@ func TestHandlePaste_UnsupportedTypeRollback(t *testing.T) {
 	require.NoError(t, os.WriteFile(sh, []byte("#!/bin/sh"), 0o644))
 
 	e := newPasteTestEditor()
-	handled := e.handlePaste(png + " " + sh)
+	_, handled := e.handlePaste(png + " " + sh)
 
 	assert.False(t, handled, "unsupported file type should cause fallback to text")
 	assert.Empty(t, e.attachments, "no attachments when file type is unsupported")
@@ -564,7 +618,7 @@ func TestHandlePaste_SymlinkRejected(t *testing.T) {
 	require.NoError(t, os.Symlink(realFile, link))
 
 	e := newPasteTestEditor()
-	handled := e.handlePaste(link)
+	_, handled := e.handlePaste(link)
 
 	assert.False(t, handled, "symlink should be rejected")
 	assert.Empty(t, e.attachments)
@@ -574,7 +628,7 @@ func TestHandlePaste_PathTraversalRejected(t *testing.T) {
 	t.Parallel()
 
 	e := newPasteTestEditor()
-	handled := e.handlePaste("../../etc/passwd")
+	_, handled := e.handlePaste("../../etc/passwd")
 
 	assert.False(t, handled, "path traversal should be rejected")
 	assert.Empty(t, e.attachments)

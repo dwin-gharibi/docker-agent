@@ -682,9 +682,18 @@ func (e *editor) Update(msg tea.Msg) (layout.Model, tea.Cmd) {
 		cmd := e.tickRecordingDots()
 		return e, cmd
 	case tea.PasteMsg:
-		if e.handlePaste(msg.Content) {
+		content, handled := e.handlePaste(msg.Content)
+		if handled {
 			return e, nil
 		}
+		// Forward the normalized content explicitly; falling through would
+		// hand the textarea the raw message, whose CR/CRLF line endings
+		// corrupt the rendered layout.
+		msg.Content = content
+		var cmd tea.Cmd
+		e.textarea, cmd = e.textarea.Update(msg)
+		e.refreshSuggestion()
+		return e, cmd
 	case tea.KeyboardEnhancementsMsg:
 		// Track keyboard enhancement support and configure newline keybinding accordingly
 		e.keyboardEnhancementsSupported = msg.Flags != 0 || termfeatures.SupportsModifiedEnter(os.Getenv)
@@ -939,10 +948,11 @@ func (e *editor) handleClipboardPaste() (layout.Model, tea.Cmd) {
 		return e, nil
 	}
 
-	// handlePaste returns true if content was buffered to disk (large paste),
-	// false if it's small enough for inline insertion.
-	if !e.handlePaste(content) {
-		e.textarea.InsertString(content)
+	// Insert the normalized content returned by handlePaste so the inserted
+	// text always matches what was classified.
+	normalized, handled := e.handlePaste(content)
+	if !handled {
+		e.textarea.InsertString(normalized)
 	}
 	return e, textarea.Blink
 }
@@ -1521,7 +1531,23 @@ func (e *editor) SendContent() tea.Cmd {
 	return e.resetAndSend(value)
 }
 
-func (e *editor) handlePaste(content string) bool {
+// normalizePasteNewlines converts CRLF and bare CR line endings to LF.
+// Pasted terminal output (e.g. Docker BuildKit logs) can separate records
+// with bare CRs, which would defeat line-based classification and let raw
+// CRs reach the textarea.
+func normalizePasteNewlines(content string) string {
+	content = strings.ReplaceAll(content, "\r\n", "\n")
+	return strings.ReplaceAll(content, "\r", "\n")
+}
+
+// handlePaste processes pasted content: file paths become attachments and
+// large text is buffered to a temp file attachment. It returns the
+// line-ending-normalized content and whether the paste was fully handled.
+// When handled is false the caller must insert the returned content, which
+// guarantees classification and insertion agree on the same string.
+func (e *editor) handlePaste(content string) (normalized string, handled bool) {
+	content = normalizePasteNewlines(content)
+
 	// First, try to parse as file paths (drag-and-drop)
 	filePaths := ParsePastedFiles(content)
 	if len(filePaths) > 0 {
@@ -1537,7 +1563,7 @@ func (e *editor) handlePaste(content string) bool {
 			attached++
 		}
 		if attached == len(filePaths) {
-			return true
+			return content, true
 		}
 		// Not all files could be attached; undo partial attachments and fall through to text paste
 		e.removeLastNAttachments(attached)
@@ -1552,22 +1578,22 @@ func (e *editor) handlePaste(content string) bool {
 
 	// Allow inline if within both limits
 	if lines <= maxInlinePasteLines && len(content) <= maxInlinePasteChars {
-		return false
+		return content, false
 	}
 
 	e.pasteCounter++
 	att, err := createPasteAttachment(content, e.pasteCounter)
 	if err != nil {
 		slog.Warn("failed to buffer paste", "error", err)
-		// Still return true to prevent the large paste from falling through
-		// to textarea.Update(), which would block the UI for seconds.
-		return true
+		// Still report handled to prevent the large paste from falling
+		// through to textarea.Update(), which would block the UI for seconds.
+		return content, true
 	}
 
 	e.textarea.InsertString(att.placeholder)
 	e.attachments = append(e.attachments, att)
 
-	return true
+	return content, true
 }
 
 // removeLastNAttachments removes the last n non-temp attachments and their
