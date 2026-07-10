@@ -1042,6 +1042,7 @@ func (f *runExecFlags) buildSessionOpts(agt *agent.Agent, req runtime.CreateSess
 		session.WithMaxIterations(agt.MaxIterations()),
 		session.WithMaxConsecutiveToolCalls(agt.MaxConsecutiveToolCalls()),
 		session.WithMaxOldToolCallTokens(agt.MaxOldToolCallTokens()),
+		session.WithMaxToolResultTokens(agt.MaxToolResultTokens()),
 		session.WithToolsApproved(req.ToolsApproved),
 		session.WithHideToolResults(req.HideToolResults),
 		session.WithWorkingDir(req.WorkingDir),

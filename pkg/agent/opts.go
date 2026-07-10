@@ -216,6 +216,15 @@ func WithMaxOldToolCallTokens(n int) Opt {
 	}
 }
 
+// WithMaxToolResultTokens sets the per-tool-result token cap applied when a
+// tool result enters a session. Positive values enable middle-out truncation;
+// 0 and -1 disable the cap (unbounded tool results).
+func WithMaxToolResultTokens(n int) Opt {
+	return func(a *Agent) {
+		a.maxToolResultTokens = n
+	}
+}
+
 func WithNumHistoryItems(numHistoryItems int) Opt {
 	return func(a *Agent) {
 		a.numHistoryItems = numHistoryItems

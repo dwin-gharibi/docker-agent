@@ -910,6 +910,27 @@ func TestLoadRetainsAgentConfig(t *testing.T) {
 	assert.False(t, ok, "unknown agent reports no retained config")
 }
 
+// TestLoadPropagatesMaxToolResultTokens verifies the opt-in per-tool-result
+// cap travels from the YAML config to the built agent, where session
+// constructors read it via agent.MaxToolResultTokens().
+func TestLoadPropagatesMaxToolResultTokens(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "dummy")
+
+	data := []byte(`agents:
+  root:
+    model: openai/gpt-4o
+    instruction: test
+    max_tool_result_tokens: 512
+`)
+
+	team, err := Load(t.Context(), config.NewBytesSource("cap.yaml", data), &config.RuntimeConfig{}, withTestProviderRegistry()...)
+	require.NoError(t, err)
+
+	agt, err := team.Agent("root")
+	require.NoError(t, err)
+	assert.Equal(t, 512, agt.MaxToolResultTokens())
+}
+
 // TestLoadWithConfig_GlobalProviders covers user-level custom providers
 // (seeded into the runtime config from the user config file): they must
 // resolve inline `provider/model` references in any agent config, while

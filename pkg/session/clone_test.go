@@ -29,6 +29,7 @@ func TestClone_CopiesScalarFields(t *testing.T) {
 		MaxIterations:           7,
 		MaxConsecutiveToolCalls: 3,
 		MaxOldToolCallTokens:    99,
+		MaxToolResultTokens:     44,
 		Starred:                 true,
 		InputTokens:             11,
 		OutputTokens:            22,
@@ -56,6 +57,7 @@ func TestClone_CopiesScalarFields(t *testing.T) {
 	assert.Equal(t, 7, clone.MaxIterations)
 	assert.Equal(t, 3, clone.MaxConsecutiveToolCalls)
 	assert.Equal(t, 99, clone.MaxOldToolCallTokens)
+	assert.Equal(t, 44, clone.MaxToolResultTokens)
 	assert.True(t, clone.Starred)
 	assert.Equal(t, int64(11), clone.InputTokens)
 	assert.Equal(t, int64(22), clone.OutputTokens)
