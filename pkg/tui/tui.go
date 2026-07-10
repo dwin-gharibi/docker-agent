@@ -1140,7 +1140,7 @@ func (m *appModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.forwardChat(msg)
 
 	case messages.CompactSessionMsg:
-		return m.handleCompactSession(msg.AdditionalPrompt)
+		return m.handleCompactSession(msg)
 
 	case messages.CopySessionToClipboardMsg:
 		return m.handleCopySessionToClipboard()

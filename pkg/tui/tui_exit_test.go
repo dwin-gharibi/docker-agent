@@ -29,13 +29,18 @@ import (
 )
 
 // mockChatPage implements chat.Page for testing.
-type mockChatPage struct{}
+type mockChatPage struct {
+	compactCalls []string // AdditionalPrompt of each CompactSession call
+}
 
-func (m *mockChatPage) Init() tea.Cmd                            { return nil }
-func (m *mockChatPage) Update(tea.Msg) (layout.Model, tea.Cmd)   { return m, nil }
-func (m *mockChatPage) View() string                             { return "" }
-func (m *mockChatPage) SetSize(int, int) tea.Cmd                 { return nil }
-func (m *mockChatPage) CompactSession(string) tea.Cmd            { return nil }
+func (m *mockChatPage) Init() tea.Cmd                          { return nil }
+func (m *mockChatPage) Update(tea.Msg) (layout.Model, tea.Cmd) { return m, nil }
+func (m *mockChatPage) View() string                           { return "" }
+func (m *mockChatPage) SetSize(int, int) tea.Cmd               { return nil }
+func (m *mockChatPage) CompactSession(prompt string) tea.Cmd {
+	m.compactCalls = append(m.compactCalls, prompt)
+	return nil
+}
 func (m *mockChatPage) SetSessionStarred(bool)                   {}
 func (m *mockChatPage) SetTitleRegenerating(bool) tea.Cmd        { return nil }
 func (m *mockChatPage) ScrollToBottom() tea.Cmd                  { return nil }

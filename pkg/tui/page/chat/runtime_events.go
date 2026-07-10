@@ -133,8 +133,16 @@ func (p *chatPage) handleRuntimeEvent(msg tea.Msg) (bool, tea.Cmd) {
 
 	case *runtime.SessionCompactionEvent:
 		// The sidebar tracks the started/completed pair to drive its
-		// "compacting…" gauge state.
+		// "compacting…" gauge state (it ignores sessions it is not
+		// currently displaying).
 		sidebarCmd := p.forwardToSidebar(msg)
+		if p.isSubSessionEvent(msg.SessionID) {
+			// A sub-agent session compacting (threshold-triggered on a
+			// foreground child, or an explicit /context request on a live
+			// session) must not touch the root chat's work state: no
+			// clearing of msgCancel, no spinner flip, no queue processing.
+			return true, tea.Batch(sidebarCmd, subSessionCompactionNotice(msg))
+		}
 		if msg.Status == "completed" {
 			p.msgCancel = nil
 			cmds := []tea.Cmd{
@@ -182,6 +190,39 @@ func (p *chatPage) forwardToSidebar(msg tea.Msg) tea.Cmd {
 	model, cmd := p.sidebar.Update(msg)
 	p.sidebar = model.(sidebar.Model)
 	return cmd
+}
+
+// isSubSessionEvent reports whether sessionID identifies a session other
+// than the page's root session. Events without a session ID are treated as
+// root events for backward compatibility.
+func (p *chatPage) isSubSessionEvent(sessionID string) bool {
+	if sessionID == "" || p.app == nil {
+		return false
+	}
+	sess := p.app.Session()
+	return sess != nil && sessionID != sess.ID
+}
+
+// subSessionCompactionNotice builds the agent-scoped feedback for a
+// sub-agent session's compaction: success, skipped or failed on the terminal
+// event, silence while it runs (the request itself was already announced).
+func subSessionCompactionNotice(msg *runtime.SessionCompactionEvent) tea.Cmd {
+	if msg.Status != "completed" {
+		return nil
+	}
+	agentLabel := msg.AgentName
+	if agentLabel == "" {
+		agentLabel = "sub-agent"
+	}
+	switch msg.Outcome {
+	case "", runtime.CompactionOutcomeApplied:
+		return notification.SuccessCmd(fmt.Sprintf("Compacted %s's session.", agentLabel))
+	case runtime.CompactionOutcomeSkipped:
+		return notification.InfoCmd(fmt.Sprintf("Compaction skipped for %s's session.", agentLabel))
+	case runtime.CompactionOutcomeFailed:
+		return notification.ErrorCmd(fmt.Sprintf("Compaction failed for %s's session.", agentLabel))
+	}
+	return nil
 }
 
 // handleTokenUsage updates sidebar and session with token usage data.

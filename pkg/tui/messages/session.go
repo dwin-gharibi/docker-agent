@@ -39,7 +39,15 @@ type (
 	EvalSessionMsg struct{ Filename string }
 
 	// CompactSessionMsg generates a summary and compacts session history.
-	CompactSessionMsg struct{ AdditionalPrompt string }
+	// SessionID selects the target: empty (or the current root session's ID)
+	// compacts the root session via the classic /compact path, any other ID
+	// requests a targeted compaction of that live sub-agent session.
+	// AgentName is carried along for user-facing feedback only.
+	CompactSessionMsg struct {
+		AdditionalPrompt string
+		SessionID        string
+		AgentName        string
+	}
 
 	// CopySessionToClipboardMsg copies the entire conversation to clipboard.
 	CopySessionToClipboardMsg struct{}

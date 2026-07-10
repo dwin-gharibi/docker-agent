@@ -29,49 +29,78 @@ import (
 type contextDialog struct {
 	BaseDialog
 
-	breakdown  *runtime.ContextBreakdown
-	keyMap     contextDialogKeyMap
-	scrollview *scrollview.Model
+	breakdown    *runtime.ContextBreakdown
+	liveSessions []runtime.LiveSession
+	keyMap       contextDialogKeyMap
+	scrollview   *scrollview.Model
 
-	// selected indexes breakdown.AttachedFiles; -1 when the inventory has
-	// nothing to select.
+	// selected indexes the combined selectable rows: live sessions first
+	// (0..len(liveSessions)-1), then breakdown.AttachedFiles; -1 when there
+	// is nothing to select.
 	selected int
-	// attachedLines maps each attached file to its line index in the
-	// scrollable content region. Rebuilt on every render and used to keep
-	// the selection visible while navigating.
-	attachedLines []int
+	// rowLines maps each selectable row (same order as the selection index)
+	// to its line index in the scrollable content region. Rebuilt on every
+	// render and used to keep the selection visible while navigating.
+	rowLines []int
 }
 
 type contextDialogKeyMap struct {
-	Close, Copy, Up, Down, Drop key.Binding
+	Close, Copy, Up, Down, Drop, Compact key.Binding
 }
 
 // NewContextDialog creates the /context dialog showing the estimated
-// context-window composition by category, plus the per-file inventory of
-// attached files (droppable) and prompt files.
-func NewContextDialog(breakdown *runtime.ContextBreakdown) Dialog {
+// context-window composition by category, the live-session team view
+// (explicitly compactable), plus the per-file inventory of attached files
+// (droppable) and prompt files.
+func NewContextDialog(breakdown *runtime.ContextBreakdown, liveSessions ...runtime.LiveSession) Dialog {
 	if breakdown == nil {
 		breakdown = &runtime.ContextBreakdown{}
 	}
 	d := &contextDialog{
-		breakdown: breakdown,
-		selected:  -1,
+		breakdown:    breakdown,
+		liveSessions: liveSessions,
+		selected:     -1,
 		scrollview: scrollview.New(
 			scrollview.WithKeyMap(scrollview.ReadOnlyScrollKeyMap()),
 			scrollview.WithReserveScrollbarSpace(true),
 		),
 		keyMap: contextDialogKeyMap{
-			Close: key.NewBinding(key.WithKeys("esc", "enter", "q"), key.WithHelp("Esc", "close")),
-			Copy:  key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "copy")),
-			Up:    key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑", "select")),
-			Down:  key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓", "select")),
-			Drop:  key.NewBinding(key.WithKeys("d", "x", "backspace", "delete"), key.WithHelp("d", "drop")),
+			Close:   key.NewBinding(key.WithKeys("esc", "q"), key.WithHelp("Esc", "close")),
+			Copy:    key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "copy")),
+			Up:      key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑", "select")),
+			Down:    key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓", "select")),
+			Drop:    key.NewBinding(key.WithKeys("d", "x", "backspace", "delete"), key.WithHelp("d", "drop")),
+			Compact: key.NewBinding(key.WithKeys("enter"), key.WithHelp("Enter", "compact")),
 		},
 	}
-	if len(breakdown.AttachedFiles) > 0 {
+	if d.selectableCount() > 0 {
 		d.selected = 0
 	}
 	return d
+}
+
+// selectableCount returns the number of selectable rows: live sessions plus
+// attached files.
+func (d *contextDialog) selectableCount() int {
+	return len(d.liveSessions) + len(d.breakdown.AttachedFiles)
+}
+
+// selectedLiveSession returns the live-session row under the selection.
+func (d *contextDialog) selectedLiveSession() (runtime.LiveSession, bool) {
+	if d.selected >= 0 && d.selected < len(d.liveSessions) {
+		return d.liveSessions[d.selected], true
+	}
+	return runtime.LiveSession{}, false
+}
+
+// selectedAttachedIndex returns the breakdown.AttachedFiles index under the
+// selection.
+func (d *contextDialog) selectedAttachedIndex() (int, bool) {
+	idx := d.selected - len(d.liveSessions)
+	if d.selected >= len(d.liveSessions) && idx >= 0 && idx < len(d.breakdown.AttachedFiles) {
+		return idx, true
+	}
+	return -1, false
 }
 
 func (d *contextDialog) Init() tea.Cmd { return nil }
@@ -93,54 +122,73 @@ func (d *contextDialog) Update(msg tea.Msg) (layout.Model, tea.Cmd) {
 }
 
 // handleKey processes dialog-level keys. Up/Down are claimed for selection
-// only while attached files are listed; without them the keys fall through
-// to the scrollview and keep their plain scrolling behavior.
+// only while selectable rows (live sessions, attached files) are listed;
+// without them the keys fall through to the scrollview and keep their plain
+// scrolling behavior.
 func (d *contextDialog) handleKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
-	hasAttached := len(d.breakdown.AttachedFiles) > 0
+	selectable := d.selectableCount() > 0
 	switch {
 	case key.Matches(msg, d.keyMap.Close):
 		return core.CmdHandler(CloseDialogMsg{}), true
 	case key.Matches(msg, d.keyMap.Copy):
 		_ = clipboard.WriteAll(d.renderPlainText())
 		return notification.SuccessCmd("Context breakdown copied to clipboard."), true
-	case key.Matches(msg, d.keyMap.Up) && hasAttached:
+	case key.Matches(msg, d.keyMap.Up) && selectable:
 		d.moveSelection(-1)
 		return nil, true
-	case key.Matches(msg, d.keyMap.Down) && hasAttached:
+	case key.Matches(msg, d.keyMap.Down) && selectable:
 		d.moveSelection(1)
 		return nil, true
-	case key.Matches(msg, d.keyMap.Drop) && hasAttached:
-		return d.dropSelected(), true
+	case key.Matches(msg, d.keyMap.Compact) && len(d.liveSessions) > 0:
+		return d.compactSelected(), true
+	case key.Matches(msg, d.keyMap.Drop):
+		if idx, ok := d.selectedAttachedIndex(); ok {
+			return d.dropSelected(idx), true
+		}
 	}
 	return nil, false
 }
 
-// moveSelection moves the attached-file selection by delta, clamped to the
-// list bounds, and scrolls the selected row into view.
+// moveSelection moves the selection by delta across the combined rows (live
+// sessions, then attached files), clamped to the list bounds, and scrolls
+// the selected row into view.
 func (d *contextDialog) moveSelection(delta int) {
-	n := len(d.breakdown.AttachedFiles)
+	n := d.selectableCount()
 	if n == 0 {
 		return
 	}
 	d.selected = min(max(d.selected+delta, 0), n-1)
-	if d.selected < len(d.attachedLines) {
-		d.scrollview.EnsureLineVisible(d.attachedLines[d.selected])
+	if d.selected < len(d.rowLines) {
+		d.scrollview.EnsureLineVisible(d.rowLines[d.selected])
 	}
 }
 
-// dropSelected removes the selected attached file from the local inventory
+// compactSelected requests an explicit compaction of the selected live
+// session and closes the dialog. The row's SessionID and AgentName travel on
+// the message so the handler can route the current root session through the
+// classic /compact path and live sub-agent sessions through the targeted
+// runtime API.
+func (d *contextDialog) compactSelected() tea.Cmd {
+	row, ok := d.selectedLiveSession()
+	if !ok {
+		return nil
+	}
+	return tea.Sequence(
+		core.CmdHandler(CloseDialogMsg{}),
+		core.CmdHandler(messages.CompactSessionMsg{SessionID: row.SessionID, AgentName: row.AgentName}),
+	)
+}
+
+// dropSelected removes the attached file at idx from the local inventory
 // and asks the app to drop it from the session. The local removal is
 // optimistic, mirroring the session-browser delete flow; the handler reports
 // success or failure through a notification.
-func (d *contextDialog) dropSelected() tea.Cmd {
+func (d *contextDialog) dropSelected(idx int) tea.Cmd {
 	files := d.breakdown.AttachedFiles
-	if d.selected < 0 || d.selected >= len(files) {
-		return nil
-	}
-	path := files[d.selected].Path
-	d.breakdown.AttachedFiles = slices.Delete(files, d.selected, d.selected+1)
-	if d.selected >= len(d.breakdown.AttachedFiles) {
-		d.selected = len(d.breakdown.AttachedFiles) - 1
+	path := files[idx].Path
+	d.breakdown.AttachedFiles = slices.Delete(files, idx, idx+1)
+	if n := d.selectableCount(); d.selected >= n {
+		d.selected = n - 1
 	}
 	return core.CmdHandler(messages.DropAttachedFileMsg{Path: path})
 }
@@ -254,6 +302,11 @@ const contextEstimateNote = "Token counts are estimates; the provider's tokenize
 // stops being shared forward, but past messages keep their inlined copy.
 const contextDropNote = "Dropping a file removes it from the session's attachment list (sub-agents and skills stop receiving it); content already inlined in past messages stays until compaction."
 
+// contextCompactNote explains the live-session rows: Enter queues an
+// explicit compaction that executes on the selected session's own run loop
+// at a safe point, so it never interrupts an in-flight model turn.
+const contextCompactNote = "Press Enter to compact the selected live session; sub-agent compactions run at the session's next safe point."
+
 // categoryColors returns the per-category accent colors, aligned with the
 // order of contextRows. Hues are used categorically (Error's rose tint
 // carries no alarm semantics here); each maps to a distinct color in the
@@ -294,15 +347,83 @@ func (d *contextDialog) renderContent(contentWidth, maxHeight int) string {
 		lines = append(lines, renderContextRow(&row, scale, labelWidth, markerColor(i, row, colors)))
 	}
 
+	d.rowLines = d.rowLines[:0]
+	lines = d.appendLiveSessions(lines)
 	lines = d.appendInventory(lines, scale, contentWidth)
 
 	lines = append(lines, "")
 	lines = append(lines, wrapMutedLines(contextEstimateNote, contentWidth)...)
+	if len(d.liveSessions) > 0 {
+		lines = append(lines, wrapMutedLines(contextCompactNote, contentWidth)...)
+	}
 	if len(b.AttachedFiles) > 0 {
 		lines = append(lines, wrapMutedLines(contextDropNote, contentWidth)...)
 	}
 
 	return d.applyScrolling(lines, contentWidth, maxHeight)
+}
+
+// appendLiveSessions renders the team view: one selectable row per live
+// session (the current root first, then every running sub-agent session)
+// with its agent identity, short session ID and context budget. Omitted when
+// the runtime does not expose live-session tracking.
+func (d *contextDialog) appendLiveSessions(lines []string) []string {
+	if len(d.liveSessions) == 0 {
+		return lines
+	}
+	lines = append(lines, "", sectionStyle().Render("Live sessions"))
+	labelWidth := liveAgentLabelWidth(d.liveSessions)
+	for i := range d.liveSessions {
+		d.rowLines = append(d.rowLines, len(lines)-contextHeaderLines)
+		lines = append(lines, renderLiveSessionRow(&d.liveSessions[i], labelWidth, i == d.selected))
+	}
+	return lines
+}
+
+// liveAgentLabelWidth returns the display width of the agent-name column,
+// clamped so one long name cannot push the budget columns off screen.
+func liveAgentLabelWidth(rows []runtime.LiveSession) int {
+	width := 0
+	for i := range rows {
+		width = max(width, lipgloss.Width(rows[i].AgentName))
+	}
+	return min(max(width, 4), 24)
+}
+
+// renderLiveSessionRow renders one team row:
+// "▶ developer  0f9e8d7c  55.1K of 200.0K (28%)".
+func renderLiveSessionRow(row *runtime.LiveSession, labelWidth int, selected bool) string {
+	prefix := "  "
+	nameStyle := labelStyle()
+	if selected {
+		prefix = accentStyle().Render("▶ ")
+		nameStyle = nameStyle.Foreground(styles.Highlight)
+	}
+	name := truncateName(row.AgentName, labelWidth)
+	pad := strings.Repeat(" ", max(0, labelWidth-lipgloss.Width(name)))
+	line := fmt.Sprintf("%s%s%s  %s  %s",
+		prefix,
+		nameStyle.Render(name),
+		pad,
+		styles.MutedStyle.Render(row.ShortID()),
+		valueStyle().Render(liveSessionBudget(row)))
+	if row.Current {
+		line += "  " + styles.MutedStyle.Render("(current)")
+	}
+	return line
+}
+
+// liveSessionBudget formats a live session's context budget: used tokens,
+// window and percentage, or an explicit unknown-limit reading.
+func liveSessionBudget(row *runtime.LiveSession) string {
+	used := row.UsedTokens()
+	if row.ContextLimit <= 0 {
+		return formatTokenCount(used) + " tokens, limit unknown"
+	}
+	return fmt.Sprintf("%s of %s (%s)",
+		formatTokenCount(used),
+		formatTokenCount(row.ContextLimit),
+		percentLabel(used, row.ContextLimit))
 }
 
 // appendInventory renders the per-file inventory under the category rows:
@@ -311,15 +432,14 @@ func (d *contextDialog) renderContent(contentWidth, maxHeight int) string {
 // content-region line index of every attached row is recorded so navigation
 // can keep the selection visible.
 func (d *contextDialog) appendInventory(lines []string, scale int64, contentWidth int) []string {
-	d.attachedLines = d.attachedLines[:0]
 	b := d.breakdown
 	labelWidth := fileLabelWidth(b)
 
 	if len(b.AttachedFiles) > 0 {
 		lines = append(lines, "", sectionStyle().Render("Attached files"))
 		for i := range b.AttachedFiles {
-			d.attachedLines = append(d.attachedLines, len(lines)-contextHeaderLines)
-			lines = append(lines, renderContextFileRow(&b.AttachedFiles[i], scale, labelWidth, contentWidth, i == d.selected))
+			d.rowLines = append(d.rowLines, len(lines)-contextHeaderLines)
+			lines = append(lines, renderContextFileRow(&b.AttachedFiles[i], scale, labelWidth, contentWidth, len(d.liveSessions)+i == d.selected))
 		}
 	}
 	if len(b.PromptFileItems) > 0 {
@@ -530,13 +650,21 @@ func (d *contextDialog) applyScrolling(allLines []string, contentWidth, maxHeigh
 	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
 
-// helpKeys returns the footer bindings; the selection/drop pair appears
-// only while attached files are listed.
+// helpKeys returns the footer bindings; the selection pair appears while
+// selectable rows are listed, the compact key while live sessions are
+// listed, and the drop key while attached files are listed.
 func (d *contextDialog) helpKeys() []string {
-	if len(d.breakdown.AttachedFiles) > 0 {
-		return []string{"↑↓", "select", "d", "drop", "c", "copy", "Esc", "close"}
+	keys := []string{"↑↓", "scroll"}
+	if d.selectableCount() > 0 {
+		keys = []string{"↑↓", "select"}
 	}
-	return []string{"↑↓", "scroll", "c", "copy", "Esc", "close"}
+	if len(d.liveSessions) > 0 {
+		keys = append(keys, "Enter", "compact")
+	}
+	if len(d.breakdown.AttachedFiles) > 0 {
+		keys = append(keys, "d", "drop")
+	}
+	return append(keys, "c", "copy", "Esc", "close")
 }
 
 // ---------------------------------------------------------------------------
@@ -566,6 +694,13 @@ func (d *contextDialog) renderPlainText() string {
 		lines = append(lines, line)
 	}
 
+	if len(d.liveSessions) > 0 {
+		lines = append(lines, "", "Live sessions")
+		for i := range d.liveSessions {
+			lines = append(lines, plainLiveSessionLine(&d.liveSessions[i]))
+		}
+	}
+
 	if len(b.AttachedFiles) > 0 {
 		lines = append(lines, "", "Attached files")
 		for i := range b.AttachedFiles {
@@ -588,6 +723,15 @@ func plainFileLine(file *runtime.ContextFile, scale int64) string {
 	line := fmt.Sprintf("%-8s %4s  %s", fileTokensLabel(file), percentLabel(file.Tokens, scale), file.Path)
 	if file.Missing {
 		line += " (missing)"
+	}
+	return line
+}
+
+// plainLiveSessionLine formats one live-session row for the clipboard copy.
+func plainLiveSessionLine(row *runtime.LiveSession) string {
+	line := fmt.Sprintf("%s  %s  %s", row.AgentName, row.ShortID(), liveSessionBudget(row))
+	if row.Current {
+		line += " (current)"
 	}
 	return line
 }

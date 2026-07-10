@@ -230,11 +230,16 @@ func (r *LocalRuntime) RunStream(ctx context.Context, sess *session.Session) <-c
 		r.activeRootStreams.Add(1)
 	}
 
+	// Register before the run goroutine starts so the session is listed in
+	// the /context team view (and targetable for explicit compaction) for
+	// the whole lifetime of its stream.
+	entry := r.registerLiveSession(sess)
+
 	go func() {
 		if rootStream {
 			defer r.activeRootStreams.Add(-1)
 		}
-		r.runStreamLoop(ctx, sess, events)
+		r.runStreamLoop(ctx, sess, entry, events)
 	}()
 	return r.observe(ctx, sess, events)
 }
@@ -242,7 +247,7 @@ func (r *LocalRuntime) RunStream(ctx context.Context, sess *session.Session) <-c
 // runStreamLoop is the body of RunStream. Pulled out of the anonymous
 // goroutine so it has a real name in stack traces and is easier to navigate
 // in editors.
-func (r *LocalRuntime) runStreamLoop(ctx context.Context, sess *session.Session, events chan Event) {
+func (r *LocalRuntime) runStreamLoop(ctx context.Context, sess *session.Session, liveEntry *liveSessionEntry, events chan Event) {
 	sink := &channelSink{ch: events}
 
 	// Seed the cagent session ID at the run-loop boundary so any
@@ -316,6 +321,13 @@ func (r *LocalRuntime) runStreamLoop(ctx context.Context, sess *session.Session,
 	defer func() {
 		r.finalizeEventChannel(ctx, sess, streamReason, prevElicitationCh, events)
 	}()
+
+	// Unregister from the live-session registry and execute any accepted
+	// explicit-compaction request before the stream lifecycle closes.
+	// Registered after the finalize defer so it runs first (LIFO): an
+	// accepted request is processed before StreamStopped is emitted and
+	// the events channel closes, so it can never be stranded.
+	defer r.finishLiveSession(ctx, liveEntry)
 
 	a := r.resolveSessionAgent(sess)
 
@@ -417,6 +429,12 @@ func (r *LocalRuntime) runStreamLoop(ctx context.Context, sess *session.Session,
 				return
 			}
 		}
+
+		// Execute any explicitly requested (/context) compaction for this
+		// session now, at the iteration boundary: no model turn is in flight,
+		// so the compaction snapshot cannot race with messages being appended
+		// between the snapshot and ApplyCompaction.
+		r.runQueuedCompaction(ctx, liveEntry)
 
 		a = r.resolveSessionAgent(sess)
 

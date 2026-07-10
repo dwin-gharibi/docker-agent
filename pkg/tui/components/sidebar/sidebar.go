@@ -724,6 +724,14 @@ func (m *model) Update(msg tea.Msg) (layout.Model, tea.Cmd) {
 		m.SetTokenUsage(msg)
 		return m, nil
 	case *runtime.SessionCompactionEvent:
+		// The "compacting…" gauge describes the displayed session only: a
+		// targeted compaction of a session that is not currently shown
+		// (e.g. an idle background agent session) must not flip it. Events
+		// without a session ID, or arriving before any session is known,
+		// keep the legacy behavior.
+		if active := m.activeSessionID(); active != "" && msg.SessionID != "" && msg.SessionID != active {
+			return m, nil
+		}
 		m.compacting = msg.Status == "started"
 		m.invalidateCache()
 		if m.compacting {

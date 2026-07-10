@@ -224,8 +224,41 @@ func (m *appModel) handleExportSession(filename string) (tea.Model, tea.Cmd) {
 	return m, notification.SuccessCmd("Session exported to " + exportFile)
 }
 
-func (m *appModel) handleCompactSession(additionalPrompt string) (tea.Model, tea.Cmd) {
-	return m, m.chatPage.CompactSession(additionalPrompt)
+func (m *appModel) handleCompactSession(msg messages.CompactSessionMsg) (tea.Model, tea.Cmd) {
+	if compactTargetsCurrentSession(msg, m.application.Session()) {
+		return m, m.chatPage.CompactSession(msg.AdditionalPrompt)
+	}
+	// Targeted compaction of a live sub-agent session: queued onto the
+	// target session's own run loop, so neither the root stream nor the
+	// target stream is cancelled.
+	if err := m.application.CompactLiveSession(m.ctx(), msg.SessionID, msg.AdditionalPrompt); err != nil {
+		return m, notification.ErrorCmd(fmt.Sprintf("Compaction request failed: %v", err))
+	}
+	return m, notification.InfoCmd(fmt.Sprintf(
+		"Compaction requested for %s; it runs at the session's next safe point.",
+		compactTargetLabel(msg)))
+}
+
+// compactTargetsCurrentSession reports whether msg addresses the current
+// root session: an empty target (the /compact command) or the root's own
+// session ID (the main row of the /context team view). Both route through
+// the existing root compaction path.
+func compactTargetsCurrentSession(msg messages.CompactSessionMsg, current *session.Session) bool {
+	return msg.SessionID == "" || (current != nil && msg.SessionID == current.ID)
+}
+
+// compactTargetLabel names the target of a targeted compaction request for
+// notifications: "agent (session 0f9e8d7c)", or just the short session ID
+// when the agent name is unknown.
+func compactTargetLabel(msg messages.CompactSessionMsg) string {
+	shortID := msg.SessionID
+	if len(shortID) > 8 {
+		shortID = shortID[:8]
+	}
+	if msg.AgentName == "" {
+		return "session " + shortID
+	}
+	return fmt.Sprintf("%s (session %s)", msg.AgentName, shortID)
 }
 
 func (m *appModel) handleCopySessionToClipboard() (tea.Model, tea.Cmd) {
@@ -455,7 +488,8 @@ func (m *appModel) handleShowCostDialog() (tea.Model, tea.Cmd) {
 // goroutine: the computation lists the agent's tools, which may start
 // not-yet-started toolsets (e.g. MCP servers) and block for a while, so it
 // must not run inside the Update loop. The dialog opens when the data is
-// ready.
+// ready, together with the live-session team view (current root plus every
+// running sub-agent session; empty for runtimes without live tracking).
 func (m *appModel) handleShowContextDialog() (tea.Model, tea.Cmd) {
 	appRef := m.application
 	ctx := m.ctx()
@@ -473,7 +507,7 @@ func (m *appModel) handleShowContextDialog() (tea.Model, tea.Cmd) {
 				Type: notification.TypeError,
 			}
 		}
-		return dialog.OpenDialogMsg{Model: dialog.NewContextDialog(breakdown)}
+		return dialog.OpenDialogMsg{Model: dialog.NewContextDialog(breakdown, appRef.LiveSessions(ctx)...)}
 	}
 }
 

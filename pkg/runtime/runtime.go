@@ -290,6 +290,13 @@ type LocalRuntime struct {
 	// stream has gone idle.
 	activeRootStreams atomic.Int32
 
+	// liveSessions is the registry of sessions with an active RunStream,
+	// keyed by session ID. It backs the /context team view (LiveSessions)
+	// and targeted manual compaction (CompactLiveSession). Guarded by
+	// liveSessionsMu; see live_sessions.go for the enqueue/drain contract.
+	liveSessionsMu sync.Mutex
+	liveSessions   map[string]*liveSessionEntry
+
 	// recallHandler wakes embedders (TUI/App) when a tool recall arrives after
 	// the active RunStream has gone idle. Protected by recallMu because tool
 	// callbacks can fire from background goroutines.
@@ -599,6 +606,7 @@ func NewLocalRuntime(ctx context.Context, agents *team.Team, opts ...Opt) (*Loca
 	r := &LocalRuntime{
 		ctx:                    func() context.Context { return context.WithoutCancel(ctx) },
 		toolMap:                make(map[string]ToolHandlerFunc),
+		liveSessions:           make(map[string]*liveSessionEntry),
 		team:                   agents,
 		agents:                 newAgentRouter(agents, defaultAgent.Name()),
 		resumeChan:             make(chan ResumeRequest),

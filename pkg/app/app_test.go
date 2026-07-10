@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -646,4 +647,90 @@ func TestResolveAttachedFile_RelativePath(t *testing.T) {
 	resolved, err := resolveAttachedFile([]string{abs}, "notes.md")
 	require.NoError(t, err)
 	assert.Equal(t, abs, resolved)
+}
+
+// liveSessionsMockRuntime layers the optional live-session capabilities
+// (LiveSessions, CompactLiveSession) over the base mock runtime.
+type liveSessionsMockRuntime struct {
+	mockRuntime
+
+	rows        []runtime.LiveSession
+	lastCurrent *session.Session
+	compactedID string
+	compactErr  error
+}
+
+func (m *liveSessionsMockRuntime) LiveSessions(_ context.Context, current *session.Session) []runtime.LiveSession {
+	m.lastCurrent = current
+	return m.rows
+}
+
+func (m *liveSessionsMockRuntime) CompactLiveSession(_ context.Context, sessionID, _ string, events runtime.EventSink) error {
+	if m.compactErr != nil {
+		return m.compactErr
+	}
+	m.compactedID = sessionID
+	events.Emit(runtime.SessionCompactionCompleted(sessionID, runtime.CompactionOutcomeApplied, "worker"))
+	return nil
+}
+
+func TestApp_LiveSessions_UnsupportedRuntime(t *testing.T) {
+	t.Parallel()
+
+	app := New(t.Context(), &mockRuntime{}, session.New())
+	assert.Nil(t, app.LiveSessions(t.Context()),
+		"runtimes without live-session tracking degrade to an empty team view")
+}
+
+func TestApp_CompactLiveSession_UnsupportedRuntime(t *testing.T) {
+	t.Parallel()
+
+	app := New(t.Context(), &mockRuntime{}, session.New())
+	err := app.CompactLiveSession(t.Context(), "some-session", "")
+	require.ErrorIs(t, err, runtime.ErrUnsupported)
+}
+
+func TestApp_LiveSessions_PassesCurrentSession(t *testing.T) {
+	t.Parallel()
+
+	sess := session.New()
+	rt := &liveSessionsMockRuntime{rows: []runtime.LiveSession{
+		{SessionID: sess.ID, AgentName: "root", Current: true},
+		{SessionID: "child-1", AgentName: "worker"},
+	}}
+	app := New(t.Context(), rt, sess)
+
+	rows := app.LiveSessions(t.Context())
+	require.Len(t, rows, 2)
+	assert.Same(t, sess, rt.lastCurrent, "the app's current session drives the root row")
+}
+
+func TestApp_CompactLiveSession_BridgesEventsIntoStream(t *testing.T) {
+	t.Parallel()
+
+	rt := &liveSessionsMockRuntime{}
+	app := New(t.Context(), rt, session.New())
+
+	require.NoError(t, app.CompactLiveSession(t.Context(), "child-1", ""))
+	assert.Equal(t, "child-1", rt.compactedID)
+
+	select {
+	case msg := <-app.events:
+		evt, ok := msg.(*runtime.SessionCompactionEvent)
+		require.True(t, ok, "expected SessionCompactionEvent, got %T", msg)
+		assert.Equal(t, "child-1", evt.SessionID)
+		assert.Equal(t, "completed", evt.Status)
+	case <-time.After(time.Second):
+		t.Fatal("compaction event was not bridged into the app event stream")
+	}
+}
+
+func TestApp_CompactLiveSession_ForwardsRuntimeError(t *testing.T) {
+	t.Parallel()
+
+	rt := &liveSessionsMockRuntime{compactErr: errors.New("session x is not live")}
+	app := New(t.Context(), rt, session.New())
+
+	err := app.CompactLiveSession(t.Context(), "x", "")
+	require.ErrorContains(t, err, "not live")
 }

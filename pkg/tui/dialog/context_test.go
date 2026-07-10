@@ -320,3 +320,172 @@ func TestFileLabelWidthClamped(t *testing.T) {
 	b = &runtime.ContextBreakdown{AttachedFiles: []runtime.ContextFile{{Path: "/p/a.go"}}}
 	assert.Equal(t, 4, fileLabelWidth(b))
 }
+
+// ---------------------------------------------------------------------------
+// Live sessions (team view, targeted compaction)
+// ---------------------------------------------------------------------------
+
+func testLiveSessions() []runtime.LiveSession {
+	return []runtime.LiveSession{
+		{SessionID: "root-session-1234", AgentName: "root", InputTokens: 20_000, OutputTokens: 5_400, ContextLimit: 128_000, Current: true},
+		// Two concurrent runs of the SAME agent: rows must stay distinct.
+		{SessionID: "aaaa1111-e89b-12d3", AgentName: "developer", InputTokens: 50_000, OutputTokens: 5_100, ContextLimit: 200_000},
+		{SessionID: "bbbb2222-e89b-12d3", AgentName: "developer", InputTokens: 1_000, OutputTokens: 200},
+	}
+}
+
+func TestContextDialogLiveSessionsView(t *testing.T) {
+	t.Parallel()
+
+	dialog := NewContextDialog(testBreakdown(), testLiveSessions()...)
+	dialog.SetSize(120, 50)
+	view := dialog.View()
+
+	assert.Contains(t, view, "Live sessions")
+	assert.Contains(t, view, "root")
+	assert.Contains(t, view, "(current)")
+	assert.Contains(t, view, "developer")
+
+	// Short session IDs disambiguate duplicate same-agent rows.
+	assert.Contains(t, view, "aaaa1111")
+	assert.Contains(t, view, "bbbb2222")
+
+	// Budgets: used of limit with percentage, or the unknown-limit reading.
+	assert.Contains(t, view, "55.1K of 200.0K (28%)")
+	assert.Contains(t, view, "1.2K tokens, limit unknown")
+
+	assert.Contains(t, view, "compact", "help must advertise the compact key")
+}
+
+func TestContextDialogNoLiveSessions(t *testing.T) {
+	t.Parallel()
+
+	dialog := NewContextDialog(testBreakdown())
+	dialog.SetSize(100, 50)
+	view := dialog.View()
+
+	assert.NotContains(t, view, "Live sessions")
+	assert.NotContains(t, view, "compact")
+}
+
+func TestContextDialogEnterCompactsSelectedLiveSession(t *testing.T) {
+	t.Parallel()
+
+	d := NewContextDialog(testBreakdown(), testLiveSessions()...).(*contextDialog)
+	d.SetSize(120, 50)
+	d.View()
+
+	require.Equal(t, 0, d.selected, "selection starts on the first live session")
+
+	// Select the second developer row and request its compaction.
+	d.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	d.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	_, cmd := d.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	require.NotNil(t, cmd)
+
+	msgs := collectMsgs(cmd)
+	require.Len(t, msgs, 2)
+	assert.IsType(t, CloseDialogMsg{}, msgs[0], "the dialog closes after requesting a compaction")
+	compactMsg, ok := msgs[1].(messages.CompactSessionMsg)
+	require.True(t, ok, "expected CompactSessionMsg, got %T", msgs[1])
+	assert.Equal(t, "bbbb2222-e89b-12d3", compactMsg.SessionID)
+	assert.Equal(t, "developer", compactMsg.AgentName)
+	assert.Empty(t, compactMsg.AdditionalPrompt)
+}
+
+func TestContextDialogEnterOnMainRowTargetsRootSession(t *testing.T) {
+	t.Parallel()
+
+	d := NewContextDialog(testBreakdown(), testLiveSessions()...).(*contextDialog)
+	d.SetSize(120, 50)
+	d.View()
+
+	_, cmd := d.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	require.NotNil(t, cmd)
+
+	msgs := collectMsgs(cmd)
+	require.Len(t, msgs, 2)
+	compactMsg, ok := msgs[1].(messages.CompactSessionMsg)
+	require.True(t, ok, "expected CompactSessionMsg, got %T", msgs[1])
+	assert.Equal(t, "root-session-1234", compactMsg.SessionID,
+		"the main row carries the root session ID; the handler routes it through the classic /compact path")
+}
+
+func TestContextDialogCombinedSelection(t *testing.T) {
+	t.Parallel()
+
+	d := NewContextDialog(testBreakdownWithFiles(), testLiveSessions()...).(*contextDialog)
+	d.SetSize(120, 50)
+	d.View()
+
+	// 3 live sessions + 3 attached files = 6 selectable rows.
+	require.Equal(t, 6, d.selectableCount())
+
+	// Walk from the live rows into the attached rows.
+	for range 3 {
+		d.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	}
+	assert.Equal(t, 3, d.selected)
+	idx, ok := d.selectedAttachedIndex()
+	require.True(t, ok)
+	assert.Equal(t, 0, idx)
+
+	// Enter on an attached row is inert: no compaction, no close.
+	_, cmd := d.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	assert.Nil(t, cmd)
+
+	// Dropping works from the combined selection and targets the right file.
+	_, cmd = d.Update(keyPress('d'))
+	require.NotNil(t, cmd)
+	dropMsg, ok := cmd().(messages.DropAttachedFileMsg)
+	require.True(t, ok)
+	assert.Equal(t, "/proj/main.go", dropMsg.Path)
+	require.Len(t, d.breakdown.AttachedFiles, 2)
+
+	// Selection clamps within the combined bounds after drops.
+	d.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	d.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	d.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	assert.Equal(t, 4, d.selected)
+
+	// The drop keys are inert while a live-session row is selected.
+	for range 6 {
+		d.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	}
+	require.Equal(t, 0, d.selected)
+	_, cmd = d.Update(keyPress('d'))
+	assert.Nil(t, cmd)
+	require.Len(t, d.breakdown.AttachedFiles, 2, "drop on a live row must not remove attachments")
+}
+
+func TestContextDialogEnterDoesNotClose(t *testing.T) {
+	t.Parallel()
+
+	// Without live sessions Enter is unbound: neither close nor compact.
+	d := NewContextDialog(testBreakdown()).(*contextDialog)
+	d.SetSize(100, 50)
+	_, cmd := d.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	assert.Nil(t, cmd)
+
+	// Esc and q still close.
+	_, cmd = d.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	require.NotNil(t, cmd)
+	assert.IsType(t, CloseDialogMsg{}, cmd())
+	_, cmd = d.Update(keyPress('q'))
+	require.NotNil(t, cmd)
+	assert.IsType(t, CloseDialogMsg{}, cmd())
+}
+
+func TestContextDialogPlainTextLiveSessions(t *testing.T) {
+	t.Parallel()
+
+	d := &contextDialog{breakdown: testBreakdown(), liveSessions: testLiveSessions()}
+	text := d.renderPlainText()
+
+	assert.Contains(t, text, "Live sessions")
+	assert.Contains(t, text, "root  root-ses")
+	assert.Contains(t, text, "(current)")
+	assert.Contains(t, text, "developer  aaaa1111  55.1K of 200.0K (28%)")
+	assert.Contains(t, text, "developer  bbbb2222  1.2K tokens, limit unknown")
+	assert.NotContains(t, text, "\x1b[", "plain text must carry no ANSI escapes")
+}

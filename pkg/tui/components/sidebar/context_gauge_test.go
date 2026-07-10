@@ -107,3 +107,41 @@ func TestStreamCancelClearsCompacting(t *testing.T) {
 
 	assert.False(t, m.compacting, "ESC cancel must not leave the gauge stuck on compacting…")
 }
+
+// TestCompactingGaugeIgnoresOtherSessions pins the #3439 sidebar contract:
+// the "compacting…" gauge describes the displayed session only, so a
+// targeted compaction of a session that is not displayed (e.g. an idle
+// background agent session) must not flip it in either direction.
+func TestCompactingGaugeIgnoresOtherSessions(t *testing.T) {
+	t.Parallel()
+
+	m := newTestSidebar(t)
+	m.startStream("session-1", "root")
+	m.spinnerActive = true
+
+	m.Update(&runtime.SessionCompactionEvent{SessionID: "background-1", Status: "started"})
+	assert.False(t, m.compacting, "another session's compaction must not show the root gauge as compacting")
+
+	m.Update(&runtime.SessionCompactionEvent{SessionID: "session-1", Status: "started"})
+	assert.True(t, m.compacting, "the displayed session's compaction still drives the gauge")
+
+	m.Update(&runtime.SessionCompactionEvent{SessionID: "background-1", Status: "completed", Outcome: runtime.CompactionOutcomeApplied})
+	assert.True(t, m.compacting, "another session's completion must not clear the running gauge")
+
+	m.Update(&runtime.SessionCompactionEvent{SessionID: "session-1", Status: "completed", Outcome: runtime.CompactionOutcomeApplied})
+	assert.False(t, m.compacting)
+}
+
+// TestCompactingGaugeBeforeAnySessionKnown keeps the legacy behavior when no
+// session has been recorded yet (fresh session, /compact before any stream):
+// the event is applied rather than dropped.
+func TestCompactingGaugeBeforeAnySessionKnown(t *testing.T) {
+	t.Parallel()
+
+	m := newTestSidebar(t)
+	m.workingAgent = "root" // keep needsSpinner true so Update never touches the coordinator
+	m.spinnerActive = true
+
+	m.Update(&runtime.SessionCompactionEvent{SessionID: "session-1", Status: "started"})
+	assert.True(t, m.compacting)
+}
