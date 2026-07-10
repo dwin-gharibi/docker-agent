@@ -494,22 +494,17 @@ func (c *call) autoApprovalAfterConfirmationWait() (PermissionDecision, bool) {
 // "mkdir x && rm -rf ~". Silencing a safety verdict demands the stricter
 // word-boundary, no-metacharacter reading — see shellGrantCoversCommand.
 func (c *call) sessionPermissionsAllow() bool {
-	c.d.approvalMu.Lock()
-	defer c.d.approvalMu.Unlock()
-	if c.sess.Permissions == nil {
+	perms := c.sess.ClonePermissions()
+	if perms == nil {
 		return false
 	}
 	args := ParseToolInput(c.tc.Function.Arguments)
-	checker := permissions.NewCheckerFromRules(
-		c.sess.Permissions.Allow,
-		c.sess.Permissions.Ask,
-		c.sess.Permissions.Deny,
-	)
+	checker := permissions.NewCheckerFromRules(perms.Allow, perms.Ask, perms.Deny)
 	if checker.CheckWithArgs(c.tc.Function.Name, args) != permissions.Allow {
 		return false
 	}
 	if c.tc.Function.Name == shellToolName {
-		return shellGrantCoversCommand(c.sess.Permissions.Allow, args)
+		return shellGrantCoversCommand(perms.Allow, args)
 	}
 	return true
 }
