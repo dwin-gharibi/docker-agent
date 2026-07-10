@@ -58,12 +58,12 @@ func (r *LocalRuntime) processToolCalls(ctx context.Context, sess *session.Sessi
 // evaluate (session-level first, then team-level).
 func (r *LocalRuntime) permissionCheckers(sess *session.Session) []toolexec.NamedChecker {
 	var checkers []toolexec.NamedChecker
-	if sess.Permissions != nil {
+	if perms := sess.ClonePermissions(); perms != nil {
 		checkers = append(checkers, toolexec.NamedChecker{
 			Checker: permissions.NewChecker(&latest.PermissionsConfig{
-				Allow: sess.Permissions.Allow,
-				Ask:   sess.Permissions.Ask,
-				Deny:  sess.Permissions.Deny,
+				Allow: perms.Allow,
+				Ask:   perms.Ask,
+				Deny:  perms.Deny,
 			}),
 			Source: "session permissions",
 		})
