@@ -529,8 +529,35 @@ func (a *App) buildUserMultiContent(ctx context.Context, message string, attachm
 		case att.Content != "":
 			// Inline content attachment (e.g. pasted text).
 			a.processInlineAttachment(att, &textBuilder)
+		case len(att.Data) > 0:
+			// Binary inline content.
+			doc, resizeMeta, procErr := chat.ProcessAttachmentWithMetadata(chat.MessagePart{
+				Type: chat.MessagePartTypeDocument,
+				Document: &chat.Document{
+					Name:     att.Name,
+					MimeType: att.MimeType,
+					Source: chat.DocumentSource{
+						InlineData: att.Data,
+					},
+				},
+			})
+			if procErr != nil {
+				slog.WarnContext(ctx, "skipping inline attachment: processing failed", "name", att.Name, "error", procErr)
+				a.sendEvent(ctx, runtime.Warning(fmt.Sprintf("Skipped attachment %s: %s", att.Name, procErr), ""))
+				continue
+			}
+			if resizeMeta != nil {
+				if note := chat.FormatDimensionNote(resizeMeta); note != "" {
+					textBuilder.WriteString("\n")
+					textBuilder.WriteString(note)
+				}
+			}
+			binaryParts = append(binaryParts, chat.MessagePart{
+				Type:     chat.MessagePartTypeDocument,
+				Document: &doc,
+			})
 		default:
-			slog.DebugContext(ctx, "skipping attachment with no file path or content", "name", att.Name)
+			slog.DebugContext(ctx, "skipping attachment with no file path, content, or data", "name", att.Name)
 		}
 	}
 

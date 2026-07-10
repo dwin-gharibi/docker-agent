@@ -141,6 +141,32 @@ func TestProcessAttachment_ImageTooLarge_Resized(t *testing.T) {
 	assert.LessOrEqual(t, b.Dy(), chat.MaxImageDimension)
 }
 
+func TestProcessAttachmentWithMetadata_IdempotentResend(t *testing.T) {
+	t.Parallel()
+	// An image that is already within the dimension limits
+	smallData := encodeJPEGBytes(50, 50)
+
+	doc, resizeMeta, err := chat.ProcessAttachmentWithMetadata(chat.MessagePart{
+		Type: chat.MessagePartTypeDocument,
+		Document: &chat.Document{
+			Name:     "photo.jpg",
+			MimeType: "image/jpeg",
+			Source:   chat.DocumentSource{InlineData: smallData},
+		},
+	})
+	require.NoError(t, err)
+	assert.NotEmpty(t, doc.Source.InlineData)
+
+	// Since it fits within the limit, it shouldn't be resized
+	if assert.NotNil(t, resizeMeta) {
+		assert.False(t, resizeMeta.Resized)
+	}
+
+	// FormatDimensionNote should return empty string for un-resized images
+	note := chat.FormatDimensionNote(resizeMeta)
+	assert.Empty(t, note, "expected no dimension note for an image that wasn't resized")
+}
+
 func TestProcessAttachment_PDF_Passthrough(t *testing.T) {
 	t.Parallel()
 	pdfBytes := []byte("%PDF-1.4 fake pdf content for testing")

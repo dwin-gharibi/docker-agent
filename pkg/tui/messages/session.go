@@ -2,12 +2,11 @@ package messages
 
 import "github.com/docker/docker-agent/pkg/session"
 
-// Attachment represents content attached to a message. It is either a reference
-// to a file on disk (FilePath is set) or inline content already in memory
-// (Content is set, e.g. pasted text). When FilePath is set the consumer reads
-// and classifies the file at send time; when only Content is set the consumer
-// uses it directly as inline text. This design lets us add binary-file support
-// (images, PDFs, …) in the future by extending the struct with a MimeType hint.
+// Attachment represents content attached to a message. It can be a reference
+// to a file on disk (FilePath is set), inline text content (Content is set),
+// or inline binary content (Data and MimeType are set). When FilePath is set,
+// the consumer reads and classifies the file at send time; inline content
+// is used directly.
 type Attachment struct {
 	// Name is the human-readable label (e.g. "paste-1", "main.go").
 	Name string
@@ -18,6 +17,10 @@ type Attachment struct {
 	// backing temp file is cleaned up before the message reaches the app layer.
 	// Empty for file-reference attachments that are read from disk.
 	Content string
+	// MimeType is the MIME type of the binary data, if Data is present.
+	MimeType string
+	// Data holds raw binary content for non-text inline attachments.
+	Data []byte
 }
 
 // Session lifecycle messages control session state and persistence.
