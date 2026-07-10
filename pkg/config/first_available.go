@@ -174,13 +174,26 @@ func (e *firstAvailableMissingEnvError) Error() string {
 
 	fmt.Fprintln(&msg, "No 'first_available' candidate has credentials configured.")
 	fmt.Fprintln(&msg, "Set the environment variables for at least one candidate:")
-	for _, candidate := range e.Candidates {
+	example := "OPENAI_API_KEY"
+	for i, candidate := range e.Candidates {
 		fmt.Fprintf(&msg, " - %s: %s\n", candidate.Ref, strings.Join(candidate.Missing, ", "))
+		if i == 0 && len(candidate.Missing) > 0 {
+			example = candidate.Missing[0]
+		}
 	}
-	fmt.Fprintln(&msg, "\nEither:\n - Set one of those groups of environment variables before running docker agent\n - Run docker agent with --env-from-file\n - Store those secrets using one of the built-in environment variable providers.")
+	msg.WriteString("\n")
+	msg.WriteString(environment.SecretSourcesHelp(example))
+	msg.WriteString("\nOr run `docker agent setup` to configure a provider or local model interactively.\n")
+	fmt.Fprintf(&msg, "Step-by-step model setup (API key or local): %s\n", environment.ModelSetupDocsURL)
 
 	return msg.String()
 }
+
+// MissingModelCredentials reports that the missing variables are model
+// credentials: first_available candidates are models by definition. It lets
+// callers (e.g. the CLI's setup offer) classify this error without exporting
+// the type.
+func (e *firstAvailableMissingEnvError) MissingModelCredentials() bool { return true }
 
 // resolveCandidate turns a candidate reference into a ModelConfig. The
 // reference is first looked up as a named model; otherwise it is parsed as an

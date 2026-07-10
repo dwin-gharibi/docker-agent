@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"os"
@@ -232,6 +233,39 @@ func TestGetSessionSummaries(t *testing.T) {
 	assert.Equal(t, session1Time, summaries[1].CreatedAt)
 	assert.Equal(t, 1, summaries[1].NumMessages)
 	assert.Equal(t, "/work/project", summaries[1].WorkingDir)
+}
+
+func TestGetSessionSummaries_CorruptCreatedAt(t *testing.T) {
+	t.Parallel()
+
+	tempDB := filepath.Join(t.TempDir(), "test_corrupt_created_at.db")
+
+	store, err := NewSQLiteSessionStore(t.Context(), tempDB)
+	require.NoError(t, err)
+	sqlStore := store.(*SQLiteSessionStore)
+	defer sqlStore.Close()
+
+	validTime := time.Now().UTC().Truncate(time.Second)
+	require.NoError(t, store.AddSession(t.Context(), &Session{ID: "valid", CreatedAt: validTime}))
+
+	// Simulate a corrupt row written by an older/buggy version.
+	_, err = sqlStore.db.ExecContext(t.Context(),
+		"INSERT INTO sessions (id, created_at) VALUES (?, ?)", "corrupt", "139800")
+	require.NoError(t, err)
+
+	// Listing must not fail; the corrupt row gets a zero CreatedAt.
+	summaries, err := store.GetSessionSummaries(t.Context())
+	require.NoError(t, err)
+	require.Len(t, summaries, 2)
+	assert.Equal(t, "valid", summaries[0].ID)
+	assert.Equal(t, validTime, summaries[0].CreatedAt)
+	assert.Equal(t, "corrupt", summaries[1].ID)
+	assert.True(t, summaries[1].CreatedAt.IsZero())
+
+	// Loading the corrupt session directly must not fail either.
+	sess, err := store.GetSession(t.Context(), "corrupt")
+	require.NoError(t, err)
+	assert.True(t, sess.CreatedAt.IsZero())
 }
 
 func TestGetSessionSummaries_InMemory_WorkingDir(t *testing.T) {
@@ -715,6 +749,39 @@ func TestNewSQLiteSessionStore_RejectsNewerDatabase(t *testing.T) {
 	require.ErrorIs(t, err, ErrNewerDatabase)
 	assert.Contains(t, err.Error(), "9999")
 	assert.Contains(t, err.Error(), "upgrade docker-agent")
+}
+
+// TestNewSQLiteSessionStore_TransientErrorPreservesDB verifies that a
+// transient failure during open (here: a canceled context, e.g. Ctrl-C
+// during startup) does NOT trigger the backup-and-reset recovery path,
+// which would silently discard a healthy session history.
+func TestNewSQLiteSessionStore_TransientErrorPreservesDB(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "test_transient.db")
+
+	// Create a valid database with one session.
+	store, err := NewSQLiteSessionStore(t.Context(), dbPath)
+	require.NoError(t, err)
+	require.NoError(t, store.AddSession(t.Context(), &Session{ID: "keep-me", CreatedAt: time.Now()}))
+	require.NoError(t, store.Close())
+
+	// Opening with an already-canceled context must fail without recovery.
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err = NewSQLiteSessionStore(canceled, dbPath)
+	require.ErrorIs(t, err, context.Canceled)
+
+	// The database must be untouched: no .bak, data still there.
+	_, err = os.Stat(dbPath + ".bak")
+	assert.True(t, os.IsNotExist(err), "no backup should be created for transient errors")
+
+	store, err = NewSQLiteSessionStore(t.Context(), dbPath)
+	require.NoError(t, err)
+	defer store.Close()
+	retrieved, err := store.GetSession(t.Context(), "keep-me")
+	require.NoError(t, err)
+	assert.Equal(t, "keep-me", retrieved.ID)
 }
 
 func TestNewSQLiteSessionStore_MigrationFailureRecovery(t *testing.T) {

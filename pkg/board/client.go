@@ -13,6 +13,8 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
+	"time"
 )
 
 // Event types the board reacts to on the session event stream. Every other
@@ -41,6 +43,17 @@ const (
 // reasonNormal is the stream_stopped reason for a turn that completed
 // cleanly, as opposed to "error", "canceled", "hook_blocked"...
 const reasonNormal = "normal"
+
+// streamIdleTimeout is how long StreamEvents tolerates a silent connection
+// once the server has proven it sends heartbeats (": ping" SSE comments,
+// emitted every 15s). Three missed heartbeats means the transport is hung —
+// e.g. the agent's VM was paused — not that the session is quiet, so the
+// stream is aborted and the watcher reconnects. Servers that predate
+// heartbeats never arm the watchdog, keeping long-lived idle streams working.
+var streamIdleTimeout = 45 * time.Second
+
+// errStreamIdle reports a stream aborted by the idle watchdog.
+var errStreamIdle = errors.New("event stream idle: heartbeats stopped")
 
 // event is the subset of a runtime event the board cares about.
 type event struct {
@@ -147,6 +160,8 @@ func (c *client) Followup(ctx context.Context, idempotencyKey, message string) e
 // false stops the stream cleanly. It returns nil on a clean stop and an
 // error when the connection fails.
 func (c *client) StreamEvents(ctx context.Context, since uint64, onEvent func(event) bool) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	u := c.endpoint("events")
 	if since > 0 {
 		u += "?since=" + strconv.FormatUint(since, 10)
@@ -167,9 +182,37 @@ func (c *client) StreamEvents(ctx context.Context, since uint64, onEvent func(ev
 
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
+
+	// The idle watchdog is armed by the first heartbeat and re-armed by any
+	// subsequent line; when it fires it cancels the request, failing the read.
+	var idle atomic.Bool
+	var watchdog *time.Timer
+	defer func() {
+		if watchdog != nil {
+			watchdog.Stop()
+		}
+	}()
+	resetWatchdog := func() {
+		if watchdog != nil {
+			watchdog.Reset(streamIdleTimeout)
+		}
+	}
+
 	var seq uint64
 	for scanner.Scan() {
 		line := scanner.Text()
+		if strings.HasPrefix(line, ":") {
+			// Heartbeat comment: the server sends them, so silence now means
+			// a hung transport. Arm the watchdog on the first one.
+			if watchdog == nil {
+				watchdog = time.AfterFunc(streamIdleTimeout, func() {
+					idle.Store(true)
+					cancel()
+				})
+			}
+			continue
+		}
+		resetWatchdog()
 		if id, ok := strings.CutPrefix(line, "id:"); ok {
 			seq, _ = strconv.ParseUint(strings.TrimSpace(id), 10, 64)
 			continue
@@ -187,6 +230,9 @@ func (c *client) StreamEvents(ctx context.Context, since uint64, onEvent func(ev
 		if !onEvent(ev) {
 			return nil
 		}
+	}
+	if idle.Load() {
+		return errStreamIdle
 	}
 	if err := scanner.Err(); err != nil {
 		return err

@@ -1,0 +1,127 @@
+---
+version: 2
+interactions:
+    - id: 0
+      request:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 0
+        host: api.openai.com
+        body: '{"messages":[{"content":"You are a knowledgeable assistant that helps users with various tasks.\nBe helpful, accurate, and concise in your responses.\n","role":"system"},{"content":"What''s 2+2?","role":"user"}],"model":"gpt-3.5-turbo","stream_options":{"include_usage":true},"stream":true}'
+        url: https://api.openai.com/v1/chat/completions
+        method: POST
+      response:
+        proto: HTTP/2.0
+        proto_major: 2
+        proto_minor: 0
+        content_length: -1
+        body: |+
+            data: {"id":"chatcmpl-steer-a1","object":"chat.completion.chunk","created":1765813154,"model":"gpt-3.5-turbo-0125","choices":[{"index":0,"delta":{"role":"assistant","content":"","refusal":null},"logprobs":null,"finish_reason":null}],"usage":null}
+
+            data: {"id":"chatcmpl-steer-a1","object":"chat.completion.chunk","created":1765813154,"model":"gpt-3.5-turbo-0125","choices":[{"index":0,"delta":{"content":"2"},"logprobs":null,"finish_reason":null}],"usage":null}
+
+            data: {"id":"chatcmpl-steer-a1","object":"chat.completion.chunk","created":1765813154,"model":"gpt-3.5-turbo-0125","choices":[{"index":0,"delta":{"content":" "},"logprobs":null,"finish_reason":null}],"usage":null}
+
+            data: {"id":"chatcmpl-steer-a1","object":"chat.completion.chunk","created":1765813154,"model":"gpt-3.5-turbo-0125","choices":[{"index":0,"delta":{"content":"+"},"logprobs":null,"finish_reason":null}],"usage":null}
+
+            data: {"id":"chatcmpl-steer-a1","object":"chat.completion.chunk","created":1765813154,"model":"gpt-3.5-turbo-0125","choices":[{"index":0,"delta":{"content":" "},"logprobs":null,"finish_reason":null}],"usage":null}
+
+            data: {"id":"chatcmpl-steer-a1","object":"chat.completion.chunk","created":1765813154,"model":"gpt-3.5-turbo-0125","choices":[{"index":0,"delta":{"content":"2"},"logprobs":null,"finish_reason":null}],"usage":null}
+
+            data: {"id":"chatcmpl-steer-a1","object":"chat.completion.chunk","created":1765813154,"model":"gpt-3.5-turbo-0125","choices":[{"index":0,"delta":{"content":" "},"logprobs":null,"finish_reason":null}],"usage":null}
+
+            data: {"id":"chatcmpl-steer-a1","object":"chat.completion.chunk","created":1765813154,"model":"gpt-3.5-turbo-0125","choices":[{"index":0,"delta":{"content":"e"},"logprobs":null,"finish_reason":null}],"usage":null}
+
+            data: {"id":"chatcmpl-steer-a1","object":"chat.completion.chunk","created":1765813154,"model":"gpt-3.5-turbo-0125","choices":[{"index":0,"delta":{"content":"q"},"logprobs":null,"finish_reason":null}],"usage":null}
+
+            data: {"id":"chatcmpl-steer-a1","object":"chat.completion.chunk","created":1765813154,"model":"gpt-3.5-turbo-0125","choices":[{"index":0,"delta":{"content":"u"},"logprobs":null,"finish_reason":null}],"usage":null}
+
+            data: {"id":"chatcmpl-steer-a1","object":"chat.completion.chunk","created":1765813154,"model":"gpt-3.5-turbo-0125","choices":[{"index":0,"delta":{"content":"a"},"logprobs":null,"finish_reason":null}],"usage":null}
+
+            data: {"id":"chatcmpl-steer-a1","object":"chat.completion.chunk","created":1765813154,"model":"gpt-3.5-turbo-0125","choices":[{"index":0,"delta":{"content":"l"},"logprobs":null,"finish_reason":null}],"usage":null}
+
+            data: {"id":"chatcmpl-steer-a1","object":"chat.completion.chunk","created":1765813154,"model":"gpt-3.5-turbo-0125","choices":[{"index":0,"delta":{"content":"s"},"logprobs":null,"finish_reason":null}],"usage":null}
+
+            data: {"id":"chatcmpl-steer-a1","object":"chat.completion.chunk","created":1765813154,"model":"gpt-3.5-turbo-0125","choices":[{"index":0,"delta":{"content":" "},"logprobs":null,"finish_reason":null}],"usage":null}
+
+            data: {"id":"chatcmpl-steer-a1","object":"chat.completion.chunk","created":1765813154,"model":"gpt-3.5-turbo-0125","choices":[{"index":0,"delta":{"content":"4"},"logprobs":null,"finish_reason":null}],"usage":null}
+
+            data: {"id":"chatcmpl-steer-a1","object":"chat.completion.chunk","created":1765813154,"model":"gpt-3.5-turbo-0125","choices":[{"index":0,"delta":{"content":"."},"logprobs":null,"finish_reason":null}],"usage":null}
+
+            data: {"id":"chatcmpl-steer-a1","object":"chat.completion.chunk","created":1765813154,"model":"gpt-3.5-turbo-0125","choices":[{"index":0,"delta":{},"logprobs":null,"finish_reason":"stop"}],"usage":null}
+
+            data: {"id":"chatcmpl-steer-a1","object":"chat.completion.chunk","created":1765813154,"model":"gpt-3.5-turbo-0125","choices":[],"usage":{"prompt_tokens":41,"completion_tokens":15,"total_tokens":56}}
+
+            data: [DONE]
+
+        headers: {}
+        status: 200 OK
+        code: 200
+        duration: 100ms
+    - id: 1
+      request:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 0
+        host: api.openai.com
+        body: '{"messages":[{"content":"You are a helpful AI assistant that generates concise, descriptive titles for conversations. You will be given up to 2 recent user messages and asked to create a single-line title that captures the main topic. Never use newlines or line breaks in your response.","role":"system"},{"content":"Based on the following recent user messages from a conversation with an AI assistant, generate a short, descriptive title (maximum 50 characters) that captures the main topic or purpose of the conversation. Return ONLY the title text on a single line, nothing else. Do not include any newlines, explanations, or formatting.\n\nRecent user messages:\n1. What''s 2+2?\n\n\n","role":"user"}],"model":"gpt-3.5-turbo","stream_options":{"include_usage":true},"stream":true}'
+        url: https://api.openai.com/v1/chat/completions
+        method: POST
+      response:
+        proto: HTTP/2.0
+        proto_major: 2
+        proto_minor: 0
+        content_length: -1
+        body: |+
+            data: {"id":"chatcmpl-steer-title","object":"chat.completion.chunk","created":1765813154,"model":"gpt-3.5-turbo-0125","choices":[{"index":0,"delta":{"role":"assistant","content":"","refusal":null},"logprobs":null,"finish_reason":null}],"usage":null}
+
+            data: {"id":"chatcmpl-steer-title","object":"chat.completion.chunk","created":1765813154,"model":"gpt-3.5-turbo-0125","choices":[{"index":0,"delta":{"content":"Simple"},"logprobs":null,"finish_reason":null}],"usage":null}
+
+            data: {"id":"chatcmpl-steer-title","object":"chat.completion.chunk","created":1765813154,"model":"gpt-3.5-turbo-0125","choices":[{"index":0,"delta":{"content":" Math"},"logprobs":null,"finish_reason":null}],"usage":null}
+
+            data: {"id":"chatcmpl-steer-title","object":"chat.completion.chunk","created":1765813154,"model":"gpt-3.5-turbo-0125","choices":[{"index":0,"delta":{},"logprobs":null,"finish_reason":"stop"}],"usage":null}
+
+            data: {"id":"chatcmpl-steer-title","object":"chat.completion.chunk","created":1765813154,"model":"gpt-3.5-turbo-0125","choices":[],"usage":{"prompt_tokens":100,"completion_tokens":2,"total_tokens":102}}
+
+            data: [DONE]
+
+        headers: {}
+        status: 200 OK
+        code: 200
+        duration: 100ms
+    - id: 2
+      request:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 0
+        host: api.openai.com
+        body: '{"messages":[{"content":"You are a knowledgeable assistant that helps users with various tasks.\nBe helpful, accurate, and concise in your responses.\n","role":"system"},{"content":"What''s 2+2?","role":"user"},{"content":"2 + 2 equals 4.","role":"assistant"},{"content":"Also, what''s 3+3?","role":"user"}],"model":"gpt-3.5-turbo","stream_options":{"include_usage":true},"stream":true}'
+        url: https://api.openai.com/v1/chat/completions
+        method: POST
+      response:
+        proto: HTTP/2.0
+        proto_major: 2
+        proto_minor: 0
+        content_length: -1
+        body: |+
+            data: {"id":"chatcmpl-steer-a2","object":"chat.completion.chunk","created":1765813154,"model":"gpt-3.5-turbo-0125","choices":[{"index":0,"delta":{"role":"assistant","content":"","refusal":null},"logprobs":null,"finish_reason":null}],"usage":null}
+
+            data: {"id":"chatcmpl-steer-a2","object":"chat.completion.chunk","created":1765813154,"model":"gpt-3.5-turbo-0125","choices":[{"index":0,"delta":{"content":"3 + 3"},"logprobs":null,"finish_reason":null}],"usage":null}
+
+            data: {"id":"chatcmpl-steer-a2","object":"chat.completion.chunk","created":1765813154,"model":"gpt-3.5-turbo-0125","choices":[{"index":0,"delta":{"content":" equals"},"logprobs":null,"finish_reason":null}],"usage":null}
+
+            data: {"id":"chatcmpl-steer-a2","object":"chat.completion.chunk","created":1765813154,"model":"gpt-3.5-turbo-0125","choices":[{"index":0,"delta":{"content":" 6."},"logprobs":null,"finish_reason":null}],"usage":null}
+
+            data: {"id":"chatcmpl-steer-a2","object":"chat.completion.chunk","created":1765813154,"model":"gpt-3.5-turbo-0125","choices":[{"index":0,"delta":{},"logprobs":null,"finish_reason":"stop"}],"usage":null}
+
+            data: {"id":"chatcmpl-steer-a2","object":"chat.completion.chunk","created":1765813154,"model":"gpt-3.5-turbo-0125","choices":[],"usage":{"prompt_tokens":70,"completion_tokens":5,"total_tokens":75}}
+
+            data: [DONE]
+
+        headers: {}
+        status: 200 OK
+        code: 200
+        duration: 100ms

@@ -146,11 +146,12 @@ func TestTokenUsageSummary_SingleSession(t *testing.T) {
 		},
 	})
 
-	summary := m.tokenUsageSummary()
-	// Single session: shows total tokens, cost, and context
-	assert.Contains(t, summary, "Tokens: 8.0K")
-	assert.Contains(t, summary, "Cost: $0.05")
-	assert.Contains(t, summary, "Context: 8%")
+	summary := ansi.Strip(m.tokenUsageSummary())
+	// Single session: shows total tokens, context, and cost in the same
+	// compact format as the vertical Token Usage tab
+	assert.Contains(t, summary, "8.0K")
+	assert.Contains(t, summary, "$0.05")
+	assert.Contains(t, summary, "(8%)")
 	assert.NotContains(t, summary, "sub-sessions")
 }
 
@@ -189,18 +190,18 @@ func TestTokenUsageSummary_MultipleSessions_ShowsActiveSessionTokens(t *testing.
 
 	// While the sub-agent runs, show its tokens and context, with the
 	// aggregated cost and sub-session count.
-	summary := m.tokenUsageSummary()
-	assert.Contains(t, summary, "Tokens: 10.0K")
-	assert.Contains(t, summary, "Cost: $0.15")
-	assert.Contains(t, summary, "Context: 5%")
-	assert.Contains(t, summary, "1 sub-sessions")
+	summary := ansi.Strip(m.tokenUsageSummary())
+	assert.Contains(t, summary, "10.0K")
+	assert.Contains(t, summary, "$0.15")
+	assert.Contains(t, summary, "(5%)")
+	assert.Contains(t, summary, "(1 sub-sessions)")
 
 	// Once it returns, the parent's tokens and context are shown again.
 	m.stopStream()
-	summary = m.tokenUsageSummary()
-	assert.Contains(t, summary, "Tokens: 30.0K")
-	assert.Contains(t, summary, "Cost: $0.15")
-	assert.Contains(t, summary, "Context: 30%")
+	summary = ansi.Strip(m.tokenUsageSummary())
+	assert.Contains(t, summary, "30.0K")
+	assert.Contains(t, summary, "$0.15")
+	assert.Contains(t, summary, "(30%)")
 }
 
 func TestTokenUsageSummary_Empty(t *testing.T) {

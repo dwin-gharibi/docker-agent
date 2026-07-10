@@ -46,6 +46,7 @@ type loadOptions struct {
 	promptFiles      []string
 	toolsetRegistry  ToolsetRegistry
 	providerRegistry *provider.Registry
+	modelOpts        []options.Opt
 }
 
 type Opt func(*loadOptions) error
@@ -80,6 +81,23 @@ func WithProviderRegistry(registry *provider.Registry) Opt {
 		if registry != nil {
 			opts.providerRegistry = registry
 		}
+		return nil
+	}
+}
+
+// WithModelOptions appends caller-supplied [options.Opt] values to every model
+// client teamloader constructs for this load: primary, fallback, title, and
+// compaction models, as well as models built while loading external
+// (OCI/URL-referenced) sub-agents. Use this to thread cross-cutting model
+// configuration — most notably options.WithHTTPTransportWrapper, which lets an
+// embedder authenticate every outbound LLM request (regardless of provider)
+// without depending on provider-specific environment variables or
+// environment.IsTrustedDockerURL. The opts are appended after teamloader's own
+// built-in opts (options.WithGateway, options.WithStructuredOutput, etc.), so
+// they take precedence for any option that both sides set.
+func WithModelOptions(opts ...options.Opt) Opt {
+	return func(o *loadOptions) error {
+		o.modelOpts = append(o.modelOpts, opts...)
 		return nil
 	}
 }
@@ -145,6 +163,12 @@ func LoadWithConfig(ctx context.Context, agentSource config.Source, runConfig *c
 			attribute.Int("cagent.teamloader.model_count", len(cfg.Models)),
 		)
 	}
+
+	// Merge user-level provider definitions (seeded into the runtime config
+	// from the user config file) so custom providers registered via
+	// `docker agent setup` resolve in every run, including inline
+	// `--model myprovider/mymodel` overrides. Agent-file definitions win.
+	config.MergeGlobalProviders(cfg, runConfig.Providers)
 
 	// Resolve model aliases (e.g., "claude-sonnet-4-5" -> "claude-sonnet-4-5-20250929")
 	// This ensures the API uses the pinned model version. The original name is preserved
@@ -264,13 +288,14 @@ func LoadWithConfig(ctx context.Context, agentSource config.Source, runConfig *c
 			}
 			opts = append(opts, agent.WithHarness(&harnessCfg))
 		} else {
-			models, err := getModelsForAgent(ctx, cfg, &agentConfig, autoModel, dmrFallbackSelectors, runConfig, loadOpts.providerRegistry)
+			models, err := getModelsForAgent(ctx, cfg, &agentConfig, autoModel, dmrFallbackSelectors, runConfig, loadOpts.providerRegistry, loadOpts.modelOpts)
 			if err != nil {
-				// Return auto model fallback errors, DMR not installed errors, and
-				// DMR pull failures directly without wrapping to provide cleaner,
-				// actionable messages.
+				// Return auto model fallback errors, DMR not installed errors,
+				// DMR pull failures, and DMR model-not-available errors directly
+				// without wrapping to provide cleaner, actionable messages.
 				_, isPull := errors.AsType[*dmr.PullFailedError](err)
-				if _, ok := errors.AsType[*config.AutoModelFallbackError](err); ok || errors.Is(err, dmr.ErrNotInstalled) || isPull {
+				_, isNotAvailable := errors.AsType[*dmr.ModelNotAvailableError](err)
+				if _, ok := errors.AsType[*config.AutoModelFallbackError](err); ok || errors.Is(err, dmr.ErrNotInstalled) || isPull || isNotAvailable {
 					return nil, err
 				}
 				return nil, fmt.Errorf("failed to get models: %w", err)
@@ -282,7 +307,7 @@ func LoadWithConfig(ctx context.Context, agentSource config.Source, runConfig *c
 			// Load fallback models if configured
 			fallbackModelRefs := agentConfig.GetFallbackModels()
 			if len(fallbackModelRefs) > 0 {
-				fallbackModels, err := getFallbackModelsForAgent(ctx, cfg, &agentConfig, runConfig, loadOpts.providerRegistry)
+				fallbackModels, err := getFallbackModelsForAgent(ctx, cfg, &agentConfig, runConfig, loadOpts.providerRegistry, loadOpts.modelOpts)
 				if err != nil {
 					return nil, fmt.Errorf("failed to get fallback models: %w", err)
 				}
@@ -296,7 +321,7 @@ func LoadWithConfig(ctx context.Context, agentSource config.Source, runConfig *c
 			}
 
 			// A model may delegate session-title generation to another model.
-			titleModel, err := getTitleModelForAgent(ctx, cfg, &agentConfig, runConfig, loadOpts.providerRegistry)
+			titleModel, err := getTitleModelForAgent(ctx, cfg, &agentConfig, runConfig, loadOpts.providerRegistry, loadOpts.modelOpts)
 			if err != nil {
 				return nil, fmt.Errorf("failed to get title model: %w", err)
 			}
@@ -306,7 +331,7 @@ func LoadWithConfig(ctx context.Context, agentSource config.Source, runConfig *c
 
 			// A model may delegate session compaction (summary generation) to
 			// another, cheaper/faster model.
-			compactionModel, err := getCompactionModelForAgent(ctx, cfg, &agentConfig, runConfig, loadOpts.providerRegistry)
+			compactionModel, err := getCompactionModelForAgent(ctx, cfg, &agentConfig, runConfig, loadOpts.providerRegistry, loadOpts.modelOpts)
 			if err != nil {
 				return nil, fmt.Errorf("failed to get compaction model: %w", err)
 			}
@@ -424,7 +449,7 @@ func LoadWithConfig(ctx context.Context, agentSource config.Source, runConfig *c
 	}, nil
 }
 
-func getModelsForAgent(ctx context.Context, cfg *latest.Config, a *latest.AgentConfig, autoModelFn func() latest.ModelConfig, dmrFallbackSelectors map[string]bool, runConfig *config.RuntimeConfig, providerRegistry *provider.Registry) ([]provider.Provider, error) {
+func getModelsForAgent(ctx context.Context, cfg *latest.Config, a *latest.AgentConfig, autoModelFn func() latest.ModelConfig, dmrFallbackSelectors map[string]bool, runConfig *config.RuntimeConfig, providerRegistry *provider.Registry, modelOpts []options.Opt) ([]provider.Provider, error) {
 	var models []provider.Provider
 
 	// Obtain the singleton store once, outside the loop.
@@ -472,6 +497,7 @@ func getModelsForAgent(ctx context.Context, cfg *latest.Config, a *latest.AgentC
 		if modelsStoreErr == nil {
 			opts = append(opts, options.WithModelsDevStore(modelsStore))
 		}
+		opts = append(opts, modelOpts...)
 
 		// Pass the full models map for routing rules to resolve model references
 		model, err := providerRegistry.NewWithModels(ctx,
@@ -497,7 +523,7 @@ func getModelsForAgent(ctx context.Context, cfg *latest.Config, a *latest.AgentC
 
 // getFallbackModelsForAgent returns fallback providers for an agent based on its fallback configuration.
 // It uses the same resolution logic as primary models (named model, inline provider/model format).
-func getFallbackModelsForAgent(ctx context.Context, cfg *latest.Config, a *latest.AgentConfig, runConfig *config.RuntimeConfig, providerRegistry *provider.Registry) ([]provider.Provider, error) {
+func getFallbackModelsForAgent(ctx context.Context, cfg *latest.Config, a *latest.AgentConfig, runConfig *config.RuntimeConfig, providerRegistry *provider.Registry, modelOpts []options.Opt) ([]provider.Provider, error) {
 	var fallbackModels []provider.Provider
 
 	// Obtain the singleton store once, outside the loop.
@@ -537,6 +563,7 @@ func getFallbackModelsForAgent(ctx context.Context, cfg *latest.Config, a *lates
 		if modelsStoreErr == nil {
 			opts = append(opts, options.WithModelsDevStore(modelsStore))
 		}
+		opts = append(opts, modelOpts...)
 
 		// Pass the full models map for routing rules to resolve model references
 		model, err := providerRegistry.NewWithModels(ctx,
@@ -557,7 +584,7 @@ func getFallbackModelsForAgent(ctx context.Context, cfg *latest.Config, a *lates
 // getTitleModelForAgent resolves the dedicated title-generation model for an
 // agent, if any. It returns the model named by the `title_model` field of the
 // first of the agent's configured models that sets it, or nil when none do.
-func getTitleModelForAgent(ctx context.Context, cfg *latest.Config, a *latest.AgentConfig, runConfig *config.RuntimeConfig, providerRegistry *provider.Registry) (provider.Provider, error) {
+func getTitleModelForAgent(ctx context.Context, cfg *latest.Config, a *latest.AgentConfig, runConfig *config.RuntimeConfig, providerRegistry *provider.Registry, modelOpts []options.Opt) (provider.Provider, error) {
 	var titleRef string
 	for name := range strings.SplitSeq(a.Model, ",") {
 		if modelCfg, ok := cfg.Models[name]; ok && modelCfg.TitleModel != "" {
@@ -602,6 +629,7 @@ func getTitleModelForAgent(ctx context.Context, cfg *latest.Config, a *latest.Ag
 	if modelsStoreErr == nil {
 		opts = append(opts, options.WithModelsDevStore(modelsStore))
 	}
+	opts = append(opts, modelOpts...)
 
 	model, err := providerRegistry.NewWithModels(ctx, &modelCfg, cfg.Models, runConfig.EnvProvider(), opts...)
 	if err != nil {
@@ -615,7 +643,7 @@ func getTitleModelForAgent(ctx context.Context, cfg *latest.Config, a *latest.Ag
 // `compaction_model` field of the first of the agent's configured models that
 // sets it, or nil when none do. It mirrors getTitleModelForAgent: the value may
 // be a named model from the models section or an inline "provider/model" spec.
-func getCompactionModelForAgent(ctx context.Context, cfg *latest.Config, a *latest.AgentConfig, runConfig *config.RuntimeConfig, providerRegistry *provider.Registry) (provider.Provider, error) {
+func getCompactionModelForAgent(ctx context.Context, cfg *latest.Config, a *latest.AgentConfig, runConfig *config.RuntimeConfig, providerRegistry *provider.Registry, modelOpts []options.Opt) (provider.Provider, error) {
 	var compactionRef string
 	for name := range strings.SplitSeq(a.Model, ",") {
 		if modelCfg, ok := cfg.Models[name]; ok && modelCfg.CompactionModel != "" {
@@ -660,6 +688,7 @@ func getCompactionModelForAgent(ctx context.Context, cfg *latest.Config, a *late
 	if modelsStoreErr == nil {
 		opts = append(opts, options.WithModelsDevStore(modelsStore))
 	}
+	opts = append(opts, modelOpts...)
 
 	model, err := providerRegistry.NewWithModels(ctx, &modelCfg, cfg.Models, runConfig.EnvProvider(), opts...)
 	if err != nil {
@@ -983,6 +1012,10 @@ func loadExternalAgent(ctx context.Context, ref string, runConfig *config.Runtim
 
 	if loadOpts.providerRegistry != nil {
 		opts = append(opts, WithProviderRegistry(loadOpts.providerRegistry))
+	}
+
+	if len(loadOpts.modelOpts) > 0 {
+		opts = append(opts, WithModelOptions(loadOpts.modelOpts...))
 	}
 
 	result, err := Load(contextWithExternalDepth(ctx, depth+1), source, runConfig, opts...)

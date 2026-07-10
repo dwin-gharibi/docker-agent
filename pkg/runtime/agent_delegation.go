@@ -367,6 +367,12 @@ func (r *LocalRuntime) runCollecting(ctx context.Context, parent *session.Sessio
 				onContent(choice.Content)
 			}
 		}
+		// Token usage is the one event a background sub-session surfaces
+		// out-of-band: it carries the sub-session id and agent name, so the
+		// UI can keep per-agent context accounting for background agents.
+		if usage, ok := event.(*TokenUsageEvent); ok {
+			r.emitBackgroundEvent(usage)
+		}
 		if errEvt, ok := event.(*ErrorEvent); ok {
 			errMsg = errEvt.Error
 			break

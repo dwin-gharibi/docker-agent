@@ -21,6 +21,22 @@ type Agent struct {
 	Multi       bool   `json:"multi"`
 }
 
+// ErrCodeUnknownSession is the [ErrorResponse.Code] for a request that names
+// a session the server does not know. Distinguishing it matters to clients
+// like the board: a 404 with this code means "the server is current but the
+// session does not exist (yet)" — keep waiting or recreate the session —
+// while a 404 without it means the route itself is missing (an older binary
+// that predates the endpoint).
+const ErrCodeUnknownSession = "unknown_session"
+
+// ErrorResponse is the body of an API error that clients may need to react
+// to programmatically. Message is human-readable; Code, when set, is a
+// stable machine-readable classifier (e.g. [ErrCodeUnknownSession]).
+type ErrorResponse struct {
+	Code    string `json:"code,omitempty"`
+	Message string `json:"message"`
+}
+
 // CreateAgentRequest represents a request to create an agent
 type CreateAgentRequest struct {
 	Prompt string `json:"prompt"`
@@ -327,6 +343,10 @@ type SessionSnapshotResponse struct {
 	// Zero when the session has no event stream (no events yet, or not
 	// attached to a control plane).
 	LastEventSeq uint64 `json:"last_event_seq"`
+	// Cost is the session's cumulative cost in US dollars, including
+	// sub-sessions and item-level costs (e.g. compaction). Clients should
+	// prefer it over summing per-message costs, which misses those.
+	Cost float64 `json:"cost"`
 }
 
 // RunAgentRequest is the body of POST /api/sessions/:id/agent/:agent[/:agent_name].

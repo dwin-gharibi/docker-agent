@@ -2274,7 +2274,7 @@ type PermissionsConfig struct {
 // Hooks allow running shell commands at various points in the agent lifecycle.
 type HooksConfig struct {
 	// PreToolUse hooks run before tool execution
-	PreToolUse []HookMatcherConfig `json:"pre_tool_use,omitempty" yaml:"pre_tool_use,omitempty"`
+	PreToolUse HookMatcherConfigs `json:"pre_tool_use,omitempty" yaml:"pre_tool_use,omitempty"`
 
 	// PostToolUse hooks run after a tool completes — both success and
 	// failure: a failed tool call still fires this event, with the
@@ -2282,7 +2282,7 @@ type HooksConfig struct {
 	// any error text). Use post_tool_use to react to either outcome
 	// (logging, audits, circuit-breakers); branch on tool_response.is_error
 	// in the handler when you only want to act on one of them.
-	PostToolUse []HookMatcherConfig `json:"post_tool_use,omitempty" yaml:"post_tool_use,omitempty"`
+	PostToolUse HookMatcherConfigs `json:"post_tool_use,omitempty" yaml:"post_tool_use,omitempty"`
 
 	// PermissionRequest hooks run just before the runtime would prompt
 	// the user to approve a tool call (i.e. when neither --yolo nor a
@@ -2290,10 +2290,10 @@ type HooksConfig struct {
 	// or auto-deny via hook_specific_output.permission_decision so the
 	// user is not prompted; otherwise the runtime falls through to the
 	// usual interactive confirmation. Tool-matched, like pre_tool_use.
-	PermissionRequest []HookMatcherConfig `json:"permission_request,omitempty" yaml:"permission_request,omitempty"`
+	PermissionRequest HookMatcherConfigs `json:"permission_request,omitempty" yaml:"permission_request,omitempty"`
 
 	// SessionStart hooks run when a session begins
-	SessionStart []HookDefinition `json:"session_start,omitempty" yaml:"session_start,omitempty"`
+	SessionStart HookDefinitions `json:"session_start,omitempty" yaml:"session_start,omitempty"`
 
 	// UserPromptSubmit hooks run once per user message, after the user
 	// has submitted their prompt and before the first model call of the
@@ -2304,7 +2304,7 @@ type HooksConfig struct {
 	// Sub-sessions (transferred tasks, background agents) do not fire
 	// this event because their kick-off message is synthesised by the
 	// runtime, not authored by the user.
-	UserPromptSubmit []HookDefinition `json:"user_prompt_submit,omitempty" yaml:"user_prompt_submit,omitempty"`
+	UserPromptSubmit HookDefinitions `json:"user_prompt_submit,omitempty" yaml:"user_prompt_submit,omitempty"`
 
 	// UserSteeringMessagesSubmit hooks run once each time the runtime
 	// drains the steering queue and appends the queued user messages to
@@ -2316,7 +2316,7 @@ type HooksConfig struct {
 	// contribute additional_context that is spliced into the conversation
 	// as a transient system message for the steered turn only — it is NOT
 	// persisted to the session.
-	UserSteeringMessagesSubmit []HookDefinition `json:"user_steering_messages_submit,omitempty" yaml:"user_steering_messages_submit,omitempty"`
+	UserSteeringMessagesSubmit HookDefinitions `json:"user_steering_messages_submit,omitempty" yaml:"user_steering_messages_submit,omitempty"`
 
 	// UserFollowupSubmit hooks run once each time the runtime dequeues a
 	// follow-up message at the end of a turn and starts a fresh turn for
@@ -2327,14 +2327,14 @@ type HooksConfig struct {
 	// continue=false / exit code 2) or contribute additional_context that
 	// is spliced into the conversation as a transient system message for
 	// the follow-up turn only — it is NOT persisted to the session.
-	UserFollowupSubmit []HookDefinition `json:"user_followup_submit,omitempty" yaml:"user_followup_submit,omitempty"`
+	UserFollowupSubmit HookDefinitions `json:"user_followup_submit,omitempty" yaml:"user_followup_submit,omitempty"`
 
 	// TurnStart hooks run at the start of every agent turn (each model
 	// call). Their AdditionalContext is appended as transient system
 	// messages for that turn only — it is NOT persisted to the session,
 	// so per-turn signals (date, prompt files, ...) are recomputed every
 	// turn instead of bloating the message history on every resume.
-	TurnStart []HookDefinition `json:"turn_start,omitempty" yaml:"turn_start,omitempty"`
+	TurnStart HookDefinitions `json:"turn_start,omitempty" yaml:"turn_start,omitempty"`
 
 	// TurnEnd hooks run once per agent turn when the turn finishes —
 	// the symmetric counterpart of TurnStart. Fires no matter why the
@@ -2343,22 +2343,22 @@ type HooksConfig struct {
 	// in the hook input's reason field ("normal", "continue",
 	// "steered", "error", "canceled", "hook_blocked",
 	// "loop_detected"). Observational; output is ignored.
-	TurnEnd []HookDefinition `json:"turn_end,omitempty" yaml:"turn_end,omitempty"`
+	TurnEnd HookDefinitions `json:"turn_end,omitempty" yaml:"turn_end,omitempty"`
 
 	// BeforeLLMCall hooks run just before each model call (after
 	// turn_start). Use this for observability, cost guardrails, or
 	// auditing without contributing system messages — turn_start is the
 	// right event for the latter.
-	BeforeLLMCall []HookDefinition `json:"before_llm_call,omitempty" yaml:"before_llm_call,omitempty"`
+	BeforeLLMCall HookDefinitions `json:"before_llm_call,omitempty" yaml:"before_llm_call,omitempty"`
 
 	// AfterLLMCall hooks run just after each successful model call,
 	// before the response is recorded into the session and tool calls
 	// are dispatched. Receives the assistant text content in
 	// stop_response.
-	AfterLLMCall []HookDefinition `json:"after_llm_call,omitempty" yaml:"after_llm_call,omitempty"`
+	AfterLLMCall HookDefinitions `json:"after_llm_call,omitempty" yaml:"after_llm_call,omitempty"`
 
 	// SessionEnd hooks run when a session ends
-	SessionEnd []HookDefinition `json:"session_end,omitempty" yaml:"session_end,omitempty"`
+	SessionEnd HookDefinitions `json:"session_end,omitempty" yaml:"session_end,omitempty"`
 
 	// PreCompact hooks run just before the runtime compacts the session
 	// transcript into a summary. The trigger is reported in the source
@@ -2369,50 +2369,50 @@ type HooksConfig struct {
 	// continue=false / exit code 2) or contribute additional_context
 	// that is appended to the compaction prompt — useful for steering
 	// the summary without modifying the agent's instruction.
-	PreCompact []HookDefinition `json:"pre_compact,omitempty" yaml:"pre_compact,omitempty"`
+	PreCompact HookDefinitions `json:"pre_compact,omitempty" yaml:"pre_compact,omitempty"`
 
 	// SubagentStop hooks run when a sub-agent (transferred task,
 	// background agent, skill sub-session) finishes. The sub-agent's
 	// name is passed in agent_name and its final assistant message in
 	// stop_response. Useful for handoff auditing and per-sub-agent
 	// metrics, separately from the parent's stop event.
-	SubagentStop []HookDefinition `json:"subagent_stop,omitempty" yaml:"subagent_stop,omitempty"`
+	SubagentStop HookDefinitions `json:"subagent_stop,omitempty" yaml:"subagent_stop,omitempty"`
 
 	// OnUserInput hooks run when the agent needs user input
-	OnUserInput []HookDefinition `json:"on_user_input,omitempty" yaml:"on_user_input,omitempty"`
+	OnUserInput HookDefinitions `json:"on_user_input,omitempty" yaml:"on_user_input,omitempty"`
 
 	// Stop hooks run when the model finishes responding and is about to hand control back to the user
-	Stop []HookDefinition `json:"stop,omitempty" yaml:"stop,omitempty"`
+	Stop HookDefinitions `json:"stop,omitempty" yaml:"stop,omitempty"`
 
 	// Notification hooks run when the agent sends a notification (error, warning) to the user
-	Notification []HookDefinition `json:"notification,omitempty" yaml:"notification,omitempty"`
+	Notification HookDefinitions `json:"notification,omitempty" yaml:"notification,omitempty"`
 
 	// OnError hooks run when the runtime hits an error during a turn
 	// (model failures, repetitive tool-call loops). Fires alongside
 	// Notification with level="error".
-	OnError []HookDefinition `json:"on_error,omitempty" yaml:"on_error,omitempty"`
+	OnError HookDefinitions `json:"on_error,omitempty" yaml:"on_error,omitempty"`
 
 	// OnMaxIterations hooks run when the runtime reaches its configured
 	// max_iterations limit. Fires alongside Notification with
 	// level="warning".
-	OnMaxIterations []HookDefinition `json:"on_max_iterations,omitempty" yaml:"on_max_iterations,omitempty"`
+	OnMaxIterations HookDefinitions `json:"on_max_iterations,omitempty" yaml:"on_max_iterations,omitempty"`
 
 	// OnAgentSwitch hooks run whenever the runtime moves the active
 	// agent to a new one — transfer_task, handoff, force_handoff, or
 	// the return after a transferred task completes. Observational;
 	// useful for audit, transcript, and metrics pipelines.
-	OnAgentSwitch []HookDefinition `json:"on_agent_switch,omitempty" yaml:"on_agent_switch,omitempty"`
+	OnAgentSwitch HookDefinitions `json:"on_agent_switch,omitempty" yaml:"on_agent_switch,omitempty"`
 
 	// OnSessionResume hooks run when the user explicitly approves the
 	// runtime to continue past its configured max_iterations limit.
 	// Observational; useful for alerting on extended-runtime sessions.
-	OnSessionResume []HookDefinition `json:"on_session_resume,omitempty" yaml:"on_session_resume,omitempty"`
+	OnSessionResume HookDefinitions `json:"on_session_resume,omitempty" yaml:"on_session_resume,omitempty"`
 
 	// OnToolApprovalDecision hooks run after the runtime's tool
 	// approval chain resolves a verdict for a tool call. Observational;
 	// gives audit pipelines a structured "who approved what" record
 	// without re-implementing the chain.
-	OnToolApprovalDecision []HookDefinition `json:"on_tool_approval_decision,omitempty" yaml:"on_tool_approval_decision,omitempty"`
+	OnToolApprovalDecision HookDefinitions `json:"on_tool_approval_decision,omitempty" yaml:"on_tool_approval_decision,omitempty"`
 
 	// BeforeCompaction hooks run immediately before a session compaction.
 	// Hooks may veto compaction (Decision: "block") or supply a custom
@@ -2420,12 +2420,12 @@ type HooksConfig struct {
 	// applies that summary verbatim and skips the LLM call. Hooks receive
 	// the current input/output token counts, the model context limit, and
 	// a compaction_reason of "threshold", "overflow", or "manual".
-	BeforeCompaction []HookDefinition `json:"before_compaction,omitempty" yaml:"before_compaction,omitempty"`
+	BeforeCompaction HookDefinitions `json:"before_compaction,omitempty" yaml:"before_compaction,omitempty"`
 
 	// AfterCompaction hooks run after a successful compaction (a summary
 	// was applied to the session). The Input.summary field carries the
 	// produced summary text. AfterCompaction is purely observational.
-	AfterCompaction []HookDefinition `json:"after_compaction,omitempty" yaml:"after_compaction,omitempty"`
+	AfterCompaction HookDefinitions `json:"after_compaction,omitempty" yaml:"after_compaction,omitempty"`
 
 	// ToolResponseTransform hooks run between a tool's exec and the
 	// runtime's emission/record of the response. Hooks may rewrite the
@@ -2437,7 +2437,7 @@ type HooksConfig struct {
 	// arguments, before_llm_call scrubs outgoing chat content, and
 	// tool_response_transform scrubs tool output. Tool-matched, like
 	// pre_tool_use / post_tool_use.
-	ToolResponseTransform []HookMatcherConfig `json:"tool_response_transform,omitempty" yaml:"tool_response_transform,omitempty"`
+	ToolResponseTransform HookMatcherConfigs `json:"tool_response_transform,omitempty" yaml:"tool_response_transform,omitempty"`
 
 	// WorktreeCreate hooks run once, just after `docker agent run
 	// --worktree` creates a git worktree and before the session starts.
@@ -2449,7 +2449,7 @@ type HooksConfig struct {
 	// dependencies, warm caches. A hook may abort the run by blocking
 	// (decision="block" / continue=false / exit code 2); stdout is added
 	// as context.
-	WorktreeCreate []HookDefinition `json:"worktree_create,omitempty" yaml:"worktree_create,omitempty"`
+	WorktreeCreate HookDefinitions `json:"worktree_create,omitempty" yaml:"worktree_create,omitempty"`
 }
 
 // IsEmpty returns true if no hooks are configured
@@ -2493,7 +2493,7 @@ type HookMatcherConfig struct {
 	Matcher string `json:"matcher,omitempty" yaml:"matcher,omitempty"`
 
 	// Hooks are the hooks to execute when the matcher matches
-	Hooks []HookDefinition `json:"hooks" yaml:"hooks"`
+	Hooks HookDefinitions `json:"hooks" yaml:"hooks"`
 
 	// PreemptYolo opts a pre_tool_use entry into firing BEFORE the
 	// deterministic approval pipeline (--yolo, permission patterns).
@@ -2508,6 +2508,63 @@ type HookMatcherConfig struct {
 	// true when they implement a security-critical check that must
 	// not be bypassed by --yolo.
 	PreemptYolo *bool `json:"preempt_yolo,omitempty" yaml:"preempt_yolo,omitempty"`
+}
+
+// HookDefinitions is a list of hook definitions that also accepts a single
+// mapping in YAML and JSON (`stop: {type: command, ...}`) as sugar for a
+// one-element list. Hand-written user configs frequently use the mapping
+// form; rejecting it made the whole user config unparseable and silently
+// dropped aliases (docker/docker-agent#3536). Always marshals back as a
+// list, the canonical documented form.
+type HookDefinitions []HookDefinition
+
+func (h *HookDefinitions) UnmarshalYAML(unmarshal func(any) error) error {
+	return h.unmarshal(unmarshal)
+}
+
+func (h *HookDefinitions) UnmarshalJSON(data []byte) error {
+	return h.unmarshal(func(v any) error { return json.Unmarshal(data, v) })
+}
+
+func (h *HookDefinitions) unmarshal(unmarshal func(any) error) error {
+	var many []HookDefinition
+	if err := unmarshal(&many); err == nil {
+		*h = many
+		return nil
+	}
+	var one HookDefinition
+	if err := unmarshal(&one); err != nil {
+		return errors.New("hook event must be a hook or a list of hooks")
+	}
+	*h = HookDefinitions{one}
+	return nil
+}
+
+// HookMatcherConfigs is a list of hook matchers that also accepts a single
+// mapping in YAML and JSON as sugar for a one-element list, mirroring
+// HookDefinitions. Always marshals back as a list.
+type HookMatcherConfigs []HookMatcherConfig
+
+func (h *HookMatcherConfigs) UnmarshalYAML(unmarshal func(any) error) error {
+	return h.unmarshal(unmarshal)
+}
+
+func (h *HookMatcherConfigs) UnmarshalJSON(data []byte) error {
+	return h.unmarshal(func(v any) error { return json.Unmarshal(data, v) })
+}
+
+func (h *HookMatcherConfigs) unmarshal(unmarshal func(any) error) error {
+	var many []HookMatcherConfig
+	if err := unmarshal(&many); err == nil {
+		*h = many
+		return nil
+	}
+	var one HookMatcherConfig
+	if err := unmarshal(&one); err != nil {
+		return errors.New("hook event must be a matcher or a list of matchers")
+	}
+	*h = HookMatcherConfigs{one}
+	return nil
 }
 
 // HookDefinition represents a single hook configuration

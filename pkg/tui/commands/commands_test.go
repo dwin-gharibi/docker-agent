@@ -98,6 +98,15 @@ func TestParseSlashCommand_OtherCommands(t *testing.T) {
 		assert.True(t, ok)
 	})
 
+	t.Run("settings command", func(t *testing.T) {
+		t.Parallel()
+		cmd := parser.Parse("/settings")
+		require.NotNil(t, cmd)
+		msg := cmd()
+		_, ok := msg.(messages.OpenSettingsDialogMsg)
+		assert.True(t, ok)
+	})
+
 	t.Run("undo command", func(t *testing.T) {
 		t.Parallel()
 		cmd := parser.Parse("/undo")

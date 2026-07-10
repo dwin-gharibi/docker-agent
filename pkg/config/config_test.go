@@ -283,6 +283,7 @@ func TestCheckRequiredEnvVars(t *testing.T) {
 				var reqErr *environment.RequiredEnvError
 				require.ErrorAs(t, err, &reqErr)
 				assert.Equal(t, test.expectedMissing, reqErr.Missing)
+				assert.True(t, reqErr.MissingModelCredentials, "missing vars are model credentials, so the local-model hint must be offered")
 			}
 		})
 	}
@@ -977,4 +978,110 @@ func TestProviders_Validation(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestMergeGlobalProviders(t *testing.T) {
+	t.Parallel()
+
+	global := map[string]latest.ProviderConfig{
+		"myprovider": {BaseURL: "https://global.example.com/v1", TokenKey: "MY_KEY"},
+		"other":      {BaseURL: "https://other.example.com/v1"},
+	}
+
+	t.Run("adds global providers", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := &latest.Config{}
+		MergeGlobalProviders(cfg, global)
+
+		require.Len(t, cfg.Providers, 2)
+		assert.Equal(t, "https://global.example.com/v1", cfg.Providers["myprovider"].BaseURL)
+	})
+
+	t.Run("agent file definition wins", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := &latest.Config{Providers: map[string]latest.ProviderConfig{
+			"myprovider": {BaseURL: "https://file.example.com/v1"},
+		}}
+		MergeGlobalProviders(cfg, global)
+
+		assert.Equal(t, "https://file.example.com/v1", cfg.Providers["myprovider"].BaseURL)
+		assert.Equal(t, "https://other.example.com/v1", cfg.Providers["other"].BaseURL)
+	})
+
+	t.Run("invalid global provider is skipped", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := &latest.Config{}
+		MergeGlobalProviders(cfg, map[string]latest.ProviderConfig{
+			"no-base-url": {APIType: "openai_chatcompletions"},
+			"valid":       {BaseURL: "https://ok.example.com/v1"},
+		})
+
+		require.Len(t, cfg.Providers, 1)
+		assert.Contains(t, cfg.Providers, "valid")
+	})
+
+	t.Run("no global providers leaves config untouched", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := &latest.Config{}
+		MergeGlobalProviders(cfg, nil)
+		assert.Nil(t, cfg.Providers)
+	})
+}
+
+func TestLoadUnknownKeyFromNewerVersionHint(t *testing.T) {
+	t.Parallel()
+
+	// instruction_file was introduced in version 11.
+	cfgStr := `version: "10"
+agents:
+  root:
+    model: openai/gpt-4o
+    instruction_file: prompt.md
+`
+	_, err := Load(t.Context(), NewBytesSource("test.yaml", []byte(cfgStr)))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `unknown field "instruction_file"`)
+	assert.Contains(t, err.Error(), "supported by config version 11")
+	assert.Contains(t, err.Error(), "currently 10")
+}
+
+func TestLoadUnknownKeyNoNewerVersionNoHint(t *testing.T) {
+	t.Parallel()
+
+	cfgStr := `version: "` + latest.Version + `"
+agents:
+  root:
+    model: openai/gpt-4o
+    instruction: test
+    not_a_real_key: true
+`
+	_, err := Load(t.Context(), NewBytesSource("test.yaml", []byte(cfgStr)))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `unknown field "not_a_real_key"`)
+	assert.NotContains(t, err.Error(), "hint:")
+}
+
+func TestLoadNewerVersionHintNumericOrdering(t *testing.T) {
+	t.Parallel()
+
+	// force_handoff was introduced in version 10. Declaring version "2" pins
+	// two behaviors: versions compare numerically ("10" > "2" despite
+	// lexicographic order) and the smallest accepting version wins (10, not
+	// 11 or 12).
+	cfgStr := `version: "2"
+agents:
+  root:
+    model: openai/gpt-4o
+    instruction: test
+    force_handoff: root
+`
+	_, err := Load(t.Context(), NewBytesSource("test.yaml", []byte(cfgStr)))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `unknown field "force_handoff"`)
+	assert.Contains(t, err.Error(), "supported by config version 10")
+	assert.Contains(t, err.Error(), "currently 2")
 }

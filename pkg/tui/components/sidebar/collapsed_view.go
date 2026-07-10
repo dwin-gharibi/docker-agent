@@ -5,8 +5,6 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
-
-	"github.com/docker/docker-agent/pkg/tui/styles"
 )
 
 // CollapsedViewModel holds the computed layout decisions for collapsed mode.
@@ -17,6 +15,9 @@ type CollapsedViewModel struct {
 	WorkingIndicator string
 	WorkingDir       string
 	UsageSummary     string
+	// InfoLine is the compact agents/tools/todos summary shown when the
+	// sidebar renders as a horizontal band.
+	InfoLine string
 
 	// Layout decisions computed from the data
 	TitleAndIndicatorOnOneLine bool
@@ -36,6 +37,10 @@ func (vm CollapsedViewModel) LineCount() int {
 		if vm.UsageSummary != "" {
 			lines += linesNeeded(lipgloss.Width(vm.UsageSummary), vm.ContentWidth)
 		}
+	}
+
+	if vm.InfoLine != "" {
+		lines += linesNeeded(lipgloss.Width(vm.InfoLine), vm.ContentWidth)
 	}
 
 	return lines
@@ -77,15 +82,20 @@ func RenderCollapsedView(vm CollapsedViewModel) string {
 		lines = append(lines, vm.TitleWithStar, vm.WorkingIndicator)
 	}
 
-	// Working directory + usage line(s)
+	// Working directory + usage line(s). WorkingDir arrives pre-styled
+	// (accent block + primary text) to match the vertical Session tab.
 	if vm.WdAndUsageOnOneLine {
 		gap := vm.ContentWidth - lipgloss.Width(vm.WorkingDir) - lipgloss.Width(vm.UsageSummary)
-		lines = append(lines, fmt.Sprintf("%s%*s%s", styles.MutedStyle.Render(vm.WorkingDir), gap, "", vm.UsageSummary))
+		lines = append(lines, fmt.Sprintf("%s%*s%s", vm.WorkingDir, gap, "", vm.UsageSummary))
 	} else {
-		lines = append(lines, styles.MutedStyle.Render(vm.WorkingDir))
+		lines = append(lines, vm.WorkingDir)
 		if vm.UsageSummary != "" {
 			lines = append(lines, vm.UsageSummary)
 		}
+	}
+
+	if vm.InfoLine != "" {
+		lines = append(lines, vm.InfoLine)
 	}
 
 	return strings.Join(lines, "\n")

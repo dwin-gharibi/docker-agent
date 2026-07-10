@@ -138,11 +138,6 @@ func runAliasAddCommand(cmd *cobra.Command, args []string, flags *aliasAddFlags)
 	name := args[0]
 	agentPath := args[1]
 
-	cfg, err := userconfig.Load()
-	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
-	}
-
 	absAgentPath, err := pathx.ExpandHomeDir(agentPath)
 	if err != nil {
 		return err
@@ -166,13 +161,10 @@ func runAliasAddCommand(cmd *cobra.Command, args []string, flags *aliasAddFlags)
 	}
 
 	// Store the alias
-	if err := cfg.SetAlias(name, alias); err != nil {
+	if err := userconfig.Update(func(cfg *userconfig.Config) error {
+		return cfg.SetAlias(name, alias)
+	}); err != nil {
 		return err
-	}
-
-	// Save to file
-	if err := cfg.Save(); err != nil {
-		return fmt.Errorf("failed to save config: %w", err)
 	}
 
 	out.Printf("Alias '%s' created successfully\n", name)
@@ -293,17 +285,13 @@ func runAliasRemoveCommand(cmd *cobra.Command, args []string) (commandErr error)
 	out := cli.NewPrinter(cmd.OutOrStdout())
 	name := args[0]
 
-	cfg, err := userconfig.Load()
-	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
-	}
-
-	if !cfg.DeleteAlias(name) {
-		return fmt.Errorf("alias '%s' not found", name)
-	}
-
-	if err := cfg.Save(); err != nil {
-		return fmt.Errorf("failed to save config: %w", err)
+	if err := userconfig.Update(func(cfg *userconfig.Config) error {
+		if !cfg.DeleteAlias(name) {
+			return fmt.Errorf("alias '%s' not found", name)
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
 
 	out.Printf("Alias '%s' removed successfully\n", name)

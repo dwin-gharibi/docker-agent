@@ -17,6 +17,8 @@ import (
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	uv "github.com/charmbracelet/ultraviolet"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/docker/docker-agent/pkg/app"
 	"github.com/docker/docker-agent/pkg/audio/transcribe"
@@ -152,6 +154,13 @@ type appModel struct {
 	// perform a full terminal release/restore cycle on focus events.
 	program *tea.Program
 
+	// themeWatcher hot-reloads the active custom theme: it watches the
+	// current theme's backing file and reports edits as ThemeFileChangedMsg.
+	// Created in SetProgram (the callback needs the program to inject
+	// messages into the event loop) and re-targeted after every theme
+	// change via watchCurrentTheme.
+	themeWatcher themeFileWatcher
+
 	// dockerDesktop is true when running inside Docker Desktop's terminal
 	// (TERM_PROGRAM=docker_desktop). Focus reporting and the terminal
 	// release/restore cycle on tab switch are only enabled in this
@@ -172,6 +181,11 @@ type appModel struct {
 	// keep flowing at startup even before any focus event arrives — some
 	// terminals never send FocusMsg.
 	tickPaused bool
+
+	// lightDarkModeSet is true while DEC mode 2031 (terminal color-scheme
+	// reports) is enabled. Set when the auto theme turns the mode on, so the
+	// quit path knows to reset it and leave no stray reports in the shell.
+	lightDarkModeSet bool
 
 	// pendingRestores maps runtime tab IDs (supervisor routing keys) to
 	// persisted session-store IDs. When a tab with a pending restore is first
@@ -225,6 +239,15 @@ type appModel struct {
 	// hideSidebar hides the sidebar and disables the ctrl+b toggle.
 	hideSidebar bool
 
+	// layoutSettings is the active TUI layout customization (sidebar position
+	// and section visibility). Shared by every tab and managed via /settings.
+	layoutSettings messages.LayoutSettings
+
+	// sendMode is what happens to messages sent while the agent is working:
+	// steer into the ongoing stream (default) or queue until the turn ends.
+	// Shared by every tab and managed via /settings.
+	sendMode messages.SendMode
+
 	// buildCommandCategories is a function that returns the list of command categories.
 	buildCommandCategories func(context.Context, tea.Model) []commands.Category
 
@@ -234,6 +257,13 @@ type appModel struct {
 	// disabledCommands holds slash commands to hide and disable.
 	// Normalized to start with "/".
 	disabledCommands map[string]bool
+}
+
+// themeFileWatcher is the subset of *styles.ThemeWatcher the model drives.
+// It is an interface so tests can record Watch/Stop calls.
+type themeFileWatcher interface {
+	Watch(themeRef string) error
+	Stop()
 }
 
 // Transcriber is the speech-to-text interface used by the TUI. It is an
@@ -391,8 +421,8 @@ func New(ctx context.Context, spawner SessionSpawner, initialApp *app.App, initi
 	sv := supervisor.New(spawner)
 
 	// Initialize tab bar with configurable title length from user settings
-	tabTitleMaxLen := userconfig.Get().GetTabTitleMaxLength()
-	tb := tabbar.New(tabTitleMaxLen)
+	userSettings := userconfig.Get()
+	tb := tabbar.New(userSettings.GetTabTitleMaxLength())
 
 	// Initialize tab store
 	var ts *tuistate.Store
@@ -437,6 +467,8 @@ func New(ctx context.Context, spawner SessionSpawner, initialApp *app.App, initi
 		workingSpinner:                spinner.New(spinner.ModeSpinnerOnly, styles.SpinnerDotsHighlightStyle),
 		focusedPanel:                  PanelEditor,
 		editorLines:                   3,
+		layoutSettings:                layoutSettingsFromConfig(userSettings.GetLayout()),
+		sendMode:                      messages.ParseSendMode(userSettings.GetBusySendMode()),
 		keyboardEnhancementsSupported: termfeatures.SupportsModifiedEnter(os.Getenv),
 		dockerDesktop:                 os.Getenv("TERM_PROGRAM") == "docker_desktop",
 		appName:                       "docker agent",
@@ -493,9 +525,35 @@ func (m *appModel) Resolve(v any) any {
 }
 
 // SetProgram sets the tea.Program for the supervisor to send routed messages.
+// It also starts the theme file watcher, whose callback needs the program to
+// inject hot-reload messages into the event loop.
 func (m *appModel) SetProgram(p *tea.Program) {
 	m.program = p
 	m.supervisor.SetProgram(p)
+
+	if m.themeWatcher != nil {
+		m.themeWatcher.Stop()
+	}
+	m.themeWatcher = styles.NewThemeWatcher(func(themeRef string) {
+		p.Send(messages.ThemeFileChangedMsg{ThemeRef: themeRef})
+	})
+	m.watchCurrentTheme()
+}
+
+// watchCurrentTheme points the theme watcher at the currently applied theme
+// so edits to its backing file hot-reload it. The watcher no-ops for themes
+// without a user theme file (e.g. built-ins).
+func (m *appModel) watchCurrentTheme() {
+	if m.themeWatcher == nil {
+		return
+	}
+	theme := styles.CurrentTheme()
+	if theme.Ref == "" {
+		return
+	}
+	if err := m.themeWatcher.Watch(theme.Ref); err != nil {
+		slog.Warn("Failed to watch theme file", "theme", theme.Ref, "error", err)
+	}
 }
 
 // reapplyKeyboardEnhancements forwards the cached keyboard enhancements message
@@ -537,6 +595,8 @@ func (m *appModel) commandCategories() []commands.Category {
 func (m *appModel) chatPageOpts() []chat.PageOption {
 	opts := []chat.PageOption{
 		chat.WithCommandParser(commands.NewParser(m.commandCategories()...)),
+		chat.WithLayoutSettings(m.layoutSettings),
+		chat.WithSendMode(m.sendMode),
 	}
 
 	if m.leanMode {
@@ -604,7 +664,30 @@ func (m *appModel) contextShutdownCmd() tea.Cmd {
 
 // Init initializes the model.
 func (m *appModel) Init() tea.Cmd {
-	return tea.Batch(m.init(), m.tourStartupCmd())
+	return tea.Batch(m.init(), m.tourStartupCmd(), m.autoThemeInitCmd())
+}
+
+// autoThemeInitCmd enables DEC mode 2031 (terminal color-scheme reports) so
+// terminals that support it push light/dark changes live while the auto
+// theme is active. Terminals without the mode ignore the sequence. When the
+// auto theme is off nothing is emitted, keeping default runs byte-identical.
+func (m *appModel) autoThemeInitCmd() tea.Cmd {
+	if !styles.AutoThemeEnabled() {
+		return nil
+	}
+	m.lightDarkModeSet = true
+	return tea.Raw(ansi.SetModeLightDark)
+}
+
+// quitCmd returns tea.Quit, first resetting DEC mode 2031 when the auto
+// theme enabled it, so the terminal stops sending color-scheme reports
+// after exit.
+func (m *appModel) quitCmd() tea.Cmd {
+	if !m.lightDarkModeSet {
+		return tea.Quit
+	}
+	m.lightDarkModeSet = false
+	return tea.Sequence(tea.Raw(ansi.ResetModeLightDark), tea.Quit)
 }
 
 // tourStartupCmd applies the configured startup tour mode: start the tour
@@ -689,7 +772,7 @@ func (m *appModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.(type) {
 		case messages.SpawnSessionMsg, messages.SwitchTabMsg,
 			messages.CloseTabMsg, messages.ReorderTabMsg,
-			messages.ToggleSidebarMsg:
+			messages.ToggleSidebarMsg, messages.OpenSettingsDialogMsg:
 			return m, nil
 		}
 	}
@@ -830,6 +913,12 @@ func (m *appModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, animation.StartTick())
 			}
 		}
+		if styles.AutoThemeEnabled() {
+			// Terminals without mode 2031 can still flip their appearance
+			// while we're in the background; re-query on focus so the auto
+			// theme catches up.
+			cmds = append(cmds, tea.RequestBackgroundColor)
+		}
 		if m.dockerDesktop && m.program != nil {
 			// Docker Desktop: the terminal may have lost all mode state (alt
 			// screen, mouse tracking, keyboard enhancements, background
@@ -842,6 +931,17 @@ func (m *appModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			})
 		}
 		return m, tea.Batch(cmds...)
+
+	case tea.BackgroundColorMsg:
+		return m.handleColorSchemeChange(msg.IsDark())
+
+	// DEC mode 2031 color-scheme reports. bubbletea passes these ultraviolet
+	// events through untyped, so they are matched here directly.
+	case uv.DarkColorSchemeEvent:
+		return m.handleColorSchemeChange(true)
+
+	case uv.LightColorSchemeEvent:
+		return m.handleColorSchemeChange(false)
 
 	case tea.KeyboardEnhancementsMsg:
 		m.keyboardEnhancements = &msg
@@ -887,7 +987,8 @@ func (m *appModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case dialog.ExitConfirmedMsg:
 		m.cleanupAll()
-		return m, tea.Quit
+		quit := m.quitCmd()
+		return m, quit
 
 	case dialog.RuntimeResumeMsg:
 		m.application.Resume(msg.Request)
@@ -973,11 +1074,13 @@ func (m *appModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleCloseTab(m.supervisor.ActiveID())
 		}
 		m.cleanupAll()
-		return m, tea.Quit
+		quit := m.quitCmd()
+		return m, quit
 
 	case messages.ExitAfterFirstResponseMsg:
 		m.cleanupAll()
-		return m, tea.Quit
+		quit := m.quitCmd()
+		return m, quit
 
 	// --- SendMsg from editor ---
 
@@ -1138,6 +1241,20 @@ func (m *appModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case messages.ThemeFileChangedMsg:
 		return m.handleThemeFileChanged(msg.ThemeRef)
 
+	// --- Settings (/settings) ---
+
+	case messages.OpenSettingsDialogMsg:
+		return m.handleOpenSettingsDialog()
+
+	case messages.PreviewLayoutMsg:
+		return m.applyLayoutSettings(msg.Layout)
+
+	case messages.ApplySettingsMsg:
+		return m.handleApplySettings(msg)
+
+	case messages.CancelLayoutPreviewMsg:
+		return m.applyLayoutSettings(msg.Original)
+
 	// --- Speech-to-text ---
 
 	case messages.StartSpeakMsg:
@@ -1229,8 +1346,13 @@ func (m *appModel) handleRoutedMsg(msg messages.RoutedMsg) (tea.Model, tea.Cmd) 
 	// Update session state for inactive sessions
 	if event, isRuntimeEvent := msg.Inner.(runtime.Event); isRuntimeEvent {
 		if sessionState, ok := m.sessionStates[msg.SessionID]; ok {
-			if agentName := event.GetAgentName(); agentName != "" {
-				sessionState.SetCurrentAgentName(agentName)
+			// Token-usage events are accounting, not agent-switch signals: a
+			// background agent task's usage can arrive while the tab is idle
+			// and must not move the current-agent marker to that agent.
+			if _, isUsage := msg.Inner.(*runtime.TokenUsageEvent); !isUsage {
+				if agentName := event.GetAgentName(); agentName != "" {
+					sessionState.SetCurrentAgentName(agentName)
+				}
 			}
 			m.applyPauseEvent(sessionState, msg.Inner)
 		}
@@ -2327,6 +2449,14 @@ func (m *appModel) handleMouseMotion(msg tea.MouseMotionMsg) (tea.Model, tea.Cmd
 		return model, batchWith(cmd)
 	}
 
+	// A text-selection drag must keep receiving motion wherever the cursor
+	// goes (editor, tab bar, status bar), otherwise the selection freezes
+	// and the release-copy pair is lost.
+	if m.chatPage.IsSelecting() {
+		model, cmd := m.forwardChat(msg)
+		return model, batchWith(cmd)
+	}
+
 	// Update hover state for resize handle
 	region := m.hitTestRegion(msg.Y)
 	m.isHoveringHandle = region == regionResizeHandle
@@ -2364,6 +2494,12 @@ func (m *appModel) handleMouseRelease(msg tea.MouseReleaseMsg) (tea.Model, tea.C
 
 	if m.dialogMgr.Open() {
 		return m.forwardDialog(msg)
+	}
+
+	// Finish a text-selection drag in the chat no matter where the button
+	// was released; this is what triggers the selection copy.
+	if m.chatPage.IsSelecting() {
+		return m.forwardChat(msg)
 	}
 
 	region := m.hitTestRegion(msg.Y)
@@ -2711,6 +2847,9 @@ func (m *appModel) shutdownTimeoutOrDefault() time.Duration {
 // exit) and the context watcher (external cancellation).
 func (m *appModel) cleanupManagedResources() {
 	m.cleanupOnce.Do(func() {
+		if m.themeWatcher != nil {
+			m.themeWatcher.Stop()
+		}
 		if m.tuiStore != nil {
 			_ = m.tuiStore.Close()
 		}

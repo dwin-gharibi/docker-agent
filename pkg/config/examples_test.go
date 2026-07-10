@@ -20,6 +20,7 @@ import (
 // skips models.dev lookups for these to avoid false failures.
 var modelsDevAbsentProviders = map[string]bool{
 	"dmr":                   true, // Docker Model Runner (local, not in catalog)
+	"chatgpt":               true, // ChatGPT subscription backend; models.dev catalogs its models under the "openai" id
 	"opencode-zen":          true, // not yet registered in models.dev
 	"ovhcloud":              true, // OVHcloud AI Endpoints (not yet in models.dev)
 	"fireworks":             true, // models.dev catalogs Fireworks under the "fireworks-ai" id, not "fireworks"

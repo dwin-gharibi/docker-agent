@@ -176,7 +176,7 @@ The kit is built whenever `--sandbox` is used with an agent reference. It is opt
 
 For the agent referenced on the command line, the kit collects:
 
-- **Local [skills](../../features/skills/index.md)** — every `SKILL.md` discovered on the host (global `~/.codex/skills/`, `~/.claude/skills/`, `~/.agents/skills/`, plus project `.claude/skills/` and `.agents/skills/`) is copied under `<kit>/skills/<skill-name>/`. The in-sandbox skills loader reads from the kit instead of the (non-existent) host `$HOME`.
+- **Local [skills](../../features/skills/index.md)** — every `SKILL.md` discovered on the host (global `~/.codex/skills/`, `~/.claude/skills/`, `~/.agents/skills/`, plus project `.claude/skills/`, `.github/skills/` and `.agents/skills/`) is copied under `<kit>/skills/<skill-name>/`. The in-sandbox skills loader reads from the kit instead of the (non-existent) host `$HOME`.
 - **Prompt files** — every file referenced via the agent's `add_prompt_files` (`AGENTS.md`, `CLAUDE.md`, …) is collected. Files that already live under the working directory are left alone (the live workspace mount surfaces them); files outside it (e.g. an `AGENTS.md` in `$HOME`) are copied under `<kit>/prompt_files/`.
 - **A manifest** — `<kit>/manifest.json` records what was staged. The on-disk copy is sanitised so it cannot be used to map the host filesystem from inside the sandbox.
 

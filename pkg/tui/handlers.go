@@ -6,14 +6,13 @@ import (
 	"log/slog"
 	neturl "net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
-	goruntime "runtime"
 	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/atotto/clipboard"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/docker/docker-agent/pkg/app"
 	"github.com/docker/docker-agent/pkg/browser"
@@ -329,13 +328,19 @@ func (m *appModel) handleSwitchAgent(agentName string) (tea.Model, tea.Cmd) {
 }
 
 // handleShowAgentDetails opens the read-only agent-details dialog for the named
-// agent, looking it up in the available-agents roster.
+// agent, looking it up in the available-agents roster. The agent's latest
+// token-usage snapshot (if it has run) rides along so the dialog can show its
+// context usage.
 func (m *appModel) handleShowAgentDetails(agentName string) (tea.Model, tea.Cmd) {
 	for _, agent := range m.sessionState.AvailableAgents() {
 		if agent.Name == agentName {
 			cfg := m.application.AgentConfigInfo(m.ctx(), agentName)
+			var usage *runtime.Usage
+			if u, ok := m.sessionState.AgentUsage(agentName); ok {
+				usage = &u
+			}
 			return m, core.CmdHandler(dialog.OpenDialogMsg{
-				Model: dialog.NewAgentDetailsDialog(agent, cfg),
+				Model: dialog.NewAgentDetailsDialog(agent, cfg, usage),
 			})
 		}
 	}
@@ -425,16 +430,14 @@ func (m *appModel) handleToggleSplitDiff() (tea.Model, tea.Cmd) {
 // config without blocking the UI. Errors are logged but otherwise ignored
 // because losing the persistence is non-fatal.
 func persistSplitDiffView(enabled bool) {
-	cfg, err := userconfig.Load()
+	err := userconfig.Update(func(cfg *userconfig.Config) error {
+		if cfg.Settings == nil {
+			cfg.Settings = &userconfig.Settings{}
+		}
+		cfg.Settings.SplitDiffView = &enabled
+		return nil
+	})
 	if err != nil {
-		slog.Warn("Failed to load userconfig for split diff toggle", "error", err)
-		return
-	}
-	if cfg.Settings == nil {
-		cfg.Settings = &userconfig.Settings{}
-	}
-	cfg.Settings.SplitDiffView = &enabled
-	if err := cfg.Save(); err != nil {
 		slog.Warn("Failed to persist split diff setting to userconfig", "error", err)
 	}
 }
@@ -663,8 +666,17 @@ func (m *appModel) handleOpenThemePicker() (tea.Model, tea.Cmd) {
 	}
 	currentTheme := styles.CurrentTheme()
 	currentRef := currentTheme.Ref
+	autoEnabled := styles.AutoThemeEnabled()
 
-	var choices []dialog.ThemeChoice
+	// The auto entry resolves to the configured light/dark pair at apply
+	// time. While it is active, the resolved concrete theme is not marked
+	// current so only one entry carries the badge.
+	choices := []dialog.ThemeChoice{{
+		Ref:       styles.AutoThemeRef,
+		Name:      styles.AutoThemeDisplayName,
+		IsCurrent: autoEnabled,
+		IsBuiltin: true,
+	}}
 	for _, ref := range themeRefs {
 		theme, loadErr := styles.LoadTheme(ref)
 		if loadErr != nil {
@@ -677,7 +689,7 @@ func (m *appModel) handleOpenThemePicker() (tea.Model, tea.Cmd) {
 		choices = append(choices, dialog.ThemeChoice{
 			Ref:       ref,
 			Name:      name,
-			IsCurrent: ref == currentRef,
+			IsCurrent: !autoEnabled && ref == currentRef,
 			IsDefault: ref == styles.DefaultThemeRef,
 			IsBuiltin: styles.IsBuiltinTheme(ref),
 		})
@@ -688,26 +700,47 @@ func (m *appModel) handleOpenThemePicker() (tea.Model, tea.Cmd) {
 }
 
 func (m *appModel) handleChangeTheme(themeRef string) (tea.Model, tea.Cmd) {
-	if styles.GetPersistedThemeRef() == themeRef {
+	selectingAuto := themeRef == styles.AutoThemeRef
+	if styles.GetPersistedThemeRef() == themeRef && styles.AutoThemeEnabled() == selectingAuto {
 		return m, nil
 	}
-	theme, err := styles.LoadTheme(themeRef)
+	theme, err := styles.LoadTheme(styles.ResolveThemeRef(themeRef))
 	if err != nil {
 		return m, notification.ErrorCmd(fmt.Sprintf("Failed to load theme: %v", err))
 	}
+	wasAuto := styles.AutoThemeEnabled()
+	styles.SetAutoThemeEnabled(selectingAuto)
 	styles.ApplyTheme(theme)
 	m.invalidateCachesForThemeChange()
 
 	if err := styles.SaveThemeToUserConfig(themeRef); err != nil {
 		slog.Warn("Failed to save theme to user config", "theme", themeRef, "error", err)
 	}
-	return m, tea.Sequence(
-		notification.SuccessCmd("Theme changed to "+theme.Name),
+
+	displayName := theme.Name
+	if selectingAuto {
+		displayName = styles.AutoThemeDisplayName
+	}
+	cmds := []tea.Cmd{
+		notification.SuccessCmd("Theme changed to " + displayName),
 		core.CmdHandler(messages.ThemeChangedMsg{}),
-	)
+	}
+	// Keep terminal color-scheme reporting (DEC mode 2031) in sync with the
+	// auto selection: enable it and re-query the polarity when auto is picked
+	// mid-session, reset it when a concrete theme replaces auto.
+	switch {
+	case selectingAuto && !m.lightDarkModeSet:
+		m.lightDarkModeSet = true
+		cmds = append(cmds, tea.Raw(ansi.SetModeLightDark), tea.RequestBackgroundColor)
+	case !selectingAuto && wasAuto && m.lightDarkModeSet:
+		m.lightDarkModeSet = false
+		cmds = append(cmds, tea.Raw(ansi.ResetModeLightDark))
+	}
+	return m, tea.Sequence(cmds...)
 }
 
 func (m *appModel) handleThemePreview(themeRef string) (tea.Model, tea.Cmd) {
+	themeRef = styles.ResolveThemeRef(themeRef)
 	if current := styles.CurrentTheme(); current != nil && current.Ref == themeRef {
 		return m, nil
 	}
@@ -734,6 +767,9 @@ func (m *appModel) invalidateCachesForThemeChange() {
 
 func (m *appModel) applyThemeChanged() (tea.Model, tea.Cmd) {
 	m.invalidateCachesForThemeChange()
+	// Re-target the file watcher: theme changes (picker selection, preview,
+	// hot reload) can move the active theme to a different backing file.
+	m.watchCurrentTheme()
 	return m, tea.Batch(
 		m.updateDialogCmd(messages.ThemeChangedMsg{}),
 		m.updateChatCmd(messages.ThemeChangedMsg{}),
@@ -751,6 +787,125 @@ func (m *appModel) handleThemeFileChanged(themeRef string) (tea.Model, tea.Cmd) 
 		notification.SuccessCmd("Theme hot-reloaded"),
 		core.CmdHandler(messages.ThemeChangedMsg{}),
 	)
+}
+
+// --- Settings (/settings) ---
+
+// handleOpenSettingsDialog opens the /settings dialog. The Visuals tab is
+// omitted when there is no sidebar to customize (--sidebar=false); lean mode
+// never gets here (it has no overlay support, the message is dropped).
+func (m *appModel) handleOpenSettingsDialog() (tea.Model, tea.Cmd) {
+	return m, core.CmdHandler(dialog.OpenDialogMsg{
+		Model: dialog.NewSettingsDialog(m.layoutSettings, m.sendMode, !m.hideSidebar),
+	})
+}
+
+// handleApplySettings applies the settings chosen in the /settings dialog
+// and persists them to the user config.
+func (m *appModel) handleApplySettings(msg messages.ApplySettingsMsg) (tea.Model, tea.Cmd) {
+	model, cmd := m.applyLayoutSettings(msg.Layout)
+
+	m.sendMode = messages.ParseSendMode(string(msg.SendMode))
+	for _, page := range m.chatPages {
+		page.SetSendMode(m.sendMode)
+	}
+
+	if err := saveSettingsToUserConfig(m.layoutSettings, m.sendMode); err != nil {
+		slog.Warn("Failed to save settings to user config", "error", err)
+		return model, tea.Batch(cmd, notification.WarningCmd("Settings applied but could not be saved"))
+	}
+	return model, tea.Batch(cmd, notification.SuccessCmd("Settings updated"))
+}
+
+// applyLayoutSettings applies the given layout to every chat page (all tabs
+// share the same layout) without persisting it.
+func (m *appModel) applyLayoutSettings(settings messages.LayoutSettings) (tea.Model, tea.Cmd) {
+	settings.SidebarPosition = messages.ParseSidebarPosition(string(settings.SidebarPosition))
+	settings.SectionSpacing = messages.ParseSectionSpacing(string(settings.SectionSpacing))
+	m.layoutSettings = settings
+
+	var cmds []tea.Cmd
+	for _, page := range m.chatPages {
+		if cmd := page.SetLayoutSettings(settings); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+	cmds = append(cmds, m.resizeAll())
+
+	return m, tea.Batch(cmds...)
+}
+
+// layoutSettingsFromConfig converts persisted layout settings to their runtime form.
+func layoutSettingsFromConfig(l userconfig.LayoutSettings) messages.LayoutSettings {
+	return messages.LayoutSettings{
+		SidebarPosition: messages.ParseSidebarPosition(l.SidebarPosition),
+		SectionSpacing:  messages.ParseSectionSpacing(l.SectionSpacing),
+		HideUsage:       l.HideUsage,
+		HideAgents:      l.HideAgents,
+		HideTools:       l.HideTools,
+		HideTodos:       l.HideTodos,
+	}
+}
+
+// saveSettingsToUserConfig persists the dialog settings to the user config
+// file. Default values clear their entries to keep the config file minimal.
+func saveSettingsToUserConfig(s messages.LayoutSettings, mode messages.SendMode) error {
+	return userconfig.Update(func(cfg *userconfig.Config) error {
+		if cfg.Settings == nil {
+			cfg.Settings = &userconfig.Settings{}
+		}
+
+		if mode == messages.SendModeQueue {
+			cfg.Settings.BusySendMode = string(messages.SendModeQueue)
+		} else {
+			cfg.Settings.BusySendMode = ""
+		}
+
+		if s == (messages.LayoutSettings{SidebarPosition: messages.SidebarRight, SectionSpacing: messages.SpacingNormal}) {
+			cfg.Settings.Layout = nil
+			return nil
+		}
+
+		position := string(s.SidebarPosition)
+		if s.SidebarPosition == messages.SidebarRight {
+			position = ""
+		}
+		spacing := string(s.SectionSpacing)
+		if s.SectionSpacing == messages.SpacingNormal {
+			spacing = ""
+		}
+		cfg.Settings.Layout = &userconfig.LayoutSettings{
+			SidebarPosition: position,
+			SectionSpacing:  spacing,
+			HideUsage:       s.HideUsage,
+			HideAgents:      s.HideAgents,
+			HideTools:       s.HideTools,
+			HideTodos:       s.HideTodos,
+		}
+		return nil
+	})
+}
+
+// handleColorSchemeChange reacts to a terminal light/dark report (a DEC mode
+// 2031 event or an OSC 11 response). The polarity is always recorded so a
+// later switch to the auto theme starts from the freshest value; the theme
+// itself only changes while the auto theme is active.
+func (m *appModel) handleColorSchemeChange(dark bool) (tea.Model, tea.Cmd) {
+	styles.SetTerminalDark(dark)
+	if !styles.AutoThemeEnabled() {
+		return m, nil
+	}
+	resolved := styles.ResolveThemeRef(styles.AutoThemeRef)
+	if current := styles.CurrentTheme(); current != nil && current.Ref == resolved {
+		return m, nil
+	}
+	theme, err := styles.LoadTheme(resolved)
+	if err != nil {
+		slog.Warn("Failed to load auto theme for terminal background change", "theme", resolved, "error", err)
+		return m, nil
+	}
+	styles.ApplyTheme(theme)
+	return m, core.CmdHandler(messages.ThemeChangedMsg{})
 }
 
 // --- Miscellaneous ---
@@ -926,7 +1081,7 @@ func (m *appModel) handleElicitationResponse(action tools.ElicitationAction, con
 }
 
 func (m *appModel) startShell() (tea.Model, tea.Cmd) {
-	cmd := newInteractiveShellCmd("Type 'exit' to return to " + m.appName)
+	cmd := shellpath.InteractiveShellCmd("Type 'exit' to return to " + m.appName)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -937,30 +1092,4 @@ func (m *appModel) startShell() (tea.Model, tea.Cmd) {
 		cmd.Dir = runner.WorkingDir
 	}
 	return m, tea.ExecProcess(cmd, nil)
-}
-
-// newInteractiveShellCmd returns a command that launches the user's preferred
-// interactive shell. The command is owned by tea.ExecProcess, not by any
-// request-scoped context, so exec.Command is intentional.
-func newInteractiveShellCmd(exitMsg string) *exec.Cmd {
-	if goruntime.GOOS != "windows" {
-		shell := shellpath.DetectUnixShell()
-		return execCmd(shell, "-i", "-c", `echo -e "\n`+exitMsg+`"; exec `+shell)
-	}
-
-	psArgs := []string{"-NoLogo", "-NoExit", "-Command", `Write-Host ""; Write-Host "` + exitMsg + `"`}
-	if path, err := exec.LookPath("pwsh.exe"); err == nil {
-		return execCmd(path, psArgs...)
-	}
-	if path, err := exec.LookPath("powershell.exe"); err == nil {
-		return execCmd(path, psArgs...)
-	}
-	// Use absolute path to cmd.exe to prevent PATH hijacking (CWE-426).
-	return execCmd(shellpath.WindowsCmdExe(), "/K", "echo. & echo "+exitMsg)
-}
-
-// execCmd is a thin wrapper around exec.Command used for interactive
-// processes whose lifecycle is owned by tea.ExecProcess (not a context).
-func execCmd(name string, args ...string) *exec.Cmd {
-	return exec.Command(name, args...) //nolint:noctx // owned by tea.ExecProcess
 }

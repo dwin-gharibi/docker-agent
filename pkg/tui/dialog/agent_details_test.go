@@ -18,7 +18,13 @@ import (
 // body. cfg populates the inline config sections (toolsets, sub-agents,
 // handoffs, fallbacks).
 func renderAgentDetails(a runtime.AgentDetails, cfg runtime.AgentConfigInfo) string {
-	d := NewAgentDetailsDialog(a, cfg).(*agentDetailsDialog)
+	return renderAgentDetailsUsage(a, cfg, nil)
+}
+
+// renderAgentDetailsUsage is renderAgentDetails with a token-usage snapshot
+// for the context-usage line.
+func renderAgentDetailsUsage(a runtime.AgentDetails, cfg runtime.AgentConfigInfo, usage *runtime.Usage) string {
+	d := NewAgentDetailsDialog(a, cfg, usage).(*agentDetailsDialog)
 	return ansi.Strip(strings.Join(d.renderLines(80, 24), "\n"))
 }
 
@@ -104,7 +110,7 @@ func TestAgentDetailsDialog_TitleUsesAgentAccentColor(t *testing.T) {
 	t.Cleanup(func() { styles.SetAgentOrder(nil) })
 
 	titleOf := func(name string) string {
-		d := NewAgentDetailsDialog(runtime.AgentDetails{Name: name, Model: "gpt"}, runtime.AgentConfigInfo{}).(*agentDetailsDialog)
+		d := NewAgentDetailsDialog(runtime.AgentDetails{Name: name, Model: "gpt"}, runtime.AgentConfigInfo{}, nil).(*agentDetailsDialog)
 		return d.renderLines(80, 24)[0] // raw title line, with ANSI styling
 	}
 
@@ -215,6 +221,34 @@ func TestAgentDetailsDialog_LimitsOmitsUnsetValues(t *testing.T) {
 	assert.Contains(t, out, "Limits: history 40")
 	assert.NotContains(t, out, "max-iter", "unset max-iter is omitted")
 	assert.NotContains(t, out, "max-tool-calls", "unset max-tool-calls is omitted")
+}
+
+// TestAgentDetailsDialog_ContextUsage covers the per-agent context line: full
+// "tokens of limit (percent)" form when the context limit is known, bare token
+// count when it is not (e.g. harness-backed agents), and omission when the
+// agent has no recorded usage or an empty snapshot.
+func TestAgentDetailsDialog_ContextUsage(t *testing.T) {
+	t.Parallel()
+
+	agent := runtime.AgentDetails{Name: "root", Provider: "openai", Model: "gpt-5.4"}
+
+	withLimit := renderAgentDetailsUsage(agent, runtime.AgentConfigInfo{}, &runtime.Usage{
+		ContextLength: 12_800,
+		ContextLimit:  128_000,
+	})
+	assert.Contains(t, withLimit, "Context: 12.8K of 128.0K tokens (10%)")
+
+	noLimit := renderAgentDetailsUsage(agent, runtime.AgentConfigInfo{}, &runtime.Usage{
+		ContextLength: 8_200,
+	})
+	assert.Contains(t, noLimit, "Context: 8.2K tokens")
+	assert.NotContains(t, noLimit, "%)", "no percent without a context limit")
+
+	noUsage := renderAgentDetailsUsage(agent, runtime.AgentConfigInfo{}, nil)
+	assert.NotContains(t, noUsage, "Context:", "no context line when the agent has not run")
+
+	emptyUsage := renderAgentDetailsUsage(agent, runtime.AgentConfigInfo{}, &runtime.Usage{})
+	assert.NotContains(t, emptyUsage, "Context:", "no context line for an empty snapshot")
 }
 
 // TestInlineList_NarrowWidth_NoLabelDuplication verifies that when contentWidth

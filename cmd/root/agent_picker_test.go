@@ -235,16 +235,6 @@ func trimTrailingPerLine(s string) string {
 	return strings.Join(lines, "\n")
 }
 
-func TestPercentLabel(t *testing.T) {
-	t.Parallel()
-
-	assert.Equal(t, "0%", percentLabel(0))
-	assert.Equal(t, "50%", percentLabel(0.5))
-	assert.Equal(t, "100%", percentLabel(1))
-	assert.Equal(t, "0%", percentLabel(-0.5))
-	assert.Equal(t, "100%", percentLabel(2))
-}
-
 func TestAgentPickerDetailsFixedSize(t *testing.T) {
 	t.Parallel()
 
@@ -275,6 +265,22 @@ func TestAgentPickerDetailsFixedSize(t *testing.T) {
 	w, h := lipgloss.Size(m.renderDetails())
 	assert.Equal(t, topW, w, "width changed at bottom")
 	assert.Equal(t, topH, h, "height changed at bottom")
+}
+
+func TestAgentPickerDetailsHelpNeverWraps(t *testing.T) {
+	t.Parallel()
+
+	// On very narrow terminals the details help must drop bindings instead of
+	// soft-wrapping, which would add a row and overflow the dialog height.
+	m := newAgentPickerModel([]agentChoice{{ref: "default", yaml: strings.Repeat("a: b\n", 50)}})
+	for _, w := range []int{20, 24, 28, 32, 40, 120} {
+		m.width = w
+		m.height = 40
+		m.openDetails()
+		_, dh := m.detailsDialogSize()
+		assert.Equal(t, dh, lipgloss.Height(m.renderDetails()), "dialog height mismatch at width %d", w)
+		m.showDetails = false
+	}
 }
 
 func TestStripControl(t *testing.T) {
@@ -320,7 +326,7 @@ func TestAgentPickerWindowing(t *testing.T) {
 	}
 	m := newAgentPickerModel(choices)
 	m.width = 120
-	m.height = 30 // fits (30-12)/7 = 2 cards
+	m.height = 22 // fits (22-12)/5 = 2 cards
 
 	assert.Equal(t, 2, m.visibleCount())
 
@@ -566,12 +572,16 @@ func TestAgentPickerCardAtMatchesRenderedText(t *testing.T) {
 		assert.Equal(t, idx, i, "ref row for %q should hit card %d", ref, idx)
 	}
 
-	// The title and help rows must not resolve to any card.
+	// The title, subtitle, and status-bar rows must not resolve to any card.
 	titleY := findRow("Choose an agent to run")
 	_, ok := m.cardAt(m.width/2, titleY)
 	assert.False(t, ok, "title row must not hit a card")
 
-	helpY := findRow("double-click")
+	subtitleY := findRow("double-click a card")
+	_, ok = m.cardAt(m.width/2, subtitleY)
+	assert.False(t, ok, "subtitle row must not hit a card")
+
+	helpY := findRow("view yaml")
 	_, ok = m.cardAt(m.width/2, helpY)
 	assert.False(t, ok, "help row must not hit a card")
 }
@@ -704,6 +714,120 @@ func TestAgentPickerLeanCheckboxClickToggle(t *testing.T) {
 	// The checkbox row must not hit any card.
 	_, ok := m.cardAt(x, y)
 	assert.False(t, ok, "checkbox row must not resolve to a card")
+}
+
+func TestAgentPickerBoardKey(t *testing.T) {
+	t.Parallel()
+
+	m := newAgentPickerModel([]agentChoice{{ref: "default"}, {ref: "coder"}})
+	m.width = 120
+	m.height = 40
+
+	assert.Contains(t, ansi.Strip(m.render()), "[ Open Board ]", "board button must be rendered")
+
+	_, cmd := m.Update(tea.KeyPressMsg{Code: 'b', Text: "b"})
+	require.NotNil(t, cmd, "pressing b must quit the picker")
+	assert.True(t, m.startBoard)
+}
+
+func TestAgentPickerBoardButtonClick(t *testing.T) {
+	t.Parallel()
+
+	m := newAgentPickerModel([]agentChoice{{ref: "default"}, {ref: "coder"}})
+	m.width = 120
+	m.height = 40
+
+	// Locate the button on the rendered screen and click it; convert the
+	// byte-offset prefix to display columns (border runes are multi-byte).
+	screen := ansi.Strip(lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, m.render()))
+	var x, y int
+	found := false
+	for row, line := range strings.Split(screen, "\n") {
+		if prefix, _, ok := strings.Cut(line, "[ Open Board ]"); ok {
+			x, y, found = lipgloss.Width(prefix), row, true
+			break
+		}
+	}
+	require.True(t, found, "board button not found on screen")
+	assert.True(t, m.boardButtonAt(x, y), "hit zone must match the rendered button")
+
+	// Hit-zone boundaries: both edges inside; one cell beyond each edge and
+	// the adjacent rows outside. The cell left of the button belongs to the
+	// gap after the lean checkbox, so it must hit neither.
+	buttonWidth := len("[ Open Board ]")
+	assert.True(t, m.boardButtonAt(x+buttonWidth-1, y), "right edge must be inside")
+	assert.False(t, m.boardButtonAt(x-1, y), "left of the button must miss")
+	assert.False(t, m.leanCheckboxAt(x-1, y), "gap must not hit the checkbox either")
+	assert.False(t, m.boardButtonAt(x+buttonWidth, y), "right of the button must miss")
+	assert.False(t, m.boardButtonAt(x, y-1), "row above must miss")
+	assert.False(t, m.boardButtonAt(x, y+1), "row below must miss")
+
+	_, cmd := m.Update(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+	require.NotNil(t, cmd, "clicking the button must quit the picker")
+	assert.True(t, m.startBoard)
+	assert.False(t, m.leanMode, "board click must not toggle lean mode")
+}
+
+func TestAgentPickerBoardKeyIgnoredInDetails(t *testing.T) {
+	t.Parallel()
+
+	m := newAgentPickerModel([]agentChoice{{ref: "default", yaml: "a: b\n"}, {ref: "coder"}})
+	m.width = 120
+	m.height = 40
+	m.openDetails()
+
+	// While the YAML dialog is open, b belongs to the viewport (page up) and
+	// must not start the board.
+	_, _ = m.Update(tea.KeyPressMsg{Code: 'b', Text: "b"})
+	assert.False(t, m.startBoard, "b in the details dialog must not start the board")
+	assert.True(t, m.showDetails, "the dialog must stay open")
+}
+
+func TestAgentPickerBoardButtonWindowed(t *testing.T) {
+	t.Parallel()
+
+	// A windowed list with a scrolled offset exercises the cardRows-based row
+	// math the button's hit zone shares with the checkbox.
+	choices := make([]agentChoice, 10)
+	for i := range choices {
+		choices[i] = agentChoice{ref: "agent-" + strconv.Itoa(i)}
+	}
+	m := newAgentPickerModel(choices)
+	m.width = 120
+	m.height = 22 // fits 2 cards
+	for range 5 {
+		m.moveDown()
+	}
+	require.Positive(t, m.offset, "list must be scrolled")
+
+	screen := ansi.Strip(lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, m.render()))
+	var x, y int
+	found := false
+	for row, line := range strings.Split(screen, "\n") {
+		if prefix, _, ok := strings.Cut(line, "[ Open Board ]"); ok {
+			x, y, found = lipgloss.Width(prefix), row, true
+			break
+		}
+	}
+	require.True(t, found, "board button not found on screen")
+	assert.True(t, m.boardButtonAt(x, y), "hit zone must match the rendered button while windowed")
+}
+
+func TestAgentPickerPanelSizeMatchesRenderNarrow(t *testing.T) {
+	t.Parallel()
+
+	// On narrow terminals the header lines are truncated so nothing wraps;
+	// panelSize must still match the render exactly or hit-testing drifts.
+	for _, width := range []int{40, 60, 80, 100} {
+		m := newAgentPickerModel([]agentChoice{{ref: "default"}, {ref: "coder"}})
+		m.width = width
+		m.height = 40
+		gotW, gotH := m.panelSize()
+		wantW, wantH := lipgloss.Size(m.render())
+		assert.Equal(t, wantW, gotW, "panel width mismatch at width %d", width)
+		assert.Equal(t, wantH, gotH, "panel height mismatch at width %d", width)
+		assert.LessOrEqual(t, wantW, width, "panel must fit the terminal at width %d", width)
+	}
 }
 
 // firstCardPoint scans the grid for a coordinate that maps to card index want.

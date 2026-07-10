@@ -8,7 +8,11 @@ package board
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
+	"hash/fnv"
+	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/docker/docker-agent/pkg/paths"
@@ -33,28 +37,97 @@ var DefaultColumns = []Column{
 }
 
 // ColumnsFromConfig maps user-configured columns to board columns, falling
-// back to [DefaultColumns] when none are configured.
+// back to [DefaultColumns] when none are configured. The config file is
+// hand-editable, so entries are normalized instead of trusted: a missing id
+// is derived from the name (hashed when the name slugs to nothing, e.g.
+// non-ASCII, so the id stays stable across restarts), an id-less and
+// nameless entry is dropped, and a duplicate id is dropped (card moves
+// address columns by id, so duplicates would be ambiguous).
 func ColumnsFromConfig(cols []userconfig.BoardColumn) []Column {
-	if len(cols) == 0 {
-		return DefaultColumns
-	}
 	out := make([]Column, 0, len(cols))
+	seen := make(map[string]bool, len(cols))
 	for _, c := range cols {
-		out = append(out, Column{ID: c.ID, Name: c.Name, Emoji: c.Emoji, Prompt: c.Prompt})
+		id := strings.TrimSpace(c.ID)
+		name := collapseSpace(c.Name)
+		if id == "" {
+			id = columnID(name)
+		}
+		if id == "" && name != "" {
+			id = fallbackColumnID(name)
+		}
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		if name == "" {
+			name = id
+		}
+		out = append(out, Column{ID: id, Name: name, Emoji: collapseSpace(c.Emoji), Prompt: c.Prompt})
+	}
+	if len(out) == 0 {
+		// Cloned: the caller may edit the pipeline in place.
+		return slices.Clone(DefaultColumns)
 	}
 	return out
+}
+
+// columnID derives a column id from its display name: lowercased, with
+// runs of separators collapsed to a dash and anything else non-alphanumeric
+// dropped. Names that slug to nothing (e.g. emoji-only) yield "".
+func columnID(name string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(strings.TrimSpace(name)) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == ' ' || r == '-' || r == '_':
+			if s := b.String(); s != "" && !strings.HasSuffix(s, "-") {
+				b.WriteByte('-')
+			}
+		}
+	}
+	return strings.TrimSuffix(b.String(), "-")
+}
+
+// fallbackColumnID returns a stable id for a name [columnID] slugs to
+// nothing (e.g. non-ASCII or emoji-only): a hash of the name, so the id
+// stays the same across restarts and cards stay attached to their column.
+func fallbackColumnID(name string) string {
+	h := fnv.New32a()
+	h.Write([]byte(name))
+	return fmt.Sprintf("col-%08x", h.Sum32())
+}
+
+// collapseSpace trims a string and collapses inner whitespace (including
+// newlines) to single spaces. Column names and emoji are rendered on
+// single-line headers whose mouse hitboxes are computed arithmetically, so
+// an embedded newline from a hand-edited config would break the layout.
+func collapseSpace(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }
 
 // CardStatus tracks what a card's agent is doing.
 type CardStatus string
 
 const (
-	// StatusStarting marks a card whose agent is launching but has not yet
-	// answered on its control plane. The watcher replaces it with a real
-	// status as soon as the agent emits events.
+	// StatusStarting, StatusLoading, and StatusAttaching are the startup
+	// phases, in launch order. The agent has not answered on its control
+	// plane yet; the watcher refines the phase from the milestones the
+	// agent materializes on disk, so a stuck launch shows how far it got,
+	// and replaces it with a real status as soon as the agent emits events.
+	//
+	// StatusStarting: the tmux session is created and the agent process is
+	// booting; it has not created the card's worktree yet.
 	StatusStarting CardStatus = "starting"
-	StatusRunning  CardStatus = "running"
-	StatusWaiting  CardStatus = "waiting"
+	// StatusLoading: the worktree exists, so the agent is loading its
+	// configuration, models, and tools.
+	StatusLoading CardStatus = "loading"
+	// StatusAttaching: the control-plane socket is bound; the board is
+	// waiting for the agent to answer its first snapshot.
+	StatusAttaching CardStatus = "attaching"
+
+	StatusRunning CardStatus = "running"
+	StatusWaiting CardStatus = "waiting"
 	// StatusPaused marks a card whose turn is blocked on /pause. It lasts
 	// until the runtime emits events again (resume) or the turn ends.
 	StatusPaused CardStatus = "paused"
@@ -63,10 +136,16 @@ const (
 	StatusError CardStatus = "error"
 )
 
+// StartingUp reports whether the card is in a startup phase: its agent was
+// launched but its control plane has not answered yet.
+func (s CardStatus) StartingUp() bool {
+	return s == StatusStarting || s == StatusLoading || s == StatusAttaching
+}
+
 // Busy reports whether the card's agent cannot accept a prompt right now: it
 // is either still starting or in the middle of a turn.
 func (s CardStatus) Busy() bool {
-	return s == StatusStarting || s == StatusRunning
+	return s.StartingUp() || s == StatusRunning
 }
 
 // Card is one task on the board.
@@ -108,10 +187,19 @@ func newSessionName() string {
 
 // socketPath returns the unix socket a card's agent control plane listens
 // on. It is derived from the (unique) docker-agent session id, so it is
-// stable across board restarts and needs no extra storage. Kept short to
-// stay under the ~104-byte unix sun_path limit.
+// stable across board restarts and needs no extra storage. The socket lives
+// in the board's per-user socket dir (see socketDir) — not under the data
+// dir, whose bind mount into a docker sandbox cannot host unix sockets: the
+// agent would die at startup failing to bind --listen. Kept short to stay
+// under the ~104-byte unix sun_path limit.
 func socketPath(agentSession string) string {
-	return filepath.Join(paths.GetDataDir(), "run", "board-"+agentSession+".sock")
+	dir, err := socketDir()
+	if err != nil {
+		// The board cannot run at all when the socket dir is unusable (its
+		// tmux socket lives there too); keep the path deterministic anyway.
+		dir = os.TempDir()
+	}
+	return filepath.Join(dir, agentSession+".sock")
 }
 
 // worktreeDir returns the directory docker-agent creates for a worktree of

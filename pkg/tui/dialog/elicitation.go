@@ -631,7 +631,7 @@ func (d *ElicitationDialog) renderEnumField(content *Content, i int, field Elici
 }
 
 func (d *ElicitationDialog) renderSelectionField(content *Content, options []string, selectedIdx int, isFocused bool) {
-	selectedStyle := styles.DialogContentStyle.Foreground(styles.White).Bold(true)
+	selectedStyle := styles.DialogContentStyle.Foreground(styles.TextBright).Bold(true)
 	unselectedStyle := styles.DialogContentStyle.Foreground(styles.TextMuted)
 
 	for j, option := range options {

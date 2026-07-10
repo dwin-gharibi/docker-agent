@@ -386,6 +386,17 @@ func builtInSessionCommands() []Item {
 func builtInSettingsCommands() []Item {
 	return []Item{
 		{
+			ID:           "settings.open",
+			Label:        "Settings",
+			SlashCommand: "/settings",
+			Description:  "Open settings: layout visuals and message send behavior",
+			Category:     "Settings",
+			Immediate:    true,
+			Execute: func(string) tea.Cmd {
+				return core.CmdHandler(messages.OpenSettingsDialogMsg{})
+			},
+		},
+		{
 			ID:           "settings.split-diff",
 			Label:        "Split Diff",
 			SlashCommand: "/split-diff",

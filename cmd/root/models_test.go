@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/docker/docker-agent/pkg/config"
+	"github.com/docker/docker-agent/pkg/config/latest"
 	"github.com/docker/docker-agent/pkg/environment"
 	"github.com/docker/docker-agent/pkg/modelsdev"
 )
@@ -332,4 +333,117 @@ func TestModelsListCommand_NoCredentials(t *testing.T) {
 
 	// DMR is always available as fallback
 	assert.Contains(t, buf.String(), "dmr")
+}
+
+// withProviders seeds user-defined custom providers into the models command,
+// standing in for the user-config providers the gateway pre-run would load.
+func withProviders(providers map[string]latest.ProviderConfig) modelsCmdOption {
+	return func(rc *config.RuntimeConfig) {
+		rc.Providers = providers
+	}
+}
+
+// newCustomProviderServer serves an OpenAI-style /models listing and records
+// the Authorization header of the last request.
+func newCustomProviderServer(t *testing.T, models []string) (*httptest.Server, *atomic.Value) {
+	t.Helper()
+
+	var lastAuth atomic.Value
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lastAuth.Store(r.Header.Get("Authorization"))
+		if r.URL.Path != "/models" {
+			http.NotFound(w, r)
+			return
+		}
+		type entry struct {
+			ID string `json:"id"`
+		}
+		var data []entry
+		for _, m := range models {
+			data = append(data, entry{ID: m})
+		}
+		w.Header().Set("Content-Type", "application/json")
+		assert.NoError(t, json.NewEncoder(w).Encode(map[string]any{"data": data}))
+	}))
+	t.Cleanup(server.Close)
+	return server, &lastAuth
+}
+
+func TestModelsListCommand_CustomProviderListsEndpointModels(t *testing.T) {
+	t.Parallel()
+
+	server, lastAuth := newCustomProviderServer(t, []string{"corp-model-a", "corp-embeddings"})
+
+	var buf bytes.Buffer
+	cmd := newModelsCmd(
+		withTestConfig(map[string]string{"MYPROVIDER_API_KEY": "custom-key"}),
+		withProviders(map[string]latest.ProviderConfig{
+			"myprovider": {BaseURL: server.URL, TokenKey: "MYPROVIDER_API_KEY"},
+		}),
+	)
+	cmd.SetOut(&buf)
+	cmd.SetErr(&buf)
+	cmd.SetArgs(nil)
+
+	require.NoError(t, cmd.Execute())
+
+	output := buf.String()
+	assert.Contains(t, output, "myprovider")
+	assert.Contains(t, output, "corp-model-a")
+	assert.NotContains(t, output, "corp-embeddings", "embedding models are filtered out")
+	assert.Equal(t, "Bearer custom-key", lastAuth.Load(), "the token variable must authenticate the listing request")
+}
+
+func TestModelsListCommand_CustomProviderFilter(t *testing.T) {
+	t.Parallel()
+
+	server, _ := newCustomProviderServer(t, []string{"corp-model-a"})
+
+	var buf bytes.Buffer
+	cmd := newModelsCmd(
+		// No token variable: the provider is intentionally unauthenticated.
+		withTestConfig(map[string]string{"ANTHROPIC_API_KEY": "test-key"}),
+		withProviders(map[string]latest.ProviderConfig{
+			"myprovider": {BaseURL: server.URL},
+		}),
+	)
+	cmd.SetOut(&buf)
+	cmd.SetErr(&buf)
+	cmd.SetArgs([]string{"--provider", "myprovider"})
+
+	require.NoError(t, cmd.Execute())
+
+	output := buf.String()
+	assert.Contains(t, output, "corp-model-a")
+	assert.NotContains(t, output, "anthropic", "--provider must filter other providers out")
+}
+
+func TestModelsListCommand_CustomProviderWithoutCredentials(t *testing.T) {
+	t.Parallel()
+
+	server, _ := newCustomProviderServer(t, []string{"corp-model-a"})
+	providers := map[string]latest.ProviderConfig{
+		"myprovider": {BaseURL: server.URL, TokenKey: "MYPROVIDER_API_KEY"},
+	}
+
+	// Token variable unset: the provider is not available, so its endpoint is
+	// not queried.
+	var buf bytes.Buffer
+	cmd := newModelsCmd(withTestConfig(map[string]string{}), withProviders(providers))
+	cmd.SetOut(&buf)
+	cmd.SetErr(&buf)
+	cmd.SetArgs(nil)
+
+	require.NoError(t, cmd.Execute())
+	assert.NotContains(t, buf.String(), "corp-model-a")
+
+	// --all includes it anyway.
+	buf.Reset()
+	cmd = newModelsCmd(withTestConfig(map[string]string{}), withProviders(providers))
+	cmd.SetOut(&buf)
+	cmd.SetErr(&buf)
+	cmd.SetArgs([]string{"--all"})
+
+	require.NoError(t, cmd.Execute())
+	assert.Contains(t, buf.String(), "corp-model-a")
 }

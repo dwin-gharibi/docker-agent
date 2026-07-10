@@ -15,3 +15,11 @@ import (
 // expected to call the host's model with the supplied messages and return
 // the model's response (or an error if the request was declined or failed).
 type SamplingHandler func(ctx context.Context, req *mcp.CreateMessageParams) (*mcp.CreateMessageResult, error)
+
+// SamplingWithToolsHandler handles sampling/createMessage requests that may
+// involve tool use. The request carries a tools array and supports messages
+// with multi-block content (tool_use, tool_result). The handler is expected
+// to forward the tools to the host's model and return any tool_use blocks
+// the model emits — the requesting MCP server executes the tools and
+// continues the loop in a follow-up sampling request.
+type SamplingWithToolsHandler func(ctx context.Context, req *mcp.CreateMessageWithToolsParams) (*mcp.CreateMessageWithToolsResult, error)

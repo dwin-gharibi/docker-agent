@@ -1,8 +1,11 @@
 package userconfig
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/goccy/go-yaml"
@@ -10,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/docker/docker-agent/pkg/config/latest"
+	"github.com/docker/docker-agent/pkg/paths"
 )
 
 func TestConfig_Empty(t *testing.T) {
@@ -94,6 +98,55 @@ func TestConfig_SetAlias_Validation(t *testing.T) {
 	}
 }
 
+func TestConfig_SetGetProviders(t *testing.T) {
+	t.Parallel()
+
+	config := &Config{}
+
+	require.Error(t, config.SetProvider("", latest.ProviderConfig{}))
+	require.Error(t, config.SetProvider("   ", latest.ProviderConfig{}))
+	assert.Nil(t, config.GetProviders())
+
+	provider := latest.ProviderConfig{
+		BaseURL:  "https://llm.corp.example.com/v1",
+		APIType:  "openai_chatcompletions",
+		TokenKey: "MYPROVIDER_API_KEY",
+	}
+	require.NoError(t, config.SetProvider("myprovider", provider))
+
+	providers := config.GetProviders()
+	require.Len(t, providers, 1)
+	assert.Equal(t, provider, providers["myprovider"])
+
+	// The returned map is a copy: mutating it must not affect the config.
+	delete(providers, "myprovider")
+	assert.Len(t, config.GetProviders(), 1)
+}
+
+func TestConfig_ProvidersRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "config.yaml")
+
+	config := &Config{}
+	require.NoError(t, config.SetProvider("myprovider", latest.ProviderConfig{
+		BaseURL:  "https://llm.corp.example.com/v1",
+		APIType:  "openai_responses",
+		TokenKey: "MYPROVIDER_API_KEY",
+	}))
+	require.NoError(t, config.saveTo(configFile))
+
+	loaded, err := loadFrom(configFile, "")
+	require.NoError(t, err)
+
+	providers := loaded.GetProviders()
+	require.Len(t, providers, 1)
+	assert.Equal(t, "https://llm.corp.example.com/v1", providers["myprovider"].BaseURL)
+	assert.Equal(t, "openai_responses", providers["myprovider"].APIType)
+	assert.Equal(t, "MYPROVIDER_API_KEY", providers["myprovider"].TokenKey)
+}
+
 func TestValidateAliasName(t *testing.T) {
 	t.Parallel()
 
@@ -169,6 +222,45 @@ func TestConfig_SaveAndLoad(t *testing.T) {
 	assert.Equal(t, CurrentVersion, loaded.Version)
 	assert.Equal(t, config.Aliases["code"].Path, loaded.Aliases["code"].Path)
 	assert.Equal(t, config.Aliases["myagent"].Path, loaded.Aliases["myagent"].Path)
+}
+
+func TestSettings_LayoutRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "config.yaml")
+
+	config := &Config{
+		Settings: &Settings{
+			Layout: &LayoutSettings{
+				SidebarPosition: "left",
+				SectionSpacing:  "compact",
+				HideUsage:       true,
+				HideTodos:       true,
+			},
+		},
+	}
+
+	require.NoError(t, config.saveTo(configFile))
+
+	loaded, err := loadFrom(configFile, "")
+	require.NoError(t, err)
+
+	layout := loaded.GetSettings().GetLayout()
+	assert.Equal(t, "left", layout.SidebarPosition)
+	assert.Equal(t, "compact", layout.SectionSpacing)
+	assert.True(t, layout.HideUsage)
+	assert.False(t, layout.HideAgents)
+	assert.False(t, layout.HideTools)
+	assert.True(t, layout.HideTodos)
+}
+
+func TestSettings_GetLayoutDefaults(t *testing.T) {
+	t.Parallel()
+
+	var nilSettings *Settings
+	assert.Equal(t, LayoutSettings{}, nilSettings.GetLayout())
+	assert.Equal(t, LayoutSettings{}, (&Settings{}).GetLayout())
 }
 
 func TestConfig_MigrateFromLegacy(t *testing.T) {
@@ -1031,6 +1123,48 @@ func TestConfig_SandboxAllowlistRoundTrip(t *testing.T) {
 	assert.Equal(t, original.SandboxAllowlist, loaded.SandboxAllowlist)
 }
 
+// Regression test for docker/docker-agent#3536: a hand-written config using
+// the single-mapping hook form must not fail the whole config load, which
+// silently dropped aliases and reset every setting.
+func TestConfig_SingleMappingHooksKeepAliases(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "config.yaml")
+
+	content := `version: v1
+aliases:
+  default:
+    path: /Users/blabla/dev/tools/cagent/agent.yaml
+settings:
+  theme: catppuccin-mocha
+  hooks:
+    on_user_input:
+      type: command
+      command: terminal-notifier -message "needs input"
+    stop:
+      type: command
+      command: terminal-notifier -message "completed"
+`
+	require.NoError(t, os.WriteFile(configFile, []byte(content), 0o600))
+
+	cfg, err := loadFrom(configFile, "")
+	require.NoError(t, err)
+
+	alias, ok := cfg.GetAlias("default")
+	require.True(t, ok, "alias must survive a config with single-mapping hooks")
+	assert.Equal(t, "/Users/blabla/dev/tools/cagent/agent.yaml", alias.Path)
+
+	require.NotNil(t, cfg.Settings)
+	assert.Equal(t, "catppuccin-mocha", cfg.Settings.Theme)
+
+	hooks := cfg.Settings.GlobalHooks()
+	require.NotNil(t, hooks)
+	require.Len(t, hooks.OnUserInput, 1)
+	require.Len(t, hooks.Stop, 1)
+	assert.Equal(t, "command", hooks.OnUserInput[0].Type)
+}
+
 func TestConfig_HooksRoundTrip(t *testing.T) {
 	t.Parallel()
 
@@ -1075,4 +1209,176 @@ func TestConfig_Settings_HooksEmpty(t *testing.T) {
 	assert.Nil(t, cfg.Settings.Hooks)
 	assert.Nil(t, cfg.Settings.GlobalHooks())
 	assert.Nil(t, (*Settings)(nil).GlobalHooks())
+}
+
+func TestGet_MalformedConfigReturnsSafeDefaults(t *testing.T) {
+	// Not parallel: SetConfigDir mutates process-global state.
+	dir := t.TempDir()
+	paths.SetConfigDir(dir)
+	t.Cleanup(func() { paths.SetConfigDir("") })
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("settings: [not a map"), 0o600))
+
+	settings := Get()
+	require.NotNil(t, settings)
+	require.NotNil(t, settings.RestoreTabs, "RestoreTabs must be non-nil even when the config cannot be loaded")
+	assert.False(t, settings.GetRestoreTabs())
+}
+
+func TestSettings_GetRestoreTabs(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		settings *Settings
+		expected bool
+	}{
+		{"nil settings", nil, false},
+		{"empty settings", &Settings{}, false},
+		{"explicitly disabled", &Settings{RestoreTabs: new(false)}, false},
+		{"explicitly enabled", &Settings{RestoreTabs: new(true)}, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.expected, tt.settings.GetRestoreTabs())
+		})
+	}
+}
+
+func TestLoadSave_PreservesCommentsAndUnknownKeys(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "config.yaml")
+	input := `# docker agent user configuration
+version: v1
+aliases:
+  dev:
+    path: ./dev.yaml
+settings:
+  theme: dark # my favorite
+  future_flag: true
+top_secret_future: keep-me
+`
+	require.NoError(t, os.WriteFile(configFile, []byte(input), 0o600))
+
+	cfg, err := loadFrom(configFile, "")
+	require.NoError(t, err)
+	require.NoError(t, cfg.SetAlias("extra", &Alias{Path: "./extra.yaml"}))
+	require.NoError(t, cfg.saveTo(configFile))
+
+	data, err := os.ReadFile(configFile)
+	require.NoError(t, err)
+	out := string(data)
+
+	assert.Contains(t, out, "# docker agent user configuration")
+	assert.Contains(t, out, "# my favorite")
+	assert.Contains(t, out, "future_flag: true")
+	assert.Contains(t, out, "top_secret_future: keep-me")
+	assert.Contains(t, out, "extra")
+
+	reloaded, err := loadFrom(configFile, "")
+	require.NoError(t, err)
+	assert.Equal(t, "dark", reloaded.Settings.Theme)
+	assert.Len(t, reloaded.Aliases, 2)
+}
+
+func TestSave_ClearedCommentedSectionStillSaves(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "config.yaml")
+	input := `version: v1
+settings:
+  theme: dark
+  # sidebar on the left
+  layout:
+    sidebar_position: left
+`
+	require.NoError(t, os.WriteFile(configFile, []byte(input), 0o600))
+
+	cfg, err := loadFrom(configFile, "")
+	require.NoError(t, err)
+	cfg.Settings.Layout = nil
+	require.NoError(t, cfg.saveTo(configFile))
+
+	reloaded, err := loadFrom(configFile, "")
+	require.NoError(t, err)
+	assert.Nil(t, reloaded.Settings.Layout)
+	assert.Equal(t, "dark", reloaded.Settings.Theme)
+}
+
+func TestUpdate_ConcurrentWritersDoNotLoseChanges(t *testing.T) {
+	// Not parallel: SetConfigDir mutates process-global state.
+	dir := t.TempDir()
+	paths.SetConfigDir(dir)
+	t.Cleanup(func() { paths.SetConfigDir("") })
+
+	const writers = 8
+	var wg sync.WaitGroup
+	errs := make([]error, writers)
+	for i := range writers {
+		wg.Go(func() {
+			errs[i] = Update(func(cfg *Config) error {
+				return cfg.SetAlias(fmt.Sprintf("alias-%d", i), &Alias{Path: fmt.Sprintf("./agent-%d.yaml", i)})
+			})
+		})
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		require.NoError(t, err, "writer %d", i)
+	}
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.Len(t, cfg.Aliases, writers, "every concurrent update must be persisted")
+}
+
+func TestUpdate_MutateErrorLeavesFileUntouched(t *testing.T) {
+	// Not parallel: SetConfigDir mutates process-global state.
+	dir := t.TempDir()
+	paths.SetConfigDir(dir)
+	t.Cleanup(func() { paths.SetConfigDir("") })
+
+	original := []byte("version: v1\nmodels_gateway: https://gw.example.com\n")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.yaml"), original, 0o600))
+
+	boom := errors.New("boom")
+	err := Update(func(*Config) error { return boom })
+	require.ErrorIs(t, err, boom)
+
+	data, err := os.ReadFile(filepath.Join(dir, "config.yaml"))
+	require.NoError(t, err)
+	assert.Equal(t, original, data)
+}
+
+func TestSettings_GlobalHooksValidation(t *testing.T) {
+	t.Parallel()
+
+	valid := &latest.HooksConfig{
+		SessionStart: []latest.HookDefinition{{Type: "command", Command: "echo hi"}},
+	}
+	invalid := &latest.HooksConfig{
+		SessionStart: []latest.HookDefinition{{Type: "command"}},
+	}
+
+	assert.Nil(t, (*Settings)(nil).GlobalHooks())
+	assert.Nil(t, (&Settings{}).GlobalHooks())
+	assert.Same(t, valid, (&Settings{Hooks: valid}).GlobalHooks())
+	assert.Nil(t, (&Settings{Hooks: invalid}).GlobalHooks(), "invalid hooks must not reach the runtime")
+}
+
+func TestLoad_UnknownVersionStillLoads(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	configFile := filepath.Join(tmpDir, "config.yaml")
+	require.NoError(t, os.WriteFile(configFile, []byte("version: v99\nmodels_gateway: https://gw.example.com\n"), 0o600))
+
+	cfg, err := loadFrom(configFile, "")
+	require.NoError(t, err)
+	assert.Equal(t, "https://gw.example.com", cfg.ModelsGateway)
 }

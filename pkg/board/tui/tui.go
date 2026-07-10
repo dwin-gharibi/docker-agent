@@ -4,7 +4,9 @@ package tui
 import (
 	"context"
 	"image/color"
+	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 
@@ -13,6 +15,7 @@ import (
 	"github.com/atotto/clipboard"
 
 	"github.com/docker/docker-agent/pkg/board"
+	"github.com/docker/docker-agent/pkg/shellpath"
 	"github.com/docker/docker-agent/pkg/tui/core"
 	"github.com/docker/docker-agent/pkg/tui/styles"
 )
@@ -84,15 +87,48 @@ type (
 		project board.Project
 		prompt  string
 	}
-	// submitProjectMsg adds a project from the projects dialog.
-	submitProjectMsg struct{ project board.Project }
+	// submitProjectMsg adds a project from the projects dialog, or updates
+	// the one named oldName when set.
+	submitProjectMsg struct {
+		project board.Project
+		oldName string
+	}
+	// projectSavedMsg means an add/update was validated and persisted; name
+	// is the saved project's name, oldName its previous name (empty on add).
+	projectSavedMsg struct {
+		name    string
+		oldName string
+	}
 	// deleteProjectMsg removes a project from the projects dialog.
 	deleteProjectMsg struct{ name string }
+	// moveProjectMsg reorders a project from the projects dialog; delta is
+	// the number of positions to move (negative moves it up).
+	moveProjectMsg struct {
+		name  string
+		delta int
+	}
 	// submitPromptMsg saves a column prompt from the prompt editor.
 	submitPromptMsg struct {
 		colID  string
 		prompt string
 	}
+	// submitColumnMsg adds a column from the columns dialog, or updates the
+	// one with id oldID when set.
+	submitColumnMsg struct {
+		column board.Column
+		oldID  string
+	}
+	// deleteColumnMsg removes a column from the columns dialog.
+	deleteColumnMsg struct{ id string }
+	// moveColumnMsg reorders a column from the columns dialog; delta is the
+	// number of positions to move (negative moves it left).
+	moveColumnMsg struct {
+		id    string
+		delta int
+	}
+	// editColumnPromptMsg opens the prompt editor for a column, from the
+	// columns dialog (prompts are long-form and get the big editor).
+	editColumnPromptMsg struct{ column board.Column }
 	// confirmDeleteMsg deletes a card after confirmation.
 	confirmDeleteMsg struct{ cardID string }
 )
@@ -118,10 +154,13 @@ type keyMap struct {
 	Diff     key.Binding
 	MoveFwd  key.Binding
 	MoveBack key.Binding
+	MoveTo   key.Binding
 	Delete   key.Binding
 	Projects key.Binding
+	Columns  key.Binding
 	Prompt   key.Binding
 	Editor   key.Binding
+	Shell    key.Binding
 	Help     key.Binding
 	Quit     key.Binding
 }
@@ -138,10 +177,13 @@ var keys = keyMap{
 	Diff:     key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "view diff")),
 	MoveFwd:  key.NewBinding(key.WithKeys("]", "shift+right", "L"), key.WithHelp("]", "move card forward")),
 	MoveBack: key.NewBinding(key.WithKeys("[", "shift+left", "H"), key.WithHelp("[", "move card back")),
+	MoveTo:   key.NewBinding(key.WithKeys("1", "2", "3", "4", "5", "6", "7", "8", "9"), key.WithHelp("1-9", "move card to column N")),
 	Delete:   key.NewBinding(key.WithKeys("x", "backspace", "delete"), key.WithHelp("x", "delete card")),
 	Projects: key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "manage projects")),
+	Columns:  key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "manage columns")),
 	Prompt:   key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit column prompt")),
 	Editor:   key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "open worktree in editor")),
+	Shell:    key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "open shell in worktree")),
 	Help:     key.NewBinding(key.WithKeys("?", "f1", "ctrl+h"), key.WithHelp("?", "help")),
 	Quit:     key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
 }
@@ -209,6 +251,14 @@ type model struct {
 	// lastClick* back double-click-to-attach on cards.
 	lastClickCard string
 	lastClickTime time.Time
+
+	// drag* back drag-and-drop card moves: dragCardID is the pressed card
+	// (a drag candidate), dragging turns true on the first motion event
+	// (cell-motion mode only reports motion while a button is held), and
+	// dragCol is the drop target column under the pointer (-1 when none).
+	dragCardID string
+	dragging   bool
+	dragCol    int
 }
 
 func newModel(app *board.App, refresh chan struct{}) *model {
@@ -224,6 +274,7 @@ func newModel(app *board.App, refresh chan struct{}) *model {
 
 // openDialog installs a dialog and runs its init command.
 func (m *model) openDialog(d dialog) tea.Cmd {
+	m.resetDrag() // the dialog captures the release: the drag cannot finish
 	m.dialog = d
 	return d.Init()
 }
@@ -239,6 +290,15 @@ func (m *model) reload() {
 		m.projectColors[p.Name] = projectColorAt(i)
 	}
 	m.clampSelection()
+	// A refresh can remove the dragged card or shrink the column list;
+	// re-validate so a drop cannot act on stale state.
+	if m.dragCardID != "" {
+		if m.cardByID(m.dragCardID) == nil {
+			m.resetDrag()
+		} else if m.dragCol >= len(m.columns) {
+			m.dragCol = -1
+		}
+	}
 }
 
 // groupCards buckets cards by column, in board order. A card whose column
@@ -281,6 +341,18 @@ func (m *model) selectedCard() *board.Card {
 		return nil
 	}
 	return cards[m.selRow]
+}
+
+// cardByID finds a card anywhere on the board.
+func (m *model) cardByID(id string) *board.Card {
+	for _, cards := range m.cards {
+		for _, c := range cards {
+			if c.ID == id {
+				return c
+			}
+		}
+	}
+	return nil
 }
 
 func (m *model) Init() tea.Cmd {
@@ -360,6 +432,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case attachReadyMsg:
+		// tea.ExecProcess leaves mouse mode: a drag in flight loses its
+		// release and must not leak into the gestures after detach.
+		m.resetDrag()
 		return m, tea.ExecProcess(msg.cmd, func(err error) tea.Msg { return attachDoneMsg{err: err} })
 
 	case attachFailedMsg:
@@ -394,15 +469,30 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case submitProjectMsg:
-		if err := m.app.AddProject(msg.project); err != nil {
-			cmd := m.setFlash(err.Error(), true)
-			return m, cmd
-		}
+		cmd := m.saveProject(msg.project, msg.oldName)
+		return m, cmd
+
+	case projectSavedMsg:
 		m.reload()
-		if d, ok := m.dialog.(*projectsDialog); ok {
-			d.setProjects(m.projects)
+		// A rename keeps the new-card dialog starting on the same project.
+		if msg.oldName != "" && m.lastProject == msg.oldName {
+			m.lastProject = msg.name
 		}
-		cmd := m.setFlash("Project added to the global config", false)
+		if d, ok := m.dialog.(*projectsDialog); ok {
+			if d.mode == projectsEditing {
+				d.setProjects(m.projects)
+			} else {
+				// The save is asynchronous and the user may have moved on:
+				// refresh without leaving the dialog's current view.
+				d.refreshProjects(m.projects)
+			}
+			d.selectProject(msg.name) // the cursor follows the saved project
+		}
+		action := "added to"
+		if msg.oldName != "" {
+			action = "updated in"
+		}
+		cmd := m.setFlash("Project "+action+" the global config", false)
 		return m, cmd
 
 	case deleteProjectMsg:
@@ -416,6 +506,21 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case moveProjectMsg:
+		if err := m.app.MoveProject(msg.name, msg.delta); err != nil {
+			cmd := m.setFlash(err.Error(), true)
+			return m, cmd
+		}
+		m.reload()
+		// Refresh without leaving the dialog's current view: the message is
+		// delivered asynchronously and the user may already have opened the
+		// edit form or the delete confirmation.
+		if d, ok := m.dialog.(*projectsDialog); ok {
+			d.refreshProjects(m.projects)
+			d.selectProject(msg.name) // the cursor follows the moved project
+		}
+		return m, nil
+
 	case submitPromptMsg:
 		m.dialog = nil
 		if err := m.app.SetColumnPrompt(msg.colID, msg.prompt); err != nil {
@@ -424,6 +529,65 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.reload()
 		cmd := m.setFlash("Prompt saved to the global config", false)
+		return m, cmd
+
+	case submitColumnMsg:
+		var (
+			saved board.Column
+			err   error
+		)
+		if msg.oldID == "" {
+			saved, err = m.app.AddColumn(msg.column)
+		} else {
+			saved, err = m.app.UpdateColumn(msg.oldID, msg.column)
+		}
+		if err != nil {
+			cmd := m.setFlash(err.Error(), true)
+			return m, cmd
+		}
+		m.reload()
+		if d, ok := m.dialog.(*columnsDialog); ok {
+			if d.mode == columnsEditing {
+				d.setColumns(m.columns)
+			} else {
+				// The save is asynchronous and the user may have moved on:
+				// refresh without leaving the dialog's current view.
+				d.refreshColumns(m.columns)
+			}
+			d.selectColumn(saved.ID) // the cursor follows the saved column
+		}
+		action := "added to"
+		if msg.oldID != "" {
+			action = "updated in"
+		}
+		cmd := m.setFlash("Column "+action+" the global config", false)
+		return m, cmd
+
+	case deleteColumnMsg:
+		if err := m.app.RemoveColumn(msg.id); err != nil {
+			cmd := m.setFlash(err.Error(), true)
+			return m, cmd
+		}
+		m.reload()
+		if d, ok := m.dialog.(*columnsDialog); ok {
+			d.setColumns(m.columns)
+		}
+		return m, nil
+
+	case moveColumnMsg:
+		if err := m.app.MoveColumn(msg.id, msg.delta); err != nil {
+			cmd := m.setFlash(err.Error(), true)
+			return m, cmd
+		}
+		m.reload()
+		if d, ok := m.dialog.(*columnsDialog); ok {
+			d.refreshColumns(m.columns)
+			d.selectColumn(msg.id) // the cursor follows the moved column
+		}
+		return m, nil
+
+	case editColumnPromptMsg:
+		cmd := m.openDialog(newPromptDialog(msg.column))
 		return m, cmd
 
 	case confirmDeleteMsg:
@@ -449,6 +613,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleKey(msg)
 	case tea.MouseClickMsg:
 		return m.handleClick(msg)
+	case tea.MouseMotionMsg:
+		m.handleMotion(msg)
+		return m, nil
+	case tea.MouseReleaseMsg:
+		return m.handleRelease(msg)
 	case tea.MouseWheelMsg:
 		m.handleWheel(msg)
 		return m, nil
@@ -457,6 +626,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	// A key press cancels any drag in progress (esc cancels a drag) and
+	// keeps the state clean across paths that lose the release event, like
+	// tea.ExecProcess (attach, shell) leaving mouse mode.
+	m.resetDrag()
 	switch {
 	case key.Matches(msg, keys.Quit):
 		return m, tea.Quit
@@ -494,10 +667,13 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case key.Matches(msg, keys.MoveFwd):
-		cmd := m.moveCard(1)
+		cmd := m.moveCardTo(m.selCol + 1)
 		return m, cmd
 	case key.Matches(msg, keys.MoveBack):
-		cmd := m.moveCard(-1)
+		cmd := m.moveCardTo(m.selCol - 1)
+		return m, cmd
+	case key.Matches(msg, keys.MoveTo):
+		cmd := m.moveCardTo(int(msg.String()[0] - '1'))
 		return m, cmd
 
 	case key.Matches(msg, keys.Delete):
@@ -508,6 +684,10 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	case key.Matches(msg, keys.Projects):
 		cmd := m.openDialog(newProjectsDialog(m.projects))
+		return m, cmd
+
+	case key.Matches(msg, keys.Columns):
+		cmd := m.openDialog(newColumnsDialog(m.columns))
 		return m, cmd
 
 	case key.Matches(msg, keys.Prompt):
@@ -526,11 +706,36 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 
+	case key.Matches(msg, keys.Shell):
+		if card := m.selectedCard(); card != nil {
+			cmd := m.openShell(card)
+			return m, cmd
+		}
+
 	case key.Matches(msg, keys.Help):
 		cmd := m.openDialog(newHelpDialog())
 		return m, cmd
 	}
 	return m, nil
+}
+
+// openShell launches an interactive shell in the card's worktree, like the
+// main TUI's /shell command. tea.ExecProcess suspends the board and wires the
+// terminal to the shell until it exits.
+func (m *model) openShell(card *board.Card) tea.Cmd {
+	// The worktree is created by the agent launch; a card that is still
+	// starting (or a stale state-file entry) has nothing to open yet.
+	if _, err := os.Stat(card.Worktree); card.Worktree == "" || err != nil {
+		return m.setFlash("Worktree not available yet — the agent may still be starting", true)
+	}
+	cmd := shellpath.InteractiveShellCmd("Type 'exit' to return to the board")
+	cmd.Dir = card.Worktree
+	return tea.ExecProcess(cmd, func(err error) tea.Msg {
+		if err != nil {
+			return flashMsg{text: "shell: " + err.Error(), isErr: true}
+		}
+		return nil
+	})
 }
 
 // openNewCard opens the new-card dialog, or the projects dialog first when
@@ -565,6 +770,10 @@ func (m *model) handleClick(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 	if msg.Button != tea.MouseLeft {
 		return m, nil
 	}
+	// A fresh press while a drag is still armed means the release was lost
+	// (e.g. tea.ExecProcess leaving mouse mode): clear the stale drag before
+	// interpreting the click.
+	m.resetDrag()
 	if m.plusButtonAt(msg.X, msg.Y) {
 		cmd := m.openNewCard()
 		return m, cmd
@@ -611,13 +820,72 @@ func (m *model) handleClick(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 	}
 	m.lastClickCard = card.ID
 	m.lastClickTime = time.Now()
+	// The pressed card is a drag candidate: motion before the release turns
+	// the click into a drag (see handleMotion/handleRelease).
+	m.dragCardID = card.ID
+	m.dragCol = col
 	return m, nil
+}
+
+// handleMotion tracks a pressed card being dragged. Cell-motion mode only
+// reports motion while a button is held, so any motion after a card press
+// starts the drag — the card fades immediately — and the column under the
+// pointer becomes the drop target. Jitter is sorted out on release: a drop
+// back on the pressed card stays a plain click (see handleRelease).
+func (m *model) handleMotion(msg tea.MouseMotionMsg) {
+	if m.dragCardID == "" || msg.Button != tea.MouseLeft {
+		return
+	}
+	m.dragging = true
+	if col, ok := m.columnAt(msg.X, msg.Y); ok {
+		m.dragCol = col
+	} else {
+		m.dragCol = -1
+	}
+}
+
+// handleRelease completes a drag-and-drop: dropping a card on another
+// column moves it there. A release without prior motion, or back on the
+// pressed card itself, is a plain click — jitter while pressed must not
+// break double-click-to-attach.
+func (m *model) handleRelease(msg tea.MouseReleaseMsg) (tea.Model, tea.Cmd) {
+	if msg.Button != tea.MouseLeft {
+		return m, nil
+	}
+	cardID, wasDragging, dst := m.dragCardID, m.dragging, m.dragCol
+	m.resetDrag()
+	if !wasDragging {
+		return m, nil
+	}
+	if col, row, ok := m.cardAt(msg.X, msg.Y); ok && m.cards[m.columns[col].ID][row].ID == cardID {
+		return m, nil // dropped where it was picked up: a click
+	}
+	m.lastClickCard = "" // a completed drag must not arm double-click
+	if col, ok := m.columnAt(msg.X, msg.Y); ok {
+		dst = col
+	} // else: keep the last motion's target — the release landed in a gutter
+	cmd := m.moveCard(cardID, dst)
+	return m, cmd
+}
+
+// resetDrag abandons any drag in progress. Called whenever a drag can no
+// longer complete cleanly: a dialog opening (it captures the release), a
+// key press, or the dragged card disappearing on a refresh.
+func (m *model) resetDrag() {
+	m.dragCardID = ""
+	m.dragging = false
+	m.dragCol = -1
 }
 
 // handleWheel moves the selection through the column under the cursor, so
 // scrolling anywhere on a column walks its cards (the scroll window follows
-// the selection). Wheel events outside the columns area are ignored.
+// the selection). Wheel events outside the columns area, or during a drag
+// (they would move the selection and scroll the card under the pointer),
+// are ignored.
 func (m *model) handleWheel(msg tea.MouseWheelMsg) {
+	if m.dragCardID != "" {
+		return
+	}
 	col, ok := m.columnAt(msg.X, msg.Y)
 	if !ok {
 		return
@@ -644,7 +912,8 @@ func (m *model) setFlash(text string, isErr bool) tea.Cmd {
 	return tea.Tick(4*time.Second, func(time.Time) tea.Msg { return clearFlashMsg{id: id} })
 }
 
-// --- engine commands (all engine calls that can block run in tea.Cmds) ---
+// --- engine commands (engine calls that can block — git, tmux, readiness
+// probes — run in tea.Cmds; plain config-file mutations run inline) ---
 
 func (m *model) createCard(project board.Project, prompt string) tea.Cmd {
 	return func() tea.Msg {
@@ -655,18 +924,27 @@ func (m *model) createCard(project board.Project, prompt string) tea.Cmd {
 	}
 }
 
-func (m *model) moveCard(direction int) tea.Cmd {
-	card := m.selectedCard()
-	if card == nil {
-		return nil
+// moveCardTo moves the selected card to the column at index dst.
+func (m *model) moveCardTo(dst int) tea.Cmd {
+	if card := m.selectedCard(); card != nil {
+		return m.moveCard(card.ID, dst)
 	}
-	dst := m.selCol + direction
+	return nil
+}
+
+// moveCard moves a card — by ID, so a board refresh mid-drag cannot
+// redirect the move to another card — to the column at index dst. Moving a
+// card to the column it already occupies is a no-op.
+func (m *model) moveCard(cardID string, dst int) tea.Cmd {
 	if dst < 0 || dst >= len(m.columns) {
 		return nil
 	}
 	colID := m.columns[dst].ID
+	if slices.ContainsFunc(m.cards[colID], func(c *board.Card) bool { return c.ID == cardID }) {
+		return nil
+	}
 	return func() tea.Msg {
-		if err := m.app.MoveCard(card.ID, colID); err != nil {
+		if err := m.app.MoveCard(cardID, colID); err != nil {
 			return flashMsg{text: err.Error(), isErr: true}
 		}
 		return cardMovedMsg{colIdx: dst}
@@ -679,6 +957,23 @@ func (m *model) deleteCard(cardID string) tea.Cmd {
 			return flashMsg{text: err.Error(), isErr: true}
 		}
 		return flashMsg{text: "Card deleted, worktree and session cleaned up", isErr: false}
+	}
+}
+
+// saveProject adds or updates a project off the UI loop: validation spawns
+// a git subprocess and the config write hits the filesystem.
+func (m *model) saveProject(project board.Project, oldName string) tea.Cmd {
+	return func() tea.Msg {
+		var err error
+		if oldName == "" {
+			err = m.app.AddProject(project)
+		} else {
+			err = m.app.UpdateProject(oldName, project)
+		}
+		if err != nil {
+			return flashMsg{text: err.Error(), isErr: true}
+		}
+		return projectSavedMsg{name: project.Name, oldName: oldName}
 	}
 }
 

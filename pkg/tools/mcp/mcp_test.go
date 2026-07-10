@@ -46,6 +46,8 @@ func (m *mockMCPClient) SetElicitationHandler(tools.ElicitationHandler) {}
 
 func (m *mockMCPClient) SetSamplingHandler(tools.SamplingHandler) {}
 
+func (m *mockMCPClient) SetSamplingWithToolsHandler(tools.SamplingWithToolsHandler) {}
+
 func (m *mockMCPClient) SetOAuthSuccessHandler(func()) {}
 
 func (m *mockMCPClient) SetManagedOAuth(bool) {}

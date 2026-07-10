@@ -119,22 +119,30 @@ func NewSSRFSafeTransport() *http.Transport {
 		t = &http.Transport{Proxy: http.ProxyFromEnvironment}
 	}
 	proxies := proxyDialAllowlist()
-	t.DialContext = (&net.Dialer{
+	guarded := &net.Dialer{
 		Timeout:   30 * time.Second,
 		KeepAlive: 30 * time.Second,
-		Control: func(network, address string, c syscall.RawConn) error {
-			if _, ok := proxies[canonicalHostPort(address)]; ok {
-				return nil
-			}
-			return SSRFDialControl(network, address, c)
-		},
-	}).DialContext
+		Control:   SSRFDialControl,
+	}
+	trusted := &net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}
+	// The address here is pre-resolution: with a proxy configured the
+	// transport dials the proxy's literal host:port, so the allowlist can
+	// be matched by string without ever resolving the proxy hostname.
+	t.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		if _, ok := proxies[canonicalHostPort(address)]; ok {
+			return trusted.DialContext(ctx, network, address)
+		}
+		return guarded.DialContext(ctx, network, address)
+	}
 	return t
 }
 
 // canonicalHostPort normalises a "host:port" dial address so equivalent
 // IPv4 forms compare equal. An IPv4-mapped IPv6 address (::ffff:a.b.c.d)
-// is folded back to its dotted-quad form, matching what proxyHostPorts
+// is folded back to its dotted-quad form, matching what proxyHostPort
 // stores in the allowlist for an IPv4-literal proxy. Non-IP hosts and
 // malformed inputs are returned unchanged so the allowlist lookup
 // simply misses and the SSRF fall-through applies.
@@ -153,12 +161,13 @@ func canonicalHostPort(address string) string {
 	return net.JoinHostPort(ip.String(), port)
 }
 
-// proxyDialAllowlist returns the set of "host:port" strings that the
-// HTTP_PROXY / HTTPS_PROXY / ALL_PROXY environment variables resolve to.
-// Hostname-based proxies are resolved to all of their A/AAAA records so
-// the comparison can be done against the post-resolution dial address.
+// proxyDialAllowlist returns the set of "host:port" strings the
+// HTTP_PROXY / HTTPS_PROXY / ALL_PROXY environment variables name.
+// Hostnames are kept verbatim — never resolved — because the transport
+// dials a configured proxy by its literal host:port, so the comparison
+// happens pre-resolution. Constructors must not block on DNS.
 // The result is a snapshot taken at call time — safe to capture in a
-// dialer's Control closure.
+// dial closure.
 func proxyDialAllowlist() map[string]struct{} {
 	out := map[string]struct{}{}
 	raw := []string{
@@ -167,26 +176,26 @@ func proxyDialAllowlist() map[string]struct{} {
 		os.Getenv("ALL_PROXY"), os.Getenv("all_proxy"),
 	}
 	for _, s := range raw {
-		for addr := range proxyHostPorts(s) {
+		if addr := proxyHostPort(s); addr != "" {
 			out[addr] = struct{}{}
 		}
 	}
 	return out
 }
 
-// proxyHostPorts parses a single proxy specification (matching the syntax
+// proxyHostPort parses a single proxy specification (matching the syntax
 // accepted by net/http.ProxyFromEnvironment: a full URL or a bare host[:port]
-// in which case http:// is implied) and returns each "ip:port" it can be
-// reached at. A nil/empty input yields an empty set.
-func proxyHostPorts(spec string) map[string]struct{} {
+// in which case http:// is implied) and returns its canonical "host:port".
+// An empty or unparseable input yields "".
+func proxyHostPort(spec string) string {
 	if spec == "" {
-		return nil
+		return ""
 	}
 	u, err := url.Parse(spec)
 	if err != nil || u.Host == "" {
 		u, err = url.Parse("http://" + spec)
 		if err != nil || u.Host == "" {
-			return nil
+			return ""
 		}
 	}
 	port := u.Port()
@@ -200,24 +209,7 @@ func proxyHostPorts(spec string) map[string]struct{} {
 			port = "80"
 		}
 	}
-	out := map[string]struct{}{}
-	host := u.Hostname()
-	if ip := net.ParseIP(host); ip != nil {
-		out[net.JoinHostPort(ip.String(), port)] = struct{}{}
-		return out
-	}
-	// The allowlist is resolved once, at transport-construction time, so its
-	// (potentially blocking) DNS lookups are not repeated on every dial.
-	// There is no caller context at construction; a bounded independent root
-	// is the right base for the resolver timeout.
-	//rubocop:disable Lint/ContextConnectivity
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	ips, _ := net.DefaultResolver.LookupIPAddr(ctx, host)
-	for _, ip := range ips {
-		out[net.JoinHostPort(ip.IP.String(), port)] = struct{}{}
-	}
-	return out
+	return canonicalHostPort(net.JoinHostPort(u.Hostname(), port))
 }
 
 // BoundedRedirects returns an http.Client.CheckRedirect that limits a

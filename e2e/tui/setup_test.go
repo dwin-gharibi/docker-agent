@@ -37,10 +37,18 @@ import (
 //nolint:unparam // agentFile is intentionally parameterized for future scenarios.
 func newTUI(t *testing.T, agentFile string, width, height int, tuiOpts ...tui.Option) *tuitest.Driver {
 	t.Helper()
+	return newTUIWithProxyOptions(t, agentFile, width, height, nil, tuiOpts...)
+}
+
+// newTUIWithProxyOptions is newTUI with control over the replay proxy, e.g.
+// simulated SSE streaming so a scenario can interact with the TUI while the
+// agent is still mid-stream (steering, queueing).
+func newTUIWithProxyOptions(t *testing.T, agentFile string, width, height int, proxyOpts *fake.ProxyOptions, tuiOpts ...tui.Option) *tuitest.Driver {
+	t.Helper()
 
 	isolateState(t)
 
-	runConfig := startReplayProxy(t)
+	runConfig := startReplayProxy(t, proxyOpts)
 
 	ctx := t.Context()
 	agentSource, err := config.Resolve(agentFile, runConfig.EnvProvider())
@@ -100,8 +108,10 @@ func isolateState(t *testing.T) {
 
 // startReplayProxy starts a VCR proxy in replay-only mode against the cassette
 // named after the current test, and returns a RuntimeConfig pointed at it.
-// Recordings live in testdata/cassettes/<TestName>.yaml.
-func startReplayProxy(t *testing.T) *config.RuntimeConfig {
+// Recordings live in testdata/cassettes/<TestName>.yaml. options may be nil;
+// pass fake.ProxyOptions with SimulateStream to replay responses chunk by
+// chunk with delays.
+func startReplayProxy(t *testing.T, options *fake.ProxyOptions) *config.RuntimeConfig {
 	t.Helper()
 
 	cassettePath := filepath.Join("testdata", "cassettes", t.Name())
@@ -114,7 +124,7 @@ func startReplayProxy(t *testing.T) *config.RuntimeConfig {
 		recorder.ModeReplayOnly,
 		matcher,
 		func(string, *http.Request) {}, // no API keys needed for replay
-		nil,
+		options,
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, cleanup()) })

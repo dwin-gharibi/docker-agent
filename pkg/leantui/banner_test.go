@@ -7,15 +7,17 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/docker/docker-agent/pkg/leantui/ui"
 )
 
 func TestCommitWelcomePadsBanner(t *testing.T) {
 	t.Parallel()
-	m := &model{transcript: newTranscript()}
+	m := &model{screen: ui.NewScreen("", "", "")}
 	m.commitWelcome()
 
-	require.Len(t, m.transcript.blocks, 1)
-	lines := m.transcript.blocks[0].lines(80)
+	require.Equal(t, 1, m.screen.Transcript.BlockCount())
+	lines := m.screen.Transcript.BlockLines(0, 80)
 	require.GreaterOrEqual(t, len(lines), bannerTopPadding+len(bannerLines))
 
 	for i := range bannerTopPadding {

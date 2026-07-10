@@ -198,12 +198,21 @@ func buildDefaultStore(
 	return newKeyringTokenStore(ring, filepath.Join(configDir, tokenFileName))
 }
 
+var registerOnce sync.Once
+
 // Register installs the keyring-backed token store as the default for MCP
 // OAuth. The CLI calls this during startup; embedders that don't need
 // persistent keyring-backed storage can simply not call it and keep the
 // in-memory default.
+//
+// Register is idempotent: root.Execute can run several times in one process
+// (e2e tests do this), and once a remote MCP toolset has materialized the
+// store, re-installing the same factory would otherwise trip the misordering
+// panic in SetDefaultTokenStoreFactory.
 func Register() {
-	mcp.SetDefaultTokenStoreFactory(NewKeyringTokenStore)
+	registerOnce.Do(func() {
+		mcp.SetDefaultTokenStoreFactory(NewKeyringTokenStore)
+	})
 }
 
 // NewKeyringTokenStore returns the process-wide token store backed by the

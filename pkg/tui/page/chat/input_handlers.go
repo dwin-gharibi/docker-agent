@@ -217,6 +217,15 @@ func (p *chatPage) handleMouseMotion(msg tea.MouseMotionMsg) (layout.Model, tea.
 		return p, tea.Batch(cmds...)
 	}
 
+	// During a text-selection drag, keep feeding motion to the messages
+	// component even when the cursor drifts over the sidebar, so the
+	// selection keeps extending until the button is released.
+	if p.messages.IsSelecting() {
+		model, cmd := p.messages.Update(msg)
+		p.messages = model.(messages.Model)
+		return p, cmd
+	}
+
 	cmd := p.routeMouseEvent(msg, msg.Y)
 	return p, cmd
 }
@@ -291,6 +300,10 @@ func (p *chatPage) wheelTarget(x, _ int) wheelTarget {
 func (p *chatPage) handleSidebarResize(x int) tea.Cmd {
 	innerWidth := p.width - appPaddingHorizontal
 	delta := p.sidebarDragStartX - x
+	// A left-side sidebar grows when the handle is dragged right.
+	if p.layoutSettings.SidebarPosition == msgtypes.SidebarLeft {
+		delta = -delta
+	}
 	newWidth := p.sidebarDragStartWidth + delta
 
 	// Auto-collapse if dragged below minimum

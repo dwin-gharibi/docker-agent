@@ -132,6 +132,80 @@ func TestSchemaForGemini(t *testing.T) {
 }`, string(schemaJSON))
 }
 
+// TestNonStringEnumSchemaForGemini makes sure non-string enum values are
+// converted to strings. genai.Schema declares enum as []string and the Gemini
+// API rejects non-string enum values, so schemas like the GitHub MCP
+// issue_write tool ("enum": [true]) would otherwise fail.
+// See https://github.com/docker/docker-agent/issues/3477
+func TestNonStringEnumSchemaForGemini(t *testing.T) {
+	t.Parallel()
+	parameters := parseFunctionParameters(t, `
+{
+    "type": "object",
+    "properties": {
+      "issue_fields": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "delete": {
+              "type": "boolean",
+              "enum": [true],
+              "description": "Unset the field"
+            },
+            "priority": {
+              "type": "number",
+              "enum": [1, 2.5]
+            },
+            "state": {
+              "anyOf": [
+                {"type": "string", "enum": ["open", null]},
+                {"type": "number", "enum": [0]}
+              ]
+            }
+          }
+        }
+      }
+    }
+}`)
+
+	schema, err := gemini.ConvertParametersToSchema(parameters)
+	require.NoError(t, err)
+
+	schemaJSON, err := json.Marshal(schema)
+	require.NoError(t, err)
+	assert.JSONEq(t, `
+{
+    "type": "object",
+    "properties": {
+      "issue_fields": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "delete": {
+              "type": "boolean",
+              "enum": ["true"],
+              "description": "Unset the field"
+            },
+            "priority": {
+              "type": "number",
+              "enum": ["1", "2.5"]
+            },
+            "state": {
+              "type": "object",
+              "anyOf": [
+                {"type": "string", "enum": ["open"]},
+                {"type": "number", "enum": ["0"]}
+              ]
+            }
+          }
+        }
+      }
+    }
+}`, string(schemaJSON))
+}
+
 func TestEmptyMapSchemaForAnthropic(t *testing.T) {
 	t.Parallel()
 	shema, err := anthropic.ConvertParametersToSchema(map[string]any{})

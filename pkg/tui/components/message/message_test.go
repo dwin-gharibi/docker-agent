@@ -336,3 +336,25 @@ func TestBareSpinnerKeepsPlayfulView(t *testing.T) {
 	assert.True(t, mv.isSpinnerDriven())
 	assert.Equal(t, mv.spinner.View(), mv.View(), "empty label must keep the default spinner rendering")
 }
+
+func TestUserMessageHoverKeepsHeightAtNarrowWidth(t *testing.T) {
+	t.Parallel()
+
+	pos := 0
+	msg := &types.Message{
+		Type:            types.MessageTypeUser,
+		Content:         "hi",
+		SessionPosition: &pos,
+	}
+
+	// Narrower than the "✎ edit  ⎘ copy" action row: the labels must be
+	// dropped/truncated rather than wrapped, so hovering never changes the
+	// message height (which would invalidate click hit-testing).
+	for _, width := range []int{4, 8, 12} {
+		mv := New(msg, nil)
+		mv.SetSize(width, 0)
+		h := mv.Height(width)
+		mv.SetHovered(true)
+		assert.Equal(t, h, mv.Height(width), "hover must not change height at width %d", width)
+	}
+}

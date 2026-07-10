@@ -810,7 +810,7 @@ func (r *LocalRuntime) runTurn(
 
 	msgUsage := r.recordAssistantMessage(sess, a, res, agentTools, modelID.String(), msgCost, events)
 
-	usage := SessionUsage(sess, contextLimit)
+	usage := SessionUsage(sess, contextLimit, a.CompactionThreshold())
 	usage.LastMessage = msgUsage
 	events.Emit(NewTokenUsageEvent(sess.ID, a.Name(), usage))
 
@@ -1186,6 +1186,7 @@ func (r *LocalRuntime) configureToolsetHandlers(a *agent.Agent, events EventSink
 		tools.ConfigureHandlers(toolset,
 			r.elicitationHandler,
 			r.samplingHandler,
+			r.samplingWithToolsHandler,
 			func() { events.Emit(Authorization(tools.ElicitationActionAccept, a.Name())) },
 			r.managedOAuth,
 			r.unmanagedOAuthRedirectURI,
@@ -1294,6 +1295,7 @@ func (r *LocalRuntime) skillSubSessionTools(ctx context.Context, sess *session.S
 		tools.ConfigureHandlers(ts,
 			r.elicitationHandler,
 			r.samplingHandler,
+			r.samplingWithToolsHandler,
 			func() { events.Emit(Authorization(tools.ElicitationActionAccept, a.Name())) },
 			r.managedOAuth,
 			r.unmanagedOAuthRedirectURI,

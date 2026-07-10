@@ -564,6 +564,7 @@ func ConvertParametersToSchema(params any) (*genai.Schema, error) {
 	}
 
 	normalizeTypeFields(m)
+	normalizeEnumValues(m)
 
 	var schema *genai.Schema
 	if err := tools.ConvertSchema(m, &schema); err != nil {
@@ -608,6 +609,52 @@ func pickNonNullType(typeArr []any) string {
 		}
 	}
 	return "string"
+}
+
+// normalizeEnumValues recursively converts non-string enum values to strings.
+// The Gemini API only accepts string enum values, so schemas like
+// {"enum": [true]} (e.g. GitHub MCP issue_write) would fail to convert.
+func normalizeEnumValues(m map[string]any) {
+	if enumArr, ok := m["enum"].([]any); ok {
+		m["enum"] = stringifyEnumValues(enumArr)
+	}
+
+	if props, ok := m["properties"].(map[string]any); ok {
+		for _, prop := range props {
+			if propMap, ok := prop.(map[string]any); ok {
+				normalizeEnumValues(propMap)
+			}
+		}
+	}
+
+	if items, ok := m["items"].(map[string]any); ok {
+		normalizeEnumValues(items)
+	}
+
+	if anyOf, ok := m["anyOf"].([]any); ok {
+		for _, sub := range anyOf {
+			if subMap, ok := sub.(map[string]any); ok {
+				normalizeEnumValues(subMap)
+			}
+		}
+	}
+}
+
+func stringifyEnumValues(values []any) []string {
+	out := make([]string, 0, len(values))
+	for _, v := range values {
+		switch t := v.(type) {
+		case string:
+			out = append(out, t)
+		case nil:
+			// Nullability is expressed via the type, not an enum value.
+		default:
+			if b, err := json.Marshal(t); err == nil {
+				out = append(out, string(b))
+			}
+		}
+	}
+	return out
 }
 
 // CreateChatCompletionStream creates a streaming chat completion request

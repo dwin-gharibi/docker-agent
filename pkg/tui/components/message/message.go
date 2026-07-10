@@ -90,6 +90,7 @@ type renderCache struct {
 	selected  bool
 	hovered   bool
 	expanded  bool
+	editable  bool
 	sameAgent bool
 	result    string
 }
@@ -175,8 +176,7 @@ func (mv *messageModel) IsToggleLine(lineIdx int) bool {
 	}
 
 	// The indicator is placed at the end of the message view with a leading \n\n.
-	// Depending on edit state, the view has 0 or 1 lines of top padding,
-	// and 1 line of bottom padding.
+	// The view has an action row in place of top padding and 1 line of bottom padding.
 	// height-1 is the bottom padding.
 	// height-2 is the text of the indicator ("[-] click to collapse").
 	// height-3 is the empty line above it.
@@ -200,7 +200,6 @@ func (mv *messageModel) Render(width int) string {
 	// MessageTypeAssistant placeholder) animate on every tick, so the result is
 	// not cacheable. Everything else is a pure function of the inputs tracked in
 	// renderCache below.
-	// Spinner-driven messages animate every tick and are not cacheable.
 	// Finalized messages skip writing into renderCache so the per-view
 	// retained ANSI string does not pile up across long sessions; the chat
 	// list's bounded LRU still memoizes their rendered output.
@@ -213,6 +212,7 @@ func (mv *messageModel) Render(width int) string {
 			c.selected == mv.selected &&
 			c.hovered == mv.hovered &&
 			c.expanded == mv.expanded &&
+			c.editable == (msg.SessionPosition != nil) &&
 			c.content == msg.Content &&
 			c.sameAgent == mv.sameAgentAsPrevious(msg) {
 			return c.result
@@ -230,6 +230,7 @@ func (mv *messageModel) Render(width int) string {
 			selected:  mv.selected,
 			hovered:   mv.hovered,
 			expanded:  mv.expanded,
+			editable:  msg.SessionPosition != nil,
 			sameAgent: mv.sameAgentAsPrevious(msg),
 			result:    result,
 		}
@@ -288,29 +289,21 @@ func (mv *messageModel) render(width int) string {
 			return c
 		}
 
-		if msg.SessionPosition == nil {
-			return messageStyle.Width(width).Render(formatUserContent(msg.Content))
-		}
-
-		// For editable messages, place the pencil icon in the top padding row
 		innerWidth := width - messageStyle.GetHorizontalFrameSize()
 		content := formatUserContent(msg.Content)
 
-		// Create the edit icon for the top row
-		editIcon := styles.MutedStyle.Render(types.UserMessageEditLabel)
-		iconWidth := ansi.StringWidth(types.UserMessageEditLabel)
+		// Action labels live in the top padding row and appear on hover or
+		// selection: edit (when the message can be branched) and copy.
+		var labels []string
+		if msg.SessionPosition != nil {
+			labels = append(labels, types.UserMessageEditLabel)
+		}
+		labels = append(labels, types.MessageCopyLabel)
+		topRow := actionRow(innerWidth, mv.hovered || mv.selected, labels...)
 
-		// Create a top row with the icon pushed to the right edge
-		// This row replaces the top padding and becomes part of the content
-		topPadding := max(innerWidth-iconWidth, 0)
-		topRow := strings.Repeat(" ", topPadding) + editIcon
-
-		// Combine: icon row + content (icon row acts as the top padding)
-		contentWithIcon := topRow + "\n" + content
-
-		// Use a modified style with no top padding (our icon row replaces it)
+		// Use a modified style with no top padding (the action row replaces it)
 		noTopPaddingStyle := messageStyle.PaddingTop(0)
-		return noTopPaddingStyle.Width(width).Render(contentWithIcon)
+		return noTopPaddingStyle.Width(width).Render(topRow + "\n" + content)
 	case types.MessageTypeAssistant:
 		if msg.Content == "" {
 			return mv.spinner.View()
@@ -333,18 +326,12 @@ func (mv *messageModel) render(width int) string {
 			prefix = mv.senderPrefix(msg.Sender)
 		}
 
-		// Always reserve a top row to avoid layout shifts when the copy icon
+		// Always reserve a top row to avoid layout shifts when the copy label
 		// appears on hover. When not hovered, the row is filled with spaces
 		// (invisible). AssistantMessageStyle has PaddingTop=0, so this extra
 		// row acts as a stable spacer.
 		innerWidth := width - messageStyle.GetHorizontalFrameSize()
-		topRow := strings.Repeat(" ", innerWidth)
-		if mv.hovered || mv.selected {
-			copyIcon := styles.MutedStyle.Render(types.AssistantMessageCopyLabel)
-			iconWidth := ansi.StringWidth(types.AssistantMessageCopyLabel)
-			padding := max(innerWidth-iconWidth, 0)
-			topRow = strings.Repeat(" ", padding) + copyIcon
-		}
+		topRow := actionRow(innerWidth, mv.hovered || mv.selected, types.MessageCopyLabel)
 
 		// Translate the markdown-relative line indices into messageModel View()
 		// coordinates. The rendered markdown is preceded by the sender prefix
@@ -434,6 +421,27 @@ func (mv *messageModel) renderAssistantMarkdown(content string, width int) (stri
 		mv.mdRenderer.SetWidth(width)
 	}
 	return mv.mdRenderer.RenderWithCodeBlocks(content)
+}
+
+// actionRow builds the right-aligned row of click affordances (edit, copy)
+// rendered in place of a message's top padding. When show is false the row is
+// blank so it acts as a stable spacer and hovering never shifts the layout.
+// At very narrow widths leading labels are dropped, then the row is hard-
+// truncated: it must never wrap, as that would change the message height on
+// hover and invalidate click hit-testing until the next full render.
+func actionRow(innerWidth int, show bool, labels ...string) string {
+	innerWidth = max(innerWidth, 0)
+	if !show {
+		return strings.Repeat(" ", innerWidth)
+	}
+	joined := strings.Join(labels, types.MessageActionSeparator)
+	for len(labels) > 1 && ansi.StringWidth(joined) > innerWidth {
+		labels = labels[1:]
+		joined = strings.Join(labels, types.MessageActionSeparator)
+	}
+	joined = ansi.Truncate(joined, innerWidth, "")
+	padding := max(innerWidth-ansi.StringWidth(joined), 0)
+	return strings.Repeat(" ", padding) + styles.MutedStyle.Render(joined)
 }
 
 func (mv *messageModel) senderPrefix(sender string) string {

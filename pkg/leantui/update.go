@@ -10,76 +10,77 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/docker/docker-agent/pkg/effort"
+	"github.com/docker/docker-agent/pkg/leantui/ui"
 	"github.com/docker/docker-agent/pkg/runtime"
 	"github.com/docker/docker-agent/pkg/tui/messages"
 )
 
-func (m *model) handleKey(ctx context.Context, k key) {
-	if m.confirm != nil {
+func (m *model) handleKey(ctx context.Context, k ui.Key) {
+	if m.screen.Confirm != nil {
 		m.handleConfirmKey(k)
 		return
 	}
 
-	switch k.typ {
-	case keyCtrlC:
+	switch k.Typ {
+	case ui.KeyCtrlC:
 		m.handleInterrupt()
-	case keyCtrlD:
-		if m.editor.isEmpty() {
+	case ui.KeyCtrlD:
+		if m.screen.Editor.IsEmpty() {
 			m.quit()
 		} else {
-			m.editor.deleteForward()
+			m.screen.Editor.DeleteForward()
 		}
-	case keyEnter:
+	case ui.KeyEnter:
 		m.handleEnter(ctx)
-	case keyAltEnter:
-		m.editor.insertNewline()
-	case keyTab:
+	case ui.KeyAltEnter:
+		m.screen.Editor.InsertNewline()
+	case ui.KeyTab:
 		m.handleTab()
-	case keyShiftTab:
+	case ui.KeyShiftTab:
 		m.handleCycleThinkingLevel(ctx)
-	case keyUp:
-		if m.ac.active {
-			m.ac.moveUp()
-		} else if !m.editor.up(m.width) {
-			m.editor.historyPrev()
+	case ui.KeyUp:
+		if m.screen.Autocomplete.Active {
+			m.screen.Autocomplete.MoveUp()
+		} else if !m.screen.Editor.Up(m.width) {
+			m.screen.Editor.HistoryPrev()
 		}
-	case keyDown:
-		if m.ac.active {
-			m.ac.moveDown()
-		} else if !m.editor.down(m.width) {
-			m.editor.historyNext()
+	case ui.KeyDown:
+		if m.screen.Autocomplete.Active {
+			m.screen.Autocomplete.MoveDown()
+		} else if !m.screen.Editor.Down(m.width) {
+			m.screen.Editor.HistoryNext()
 		}
-	case keyLeft:
-		m.editor.moveLeft()
-	case keyRight:
-		m.editor.moveRight()
-	case keyWordLeft:
-		m.editor.moveWordLeft()
-	case keyWordRight:
-		m.editor.moveWordRight()
-	case keyHome:
-		m.editor.moveLineStart()
-	case keyEnd:
-		m.editor.moveLineEnd()
-	case keyBackspace:
-		m.editor.backspace()
-	case keyDelete:
-		m.editor.deleteForward()
-	case keyCtrlU:
-		m.editor.deleteToLineStart()
-	case keyCtrlK:
-		m.editor.deleteToLineEnd()
-	case keyCtrlW:
-		m.editor.deleteWordBack()
-	case keyEsc:
-		m.ac.dismiss()
-	case keyCtrlL:
+	case ui.KeyLeft:
+		m.screen.Editor.MoveLeft()
+	case ui.KeyRight:
+		m.screen.Editor.MoveRight()
+	case ui.KeyWordLeft:
+		m.screen.Editor.MoveWordLeft()
+	case ui.KeyWordRight:
+		m.screen.Editor.MoveWordRight()
+	case ui.KeyHome:
+		m.screen.Editor.MoveLineStart()
+	case ui.KeyEnd:
+		m.screen.Editor.MoveLineEnd()
+	case ui.KeyBackspace:
+		m.screen.Editor.Backspace()
+	case ui.KeyDelete:
+		m.screen.Editor.DeleteForward()
+	case ui.KeyCtrlU:
+		m.screen.Editor.DeleteToLineStart()
+	case ui.KeyCtrlK:
+		m.screen.Editor.DeleteToLineEnd()
+	case ui.KeyCtrlW:
+		m.screen.Editor.DeleteWordBack()
+	case ui.KeyEsc:
+		m.screen.Autocomplete.Dismiss()
+	case ui.KeyCtrlL:
 		m.clearScreen()
-	case keyRune, keyPaste:
-		m.editor.insert(k.runes)
+	case ui.KeyRune, ui.KeyPaste:
+		m.screen.Editor.Insert(k.Runes)
 	}
 
-	m.ac.sync(m.editor.text())
+	m.screen.Autocomplete.Sync(m.screen.Editor.Text())
 }
 
 func (m *model) handleInterrupt() {
@@ -91,33 +92,33 @@ func (m *model) handleInterrupt() {
 		m.queue = nil
 		m.pendingUsers = nil
 		m.ignoredUsers = nil
-		m.transcript.addBlock(func(int) []string { return []string{stWarning().Render("⏹ Cancelled")} })
-	case !m.editor.isEmpty():
-		m.editor.reset()
-		m.ac.dismiss()
+		m.screen.Transcript.AddBlock(func(int) []string { return []string{ui.StWarning().Render("⏹ Cancelled")} })
+	case !m.screen.Editor.IsEmpty():
+		m.screen.Editor.Reset()
+		m.screen.Autocomplete.Dismiss()
 	default:
 		m.quit()
 	}
 }
 
 func (m *model) handleEnter(ctx context.Context) {
-	if m.ac.active {
-		if cmd, ok := m.ac.current(); ok {
-			m.ac.dismiss()
-			m.submitEditor(ctx, "/"+cmd.name)
+	if m.screen.Autocomplete.Active {
+		if cmd, ok := m.screen.Autocomplete.Current(); ok {
+			m.screen.Autocomplete.Dismiss()
+			m.submitEditor(ctx, "/"+cmd.Name)
 			return
 		}
 	}
-	m.submitEditor(ctx, m.editor.text())
+	m.submitEditor(ctx, m.screen.Editor.Text())
 }
 
 func (m *model) handleTab() {
-	if !m.ac.active {
+	if !m.screen.Autocomplete.Active {
 		return
 	}
-	if cmd, ok := m.ac.current(); ok {
-		m.editor.setText("/" + cmd.name + " ")
-		m.ac.sync(m.editor.text())
+	if cmd, ok := m.screen.Autocomplete.Current(); ok {
+		m.screen.Editor.SetText("/" + cmd.Name + " ")
+		m.screen.Autocomplete.Sync(m.screen.Editor.Text())
 	}
 }
 
@@ -130,7 +131,7 @@ func (m *model) handleCycleThinkingLevel(ctx context.Context) {
 		m.reportThinkingLevelError("change", err)
 		return
 	}
-	m.status.thinking = level.String()
+	m.status.Thinking = level.String()
 }
 
 // handleSetThinkingLevel applies the /effort command: it sets the current
@@ -140,12 +141,12 @@ func (m *model) handleSetThinkingLevel(ctx context.Context, level string) {
 		return
 	}
 	if level == "" {
-		m.addNotice("", "Usage: /effort <none|minimal|low|medium|high|xhigh|max>", stMuted())
+		m.addNotice("", "Usage: /effort <none|minimal|low|medium|high|xhigh|max>", ui.StMuted())
 		return
 	}
 	parsed, ok := effort.Parse(level)
 	if !ok {
-		m.addNotice("✗ ", fmt.Sprintf("Unknown effort level %q (valid: none, minimal, low, medium, high, xhigh, max)", level), stError())
+		m.addNotice("✗ ", fmt.Sprintf("Unknown effort level %q (valid: none, minimal, low, medium, high, xhigh, max)", level), ui.StError())
 		return
 	}
 	applied, err := m.app.SetAgentThinkingLevel(ctx, parsed)
@@ -153,8 +154,8 @@ func (m *model) handleSetThinkingLevel(ctx context.Context, level string) {
 		m.reportThinkingLevelError("set", err)
 		return
 	}
-	m.status.thinking = applied.String()
-	m.addNotice("", "Reasoning effort set to "+applied.String(), stMuted())
+	m.status.Thinking = applied.String()
+	m.addNotice("", "Reasoning effort set to "+applied.String(), ui.StMuted())
 }
 
 // thinkingLevelChangeable reports whether the reasoning-effort level can be
@@ -164,7 +165,7 @@ func (m *model) thinkingLevelChangeable() bool {
 		return false
 	}
 	if !m.app.SupportsModelSwitching() {
-		m.addNotice("", "Thinking levels can't be changed with remote runtimes", stMuted())
+		m.addNotice("", "Thinking levels can't be changed with remote runtimes", ui.StMuted())
 		return false
 	}
 	return true
@@ -174,10 +175,10 @@ func (m *model) thinkingLevelChangeable() bool {
 // distinguishing the unsupported-model case from other failures.
 func (m *model) reportThinkingLevelError(action string, err error) {
 	if errors.Is(err, runtime.ErrUnsupported) {
-		m.addNotice("", "Current model does not support thinking levels", stMuted())
+		m.addNotice("", "Current model does not support thinking levels", ui.StMuted())
 		return
 	}
-	m.addNotice("✗ ", fmt.Sprintf("Failed to %s thinking level: %v", action, err), stError())
+	m.addNotice("✗ ", fmt.Sprintf("Failed to %s thinking level: %v", action, err), ui.StError())
 }
 
 type busySubmitMode int
@@ -206,9 +207,9 @@ func (m *model) submit(ctx context.Context, text string, opts submitOptions) {
 		return
 	}
 	if opts.fromEditor {
-		m.editor.rememberHistory(trimmed)
-		m.editor.reset()
-		m.ac.dismiss()
+		m.screen.Editor.RememberHistory(trimmed)
+		m.screen.Editor.Reset()
+		m.screen.Autocomplete.Dismiss()
 	}
 
 	if strings.HasPrefix(trimmed, "/") && m.handleSlash(ctx, trimmed, opts.busyMode) {
@@ -230,7 +231,7 @@ func (m *model) handleSlash(ctx context.Context, text string, mode busySubmitMod
 	case "new":
 		m.app.NewSession()
 		m.resetConversation()
-		m.addNotice("", "Started a new session.", stMuted())
+		m.addNotice("", "Started a new session.", ui.StMuted())
 		m.refreshCommands(ctx)
 		return true
 	case "clear":
@@ -270,16 +271,16 @@ func (m *model) handleSlash(ctx context.Context, text string, mode busySubmitMod
 func (m *model) dispatchUserMessage(ctx context.Context, display, content string, mode busySubmitMode) {
 	if m.app.IsReadOnly() {
 		m.addUserEcho(display)
-		m.addNotice("⚠ ", "This session is read-only.", stWarning())
+		m.addNotice("⚠ ", "This session is read-only.", ui.StWarning())
 		return
 	}
 	if m.busy {
 		if mode == busySubmitSteer {
 			if err := m.app.Steer(ctx, runtime.QueuedMessage{Content: content}); err != nil {
-				m.addNotice("⚠ ", "Could not steer current response: "+err.Error(), stWarning())
+				m.addNotice("⚠ ", "Could not steer current response: "+err.Error(), ui.StWarning())
 				return
 			}
-			m.addPendingUser(display, content, pendingUserSteer)
+			m.addPendingUser(display, content, ui.PendingUserSteer)
 			return
 		}
 		m.enqueueFollowUp(display, content)
@@ -291,7 +292,7 @@ func (m *model) dispatchUserMessage(ctx context.Context, display, content string
 }
 
 func (m *model) enqueueFollowUp(display, content string) {
-	msg := pendingUserMessage{display: display, content: content, kind: pendingUserFollowUp}
+	msg := ui.PendingUserMessage{Display: display, Content: content, Kind: ui.PendingUserFollowUp}
 	m.queue = append(m.queue, msg)
 	m.pendingUsers = append(m.pendingUsers, msg)
 }
@@ -317,7 +318,7 @@ func (m *model) sendFirstMessage(ctx context.Context, msg, attachPath string) {
 		m.addUserEcho(trimmed)
 		m.ignoreUserEcho(content)
 	case len(atts) > 0:
-		m.addNotice("", "(attached "+atts[0].Name+")", stMuted())
+		m.addNotice("", "(attached "+atts[0].Name+")", ui.StMuted())
 		m.ignoreUserEcho(content)
 	default:
 		return
@@ -355,27 +356,27 @@ func (m *model) refreshCommands(ctx context.Context) {
 		if m.disabledCommands[name] {
 			continue
 		}
-		cmds = append(cmds, command{name: name, desc: c.DisplayText(), kind: cmdAgent})
+		cmds = append(cmds, ui.Command{Name: name, Desc: c.DisplayText(), Kind: ui.CmdAgent})
 	}
 	for _, sk := range m.app.CurrentAgentSkills() {
-		cmds = append(cmds, command{name: sk.Name, desc: sk.Description, kind: cmdAgent})
+		cmds = append(cmds, ui.Command{Name: sk.Name, Desc: sk.Description, Kind: ui.CmdAgent})
 	}
-	m.ac.setCommands(cmds)
+	m.screen.Autocomplete.SetCommands(cmds)
 }
 
-func (m *model) handleConfirmKey(k key) {
-	if k.typ == keyEsc {
+func (m *model) handleConfirmKey(k ui.Key) {
+	if k.Typ == ui.KeyEsc {
 		m.resolveConfirm(runtime.ResumeReject("rejected by user"))
 		return
 	}
-	if k.typ != keyRune || len(k.runes) == 0 {
+	if k.Typ != ui.KeyRune || len(k.Runes) == 0 {
 		return
 	}
-	switch k.runes[0] {
+	switch k.Runes[0] {
 	case 'y', 'Y':
 		m.resolveConfirm(runtime.ResumeApprove())
 	case 'a', 'A':
-		m.resolveConfirm(runtime.ResumeApproveTool(m.confirm.tool))
+		m.resolveConfirm(runtime.ResumeApproveTool(m.screen.Confirm.Tool))
 	case 's', 'S':
 		m.resolveConfirm(runtime.ResumeApproveSession())
 	case 'n', 'N':
@@ -385,7 +386,7 @@ func (m *model) handleConfirmKey(k key) {
 
 func (m *model) resolveConfirm(req runtime.ResumeRequest) {
 	m.app.Resume(req)
-	m.confirm = nil
+	m.screen.Confirm = nil
 }
 
 func (m *model) resetConversation() {
@@ -393,22 +394,24 @@ func (m *model) resetConversation() {
 		m.runCancel()
 		m.runCancel = nil
 	}
-	m.transcript.clearActive()
+	m.screen.Transcript.ClearActive()
 	m.queue = nil
 	m.pendingUsers = nil
 	m.ignoredUsers = nil
 	m.busy = false
-	m.confirm = nil
-	m.usage.reset()
-	m.status.contextLength = 0
-	m.status.contextLimit = 0
-	m.status.tokens = 0
-	m.status.cost = 0
-	m.status.costKnown = false
+	m.screen.Confirm = nil
+	m.usage.Reset()
+	m.status.ContextLength = 0
+	m.status.ContextLimit = 0
+	m.status.CompactionThreshold = 0
+	m.status.Compacting = false
+	m.status.Tokens = 0
+	m.status.Cost = 0
+	m.status.CostKnown = false
 }
 
 func (m *model) clearScreen() {
-	m.r.repaint()
+	m.r.Repaint()
 }
 
 func (m *model) quit() {
@@ -419,22 +422,22 @@ func (m *model) quit() {
 }
 
 func (m *model) addUserEcho(text string) {
-	m.transcript.addBlock(func(w int) []string { return renderUserLines(text, w) })
+	m.screen.Transcript.AddBlock(func(w int) []string { return ui.RenderUserLines(text, w) })
 }
 
-func (m *model) addPendingUser(display, content string, kind pendingUserKind) {
-	m.pendingUsers = append(m.pendingUsers, pendingUserMessage{display: display, content: content, kind: kind})
+func (m *model) addPendingUser(display, content string, kind ui.PendingUserKind) {
+	m.pendingUsers = append(m.pendingUsers, ui.PendingUserMessage{Display: display, Content: content, Kind: kind})
 }
 
-func (m *model) consumePendingUser(kind pendingUserKind, content string) (pendingUserMessage, bool) {
+func (m *model) consumePendingUser(kind ui.PendingUserKind, content string) (ui.PendingUserMessage, bool) {
 	for i, msg := range m.pendingUsers {
-		if msg.kind != kind || !samePendingUserContent(msg.content, content) {
+		if msg.Kind != kind || !samePendingUserContent(msg.Content, content) {
 			continue
 		}
 		m.pendingUsers = append(m.pendingUsers[:i], m.pendingUsers[i+1:]...)
 		return msg, true
 	}
-	return pendingUserMessage{}, false
+	return ui.PendingUserMessage{}, false
 }
 
 func samePendingUserContent(pending, emitted string) bool {
@@ -457,25 +460,25 @@ func (m *model) consumeIgnoredUserEcho(content string) bool {
 }
 
 func (m *model) addNotice(prefix, text string, style lipgloss.Style) {
-	m.transcript.addBlock(func(w int) []string { return renderNoticeLines(prefix, text, w, style) })
+	m.screen.Transcript.AddBlock(func(w int) []string { return ui.RenderNoticeLines(prefix, text, w, style) })
 }
 
 func (m *model) commitHelp() {
-	m.transcript.addBlock(func(int) []string {
+	m.screen.Transcript.AddBlock(func(int) []string {
 		return []string{
-			stBold().Render("Commands"),
-			stMuted().Render("  /new       start a new session"),
-			stMuted().Render("  /compact   summarize and compact the conversation"),
-			stMuted().Render("  /effort    set the model's reasoning effort (e.g. /effort high)"),
-			stMuted().Render("  /clear     clear the screen"),
-			stMuted().Render("  /help      show this help"),
-			stMuted().Render("  /exit      quit"),
+			ui.StBold().Render("Commands"),
+			ui.StMuted().Render("  /new       start a new session"),
+			ui.StMuted().Render("  /compact   summarize and compact the conversation"),
+			ui.StMuted().Render("  /effort    set the model's reasoning effort (e.g. /effort high)"),
+			ui.StMuted().Render("  /clear     clear the screen"),
+			ui.StMuted().Render("  /help      show this help"),
+			ui.StMuted().Render("  /exit      quit"),
 			"",
-			stBold().Render("Shortcuts"),
-			stMuted().Render("  Enter      send             Alt+Enter   insert newline"),
-			stMuted().Render("  Up/Down    history           Tab         complete command"),
-			stMuted().Render("  Shift+Tab  cycle thinking    Ctrl+C      cancel / quit"),
-			stMuted().Render("  Ctrl+W     delete previous word"),
+			ui.StBold().Render("Shortcuts"),
+			ui.StMuted().Render("  Enter      send             Alt+Enter   insert newline"),
+			ui.StMuted().Render("  Up/Down    history           Tab         complete command"),
+			ui.StMuted().Render("  Shift+Tab  cycle thinking    Ctrl+C      cancel / quit"),
+			ui.StMuted().Render("  Ctrl+W     delete previous word"),
 		}
 	})
 }

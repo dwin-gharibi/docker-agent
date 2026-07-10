@@ -58,8 +58,8 @@ func (h *HitTest) At(x, y int) MouseTarget {
 		return h.sidebarClickTarget(x, y)
 	}
 
-	// Check if in collapsed sidebar area (top of screen)
-	if sl.mode != sidebarVertical && y < sl.sidebarHeight {
+	// Check if in collapsed sidebar band (above or below the chat)
+	if sl.isInBand(y) {
 		return h.sidebarClickTarget(x, y)
 	}
 
@@ -80,8 +80,8 @@ func (h *HitTest) isOnSidebarToggleGlyph(x, y int) bool {
 		return y == 0 && h.isOnSidebarResizeHandle(x, y)
 	}
 
-	// Collapsed horizontal: toggle is at right edge of first line
-	if y != 0 {
+	// Collapsed horizontal: toggle is at right edge of the band's first content line
+	if sl.bandContentY(y) != 0 {
 		return false
 	}
 	adjustedX := x - styles.AppPadding

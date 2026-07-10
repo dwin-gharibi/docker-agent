@@ -3,6 +3,273 @@
 All notable changes to this project will be documented in this file.
 
 
+## [v1.103.0] - 2026-07-09
+
+This release polishes the agent picker UI, adds context-usage gauge warning states, improves config handling, and expands sandbox template tooling.
+
+## What's New
+- Adds warning and compacting states to the context-usage gauge: color escalates (orange ≥75%, red ≥95%) as usage approaches the auto-compaction threshold, and displays "compacting…" while a compaction runs (applies to both the main TUI sidebar and lean TUI status line)
+- Installs the latest `docker-mcp` plugin in the sandbox template image so agents running in that environment have MCP tooling available out of the box
+- Adds a hint when a config key requires a newer schema version, guiding users to bump the top-level `version` field instead of seeing a generic "unknown key" error
+- Adds `WithModelOptions` passthrough in `teamloader` for provider-agnostic HTTP transport wrapping
+
+## Bug Fixes
+- Fixes config parsing failure when a hook event list is written as a single mapping instead of a sequence, which previously caused aliases and settings to be silently dropped
+
+## Technical Changes
+- Refactors agent picker status bars to use `dialog.RenderHelpKeys`, removing duplicated key-rendering logic
+- Extracts `fitHelpPairs` and adds regression tests for details help wrapping
+- Polishes agent picker visuals: more compact cards (height 7 → 5) and tightened layout
+- Simplifies the Dockerfile
+### Pull Requests
+
+- [#3089](https://github.com/docker/docker-agent/pull/3089) - feat(teamloader): add WithModelOptions passthrough for provider-agnostic HTTP transport wrapping
+- [#3537](https://github.com/docker/docker-agent/pull/3537) - feat(tui): add warning/compacting states to the context-usage gauge
+- [#3541](https://github.com/docker/docker-agent/pull/3541) - docs: update CHANGELOG.md for v1.102.0
+- [#3543](https://github.com/docker/docker-agent/pull/3543) - style(tui): polish agent picker layout, cards, and status bars
+- [#3544](https://github.com/docker/docker-agent/pull/3544) - docs: sync documentation with recent code changes
+- [#3545](https://github.com/docker/docker-agent/pull/3545) - feat: install latest docker-mcp plugin in sbx template
+- [#3546](https://github.com/docker/docker-agent/pull/3546) - fix(config): accept a single mapping for hook event lists
+- [#3549](https://github.com/docker/docker-agent/pull/3549) - feat(teamloader): add WithModelOptions passthrough for provider-agnostic HTTP transport wrapping
+- [#3550](https://github.com/docker/docker-agent/pull/3550) - feat(config): hint when a config key requires a newer schema version
+
+
+## [v1.102.0] - 2026-07-08
+
+This release brings significant enhancements to the Kanban board (drag & drop, card management, shell access, sandbox fixes), a new ChatGPT provider, TUI layout customization, and numerous stability and usability fixes across the board, session management, and copy/paste experience.
+
+## What's New
+
+- Adds a `chatgpt` provider enabling sign-in with a ChatGPT Plus/Pro/Business account via `docker agent setup`, without requiring an `OPENAI_API_KEY`
+- Adds `/custom` slash command to open a layout customization dialog for sidebar position and section visibility, with live preview and persistent settings
+- Adds a **Section spacing** selector to the `/custom` layout dialog (Compact / Normal / Relaxed)
+- Adds warning and compacting states to the context-usage gauge, escalating color as usage approaches the compaction threshold and showing "compacting..." during compaction
+- Adds `s` shortcut on the board to open an interactive shell in the selected card's worktree
+- Adds digit keys 1–9 to move a board card directly to a numbered column, and adds mouse drag & drop to reposition cards
+- Adds drag ghost preview showing where a dragged card will be inserted in the drop-target column
+- Adds intermediate startup statuses (`starting` → `loading` → `attaching`) on board cards to show boot progress
+- Adds project editing and reordering on the board: press `e` or Enter on a project to rename it, with confirm-delete for destructive removals
+- Adds desktop notifications with hooks tip to the documentation, covering macOS and Linux examples for `on_user_input` and `stop` events
+
+## Improvements
+
+- Aligns TUI board card colors with the web board's status palette; `starting`/`loading`/`attaching` render in blue, `running` in green, and `paused` in a neutral color
+- Fades the dragged card immediately on the first mouse motion during a drag, providing instant visual feedback
+- Clarifies the dirty-worktree removal prompt by listing the consequences of `y` and `N` on separate lines before asking the question
+- Improves command categories in the help output
+- Documents env vars needed for `notify-send` hooks in detached sessions (SSH, tmux, containers)
+
+## Bug Fixes
+
+- Fixes board agent startup failures being silently discarded, leaving cards stuck in "starting" forever; failures are now surfaced on the card
+- Fixes board control-plane sockets being placed inside the data dir, which prevented cards from starting in Docker sandboxes; sockets are now placed in the system temp dir
+- Fixes board storing absolute paths that broke shared state in sandboxes; paths are now stored home-relative
+- Fixes board not forwarding `--config-dir`, `--data-dir`, and `--cache-dir` overrides to spawned agents
+- Fixes board path expansion, state load, and git repo check edge cases
+- Fixes stale drag state and ignores wheel events mid-drag on the board
+- Fixes a race condition where `RunSession`/`recallSession` clobbered the attached runtime's cancel, causing `DeleteSession` to abort in-flight streams incorrectly
+- Fixes session DB being reset on transient open errors (e.g. Ctrl-C, `SQLITE_BUSY`), which could silently wipe access to all past sessions
+- Fixes SQLite memory database opening before acquiring the advisory file lock, causing `SQLITE_BUSY` races under concurrent access
+- Fixes TUI selection copy being unreliable (random one-word copies, trailing padding, UI glyphs in clipboard) and improves copy button affordances
+- Fixes redundant copy toast appearing alongside the inline "copied" flash when clicking a copy button
+- Fixes emphasized text (e.g. "Esc to interrupt") being invisible on light themes due to incorrect color mapping
+- Fixes global config file management: resolves a TUI panic on malformed config and several silent data-loss paths in the load/save cycle
+- Fixes DNS resolution happening at construction time in `NewSSRFSafeTransport`, which could slow agent startup or fail silently when DNS is unavailable
+- Fixes board reporting why a relaunch failed when attaching to an errored card, and drops per-card controller state without racing in-flight relaunches
+- Fixes docs table of contents sidebar overlapping the footer on long pages by switching from `position:fixed` to `position:sticky`
+
+## Technical Changes
+
+- Renames `$BOARD_EDITOR` environment variable to `$DOCKER_AGENT_BOARD_EDITOR`; the old name is kept as a fallback for one release
+- Folds the ChatGPT sign-in flow into `docker agent setup` rather than a separate command
+- Removes the agent catalog example from documentation
+- Adds a lint rule flagging DNS resolution (`net.Lookup*` / `Resolver.Lookup*`) in constructors
+### Pull Requests
+
+- [#3503](https://github.com/docker/docker-agent/pull/3503) - fix(cli): resolve session DB default against the data dir
+- [#3506](https://github.com/docker/docker-agent/pull/3506) - docs: update CHANGELOG.md for v1.101.0
+- [#3507](https://github.com/docker/docker-agent/pull/3507) - chore: bump direct Go dependencies
+- [#3508](https://github.com/docker/docker-agent/pull/3508) - fix(board): surface agent startup failures instead of silently doing nothing
+- [#3509](https://github.com/docker/docker-agent/pull/3509) - feat(tui): add /custom command to customize layout
+- [#3510](https://github.com/docker/docker-agent/pull/3510) - fix(board): store paths home-relative so shared state works in sandboxes
+- [#3512](https://github.com/docker/docker-agent/pull/3512) - feat(provider): add chatgpt provider with ChatGPT account sign-in
+- [#3513](https://github.com/docker/docker-agent/pull/3513) - feat(board): edit, reorder, and confirm-delete projects
+- [#3514](https://github.com/docker/docker-agent/pull/3514) - chore(board): rename $BOARD_EDITOR to $DOCKER_AGENT_BOARD_EDITOR
+- [#3515](https://github.com/docker/docker-agent/pull/3515) - fix(board): run agent control-plane sockets outside the data dir so cards start in docker sandboxes
+- [#3516](https://github.com/docker/docker-agent/pull/3516) - feat(board): show intermediate startup statuses on cards
+- [#3517](https://github.com/docker/docker-agent/pull/3517) - feat(board): add `s` shortcut to open a shell in the card's worktree
+- [#3518](https://github.com/docker/docker-agent/pull/3518) - fix(board): forward directory overrides to spawned agents
+- [#3519](https://github.com/docker/docker-agent/pull/3519) - docs: sync documentation with recent main merges
+- [#3520](https://github.com/docker/docker-agent/pull/3520) - fix(board): clarify dirty-worktree removal prompt with explicit consequences
+- [#3521](https://github.com/docker/docker-agent/pull/3521) - feat(board): align TUI card colors with web board status palette
+- [#3522](https://github.com/docker/docker-agent/pull/3522) - feat(board): move cards to any column with digit keys and drag & drop
+- [#3523](https://github.com/docker/docker-agent/pull/3523) - Improve the command categories
+- [#3524](https://github.com/docker/docker-agent/pull/3524) - feat(board): fade dragged card immediately and fix stale drag state
+- [#3525](https://github.com/docker/docker-agent/pull/3525) - fix: don't clobber attached runtime's cancel in RunSession/recallSession
+- [#3526](https://github.com/docker/docker-agent/pull/3526) - docs: add desktop notifications with hooks tip
+- [#3527](https://github.com/docker/docker-agent/pull/3527) - fix(docs): switch .toc-aside from position:fixed to sticky in flex .main row
+- [#3529](https://github.com/docker/docker-agent/pull/3529) - fix(userconfig): harden global config file management
+- [#3530](https://github.com/docker/docker-agent/pull/3530) - fix(tui): unreadable emphasized text on light themes
+- [#3531](https://github.com/docker/docker-agent/pull/3531) - docs: document env vars for notify-send hooks in detached sessions
+- [#3532](https://github.com/docker/docker-agent/pull/3532) - feat(board): preview the dragged card at its insertion point
+- [#3533](https://github.com/docker/docker-agent/pull/3533) - feat(tui): add section spacing setting to /custom layout dialog
+- [#3534](https://github.com/docker/docker-agent/pull/3534) - fix(session): don't reset the session DB on transient open errors
+- [#3535](https://github.com/docker/docker-agent/pull/3535) - fix(tui): make selection copy reliable and improve copy affordances
+- [#3537](https://github.com/docker/docker-agent/pull/3537) - feat(tui): add warning/compacting states to the context-usage gauge
+- [#3538](https://github.com/docker/docker-agent/pull/3538) - fix(memory): open sqlite db under file lock to avoid SQLITE_BUSY races
+- [#3539](https://github.com/docker/docker-agent/pull/3539) - fix(tui): drop the redundant copy toast when the inline "copied" flash shows
+- [#3540](https://github.com/docker/docker-agent/pull/3540) - fix(ssrf): avoid DNS resolution at construction time in NewSSRFSafeTransport
+
+
+## [v1.101.0] - 2026-07-07
+
+This release adds a setup wizard for first-time model configuration, an opt-in auto theme that follows the terminal's light/dark background, and several usability and bug fixes.
+
+## What's New
+- Adds an `Open Board` button (and `b` keybinding) to the agent picker, allowing users to launch the Kanban board directly without first running an agent
+- Adds a `docker agent setup` wizard, offered when no usable model is configured, guiding users through setting up a cloud API key or pulling a local model
+- Adds secret stores and a default config environment file source for environment configuration
+- Adds an opt-in `auto` theme that follows the terminal's light/dark background at startup and live (via `settings.theme: auto`, `--theme auto`, or the `/theme` menu)
+- Exports `Pull` for pre-confirmed model pulls in the Docker Model Runner integration
+
+## Bug Fixes
+- Fixes the agent picker's board button hit-zone math and improves layout on narrow terminals
+- Fixes `--session-db` default so it correctly resolves relative to `--data-dir`, making sessions stored under a custom data directory visible
+- Fixes the theme file watcher that was lost in the tab-view rewrite, restoring live hot-reload of `~/.cagent/themes/*.yaml` while the TUI is running
+
+## Technical Changes
+- Adds a "Set Up a Model" getting-started tutorial covering both API key and local model setup paths
+- Adds session DB wiring tests and documentation follow-ups for the setup wizard
+### Pull Requests
+
+- [#3497](https://github.com/docker/docker-agent/pull/3497) - docs: update CHANGELOG.md for v1.100.0
+- [#3498](https://github.com/docker/docker-agent/pull/3498) - feat(picker): add Open Board button to the agent picker
+- [#3499](https://github.com/docker/docker-agent/pull/3499) - feat(cli): add docker agent setup wizard, offered when no model is usable (phase 3 of #3442)
+- [#3502](https://github.com/docker/docker-agent/pull/3502) - docs(getting-started): add Set Up a Model tutorial for API key and local paths
+- [#3503](https://github.com/docker/docker-agent/pull/3503) - fix(cli): resolve session DB default against the data dir
+- [#3504](https://github.com/docker/docker-agent/pull/3504) - feat(tui): opt-in "auto" theme that follows the terminal light/dark background
+- [#3505](https://github.com/docker/docker-agent/pull/3505) - fix(tui): rewire theme watcher lost in tab-view rewrite
+
+
+## [v1.100.0] - 2026-07-07
+
+This release adds new diagnostic and configuration capabilities, hardens the board communication protocol, and improves error messaging for missing models and credentials.
+
+## What's New
+
+- Adds `docker agent doctor` command for diagnosing model provider credentials and agent readiness
+- Adds actionable errors when models or credentials are missing, with guidance on next steps
+- Adds `hooks.d` drop-in directory (`<config-dir>/hooks.d/*.yaml`) and `DOCKER_AGENT_CONFIG_DIR` environment variable override for config directory
+- Adds heartbeat idle watchdog to abort hung event streams in `docker agent board`
+- Adds session aggregate cost reporting to `GET /snapshot`
+- Adds machine-readable error codes to 404 responses for unknown session snapshots
+- Adds heartbeat keepalives to idle `/events` SSE streams
+
+## Bug Fixes
+
+- Fixes turn-boundary events being silently dropped when a subscriber's buffer overflows
+
+## Technical Changes
+
+- Extracts lean TUI engine into a separate package and reorganizes UI components (status models, inline images, tool views, transcript, screen model) into a dedicated UI layer
+- Adds documentation for `docker agent board` CLI reference and actionable model/credential errors in troubleshooting guide
+- Adds tmux usage guidance for running `docker agent board` in a sandbox environment
+### Pull Requests
+
+- [#3452](https://github.com/docker/docker-agent/pull/3452) - feat(cli): actionable errors for missing models and credentials (phase 1 of #3442)
+- [#3487](https://github.com/docker/docker-agent/pull/3487) - docs: update CHANGELOG.md for v1.99.0
+- [#3489](https://github.com/docker/docker-agent/pull/3489) - feat(cli): add docker agent doctor for model and credential diagnosis
+- [#3491](https://github.com/docker/docker-agent/pull/3491) - feat: harden control-plane protocol for reliable board communication
+- [#3492](https://github.com/docker/docker-agent/pull/3492) - Lean tui UI split
+- [#3494](https://github.com/docker/docker-agent/pull/3494) - docs: update CLI reference and troubleshooting for board and actionable errors
+- [#3495](https://github.com/docker/docker-agent/pull/3495) - Add tmux or running docker agent board in sbx
+- [#3496](https://github.com/docker/docker-agent/pull/3496) - feat: hooks.d drop-in directory and config-dir env override
+
+
+## [v1.99.0] - 2026-07-06
+
+This release adds significant new capabilities including a Kanban board TUI, NVIDIA provider support, parallel tool dispatch, and numerous compaction and context-window improvements, along with several important bug fixes.
+
+## What's New
+
+- Adds `docker agent board`, a full-screen Kanban TUI for orchestrating multiple agents across pipeline stages (Dev → Review → Push → Done), each on an isolated git worktree
+- Adds NVIDIA (NIM / build.nvidia.com) as a supported model provider via a new `nvidia` alias
+- Adds `/context` slash command with a categorized context-window breakdown dialog, including a stacked usage bar and copy-to-clipboard action
+- Adds the ability to list and drop attached files directly from the `/context` dialog
+- Adds `wait_background_job` tool to the shell toolset, blocking until a background job finishes instead of requiring polling
+- Adds shell background job recall, routing completed job output back to active or idle sessions
+- Splits background jobs into a separate `background_jobs` toolset, leaving the shell toolset with only synchronous shell tools
+- Adds `unix://` URL support in the remote MCP client for connecting over Unix domain sockets
+- Adds a Lean Mode checkbox to the agent picker (`--agent-picker`), toggled with `l` or mouse click
+- Adds `compaction_threshold` as a configurable key per agent (and per model), replacing the previously hardcoded 0.9 constant
+- Adds per-sub-agent context accounting in the TUI sidebar and agent inspector
+- Runs tool dispatcher calls in parallel, serializing only interactive confirmations
+- Extends the HCL `file()` function with an optional variables argument to render the file as a template
+- Groups the `/sessions` browser by current workspace instead of showing a flat global list
+
+## Improvements
+
+- Reconciles the compaction token estimator with provider-reported usage, using exact counts where available and a session-calibrated correction for unreported content
+- Wraps lean TUI tool calls in a padded themed box for improved rendering
+- Supports steering (sending messages while the agent is running) in the lean TUI, with pending messages displayed in muted styling
+
+## Bug Fixes
+
+- Fixes compaction replacing session history with a stale reply when the summarization model returns an empty response
+- Fixes compaction outcome reporting to accurately reflect applied/skipped/failed status on the completed event
+- Fixes whitespace-only compaction summaries being applied instead of treated as a no-op
+- Fixes `--yolo` flag not being applied correctly on session resume, causing `safer_shell` to prompt despite the flag
+- Fixes Gemini models failing with MCP tools that declare non-string enum values in their JSON schemas
+- Fixes session `Message.AgentName` silently dropping on load when reading files using the legacy `agentName` JSON key
+- Fixes database migration rollback errors being silently swallowed
+- Removes Anthropic Files API usage
+- Updates stale Anthropic model IDs in examples to current IDs
+
+## Technical Changes
+
+- Standardizes `agent_name` JSON tag on `Message.AgentName`, replacing the previous `agentName` camelCase tag
+- Shares git-branch detection logic between the lean and full TUIs via a new `pkg/gitbranch` package
+- Refactors lean TUI model into cohesive subsystems (usage/tool trackers, transcript type) with no functional change
+- Replaces context-smuggled emitters with an explicit `tools.Runtime` handle in the tool dispatcher
+### Pull Requests
+
+- [#3421](https://github.com/docker/docker-agent/pull/3421) - feat: add NVIDIA provider as supported model provider
+- [#3443](https://github.com/docker/docker-agent/pull/3443) - feat(picker): add Lean Mode checkbox to agent picker
+- [#3445](https://github.com/docker/docker-agent/pull/3445) - docs: update CHANGELOG.md for v1.98.0
+- [#3446](https://github.com/docker/docker-agent/pull/3446) - feat(tui): group /sessions browser by current workspace
+- [#3447](https://github.com/docker/docker-agent/pull/3447) - docs: point rel=canonical at the docs.docker.com mirrored pages
+- [#3448](https://github.com/docker/docker-agent/pull/3448) - feat(config): make the auto-compaction threshold configurable (compaction_threshold)
+- [#3449](https://github.com/docker/docker-agent/pull/3449) - feat(compaction): reconcile token estimator with provider-reported usage
+- [#3451](https://github.com/docker/docker-agent/pull/3451) - feat: add docker agent board, a Kanban TUI for orchestrating agents
+- [#3453](https://github.com/docker/docker-agent/pull/3453) - feat(mcp/remote): support unix:// URLs in remote MCP client
+- [#3454](https://github.com/docker/docker-agent/pull/3454) - ci: build and publish docker-agent sandbox templates
+- [#3455](https://github.com/docker/docker-agent/pull/3455) - refactor(leantui): decompose the model into cohesive subsystems
+- [#3457](https://github.com/docker/docker-agent/pull/3457) - refactor: share git-branch detection between the lean and full TUIs
+- [#3458](https://github.com/docker/docker-agent/pull/3458) - feat(tui): add /context command with a categorized context-window breakdown
+- [#3459](https://github.com/docker/docker-agent/pull/3459) - docs: switch github.io site from Jekyll to Hugo
+- [#3460](https://github.com/docker/docker-agent/pull/3460) - fix: box lean TUI tool calls
+- [#3461](https://github.com/docker/docker-agent/pull/3461) - feat: add shell background job recall
+- [#3463](https://github.com/docker/docker-agent/pull/3463) - feat(shell): add wait_background_job tool
+- [#3464](https://github.com/docker/docker-agent/pull/3464) - feat(hcl): render file() as a template when given variables
+- [#3465](https://github.com/docker/docker-agent/pull/3465) - feat(tui): list and drop attached files from the /context dialog
+- [#3466](https://github.com/docker/docker-agent/pull/3466) - fix: remove Anthropic Files API usage
+- [#3467](https://github.com/docker/docker-agent/pull/3467) - feat: run tool dispatcher calls in parallel
+- [#3468](https://github.com/docker/docker-agent/pull/3468) - docs: sync documentation with recent changes
+- [#3470](https://github.com/docker/docker-agent/pull/3470) - fix: compaction data loss on empty summary + honest compaction outcome reporting
+- [#3471](https://github.com/docker/docker-agent/pull/3471) - chore: standardize agent_name JSON tag in Message struct
+- [#3472](https://github.com/docker/docker-agent/pull/3472) - Tweak the golang dev
+- [#3473](https://github.com/docker/docker-agent/pull/3473) - Split background jobs into separate toolset
+- [#3474](https://github.com/docker/docker-agent/pull/3474) - fix: support steering in lean TUI
+- [#3475](https://github.com/docker/docker-agent/pull/3475) - docs: document lean TUI steering support
+- [#3476](https://github.com/docker/docker-agent/pull/3476) - fix: handle tx.Rollback error in database migrations
+- [#3480](https://github.com/docker/docker-agent/pull/3480) - fix: update stale Anthropic model IDs in examples
+- [#3481](https://github.com/docker/docker-agent/pull/3481) - chore: bump direct Go dependencies
+- [#3482](https://github.com/docker/docker-agent/pull/3482) - fix: backfill SafetyPolicy on session resume with --yolo
+- [#3483](https://github.com/docker/docker-agent/pull/3483) - fix(session): accept legacy agentName JSON key when unmarshaling Message
+- [#3485](https://github.com/docker/docker-agent/pull/3485) - fix(gemini): stringify non-string enum values in tool schemas
+- [#3486](https://github.com/docker/docker-agent/pull/3486) - feat(tui): per-sub-agent context accounting in the TUI
+
+
 ## [v1.98.0] - 2026-07-03
 
 This release adds several new TUI features including an interactive getting-started tour, an effort picker dialog, and Lean Mode support in the agent picker, along with stability fixes for startup, shutdown, and proxy recovery.
@@ -4381,3 +4648,13 @@ This release improves the terminal user interface with better error handling and
 [v1.97.0]: https://github.com/docker/docker-agent/releases/tag/v1.97.0
 
 [v1.98.0]: https://github.com/docker/docker-agent/releases/tag/v1.98.0
+
+[v1.99.0]: https://github.com/docker/docker-agent/releases/tag/v1.99.0
+
+[v1.100.0]: https://github.com/docker/docker-agent/releases/tag/v1.100.0
+
+[v1.101.0]: https://github.com/docker/docker-agent/releases/tag/v1.101.0
+
+[v1.102.0]: https://github.com/docker/docker-agent/releases/tag/v1.102.0
+
+[v1.103.0]: https://github.com/docker/docker-agent/releases/tag/v1.103.0

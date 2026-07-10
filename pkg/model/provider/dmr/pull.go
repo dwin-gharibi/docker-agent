@@ -28,6 +28,26 @@ func pullDockerModelIfNeeded(ctx context.Context, model string) error {
 		return err
 	}
 
+	return pullWithRecovery(ctx, model)
+}
+
+// Pull pulls a Docker Model Runner model via `docker model pull`, streaming
+// progress to the terminal. Unlike the run-path pull it never asks for
+// confirmation, so callers that already obtained consent (e.g. the setup
+// wizard) can invoke it directly. It skips the pull when the model is already
+// available locally and returns a *PullFailedError on failure.
+func Pull(ctx context.Context, model string) error {
+	if modelExists(ctx, model) {
+		slog.DebugContext(ctx, "Model already exists, skipping pull", "model", model)
+		return nil
+	}
+
+	return pullWithRecovery(ctx, model)
+}
+
+// pullWithRecovery runs the pull and recovers once from a corrupted partial
+// download.
+func pullWithRecovery(ctx context.Context, model string) error {
 	err := runModelPull(ctx, model)
 	if err == nil {
 		return nil

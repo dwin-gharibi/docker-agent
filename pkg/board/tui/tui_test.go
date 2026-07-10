@@ -1,9 +1,11 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -102,6 +104,312 @@ func TestCardAtMirrorsLayout(t *testing.T) {
 	assert.False(t, ok)
 	_, _, ok = m.cardAt(59, 5) // gap between columns
 	assert.False(t, ok)
+}
+
+// dragTestModel is a two-column board with two cards in the first column
+// and one in the second, on a 120x40 terminal (colWidth 59, cards from row 5).
+func dragTestModel() *model {
+	return &model{
+		width:   120,
+		height:  40,
+		columns: []board.Column{{ID: "dev", Name: "Dev"}, {ID: "done", Name: "Done"}},
+		cards: map[string][]*board.Card{
+			"dev":  {{ID: "a", Column: "dev"}, {ID: "b", Column: "dev"}},
+			"done": {{ID: "c", Column: "done"}},
+		},
+		scroll: map[string]int{},
+	}
+}
+
+func TestDragAndDropMovesCard(t *testing.T) {
+	t.Parallel()
+
+	m := dragTestModel()
+
+	// Pressing a card selects it and arms a drag candidate.
+	_, cmd := m.handleClick(tea.MouseClickMsg{X: 5, Y: 5, Button: tea.MouseLeft})
+	assert.Nil(t, cmd)
+	assert.Equal(t, "a", m.dragCardID)
+	assert.False(t, m.dragging)
+
+	// Motion while pressed turns the click into a drag targeting the
+	// column under the pointer.
+	m.handleMotion(tea.MouseMotionMsg{X: 65, Y: 5, Button: tea.MouseLeft})
+	assert.True(t, m.dragging)
+	assert.Equal(t, 1, m.dragCol)
+
+	// Releasing over the other column moves the card there.
+	_, cmd = m.handleRelease(tea.MouseReleaseMsg{X: 65, Y: 5, Button: tea.MouseLeft})
+	assert.NotNil(t, cmd, "drop on another column should move the card")
+	assert.False(t, m.dragging)
+	assert.Empty(t, m.dragCardID)
+	assert.Empty(t, m.lastClickCard, "a drag must not arm double-click attach")
+}
+
+func TestDraggedCardRendersFaded(t *testing.T) {
+	t.Parallel()
+
+	m := dragTestModel()
+	card := m.cards["dev"][0]
+
+	idle := m.renderCard(card, 30, true)
+	m.dragCardID, m.dragging = card.ID, true
+	assert.NotEqual(t, idle, m.renderCard(card, 30, true),
+		"the dragged card must be visually distinct")
+
+	// Other cards keep their normal look while a drag is in progress.
+	other := m.cards["dev"][1]
+	during := m.renderCard(other, 30, false)
+	m.resetDrag()
+	assert.Equal(t, during, m.renderCard(other, 30, false))
+}
+
+func TestDropTargetPreviewsGhostCard(t *testing.T) {
+	t.Parallel()
+
+	m := dragTestModel()
+	m.cards["dev"][0].Title = "Fix the flaky test"
+
+	// Before the drag, the destination column shows only its own card.
+	boardHeight, colWidth := m.boardSize()
+	idle := m.renderColumn(1, m.columns[1], colWidth, boardHeight)
+	assert.NotContains(t, idle, "Fix the flaky")
+
+	// Mid-drag, the drop target previews the dragged card at its insertion
+	// point: after the column's last card.
+	_, _ = m.handleClick(tea.MouseClickMsg{X: 5, Y: 5, Button: tea.MouseLeft})
+	m.handleMotion(tea.MouseMotionMsg{X: 65, Y: 5, Button: tea.MouseLeft})
+	target := m.renderColumn(1, m.columns[1], colWidth, boardHeight)
+	assert.Contains(t, target, "Fix the flaky")
+
+	// The source column shows no ghost — a drop there is a no-op.
+	source := m.renderColumn(0, m.columns[0], colWidth, boardHeight)
+	assert.Equal(t, 1, strings.Count(source, "Fix the flaky"),
+		"the source column must only show the card itself")
+
+	// The ghost vanishes when the pointer leaves the column…
+	m.handleMotion(tea.MouseMotionMsg{X: 59, Y: 5, Button: tea.MouseLeft})
+	assert.NotContains(t, m.renderColumn(1, m.columns[1], colWidth, boardHeight), "Fix the flaky")
+
+	// …and the preview never persists a scroll change on the target.
+	assert.Equal(t, 0, m.scroll["done"])
+}
+
+func TestDropTargetGhostSlidesToColumnTail(t *testing.T) {
+	t.Parallel()
+
+	// An overfull target column (7 cards, 5 slots at height 40) slides to
+	// its tail so the ghost sits at the real insertion point.
+	m := dragTestModel()
+	m.cards["dev"][0].Title = "Dragged card"
+	done := make([]*board.Card, 0, 7)
+	for i := range 7 {
+		done = append(done, &board.Card{ID: fmt.Sprintf("d%d", i), Column: "done", Title: fmt.Sprintf("Done task %d", i)})
+	}
+	m.cards["done"] = done
+
+	_, _ = m.handleClick(tea.MouseClickMsg{X: 5, Y: 5, Button: tea.MouseLeft})
+	m.handleMotion(tea.MouseMotionMsg{X: 65, Y: 5, Button: tea.MouseLeft})
+
+	boardHeight, colWidth := m.boardSize()
+	target := m.renderColumn(1, m.columns[1], colWidth, boardHeight)
+	assert.Contains(t, target, "Done task 6", "the column tail must be visible")
+	assert.Contains(t, target, "Dragged card", "the ghost follows the last card")
+	assert.NotContains(t, target, "Done task 0")
+	assert.Contains(t, target, "… 3 more", "cards hidden above the window are counted")
+	assert.Equal(t, 0, m.scroll["done"], "the tail scroll must not persist")
+}
+
+func TestDropTargetGhostOnTinyTerminal(t *testing.T) {
+	t.Parallel()
+
+	// With a single visible slot the ghost takes it, and the column's own
+	// cards collapse into the hidden-count line instead of vanishing.
+	m := dragTestModel()
+	m.height = 12 // boardSize floor: one card slot
+	m.cards["dev"][0].Title = "Dragged card"
+	m.cards["done"][0].Title = "Done task"
+
+	_, _ = m.handleClick(tea.MouseClickMsg{X: 5, Y: 5, Button: tea.MouseLeft})
+	m.handleMotion(tea.MouseMotionMsg{X: 65, Y: 5, Button: tea.MouseLeft})
+
+	boardHeight, colWidth := m.boardSize()
+	target := m.renderColumn(1, m.columns[1], colWidth, boardHeight)
+	assert.Contains(t, target, "Dragged card")
+	assert.Contains(t, target, "… 1 more")
+	assert.NotContains(t, target, "Done task")
+}
+
+func TestNoGhostWhenTargetAlreadyHoldsCard(t *testing.T) {
+	t.Parallel()
+
+	// A refresh can move the dragged card under the drag; the column that
+	// now holds it must not render it twice (the drop is a no-op anyway).
+	m := dragTestModel()
+	m.cards["dev"][0].Title = "Dragged card"
+	_, _ = m.handleClick(tea.MouseClickMsg{X: 5, Y: 5, Button: tea.MouseLeft})
+	m.handleMotion(tea.MouseMotionMsg{X: 65, Y: 5, Button: tea.MouseLeft})
+
+	// Simulate an external move of the dragged card into the target column.
+	m.cards["done"] = append(m.cards["done"], m.cards["dev"][0])
+	m.cards["dev"] = m.cards["dev"][1:]
+
+	boardHeight, colWidth := m.boardSize()
+	target := m.renderColumn(1, m.columns[1], colWidth, boardHeight)
+	assert.Equal(t, 1, strings.Count(target, "Dragged card"),
+		"the card must not render twice in its own column")
+}
+
+func TestDragBackToOriginIsANoop(t *testing.T) {
+	t.Parallel()
+
+	m := dragTestModel()
+	_, _ = m.handleClick(tea.MouseClickMsg{X: 5, Y: 5, Button: tea.MouseLeft})
+	m.handleMotion(tea.MouseMotionMsg{X: 65, Y: 5, Button: tea.MouseLeft})
+
+	// Dropping the card back on its own column moves nothing.
+	_, cmd := m.handleRelease(tea.MouseReleaseMsg{X: 5, Y: 5, Button: tea.MouseLeft})
+	assert.Nil(t, cmd)
+	assert.False(t, m.dragging)
+}
+
+func TestDragJitterWithinCardStaysAClick(t *testing.T) {
+	t.Parallel()
+
+	m := dragTestModel()
+	_, _ = m.handleClick(tea.MouseClickMsg{X: 5, Y: 5, Button: tea.MouseLeft})
+
+	// Motion within the pressed card starts the drag right away, so the
+	// pickup is visible without waiting for the pointer to leave the card…
+	m.handleMotion(tea.MouseMotionMsg{X: 6, Y: 6, Button: tea.MouseLeft})
+	assert.True(t, m.dragging)
+
+	// …but releasing back on the same card is a plain click and
+	// double-click stays armed.
+	_, cmd := m.handleRelease(tea.MouseReleaseMsg{X: 6, Y: 6, Button: tea.MouseLeft})
+	assert.Nil(t, cmd)
+	assert.False(t, m.dragging)
+	assert.Equal(t, "a", m.lastClickCard)
+}
+
+func TestNonLeftReleaseDoesNotDrop(t *testing.T) {
+	t.Parallel()
+
+	m := dragTestModel()
+	_, _ = m.handleClick(tea.MouseClickMsg{X: 5, Y: 5, Button: tea.MouseLeft})
+	m.handleMotion(tea.MouseMotionMsg{X: 65, Y: 5, Button: tea.MouseLeft})
+
+	// A stray non-left release mid-drag neither drops nor cancels.
+	_, cmd := m.handleRelease(tea.MouseReleaseMsg{X: 65, Y: 5, Button: tea.MouseRight})
+	assert.Nil(t, cmd)
+	assert.True(t, m.dragging)
+}
+
+func TestDragCancelledByDialogAndKeys(t *testing.T) {
+	t.Parallel()
+
+	// A dialog opening mid-drag captures the release: the drag must not
+	// survive, or the next click would silently move a card.
+	m := dragTestModel()
+	_, _ = m.handleClick(tea.MouseClickMsg{X: 5, Y: 5, Button: tea.MouseLeft})
+	m.handleMotion(tea.MouseMotionMsg{X: 65, Y: 5, Button: tea.MouseLeft})
+	_ = m.openDialog(newHelpDialog())
+	assert.False(t, m.dragging)
+	assert.Empty(t, m.dragCardID)
+
+	// A key press cancels a drag too (esc cancels).
+	m = dragTestModel()
+	_, _ = m.handleClick(tea.MouseClickMsg{X: 5, Y: 5, Button: tea.MouseLeft})
+	m.handleMotion(tea.MouseMotionMsg{X: 65, Y: 5, Button: tea.MouseLeft})
+	_, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape})
+	assert.False(t, m.dragging)
+}
+
+func TestStaleDragDoesNotLeakIntoNextGesture(t *testing.T) {
+	t.Parallel()
+
+	// A drag whose release was lost (tea.ExecProcess leaves mouse mode)
+	// must not turn the next click into a card move.
+	m := dragTestModel()
+	_, _ = m.handleClick(tea.MouseClickMsg{X: 5, Y: 5, Button: tea.MouseLeft})
+	m.handleMotion(tea.MouseMotionMsg{X: 65, Y: 5, Button: tea.MouseLeft})
+
+	// Next gesture: click on empty column space…
+	_, cmd := m.handleClick(tea.MouseClickMsg{X: 65, Y: 5 + 2*cardHeight, Button: tea.MouseLeft})
+	assert.Nil(t, cmd)
+	assert.False(t, m.dragging)
+	_, cmd = m.handleRelease(tea.MouseReleaseMsg{X: 65, Y: 5 + 2*cardHeight, Button: tea.MouseLeft})
+	assert.Nil(t, cmd, "a stale drag must not move a card on a plain click")
+
+	// …or on another card: the press rearms a clean candidate.
+	m = dragTestModel()
+	_, _ = m.handleClick(tea.MouseClickMsg{X: 5, Y: 5, Button: tea.MouseLeft})
+	m.handleMotion(tea.MouseMotionMsg{X: 65, Y: 5, Button: tea.MouseLeft})
+	_, _ = m.handleClick(tea.MouseClickMsg{X: 65, Y: 5, Button: tea.MouseLeft})
+	assert.False(t, m.dragging)
+	assert.Equal(t, "c", m.dragCardID)
+	_, cmd = m.handleRelease(tea.MouseReleaseMsg{X: 65, Y: 5, Button: tea.MouseLeft})
+	assert.Nil(t, cmd)
+}
+
+func TestWheelIgnoredWhileCardPressed(t *testing.T) {
+	t.Parallel()
+
+	m := dragTestModel()
+	_, _ = m.handleClick(tea.MouseClickMsg{X: 5, Y: 5, Button: tea.MouseLeft})
+	m.handleMotion(tea.MouseMotionMsg{X: 65, Y: 5, Button: tea.MouseLeft})
+
+	// A wheel event mid-drag must not move the selection: the drop-target
+	// highlight keys off selCol and the scroll would shift cards under the
+	// pointer.
+	m.handleWheel(tea.MouseWheelMsg{X: 65, Y: 5, Button: tea.MouseWheelDown})
+	assert.Equal(t, 0, m.selCol)
+	assert.Equal(t, 0, m.selRow)
+}
+
+func TestMoveCardResolvesByID(t *testing.T) {
+	t.Parallel()
+
+	m := dragTestModel()
+
+	// Moving a card to the column it already occupies is a no-op, wherever
+	// the selection points (the drop path resolves the card by ID).
+	assert.Nil(t, m.moveCard("c", 1), "card c already sits in column done")
+	assert.NotNil(t, m.moveCard("c", 0))
+	assert.Nil(t, m.moveCard("a", -1))
+	assert.Nil(t, m.moveCard("a", 2))
+}
+
+func TestReleaseWithoutMotionIsAClick(t *testing.T) {
+	t.Parallel()
+
+	m := dragTestModel()
+	_, _ = m.handleClick(tea.MouseClickMsg{X: 5, Y: 5, Button: tea.MouseLeft})
+
+	_, cmd := m.handleRelease(tea.MouseReleaseMsg{X: 5, Y: 5, Button: tea.MouseLeft})
+	assert.Nil(t, cmd)
+	assert.Equal(t, "a", m.lastClickCard, "a plain click still arms double-click attach")
+}
+
+func TestDigitKeysMoveCardToColumn(t *testing.T) {
+	t.Parallel()
+
+	m := dragTestModel()
+
+	// 2 moves the selected card (first column) to the second column.
+	_, cmd := m.handleKey(tea.KeyPressMsg{Code: '2', Text: "2"})
+	assert.NotNil(t, cmd)
+
+	// The card's own column and out-of-range columns are no-ops.
+	_, cmd = m.handleKey(tea.KeyPressMsg{Code: '1', Text: "1"})
+	assert.Nil(t, cmd)
+	_, cmd = m.handleKey(tea.KeyPressMsg{Code: '9', Text: "9"})
+	assert.Nil(t, cmd)
+
+	// No selected card: nothing to move.
+	m.cards = map[string][]*board.Card{}
+	_, cmd = m.handleKey(tea.KeyPressMsg{Code: '2', Text: "2"})
+	assert.Nil(t, cmd)
 }
 
 func TestPlusButtonAt(t *testing.T) {

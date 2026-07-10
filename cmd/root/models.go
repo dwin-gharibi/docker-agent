@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -62,6 +63,11 @@ type modelRow struct {
 type modelsCmdOption func(*config.RuntimeConfig)
 
 func newModelsCmd(opts ...modelsCmdOption) *cobra.Command {
+	var flags modelsListFlags
+	for _, opt := range opts {
+		opt(&flags.runConfig)
+	}
+
 	cmd := &cobra.Command{
 		Use:   "models",
 		Short: "List available models",
@@ -70,10 +76,10 @@ func newModelsCmd(opts ...modelsCmdOption) *cobra.Command {
 Shows models that can be passed to 'docker agent run --model' or
 'docker agent new --model'. By default shows models from providers
 you have credentials for. Use --all to include all providers.`,
-		GroupID: "core",
+		GroupID: "diagnose",
 	}
 
-	listCmd := newModelsListCmd(opts...)
+	listCmd := newModelsListCmd(&flags)
 	cmd.AddCommand(listCmd)
 
 	// Default to "list" when no subcommand given.
@@ -83,15 +89,15 @@ you have credentials for. Use --all to include all providers.`,
 	// "docker agent models --provider openai" form as well.
 	cmd.Flags().AddFlagSet(listCmd.Flags())
 
+	// The gateway/user-config pre-run must live on the parent: cobra only
+	// runs the nearest ancestor's PersistentPreRunE, so a pre-run registered
+	// on the list subcommand would never fire for the bare "models" form.
+	addGatewayFlags(cmd, &flags.runConfig, userconfig.Load)
+
 	return cmd
 }
 
-func newModelsListCmd(opts ...modelsCmdOption) *cobra.Command {
-	var flags modelsListFlags
-	for _, opt := range opts {
-		opt(&flags.runConfig)
-	}
-
+func newModelsListCmd(flags *modelsListFlags) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},
@@ -107,7 +113,6 @@ func newModelsListCmd(opts ...modelsCmdOption) *cobra.Command {
 	cmd.Flags().StringVarP(&flags.providerFilter, "provider", "p", "", "Filter by provider name")
 	cmd.Flags().StringVar(&flags.format, "format", "table", "Output format: table, json")
 	cmd.Flags().BoolVarP(&flags.all, "all", "a", false, "Include models from all providers, not just those with credentials")
-	addGatewayFlags(cmd, &flags.runConfig, userconfig.Load)
 
 	return cmd
 }
@@ -133,6 +138,18 @@ func (f *modelsListFlags) runModelsListCommand(cmd *cobra.Command, args []string
 	availableProviders := make(map[string]bool)
 	for _, p := range config.AvailableProviders(ctx, f.runConfig.ModelsGateway, env) {
 		availableProviders[p] = true
+	}
+
+	// User-defined custom providers are available when they need no API key
+	// or their token variable is set.
+	for name, p := range f.runConfig.Providers {
+		if p.TokenKey == "" {
+			availableProviders[strings.ToLower(name)] = true
+			continue
+		}
+		if token, _ := env.Get(ctx, p.TokenKey); token != "" {
+			availableProviders[strings.ToLower(name)] = true
+		}
 	}
 
 	// Determine which model auto-selection would pick. DMR discovery is left
@@ -202,6 +219,11 @@ func (f *modelsListFlags) collectModels(ctx context.Context, env environment.Pro
 		})
 	}
 
+	// User-defined custom providers are queried before the models.dev catalog
+	// so they still list in internet-restricted environments where the catalog
+	// fetch below fails and returns early.
+	rows = append(rows, f.collectCustomProviderModels(ctx, env, availableProviders, seen)...)
+
 	// Fetch catalog and add all text-capable models.
 	store, err := f.runConfig.ModelsDevStore()
 	if err != nil {
@@ -266,6 +288,53 @@ func (f *modelsListFlags) collectModels(ctx context.Context, env environment.Pro
 	return rows
 }
 
+// collectCustomProviderModels queries each usable user-defined provider's own
+// /models endpoint, since custom providers have no models.dev catalog entry.
+// Unlike built-in aliases, a custom provider's endpoint was explicitly
+// registered by the user for this purpose, so the live fetch is not gated on
+// --provider. Unavailable providers (token variable unset) are skipped unless
+// --all is given; endpoints that cannot be reached degrade to an empty list.
+func (f *modelsListFlags) collectCustomProviderModels(ctx context.Context, env environment.Provider, availableProviders, seen map[string]bool) []modelRow {
+	var rows []modelRow
+	for _, name := range slices.Sorted(maps.Keys(f.runConfig.Providers)) {
+		provCfg := f.runConfig.Providers[name]
+		if provCfg.BaseURL == "" {
+			// Native-provider defaults (e.g. a providers entry that only sets
+			// temperature on anthropic) have no endpoint of their own to query.
+			continue
+		}
+		if f.providerFilter != "" && !strings.EqualFold(name, f.providerFilter) {
+			continue
+		}
+		if !f.all && !availableProviders[strings.ToLower(name)] {
+			continue
+		}
+
+		var token string
+		if provCfg.TokenKey != "" {
+			token, _ = env.Get(ctx, provCfg.TokenKey)
+		}
+		baseURL, err := environment.Expand(ctx, provCfg.BaseURL, env)
+		if err != nil {
+			slog.WarnContext(ctx, "failed to expand custom provider base_url", "provider", name, "error", err)
+			continue
+		}
+
+		for _, m := range fetchOpenAICompatibleModels(ctx, baseURL, token) {
+			if isEmbeddingModel(m, m) {
+				continue
+			}
+			ref := name + "/" + m
+			if seen[ref] {
+				continue
+			}
+			seen[ref] = true
+			rows = append(rows, modelRow{Provider: name, Model: m})
+		}
+	}
+	return rows
+}
+
 // openAIModelsResponse is the standard OpenAI-compatible models list format.
 type openAIModelsResponse struct {
 	Data []struct {
@@ -289,7 +358,23 @@ func fetchProviderModels(ctx context.Context, providerName string, env environme
 		return nil
 	}
 
-	modelsURL := strings.TrimRight(alias.BaseURL, "/") + "/models"
+	var token string
+	// Send the alias's declared API key so providers that require it on
+	// /v1/models authenticate the request instead of returning 401/403.
+	if alias.TokenEnvVar != "" {
+		token, _ = env.Get(ctx, alias.TokenEnvVar)
+	}
+
+	return fetchOpenAICompatibleModels(ctx, alias.BaseURL, token)
+}
+
+// fetchOpenAICompatibleModels fetches the model list from an OpenAI-compatible
+// endpoint's /models route, sending Bearer auth when token is non-empty. It
+// backs both alias live-fetches and user-defined custom providers (which have
+// no models.dev catalog entry to read from), and the setup wizard's endpoint
+// check. Bounded by listTimeout; returns nil on any failure.
+func fetchOpenAICompatibleModels(ctx context.Context, baseURL, token string) []string {
+	modelsURL := strings.TrimRight(baseURL, "/") + "/models"
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, modelsURL, http.NoBody)
 	if err != nil {
@@ -297,12 +382,8 @@ func fetchProviderModels(ctx context.Context, providerName string, env environme
 		return nil
 	}
 
-	// Send the alias's declared API key so providers that require it on
-	// /v1/models authenticate the request instead of returning 401/403.
-	if alias.TokenEnvVar != "" {
-		if token, _ := env.Get(ctx, alias.TokenEnvVar); token != "" {
-			req.Header.Set("Authorization", "Bearer "+token)
-		}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, listTimeout)

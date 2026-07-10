@@ -132,9 +132,13 @@ func (p *chatPage) handleRuntimeEvent(msg tea.Msg) (bool, tea.Cmd) {
 		return true, p.forwardToSidebar(msg)
 
 	case *runtime.SessionCompactionEvent:
+		// The sidebar tracks the started/completed pair to drive its
+		// "compacting…" gauge state.
+		sidebarCmd := p.forwardToSidebar(msg)
 		if msg.Status == "completed" {
 			p.msgCancel = nil
 			cmds := []tea.Cmd{
+				sidebarCmd,
 				p.setWorking(false),
 				p.setPendingResponse(false),
 				p.processNextQueuedMessage(),
@@ -153,7 +157,7 @@ func (p *chatPage) handleRuntimeEvent(msg tea.Msg) (bool, tea.Cmd) {
 			}
 			return true, tea.Batch(cmds...)
 		}
-		return true, nil
+		return true, sidebarCmd
 
 	// ===== RAG Indexing Events (forwarded to sidebar) =====
 	case *runtime.RAGIndexingStartedEvent,

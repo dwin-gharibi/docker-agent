@@ -168,6 +168,16 @@ func (a *App) Start(ctx context.Context) {
 			case <-ctx.Done():
 			}
 		})
+
+		// Forward events surfaced from detached background work (token usage
+		// from background agent tasks) so the sidebar and agent inspector can
+		// account for background agents' context usage.
+		a.runtime.OnBackgroundEvent(func(event runtime.Event) {
+			select {
+			case a.events <- event:
+			case <-ctx.Done():
+			}
+		})
 	})
 }
 
@@ -465,66 +475,7 @@ func (a *App) Run(ctx context.Context, cancel context.CancelFunc, message string
 
 	go func() {
 		if len(attachments) > 0 {
-			// Build a single text string with the user's message and inlined text files.
-			// Keeping everything in one text block ensures the model sees file content
-			// together with the message, rather than as separate content blocks.
-			var textBuilder strings.Builder
-			textBuilder.WriteString(message)
-
-			// binaryParts holds non-text file parts (images, PDFs, etc.)
-			var binaryParts []chat.MessagePart
-
-			for _, att := range attachments {
-				switch {
-				case att.FilePath != "":
-					// File-reference attachment: read and classify from disk.
-					// Only remember the path on the session when the file actually
-					// exists as a regular file — we don't want sub-agents to inherit
-					// dangling references to directories or missing paths. The editor
-					// resolves @-mentions to absolute paths before this point.
-					if a.processFileAttachment(ctx, att, &textBuilder, &binaryParts) {
-						a.session.AddAttachedFile(att.FilePath)
-					}
-				case att.Content != "":
-					// Inline content attachment (e.g. pasted text).
-					a.processInlineAttachment(att, &textBuilder)
-				case len(att.Data) > 0:
-					// Binary inline content.
-					doc, resizeMeta, procErr := chat.ProcessAttachmentWithMetadata(chat.MessagePart{
-						Type: chat.MessagePartTypeDocument,
-						Document: &chat.Document{
-							Name:     att.Name,
-							MimeType: att.MimeType,
-							Source: chat.DocumentSource{
-								InlineData: att.Data,
-							},
-						},
-					})
-					if procErr != nil {
-						slog.WarnContext(ctx, "skipping inline attachment: processing failed", "name", att.Name, "error", procErr)
-						a.sendEvent(ctx, runtime.Warning(fmt.Sprintf("Skipped attachment %s: %s", att.Name, procErr), ""))
-						continue
-					}
-					if resizeMeta != nil {
-						if note := chat.FormatDimensionNote(resizeMeta); note != "" {
-							textBuilder.WriteString("\n")
-							textBuilder.WriteString(note)
-						}
-					}
-					binaryParts = append(binaryParts, chat.MessagePart{
-						Type:     chat.MessagePartTypeDocument,
-						Document: &doc,
-					})
-				default:
-					slog.DebugContext(ctx, "skipping attachment with no file path, content, or data", "name", att.Name)
-				}
-			}
-
-			multiContent := []chat.MessagePart{
-				{Type: chat.MessagePartTypeText, Text: textBuilder.String()},
-			}
-			multiContent = append(multiContent, binaryParts...)
-
+			multiContent := a.buildUserMultiContent(ctx, message, attachments)
 			a.session.AddMessage(session.UserMessage(message, multiContent...))
 		} else {
 			a.session.AddMessage(session.UserMessage(message))
@@ -550,6 +501,70 @@ func (a *App) Run(ctx context.Context, cancel context.CancelFunc, message string
 			a.sendEvent(ctx, event)
 		}
 	}()
+}
+
+// buildUserMultiContent assembles the MultiContent parts for a user message
+// with attachments. It builds a single text string with the user's message
+// and inlined text files — keeping everything in one text block ensures the
+// model sees file content together with the message, rather than as separate
+// content blocks — followed by any binary parts (images, PDFs, …).
+func (a *App) buildUserMultiContent(ctx context.Context, message string, attachments []messages.Attachment) []chat.MessagePart {
+	var textBuilder strings.Builder
+	textBuilder.WriteString(message)
+
+	// binaryParts holds non-text file parts (images, PDFs, etc.)
+	var binaryParts []chat.MessagePart
+
+	for _, att := range attachments {
+		switch {
+		case att.FilePath != "":
+			// File-reference attachment: read and classify from disk.
+			// Only remember the path on the session when the file actually
+			// exists as a regular file — we don't want sub-agents to inherit
+			// dangling references to directories or missing paths. The editor
+			// resolves @-mentions to absolute paths before this point.
+			if a.processFileAttachment(ctx, att, &textBuilder, &binaryParts) {
+				a.session.AddAttachedFile(att.FilePath)
+			}
+		case att.Content != "":
+			// Inline content attachment (e.g. pasted text).
+			a.processInlineAttachment(att, &textBuilder)
+		case len(att.Data) > 0:
+			// Binary inline content.
+			doc, resizeMeta, procErr := chat.ProcessAttachmentWithMetadata(chat.MessagePart{
+				Type: chat.MessagePartTypeDocument,
+				Document: &chat.Document{
+					Name:     att.Name,
+					MimeType: att.MimeType,
+					Source: chat.DocumentSource{
+						InlineData: att.Data,
+					},
+				},
+			})
+			if procErr != nil {
+				slog.WarnContext(ctx, "skipping inline attachment: processing failed", "name", att.Name, "error", procErr)
+				a.sendEvent(ctx, runtime.Warning(fmt.Sprintf("Skipped attachment %s: %s", att.Name, procErr), ""))
+				continue
+			}
+			if resizeMeta != nil {
+				if note := chat.FormatDimensionNote(resizeMeta); note != "" {
+					textBuilder.WriteString("\n")
+					textBuilder.WriteString(note)
+				}
+			}
+			binaryParts = append(binaryParts, chat.MessagePart{
+				Type:     chat.MessagePartTypeDocument,
+				Document: &doc,
+			})
+		default:
+			slog.DebugContext(ctx, "skipping attachment with no file path, content, or data", "name", att.Name)
+		}
+	}
+
+	multiContent := []chat.MessagePart{
+		{Type: chat.MessagePartTypeText, Text: textBuilder.String()},
+	}
+	return append(multiContent, binaryParts...)
 }
 
 // processFileAttachment reads a file from disk, classifies it, and either
@@ -822,6 +837,12 @@ func (a *App) removeSubscriber(ch chan tea.Msg) {
 // scatters every message to all currently-registered subscribers. Sends are
 // non-blocking; if a subscriber's buffer is full the event is dropped for
 // that subscriber so one slow consumer cannot stall the others.
+//
+// Turn-boundary events are the exception: dropping a stream_started or
+// stream_stopped skews a consumer's turn accounting for good (the SSE replay
+// buffer never sees the event, so reconnecting cannot recover it). For those,
+// the oldest pending message — almost always a content delta, which the next
+// delta supersedes — is evicted to make room instead.
 func (a *App) startFanOut() {
 	throttled := a.throttleEvents(a.ctx(), a.events)
 	go func() {
@@ -833,11 +854,45 @@ func (a *App) startFanOut() {
 				select {
 				case ch <- msg:
 				default:
-					slog.Warn("app: subscriber buffer full, dropping event")
+					if !isTurnBoundaryEvent(msg) {
+						slog.Warn("app: subscriber buffer full, dropping event")
+						continue
+					}
+					// Evict the oldest pending message (racing the subscriber's
+					// own receive is fine: either way a slot frees up), then
+					// retry once. Still full means the subscriber is wedged;
+					// drop as before rather than block the fan-out.
+					select {
+					case <-ch:
+					default:
+					}
+					select {
+					case ch <- msg:
+					default:
+						slog.Warn("app: subscriber buffer full, dropping turn-boundary event")
+					}
 				}
 			}
 		}
 	}()
+}
+
+// isTurnBoundaryEvent reports whether msg is one of the events consumers use
+// to track turn state (running/waiting/failed/paused) and identity (title).
+// These are low-frequency and irrecoverable when lost, unlike the content
+// deltas that dominate the stream, so the fan-out prefers them on overflow.
+func isTurnBoundaryEvent(msg tea.Msg) bool {
+	switch msg.(type) {
+	case *runtime.StreamStartedEvent,
+		*runtime.StreamStoppedEvent,
+		*runtime.UserMessageEvent,
+		*runtime.ErrorEvent,
+		*runtime.PausedEvent,
+		*runtime.SessionTitleEvent:
+		return true
+	default:
+		return false
+	}
 }
 
 // Resume resumes the runtime with the given confirmation request
@@ -847,6 +902,18 @@ func (a *App) Resume(req runtime.ResumeRequest) {
 
 // Steer queues a user message for mid-turn injection into the running agent.
 func (a *App) Steer(ctx context.Context, msg runtime.QueuedMessage) error {
+	return a.runtime.Steer(ctx, msg)
+}
+
+// SteerMessage resolves attachments into message parts and queues the result
+// for mid-turn injection into the running agent. The runtime appends the
+// message to the session (and emits the matching UserMessageEvent) when the
+// agent loop drains it.
+func (a *App) SteerMessage(ctx context.Context, content string, attachments []messages.Attachment) error {
+	msg := runtime.QueuedMessage{Content: content}
+	if len(attachments) > 0 {
+		msg.MultiContent = a.buildUserMultiContent(ctx, content, attachments)
+	}
 	return a.runtime.Steer(ctx, msg)
 }
 

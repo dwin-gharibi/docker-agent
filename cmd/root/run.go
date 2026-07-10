@@ -7,17 +7,18 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 	"go.opentelemetry.io/otel"
 
 	"github.com/docker/docker-agent/pkg/agent"
 	"github.com/docker/docker-agent/pkg/app"
+	boardtui "github.com/docker/docker-agent/pkg/board/tui"
 	"github.com/docker/docker-agent/pkg/cli"
 	"github.com/docker/docker-agent/pkg/config"
 	latestcfg "github.com/docker/docker-agent/pkg/config/latest"
@@ -25,7 +26,6 @@ import (
 	"github.com/docker/docker-agent/pkg/hooks/builtins"
 	"github.com/docker/docker-agent/pkg/input"
 	"github.com/docker/docker-agent/pkg/leantui"
-	"github.com/docker/docker-agent/pkg/paths"
 	"github.com/docker/docker-agent/pkg/permissions"
 	"github.com/docker/docker-agent/pkg/profiling"
 	"github.com/docker/docker-agent/pkg/runtime"
@@ -146,7 +146,7 @@ func addRunOrExecFlags(cmd *cobra.Command, flags *runExecFlags) {
 	cmd.PersistentFlags().StringArrayVar(&flags.modelOverrides, "model", nil, "Override agent model: [agent=]provider/model (repeatable)")
 	cmd.PersistentFlags().BoolVar(&flags.dryRun, "dry-run", false, "Initialize the agent without executing anything")
 	cmd.PersistentFlags().StringVar(&flags.remoteAddress, "remote", "", "Use remote runtime with specified address")
-	cmd.PersistentFlags().StringVarP(&flags.sessionDB, "session-db", "s", filepath.Join(paths.GetHomeDir(), ".cagent", "session.db"), "Path to the session database")
+	cmd.PersistentFlags().StringVarP(&flags.sessionDB, "session-db", "s", "", "Path to the session database (default: <data-dir>/session.db)")
 	cmd.PersistentFlags().StringVar(&flags.sessionID, "session", "", "Continue from a previous session by ID or relative offset (e.g., -1 for last session). An explicit ID that does not exist yet is created with that ID.")
 	cmd.PersistentFlags().StringVar(&flags.fakeResponses, "fake", "", "Replay AI responses from cassette file (for testing)")
 	cmd.PersistentFlags().IntVar(&flags.fakeStreamDelay, "fake-stream", 0, "Simulate streaming with delay in ms between chunks (default 15ms if no value given)")
@@ -170,7 +170,7 @@ func addRunOrExecFlags(cmd *cobra.Command, flags *runExecFlags) {
 	cmd.PersistentFlags().StringVar(&flags.appName, "app-name", "", "Application name shown in the TUI in place of \"docker agent\"")
 	cmd.PersistentFlags().StringSliceVar(&flags.disabledCommands, "disable-commands", nil, "Comma-separated list of slash commands to hide and disable in the TUI (e.g. /cost,/eval,/model)")
 	cmd.PersistentFlags().BoolVar(&flags.sidebar, "sidebar", true, "Show the sidebar in the TUI (set --sidebar=false to hide it)")
-	cmd.PersistentFlags().StringVar(&flags.theme, "theme", "", "Preselect a TUI theme by name (overrides the theme from user config; ignored outside the interactive TUI)")
+	cmd.PersistentFlags().StringVar(&flags.theme, "theme", "", "Preselect a TUI theme by name, or \"auto\" to match the terminal's light/dark background (overrides the theme from user config; ignored outside the interactive TUI)")
 	_ = cmd.RegisterFlagCompletionFunc("theme", completeTheme)
 	cmd.PersistentFlags().BoolVar(&flags.sandbox, "sandbox", false, "Run the agent inside a Docker sandbox (requires Docker Desktop with sandbox support)")
 	cmd.PersistentFlags().StringVar(&flags.sandboxTemplate, "template", "docker/sandbox-templates:docker-agent", "Template image for the sandbox (passed to docker sandbox create -t)")
@@ -257,6 +257,12 @@ func (f *runExecFlags) runRunCommand(cmd *cobra.Command, args []string) (command
 				cli.NewPrinter(cmd.OutOrStdout()).Println("Agent selection cancelled.")
 				return nil
 			}
+			if errors.Is(err, errAgentPickerStartBoard) {
+				// Intentionally tracked in addition to the "run" event above:
+				// the user asked for a run but ended up on the board.
+				telemetry.TrackCommand(ctx, "board", nil)
+				return boardtui.Run(ctx)
+			}
 			return err
 		}
 		// The checkbox is the user's explicit choice: it wins over both the
@@ -301,7 +307,10 @@ func (f *runExecFlags) runRunCommand(cmd *cobra.Command, args []string) (command
 
 	out := cli.NewPrinter(cmd.OutOrStdout())
 
-	return f.runOrExec(ctx, out, args, useTUI)
+	// When an interactive run cannot find any usable model, offer the setup
+	// wizard instead of leaving the user alone with the error.
+	err := f.runOrExec(ctx, out, args, useTUI)
+	return f.offerSetupOnNoModel(ctx, cmd, out, args, useTUI, err)
 }
 
 func (f *runExecFlags) runOrExec(ctx context.Context, out *cli.Printer, args []string, useTUI bool) error {
@@ -327,7 +336,7 @@ func (f *runExecFlags) runOrExec(ctx context.Context, out *cli.Printer, args []s
 	// User settings only apply if the flag wasn't explicitly set by the user
 	userSettings := userconfig.Get()
 	f.applyUserSettings(ctx, userSettings)
-	f.runConfig.GlobalHooks = userSettings.GlobalHooks()
+	f.runConfig.GlobalHooks = config.MergeHooks(userSettings.GlobalHooks(), config.LoadHookDropIns())
 
 	// Apply alias options if this is an alias reference
 	// Alias options only apply if the flag wasn't explicitly set by the user
@@ -665,7 +674,9 @@ func promptRemoveDirtyWorktree(ctx context.Context, out *cli.Printer, wt *worktr
 	}
 
 	out.Println("\nThe git worktree " + wt.Dir + " (branch " + wt.Branch + ") still has " + strings.Join(held, ", ") + ".")
-	out.Println("Remove it and discard this work? Keeping preserves the directory and branch so you can return later. (y/N):")
+	out.Println("  y: delete the worktree, its branch, and all of this work")
+	out.Println("  N: keep them so you can return later")
+	out.Print("Delete this worktree and discard the work? (y/N) ")
 
 	response, err := input.ReadLine(ctx, os.Stdin)
 	if err != nil {
@@ -1121,10 +1132,15 @@ func stopToolSets(ctx context.Context, t toolStopper) {
 
 // validateTheme reports whether ref names a loadable theme. It is used to
 // fail fast on an explicit --theme value, listing the available themes so the
-// user can correct a typo.
+// user can correct a typo. The "auto" sentinel is accepted as-is: it resolves
+// to a concrete theme at apply time.
 func validateTheme(ref string) error {
+	if ref == styles.AutoThemeRef {
+		return nil
+	}
 	if _, err := styles.LoadTheme(ref); err != nil {
 		if refs, listErr := styles.ListThemeRefs(); listErr == nil && len(refs) > 0 {
+			refs = append([]string{styles.AutoThemeRef}, refs...)
 			return fmt.Errorf("unknown theme %q; available themes: %s", ref, strings.Join(refs, ", "))
 		}
 		return fmt.Errorf("unknown theme %q: %w", ref, err)
@@ -1133,7 +1149,10 @@ func validateTheme(ref string) error {
 }
 
 // applyTheme applies the theme, resolving it from the --theme flag, then the
-// user config, then the built-in default.
+// user config, then the built-in default. The "auto" sentinel resolves to the
+// configured light/dark theme pair based on the terminal background, queried
+// synchronously (OSC 11) before the TUI starts so the first frame already has
+// the right polarity.
 func applyTheme(themeOverride string) {
 	// Resolve theme from --theme flag > user config > built-in default
 	themeRef := styles.DefaultThemeRef
@@ -1144,6 +1163,14 @@ func applyTheme(themeOverride string) {
 		themeRef = themeOverride
 	}
 
+	if themeRef == styles.AutoThemeRef {
+		styles.SetAutoThemeEnabled(true)
+		styles.SetTerminalDark(detectDarkTerminalBackground())
+		themeRef = styles.ResolveThemeRef(themeRef)
+	} else {
+		styles.SetAutoThemeEnabled(false)
+	}
+
 	theme, err := styles.LoadTheme(themeRef)
 	if err != nil {
 		slog.Warn("Failed to load theme, using default", "theme", themeRef, "error", err)
@@ -1152,4 +1179,23 @@ func applyTheme(themeOverride string) {
 
 	styles.ApplyTheme(theme)
 	slog.Debug("Applied theme", "theme_ref", themeRef, "theme_name", theme.Name)
+}
+
+// detectDarkTerminalBackground reports whether the terminal background is
+// dark, falling back to dark when it cannot tell (non-TTY, pipes, CI, or a
+// terminal that never answers). The query is TTY-gated so non-interactive
+// runs emit no escape sequences at all; lipgloss bounds the wait internally
+// and terminates early on the DA1 fallback answer that virtually every
+// terminal sends.
+func detectDarkTerminalBackground() bool {
+	return terminalHasDarkBackground(os.Stdin, os.Stdout)
+}
+
+// terminalHasDarkBackground implements detectDarkTerminalBackground against
+// explicit files so tests can drive the OSC 11 round-trip with a pty pair.
+func terminalHasDarkBackground(in, out *os.File) bool {
+	if !isatty.IsTerminal(in.Fd()) || !isatty.IsTerminal(out.Fd()) {
+		return true
+	}
+	return lipgloss.HasDarkBackground(in, out)
 }

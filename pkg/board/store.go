@@ -51,15 +51,31 @@ func OpenStore(path string) (*Store, error) {
 	if err := json.Unmarshal(data, &s.cards); err != nil {
 		return nil, fmt.Errorf("parse board state %s: %w", path, err)
 	}
+	// Drop null entries (hand-edited or corrupted file) rather than panic;
+	// they carry no data worth preserving.
+	s.cards = slices.DeleteFunc(s.cards, func(c *Card) bool { return c == nil })
+	for _, c := range s.cards {
+		c.RepoPath = expandHome(c.RepoPath)
+		c.Worktree = expandHome(c.Worktree)
+	}
 	return s, nil
 }
 
-// save persists the cards. Callers must hold s.mu.
+// save persists the cards. Callers must hold s.mu. Paths under the current
+// home are written ~-contracted so the state file stays valid across
+// environments whose home differs (host vs. docker sandbox).
 func (s *Store) save() error {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o750); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(s.cards, "", "  ")
+	cards := make([]*Card, len(s.cards))
+	for i, c := range s.cards {
+		clone := *c
+		clone.RepoPath = contractHome(clone.RepoPath)
+		clone.Worktree = contractHome(clone.Worktree)
+		cards[i] = &clone
+	}
+	data, err := json.MarshalIndent(cards, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -102,6 +118,25 @@ func (s *Store) InsertCard(c *Card) error {
 	defer s.mu.Unlock()
 	clone := *c
 	s.cards = append(s.cards, &clone)
+	return s.save()
+}
+
+// RenameProject rewrites the project name on every card that references
+// oldName, so a project rename keeps its cards attached. Saves only when a
+// card actually changed.
+func (s *Store) RenameProject(oldName, newName string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	changed := false
+	for _, c := range s.cards {
+		if c.Project == oldName {
+			c.Project = newName
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
 	return s.save()
 }
 

@@ -372,6 +372,11 @@ func (r *themeRegistry) ListThemeRefs() ([]string, error) {
 	refs := []string{DefaultThemeRef}
 	builtinSet[DefaultThemeRef] = true
 
+	// Reserve the auto sentinel: a user theme named "auto" must not shadow
+	// it, so such a theme lists under the "user:" prefix instead. The
+	// sentinel itself is not listed; pickers add their own entry for it.
+	builtinSet[AutoThemeRef] = true
+
 	// Add built-in themes from embedded files (default.yaml will be skipped since already added)
 	builtinRefs, err := r.listBuiltinThemeRefs()
 	if err != nil {
@@ -483,23 +488,20 @@ func UserThemeExists(ref string) bool {
 // SaveThemeToUserConfig persists the theme reference to the user config file.
 // If themeRef equals DefaultThemeRef, the setting is cleared (empty string).
 func SaveThemeToUserConfig(themeRef string) error {
-	cfg, err := userconfig.Load()
+	err := userconfig.Update(func(cfg *userconfig.Config) error {
+		if cfg.Settings == nil {
+			cfg.Settings = &userconfig.Settings{}
+		}
+
+		// Clear the setting if using the default theme
+		if themeRef == DefaultThemeRef {
+			cfg.Settings.Theme = ""
+		} else {
+			cfg.Settings.Theme = themeRef
+		}
+		return nil
+	})
 	if err != nil {
-		return fmt.Errorf("loading user config: %w", err)
-	}
-
-	if cfg.Settings == nil {
-		cfg.Settings = &userconfig.Settings{}
-	}
-
-	// Clear the setting if using the default theme
-	if themeRef == DefaultThemeRef {
-		cfg.Settings.Theme = ""
-	} else {
-		cfg.Settings.Theme = themeRef
-	}
-
-	if err := cfg.Save(); err != nil {
 		return fmt.Errorf("saving user config: %w", err)
 	}
 
@@ -1072,6 +1074,7 @@ func ApplyTheme(theme *Theme) {
 	BackgroundAlt = lipgloss.Color(c.BackgroundAlt)
 	// Text colors
 	White = lipgloss.Color(c.SelectedFg)
+	TextBright = lipgloss.Color(c.TextBright)
 	TextPrimary = lipgloss.Color(c.TextPrimary)
 	TextSecondary = lipgloss.Color(c.TextSecondary)
 	TextMuted = lipgloss.Color(c.AccentMuted)
@@ -1149,7 +1152,7 @@ func rebuildStyles() {
 	AppStyle = BaseStyle.Padding(0, AppPadding, 0, AppPadding)
 
 	// Text styles
-	HighlightWhiteStyle = BaseStyle.Foreground(White).Bold(true)
+	HighlightWhiteStyle = BaseStyle.Foreground(TextBright).Bold(true)
 	MutedStyle = BaseStyle.Foreground(TextMutedGray)
 	SecondaryStyle = BaseStyle.Foreground(TextSecondary)
 	BoldStyle = BaseStyle.Bold(true)
@@ -1255,7 +1258,7 @@ func rebuildStyles() {
 	// Command palette styles
 	PaletteCategoryStyle = BaseStyle.
 		Bold(true).
-		Foreground(White).
+		Foreground(TextBright).
 		MarginTop(1)
 
 	PaletteUnselectedActionStyle = BaseStyle.
@@ -1349,12 +1352,12 @@ func rebuildStyles() {
 	// Scrollbar styles
 	TrackStyle = lipgloss.NewStyle().Foreground(BorderSecondary)
 	ThumbStyle = lipgloss.NewStyle().Foreground(Info).Background(BackgroundAlt)
-	ThumbActiveStyle = lipgloss.NewStyle().Foreground(White).Background(BackgroundAlt)
+	ThumbActiveStyle = lipgloss.NewStyle().Foreground(TextBright).Background(BackgroundAlt)
 
 	// Resize handle styles
 	ResizeHandleStyle = BaseStyle.Foreground(BorderSecondary)
 	ResizeHandleHoverStyle = BaseStyle.Foreground(Info).Bold(true)
-	ResizeHandleActiveStyle = BaseStyle.Foreground(White).Bold(true)
+	ResizeHandleActiveStyle = BaseStyle.Foreground(TextBright).Bold(true)
 
 	// Notification styles
 	NotificationStyle = BaseStyle.

@@ -41,14 +41,19 @@ func (m *mockChatPage) SetTitleRegenerating(bool) tea.Cmd        { return nil }
 func (m *mockChatPage) ScrollToBottom() tea.Cmd                  { return nil }
 func (m *mockChatPage) IsWorking() bool                          { return false }
 func (m *mockChatPage) IsInlineEditing() bool                    { return false }
+func (m *mockChatPage) IsSelecting() bool                        { return false }
 func (m *mockChatPage) QueueLength() int                         { return 0 }
 func (m *mockChatPage) FocusMessages() tea.Cmd                   { return nil }
 func (m *mockChatPage) FocusMessageAt(int, int) tea.Cmd          { return nil }
 func (m *mockChatPage) BlurMessages()                            {}
 func (m *mockChatPage) GetSidebarSettings() chat.SidebarSettings { return chat.SidebarSettings{} }
 func (m *mockChatPage) SetSidebarSettings(chat.SidebarSettings)  {}
-func (m *mockChatPage) Bindings() []key.Binding                  { return nil }
-func (m *mockChatPage) Help() help.KeyMap                        { return nil }
+func (m *mockChatPage) SetLayoutSettings(messages.LayoutSettings) tea.Cmd {
+	return nil
+}
+func (m *mockChatPage) SetSendMode(messages.SendMode) {}
+func (m *mockChatPage) Bindings() []key.Binding       { return nil }
+func (m *mockChatPage) Help() help.KeyMap             { return nil }
 
 // mockEditor implements editor.Editor for testing.
 type mockEditor struct {

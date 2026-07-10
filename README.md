@@ -53,6 +53,8 @@ Set at least one API key (or use [Docker Model Runner](https://docs.docker.com/a
 export OPENAI_API_KEY=sk-...        # or ANTHROPIC_API_KEY, GOOGLE_API_KEY, etc.
 ```
 
+See [Set Up a Model](https://docker.github.io/docker-agent/getting-started/set-up-a-model) for the full walkthrough of both paths (cloud API key or local model).
+
 ## Quick Start
 
 ```sh
@@ -75,7 +77,7 @@ More examples in the [`examples/`](examples/README.md) directory.
 
 📖 **[Full documentation](https://docker.github.io/docker-agent/)**
 
-- [Installation](https://docker.github.io/docker-agent/getting-started/installation) · [Quick Start](https://docker.github.io/docker-agent/getting-started/quickstart)
+- [Installation](https://docker.github.io/docker-agent/getting-started/installation) · [Set Up a Model](https://docker.github.io/docker-agent/getting-started/set-up-a-model) · [Quick Start](https://docker.github.io/docker-agent/getting-started/quickstart)
 - [Agents](https://docker.github.io/docker-agent/concepts/agents) · [Models](https://docker.github.io/docker-agent/concepts/models) · [Tools](https://docker.github.io/docker-agent/concepts/tools) · [Multi-Agent](https://docker.github.io/docker-agent/concepts/multi-agent)
 - [Configuration Reference](https://docker.github.io/docker-agent/configuration/overview)
 - [TUI](https://docker.github.io/docker-agent/features/tui) · [CLI](https://docker.github.io/docker-agent/features/cli) · [MCP Mode](https://docker.github.io/docker-agent/features/mcp-mode) · [RAG](https://docker.github.io/docker-agent/tools/rag)

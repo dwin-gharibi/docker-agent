@@ -628,6 +628,93 @@ description: A skill from repo root
 	assert.True(t, found, "Expected to find repo-skill from .agents/skills at git root")
 }
 
+func TestLoad_GithubSkillsProjectFromNestedDir(t *testing.T) {
+	// Reproduces #3548: GitHub Copilot teams commit shared skills under
+	// .github/skills at the repo root. They must be discoverable from any
+	// nested working directory, like .agents/skills.
+	tmpRepo := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(tmpRepo, ".git"), 0o755))
+
+	githubSkillDir := filepath.Join(tmpRepo, ".github", "skills", "copilot-skill")
+	require.NoError(t, os.MkdirAll(githubSkillDir, 0o755))
+
+	skillContent := `---
+name: copilot-skill
+description: A skill from .github/skills
+---
+
+# Copilot Skill
+`
+	require.NoError(t, os.WriteFile(filepath.Join(githubSkillDir, "SKILL.md"), []byte(skillContent), 0o644))
+
+	nestedDir := filepath.Join(tmpRepo, "sub", "nested")
+	require.NoError(t, os.MkdirAll(nestedDir, 0o755))
+	t.Chdir(nestedDir)
+
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	skills := Load(t.Context(), []string{"local"})
+
+	found := false
+	for _, s := range skills {
+		if s.Name == "copilot-skill" {
+			found = true
+			assert.Equal(t, "A skill from .github/skills", s.Description)
+			assert.Equal(t, filepath.Join(githubSkillDir, "SKILL.md"), s.FilePath)
+			break
+		}
+	}
+	assert.True(t, found, "Expected to find copilot-skill from .github/skills at git root")
+}
+
+func TestLoad_GithubSkillsPrecedence_AgentsOverridesGithub(t *testing.T) {
+	// Same skill name in .github/skills and .agents/skills at the same level:
+	// the native .agents/skills version must win.
+	tmpRepo := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(tmpRepo, ".git"), 0o755))
+
+	githubSkillDir := filepath.Join(tmpRepo, ".github", "skills", "shared-skill")
+	require.NoError(t, os.MkdirAll(githubSkillDir, 0o755))
+	githubContent := `---
+name: shared-skill
+description: Github version
+---
+
+# Github
+`
+	require.NoError(t, os.WriteFile(filepath.Join(githubSkillDir, "SKILL.md"), []byte(githubContent), 0o644))
+
+	agentsSkillDir := filepath.Join(tmpRepo, ".agents", "skills", "shared-skill")
+	require.NoError(t, os.MkdirAll(agentsSkillDir, 0o755))
+	agentsContent := `---
+name: shared-skill
+description: Agents version
+---
+
+# Agents
+`
+	require.NoError(t, os.WriteFile(filepath.Join(agentsSkillDir, "SKILL.md"), []byte(agentsContent), 0o644))
+
+	t.Chdir(tmpRepo)
+
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	skills := Load(t.Context(), []string{"local"})
+
+	found := false
+	for _, s := range skills {
+		if s.Name == "shared-skill" {
+			found = true
+			assert.Equal(t, "Agents version", s.Description)
+			assert.Equal(t, filepath.Join(agentsSkillDir, "SKILL.md"), s.FilePath)
+			break
+		}
+	}
+	assert.True(t, found, ".agents/skills must override .github/skills at the same level")
+}
+
 func TestLoad_AgentsSkillsFromNonGitGroupingParent(t *testing.T) {
 	// Reproduces #3056: several independent repos grouped under a non-git
 	// parent, with a shared skill at the grouping root's .agents/skills. It

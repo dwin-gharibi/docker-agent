@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"image/color"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -244,6 +245,11 @@ func (m *model) renderBoard() string {
 
 func (m *model) renderColumn(idx int, col board.Column, colWidth, boardHeight int) string {
 	selected := idx == m.selCol
+	cards := m.cards[col.ID]
+	// A column already holding the dragged card is not a drop target: the
+	// move would be a no-op. This also covers a refresh moving the card
+	// under the drag — the card must never render twice in one column.
+	dropTarget := m.dragging && idx == m.dragCol && !containsCard(cards, m.dragCardID)
 	// The border box's Width/Height are outer sizes; the content area is two
 	// cells narrower (and shorter).
 	innerWidth := colWidth - 2
@@ -255,7 +261,6 @@ func (m *model) renderColumn(idx int, col board.Column, colWidth, boardHeight in
 	if selected {
 		nameStyle = styles.HighlightWhiteStyle
 	}
-	cards := m.cards[col.ID]
 	header := " " + columnLabel(col, nameStyle)
 	// Right-aligned: a clickable + to create a card on the first column
 	// (see plusButtonAt), then the card count rightmost.
@@ -277,10 +282,31 @@ func (m *model) renderColumn(idx int, col board.Column, colWidth, boardHeight in
 	}
 	m.scroll[col.ID] = scroll
 
+	// The drop target previews the dragged card at its insertion point: a
+	// faded ghost takes the last slot and the window slides to the column's
+	// tail, where a dropped card lands. The forced scroll is not persisted,
+	// so a cancelled drag leaves the column's window untouched.
+	ghost := ""
+	if dropTarget {
+		if card := m.cardByID(m.dragCardID); card != nil {
+			ghost = m.renderGhost(card, innerWidth)
+			slots--
+			scroll = max(len(cards)-slots, 0)
+		}
+	}
+
 	lines := []string{header, rule}
+	// The tail scroll can hide cards above the window; without this line a
+	// full column would collapse to just the ghost on short terminals.
+	if ghost != "" && scroll > 0 {
+		lines = append(lines, styles.MutedStyle.Render(fmt.Sprintf(" … %d more", scroll)))
+	}
 	end := min(scroll+slots, len(cards))
 	for i := scroll; i < end; i++ {
 		lines = append(lines, m.renderCard(cards[i], innerWidth, selected && i == m.selRow))
+	}
+	if ghost != "" {
+		lines = append(lines, ghost)
 	}
 	switch {
 	case len(cards) == 0 && selected:
@@ -289,9 +315,13 @@ func (m *model) renderColumn(idx int, col board.Column, colWidth, boardHeight in
 		lines = append(lines, styles.MutedStyle.Render(fmt.Sprintf(" … %d more", len(cards)-end)))
 	}
 
-	// Selected column: white; others: a dimmed secondary border.
+	// Selected column: white; drag drop target: success green; others: a
+	// dimmed secondary border.
 	borderColor := darken(styles.BorderSecondary, 0.35)
-	if selected {
+	switch {
+	case dropTarget:
+		borderColor = styles.Success
+	case selected:
 		borderColor = styles.White
 	}
 	return styles.BaseStyle.
@@ -302,10 +332,26 @@ func (m *model) renderColumn(idx int, col board.Column, colWidth, boardHeight in
 		Render(strings.Join(lines, "\n"))
 }
 
+// dragFade is how much a dragged card's colors blend toward the
+// background: enough to clearly read as "in flight", still legible.
+const dragFade = 0.55
+
+// blend interpolates c1 toward c2 by the given fraction (0..1).
+func blend(c1, c2 color.Color, f float64) color.Color {
+	r1, g1, b1 := styles.ColorToRGB(c1)
+	r2, g2, b2 := styles.ColorToRGB(c2)
+	return styles.RGBToColor(r1+(r2-r1)*f, g1+(g2-g1)*f, b1+(b2-b1)*f)
+}
+
 // darken scales a color towards black by the given fraction (0..1).
 func darken(c color.Color, f float64) color.Color {
-	r, g, b := styles.ColorToRGB(c)
-	return styles.RGBToColor(r*(1-f), g*(1-f), b*(1-f))
+	return blend(c, lipgloss.Color("#000000"), f)
+}
+
+// fade blends a color toward the theme background, approximating the
+// transparency of a dragged card on terminals that cannot alpha-blend.
+func fade(c color.Color) color.Color {
+	return blend(c, styles.Background, dragFade)
 }
 
 // columnHeaderColor interpolates a column's rule color from the theme's
@@ -344,14 +390,24 @@ func busyCount(cards []*board.Card) int {
 func (m *model) renderCard(card *board.Card, colInnerWidth int, selected bool) string {
 	textWidth := max(colInnerWidth-4, 1) // card border + padding
 
-	// Cards carry their project's accent color on the border and badge, so
-	// each project's work is recognizable at a glance.
+	// Like the web board, a card's border carries its status color; the
+	// project badge keeps the project's accent so its work is still
+	// recognizable at a glance.
 	accent := m.projectColor(card.Project)
 	titleStyle := styles.BaseStyle
-	borderColor := accent
+	borderColor := statusColor(card.Status)
 	if selected {
 		titleStyle = styles.HighlightWhiteStyle
 		borderColor = styles.BorderPrimary
+	}
+
+	// The card being dragged fades toward the background — a visible
+	// "picked up" state while the pointer carries it to another column.
+	dragged := m.dragging && card.ID == m.dragCardID
+	if dragged {
+		titleStyle = titleStyle.Foreground(fade(titleStyle.GetForeground()))
+		accent = fade(accent)
+		borderColor = fade(borderColor)
 	}
 
 	title1, title2 := splitTitle(sanitize(card.Title), textWidth)
@@ -361,12 +417,37 @@ func (m *model) renderCard(card *board.Card, colInnerWidth int, selected bool) s
 		titleStyle.Render(title1),
 		titleStyle.Render(title2),
 		project,
-		m.renderStatus(card.Status, textWidth),
+		m.renderStatus(card.Status, textWidth, dragged),
 	}, "\n")
 
 	return styles.BaseStyle.
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(borderColor).
+		Width(colInnerWidth).
+		Padding(0, 1).
+		Render(content)
+}
+
+// containsCard reports whether one of the cards has the given ID.
+func containsCard(cards []*board.Card, id string) bool {
+	return slices.ContainsFunc(cards, func(c *board.Card) bool { return c.ID == id })
+}
+
+// renderGhost previews the dragged card in the drop-target column: a faded
+// clone of the card at the column's tail, where the card lands on release.
+func (m *model) renderGhost(card *board.Card, colInnerWidth int) string {
+	textWidth := max(colInnerWidth-4, 1)
+	style := styles.BaseStyle.Foreground(fade(styles.SecondaryStyle.GetForeground()))
+	title1, title2 := splitTitle(sanitize(card.Title), textWidth)
+	content := strings.Join([]string{
+		style.Render(title1),
+		style.Render(title2),
+		style.Render(toolcommon.TruncateText(sanitize("◆ "+card.Project), textWidth)),
+		"",
+	}, "\n")
+	return styles.BaseStyle.
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(fade(styles.Success)).
 		Width(colInnerWidth).
 		Padding(0, 1).
 		Render(content)
@@ -390,23 +471,53 @@ func splitTitle(title string, width int) (string, string) {
 	return toolcommon.TruncateText(line1, width), ""
 }
 
-func (m *model) renderStatus(status board.CardStatus, width int) string {
+// statusColor matches the web board's card tinting: starting/loading/
+// attaching=blue, running=orange, paused=white, error=red, waiting=green.
+func statusColor(status board.CardStatus) color.Color {
+	switch status {
+	case board.StatusStarting, board.StatusLoading, board.StatusAttaching:
+		return styles.Info
+	case board.StatusRunning:
+		return styles.Warning
+	case board.StatusPaused:
+		return styles.White
+	case board.StatusError:
+		return styles.Error
+	default: // waiting
+		return styles.Success
+	}
+}
+
+func (m *model) renderStatus(status board.CardStatus, width int, faded bool) string {
+	fg := statusColor(status)
+	if faded {
+		fg = fade(fg)
+	}
+	style := styles.BaseStyle.Foreground(fg)
 	spinner := spinnerFrames[m.frame%len(spinnerFrames)]
 	switch status {
-	case board.StatusStarting:
-		return styles.WarningStyle.Render(toolcommon.TruncateText(spinner+" starting", width))
+	case board.StatusStarting, board.StatusLoading, board.StatusAttaching:
+		return style.Render(toolcommon.TruncateText(spinner+" "+string(status), width))
 	case board.StatusRunning:
-		return styles.InfoStyle.Render(toolcommon.TruncateText(spinner+" running", width))
+		return style.Render(toolcommon.TruncateText(spinner+" running", width))
 	case board.StatusPaused:
-		return styles.WarningStyle.Render(toolcommon.TruncateText("∥ paused", width))
+		return style.Render(toolcommon.TruncateText("∥ paused", width))
 	case board.StatusError:
-		return styles.ErrorStyle.Render(toolcommon.TruncateText("✗ failed", width))
+		return style.Render(toolcommon.TruncateText("✗ failed", width))
 	default: // waiting
-		return styles.SuccessStyle.Render(toolcommon.TruncateText("● ready", width))
+		return style.Render(toolcommon.TruncateText("● ready", width))
 	}
 }
 
 func (m *model) renderFooter() string {
+	if m.dragging {
+		if m.dragCol >= 0 && m.dragCol < len(m.columns) && m.dragCol != m.selCol {
+			const hint = " Release to move the card to "
+			name := strings.TrimSpace(m.columns[m.dragCol].Emoji + " " + m.columns[m.dragCol].Name)
+			return styles.SuccessStyle.Render(hint + toolcommon.TruncateText(sanitize(name), max(m.width-len(hint)-1, 1)))
+		}
+		return styles.MutedStyle.Render(" Drop the card on another column to move it")
+	}
 	if m.flash != "" {
 		style := styles.SuccessStyle
 		if m.isErr {
@@ -418,8 +529,8 @@ func (m *model) renderFooter() string {
 	// Same look as the main TUI's status bar: highlighted keys with secondary
 	// descriptions on the left, muted context on the right.
 	hints := []string{
-		"n", "new", "⏎", "attach", "d", "diff", "o", "editor", "[ ]", "move",
-		"x", "delete", "p", "projects", "e", "prompt", "?", "help", "q", "quit",
+		"n", "new", "⏎", "attach", "d", "diff", "o", "editor", "s", "shell", "[ ] 1-9", "move",
+		"x", "delete", "p", "projects", "c", "columns", "e", "prompt", "?", "help", "q", "quit",
 	}
 	parts := make([]string, 0, len(hints)/2)
 	for i := 0; i < len(hints); i += 2 {
@@ -485,7 +596,11 @@ func (m *model) columnAt(x, y int) (int, bool) {
 }
 
 // cardAt maps terminal coordinates to the (column, card) under them. It
-// mirrors the layout produced by renderBoard.
+// mirrors the layout produced by renderBoard — except the drop-target
+// column mid-drag, whose window slides for the ghost preview. That
+// divergence is safe: the only drag-time caller (handleRelease) just
+// checks the hit against the dragged card, which sits in the source
+// column, whose layout is unchanged.
 func (m *model) cardAt(x, y int) (col, row int, ok bool) {
 	col, ok = m.columnAt(x, y)
 	if !ok {

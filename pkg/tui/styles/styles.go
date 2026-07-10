@@ -10,6 +10,8 @@ import (
 	"charm.land/glamour/v2/ansi"
 	"charm.land/lipgloss/v2"
 	"github.com/alecthomas/chroma/v2"
+
+	"github.com/docker/docker-agent/pkg/compaction"
 )
 
 const (
@@ -40,6 +42,7 @@ var (
 
 	// Text hierarchy
 
+	TextBright    color.Color
 	TextPrimary   color.Color
 	TextSecondary color.Color
 	TextMuted     color.Color
@@ -123,6 +126,43 @@ const (
 	GaugeEmpty  = "▱"
 )
 
+// ContextGaugeLevel classifies context-window fill relative to the agent's
+// auto-compaction threshold, so context gauges can escalate their color
+// (normal → warning → critical) before compaction kicks in.
+type ContextGaugeLevel int
+
+const (
+	ContextGaugeNormal ContextGaugeLevel = iota
+	ContextGaugeWarning
+	ContextGaugeCritical
+)
+
+// The gauge escalates at fixed fractions of the compaction threshold rather
+// than absolute percentages, so the visual runway stays proportional when a
+// custom compaction_threshold is configured.
+const (
+	contextGaugeWarningRatio  = 0.75
+	contextGaugeCriticalRatio = 0.95
+)
+
+// ContextGaugeLevelFor returns the warning level for a context window filled
+// to the given fraction, measured against the agent's compaction threshold.
+// Thresholds outside (0, 1] fall back to [compaction.DefaultThreshold],
+// mirroring compaction.ShouldCompact.
+func ContextGaugeLevelFor(fill, threshold float64) ContextGaugeLevel {
+	if threshold <= 0 || threshold > 1 {
+		threshold = compaction.DefaultThreshold
+	}
+	switch {
+	case fill >= threshold*contextGaugeCriticalRatio:
+		return ContextGaugeCritical
+	case fill >= threshold*contextGaugeWarningRatio:
+		return ContextGaugeWarning
+	default:
+		return ContextGaugeNormal
+	}
+}
+
 var (
 	NoStyle   = lipgloss.NewStyle()
 	BaseStyle = NoStyle.Foreground(TextPrimary)
@@ -131,7 +171,10 @@ var (
 
 // Text Styles
 var (
-	HighlightWhiteStyle = BaseStyle.Foreground(White).Bold(true)
+	// HighlightWhiteStyle emphasizes text drawn on the app background (key
+	// hints, selected values). It uses TextBright, not White: White is the
+	// selection foreground and would be unreadable on light themes.
+	HighlightWhiteStyle = BaseStyle.Foreground(TextBright).Bold(true)
 	MutedStyle          = BaseStyle.Foreground(TextMutedGray)
 	SecondaryStyle      = BaseStyle.Foreground(TextSecondary)
 	BoldStyle           = BaseStyle.Bold(true)
@@ -257,7 +300,7 @@ var (
 var (
 	PaletteCategoryStyle = BaseStyle.
 				Bold(true).
-				Foreground(White).
+				Foreground(TextBright).
 				MarginTop(1)
 
 	PaletteUnselectedActionStyle = BaseStyle.
@@ -436,7 +479,7 @@ var (
 var (
 	TrackStyle       = lipgloss.NewStyle().Foreground(BorderSecondary)
 	ThumbStyle       = lipgloss.NewStyle().Foreground(Info).Background(BackgroundAlt)
-	ThumbActiveStyle = lipgloss.NewStyle().Foreground(White).Background(BackgroundAlt)
+	ThumbActiveStyle = lipgloss.NewStyle().Foreground(TextBright).Background(BackgroundAlt)
 )
 
 // Resize Handle Style
@@ -449,7 +492,7 @@ var (
 				Bold(true)
 
 	ResizeHandleActiveStyle = BaseStyle.
-				Foreground(White).
+				Foreground(TextBright).
 				Bold(true)
 )
 

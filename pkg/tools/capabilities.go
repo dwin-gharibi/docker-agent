@@ -53,6 +53,14 @@ type Sampleable interface {
 	SetSamplingHandler(handler SamplingHandler)
 }
 
+// SampleableWithTools is implemented by toolsets that support MCP sampling
+// requests carrying a tools array (sampling-with-tools). The handler is
+// invoked instead of the basic SamplingHandler when both are registered and
+// the SDK negotiates the with-tools variant on the wire.
+type SampleableWithTools interface {
+	SetSamplingWithToolsHandler(handler SamplingWithToolsHandler)
+}
+
 // OAuthCapable is implemented by toolsets that support OAuth flows.
 type OAuthCapable interface {
 	SetOAuthSuccessHandler(handler func())
@@ -81,15 +89,18 @@ type ChangeNotifier interface {
 }
 
 // ConfigureHandlers sets all applicable handlers on a toolset.
-// It checks for Elicitable, Sampleable and OAuthCapable interfaces and
-// configures them. This is a convenience function that handles the capability
-// checking internally.
-func ConfigureHandlers(ts ToolSet, elicitHandler ElicitationHandler, samplingHandler SamplingHandler, oauthHandler func(), managedOAuth bool, unmanagedOAuthRedirectURI string) {
+// It checks for Elicitable, Sampleable, SampleableWithTools, and OAuthCapable
+// interfaces and configures them. This is a convenience function that handles
+// the capability checking internally.
+func ConfigureHandlers(ts ToolSet, elicitHandler ElicitationHandler, samplingHandler SamplingHandler, samplingWithToolsHandler SamplingWithToolsHandler, oauthHandler func(), managedOAuth bool, unmanagedOAuthRedirectURI string) {
 	if e, ok := As[Elicitable](ts); ok {
 		e.SetElicitationHandler(elicitHandler)
 	}
 	if s, ok := As[Sampleable](ts); ok {
 		s.SetSamplingHandler(samplingHandler)
+	}
+	if s, ok := As[SampleableWithTools](ts); ok {
+		s.SetSamplingWithToolsHandler(samplingWithToolsHandler)
 	}
 	if o, ok := As[OAuthCapable](ts); ok {
 		o.SetOAuthSuccessHandler(oauthHandler)

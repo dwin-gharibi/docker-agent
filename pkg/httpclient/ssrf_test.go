@@ -292,40 +292,52 @@ func TestSSRFDialControl_IPv6ZoneID(t *testing.T) {
 	assert.Contains(t, err.Error(), "not a valid IP")
 }
 
-// TestProxyHostPorts pins the parsing rules for HTTP_PROXY-style values.
+// TestProxyHostPort pins the parsing rules for HTTP_PROXY-style values.
 // We support full URLs and bare host[:port] (matching net/http's
-// ProxyFromEnvironment), and we always emit a port — dial addresses
-// have one and we compare against them verbatim.
-func TestProxyHostPorts(t *testing.T) {
+// ProxyFromEnvironment), we always emit a port — dial addresses have
+// one and we compare against them verbatim — and hostnames are kept
+// literal, never DNS-resolved: parsing must not block.
+func TestProxyHostPort(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name string
 		spec string
-		want []string
+		want string
 	}{
-		{"empty", "", nil},
-		{"http URL with port", "http://172.17.0.0:3128", []string{"172.17.0.0:3128"}},
-		{"http URL without port", "http://10.0.0.1", []string{"10.0.0.1:80"}},
-		{"https URL without port", "https://10.0.0.1", []string{"10.0.0.1:443"}},
-		{"socks5 URL without port", "socks5://10.0.0.1", []string{"10.0.0.1:1080"}},
-		{"bare host:port", "172.17.0.0:3128", []string{"172.17.0.0:3128"}},
-		{"bare host", "172.17.0.0", []string{"172.17.0.0:80"}},
-		{"IPv6 with port", "http://[::1]:3128", []string{"[::1]:3128"}},
+		{"empty", "", ""},
+		{"http URL with port", "http://172.17.0.0:3128", "172.17.0.0:3128"},
+		{"http URL without port", "http://10.0.0.1", "10.0.0.1:80"},
+		{"https URL without port", "https://10.0.0.1", "10.0.0.1:443"},
+		{"socks5 URL without port", "socks5://10.0.0.1", "10.0.0.1:1080"},
+		{"bare host:port", "172.17.0.0:3128", "172.17.0.0:3128"},
+		{"bare host", "172.17.0.0", "172.17.0.0:80"},
+		{"IPv6 with port", "http://[::1]:3128", "[::1]:3128"},
+		{"hostname kept literal", "http://proxy.internal:3128", "proxy.internal:3128"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := proxyHostPorts(tt.spec)
-			if tt.want == nil {
-				assert.Empty(t, got)
-				return
-			}
-			for _, w := range tt.want {
-				assert.Contains(t, got, w)
-			}
+			assert.Equal(t, tt.want, proxyHostPort(tt.spec))
 		})
 	}
+}
+
+// TestProxyDialAllowlist_NoDNSAtConstruction is the regression test for
+// NewSSRFSafeTransport blocking constructors (NewLocalRuntime among them)
+// on synchronous proxy-hostname resolution: a hostname proxy — even one
+// that can never resolve — must land in the allowlist verbatim, proving
+// the allowlist is built without DNS. Matching happens pre-resolution at
+// dial time instead.
+func TestProxyDialAllowlist_NoDNSAtConstruction(t *testing.T) {
+	t.Setenv("HTTP_PROXY", "http://proxy.invalid:3128")
+	t.Setenv("HTTPS_PROXY", "")
+	t.Setenv("ALL_PROXY", "")
+	t.Setenv("http_proxy", "")
+	t.Setenv("https_proxy", "")
+	t.Setenv("all_proxy", "")
+
+	assert.Contains(t, proxyDialAllowlist(), "proxy.invalid:3128")
 }
 
 // TestNewSSRFSafeTransport_AllowsConfiguredProxy is the regression test

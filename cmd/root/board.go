@@ -24,7 +24,7 @@ Projects and column prompts are stored in the global config file
 (~/.config/cagent/config.yaml) and can be managed from the TUI.`,
 		Example:      `  docker-agent board`,
 		Args:         cobra.NoArgs,
-		GroupID:      "core",
+		GroupID:      "advanced",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			telemetry.TrackCommand(cmd.Context(), "board", nil)

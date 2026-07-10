@@ -12,7 +12,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/docker/docker-agent/pkg/paths"
 	"github.com/docker/docker-agent/pkg/userconfig"
 )
 
@@ -96,13 +95,6 @@ func (a *App) Columns() []Column {
 	return slices.Clone(a.columns)
 }
 
-// ColumnIndex returns the position of a column in the pipeline, or -1.
-func (a *App) ColumnIndex(colID string) int {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return slices.IndexFunc(a.columns, func(c Column) bool { return c.ID == colID })
-}
-
 // SetColumnPrompt updates a column's prompt and persists it to the user's
 // global config file.
 func (a *App) SetColumnPrompt(colID, prompt string) error {
@@ -116,8 +108,127 @@ func (a *App) SetColumnPrompt(colID, prompt string) error {
 	return a.saveConfigLocked()
 }
 
+// AddColumn validates and appends a column to the pipeline, persisting it
+// to the user's global config file. The column's id is derived from its
+// name and kept unique; the saved column (with its id) is returned so the
+// UI can select it.
+func (a *App) AddColumn(col Column) (Column, error) {
+	col, err := normalizeColumn(col)
+	if err != nil {
+		return Column{}, err
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	col.ID = a.uniqueColumnIDLocked(col.Name)
+	a.columns = append(a.columns, col)
+	if err := a.saveConfigLocked(); err != nil {
+		return Column{}, err
+	}
+	return col, nil
+}
+
+// UpdateColumn replaces the column with the given id, applying the same
+// validation as AddColumn and persisting the change. The id never changes
+// on an update, so existing cards stay attached to the column across a
+// rename.
+func (a *App) UpdateColumn(id string, col Column) (Column, error) {
+	col, err := normalizeColumn(col)
+	if err != nil {
+		return Column{}, err
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	idx := slices.IndexFunc(a.columns, func(c Column) bool { return c.ID == id })
+	if idx < 0 {
+		return Column{}, fmt.Errorf("unknown column %q", id)
+	}
+	col.ID = id
+	a.columns[idx] = col
+	if err := a.saveConfigLocked(); err != nil {
+		return Column{}, err
+	}
+	return col, nil
+}
+
+// MoveColumn moves the column with the given id delta positions in the
+// pipeline (negative moves it left) and persists the new order. The
+// destination is clamped, so moves past either end are safe no-ops.
+func (a *App) MoveColumn(id string, delta int) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	idx := slices.IndexFunc(a.columns, func(c Column) bool { return c.ID == id })
+	if idx < 0 {
+		return fmt.Errorf("unknown column %q", id)
+	}
+	dst := min(max(idx+delta, 0), len(a.columns)-1)
+	if dst == idx {
+		return nil
+	}
+	col := a.columns[idx]
+	a.columns = slices.Insert(slices.Delete(a.columns, idx, idx+1), dst, col)
+	return a.saveConfigLocked()
+}
+
+// RemoveColumn deletes a column by id and persists the change. A column
+// that still holds cards cannot be removed (its cards would silently pile
+// up in the first column), and neither can the last remaining column. The
+// cards check is advisory: a card creation or move in flight can still
+// land in the removed column, where the UI rescues it into the first one.
+func (a *App) RemoveColumn(id string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	idx := slices.IndexFunc(a.columns, func(c Column) bool { return c.ID == id })
+	if idx < 0 {
+		return fmt.Errorf("unknown column %q", id)
+	}
+	if len(a.columns) == 1 {
+		return errors.New("the board needs at least one column")
+	}
+	for _, card := range a.store.ListCards() {
+		if card.Column == id {
+			return fmt.Errorf("column %q still has cards; move or delete them first", a.columns[idx].Name)
+		}
+	}
+	a.columns = slices.Delete(a.columns, idx, idx+1)
+	return a.saveConfigLocked()
+}
+
+// normalizeColumn checks a column's name and normalizes its fields: name
+// and emoji are single-line display strings (inner whitespace collapses to
+// spaces), the prompt keeps inner newlines — multi-line prompts are the
+// norm.
+func normalizeColumn(col Column) (Column, error) {
+	col.Name = collapseSpace(col.Name)
+	if col.Name == "" {
+		return Column{}, errors.New("column name is required")
+	}
+	col.Emoji = collapseSpace(col.Emoji)
+	col.Prompt = strings.TrimSpace(col.Prompt)
+	return col, nil
+}
+
+// uniqueColumnIDLocked derives an id from a column name, suffixing it until
+// it collides with no existing column. Callers must hold a.mu.
+func (a *App) uniqueColumnIDLocked(name string) string {
+	base := columnID(name)
+	if base == "" {
+		base = fallbackColumnID(name)
+	}
+	id := base
+	for n := 2; slices.ContainsFunc(a.columns, func(c Column) bool { return c.ID == id }); n++ {
+		id = fmt.Sprintf("%s-%d", base, n)
+	}
+	return id
+}
+
 // saveConfigLocked persists the projects and columns to the global config
-// file. Callers must hold a.mu.
+// file. Callers must hold a.mu. The board section is written from the
+// board's in-memory view (authoritative for projects and columns) onto the
+// freshest on-disk config, so changes other processes made to unrelated
+// sections while the board was open are never overwritten; a.config is then
+// swapped to that fresh copy.
 func (a *App) saveConfigLocked() error {
 	board := &userconfig.Board{}
 	if a.config.Board != nil {
@@ -133,8 +244,11 @@ func (a *App) saveConfigLocked() error {
 			board.Columns = append(board.Columns, userconfig.BoardColumn{ID: c.ID, Name: c.Name, Emoji: c.Emoji, Prompt: c.Prompt})
 		}
 	}
-	a.config.Board = board
-	return a.config.Save()
+	return userconfig.Update(func(cfg *userconfig.Config) error {
+		cfg.Board = board
+		a.config = cfg
+		return nil
+	})
 }
 
 // Projects returns the configured projects.
@@ -146,7 +260,7 @@ func (a *App) Projects() []Project {
 	}
 	projects := make([]Project, 0, len(a.config.Board.Projects))
 	for _, p := range a.config.Board.Projects {
-		projects = append(projects, Project{Name: p.Name, Path: p.Path, Agent: p.Agent})
+		projects = append(projects, Project{Name: p.Name, Path: expandHome(p.Path), Agent: p.Agent})
 	}
 	return projects
 }
@@ -155,16 +269,9 @@ func (a *App) Projects() []Project {
 // global config file. The path is normalized to an absolute path (expanding
 // a leading ~) so cards never depend on the board's working directory.
 func (a *App) AddProject(p Project) error {
-	if strings.TrimSpace(p.Name) == "" {
-		return errors.New("project name is required")
-	}
-	path, err := normalizeProjectPath(p.Path)
+	stored, err := a.validateProject(p)
 	if err != nil {
 		return err
-	}
-	p.Path = path
-	if !isGitRepo(a.ctx, p.Path) {
-		return fmt.Errorf("%s is not a git repository", p.Path)
 	}
 
 	a.mu.Lock()
@@ -173,16 +280,73 @@ func (a *App) AddProject(p Project) error {
 		a.config.Board = &userconfig.Board{}
 	}
 	for _, existing := range a.config.Board.Projects {
-		if existing.Name == p.Name {
-			return fmt.Errorf("project %q already exists", p.Name)
+		if existing.Name == stored.Name {
+			return fmt.Errorf("project %q already exists", stored.Name)
 		}
 	}
-	a.config.Board.Projects = append(a.config.Board.Projects, userconfig.BoardProject{
-		Name:  p.Name,
-		Path:  p.Path,
-		Agent: p.Agent,
-	})
+	a.config.Board.Projects = append(a.config.Board.Projects, stored)
 	return a.saveConfigLocked()
+}
+
+// UpdateProject replaces the project named oldName with p, applying the
+// same validation as AddProject and persisting the change. Cards created
+// against the old name follow a rename; they keep the repo path and agent
+// they were created with.
+func (a *App) UpdateProject(oldName string, p Project) error {
+	stored, err := a.validateProject(p)
+	if err != nil {
+		return err
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	var projects []userconfig.BoardProject
+	if a.config.Board != nil {
+		projects = a.config.Board.Projects
+	}
+	idx := slices.IndexFunc(projects, func(bp userconfig.BoardProject) bool { return bp.Name == oldName })
+	if idx < 0 {
+		return fmt.Errorf("unknown project %q", oldName)
+	}
+	if stored.Name != oldName {
+		for _, existing := range projects {
+			if existing.Name == stored.Name {
+				return fmt.Errorf("project %q already exists", stored.Name)
+			}
+		}
+	}
+	projects[idx] = stored
+	if err := a.saveConfigLocked(); err != nil {
+		return err
+	}
+	if stored.Name != oldName {
+		// Keep existing cards attached to their project across the rename
+		// (their accent color and header stay consistent).
+		if err := a.store.RenameProject(oldName, stored.Name); err != nil {
+			return err
+		}
+		a.onChanged()
+	}
+	return nil
+}
+
+// validateProject checks a project's name and path and returns its stored
+// form. The name is trimmed and the path is stored ~-contracted so the
+// shared config works across environments whose home differs (host vs.
+// docker sandbox).
+func (a *App) validateProject(p Project) (userconfig.BoardProject, error) {
+	name := strings.TrimSpace(p.Name)
+	if name == "" {
+		return userconfig.BoardProject{}, errors.New("project name is required")
+	}
+	path, err := normalizeProjectPath(p.Path)
+	if err != nil {
+		return userconfig.BoardProject{}, err
+	}
+	if !isGitRepo(a.ctx, path) {
+		return userconfig.BoardProject{}, fmt.Errorf("%s is not a git repository", path)
+	}
+	return userconfig.BoardProject{Name: name, Path: contractHome(path), Agent: strings.TrimSpace(p.Agent)}, nil
 }
 
 // normalizeProjectPath expands a leading ~ and makes the path absolute. An
@@ -193,14 +357,36 @@ func normalizeProjectPath(path string) (string, error) {
 	if path == "" {
 		return "", errors.New("project path is required")
 	}
-	if path == "~" || strings.HasPrefix(path, "~/") {
-		path = filepath.Join(paths.GetHomeDir(), strings.TrimPrefix(path[1:], "/"))
-	}
-	abs, err := filepath.Abs(path)
+	abs, err := filepath.Abs(expandHome(path))
 	if err != nil {
 		return "", fmt.Errorf("resolve project path: %w", err)
 	}
 	return abs, nil
+}
+
+// MoveProject moves the named project delta positions in the list
+// (negative moves it up) and persists the new order. The destination is
+// clamped to the list, so moves past either end are safe no-ops. Project
+// order drives the accent colors and the new-card selector.
+func (a *App) MoveProject(name string, delta int) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	var projects []userconfig.BoardProject
+	if a.config.Board != nil {
+		projects = a.config.Board.Projects
+	}
+	idx := slices.IndexFunc(projects, func(p userconfig.BoardProject) bool { return p.Name == name })
+	if idx < 0 {
+		return fmt.Errorf("unknown project %q", name)
+	}
+	dst := min(max(idx+delta, 0), len(projects)-1)
+	if dst == idx {
+		return nil
+	}
+	p := projects[idx]
+	projects = slices.Delete(projects, idx, idx+1)
+	a.config.Board.Projects = slices.Insert(projects, dst, p)
+	return a.saveConfigLocked()
 }
 
 // RemoveProject deletes a project by name and persists the change. Existing
@@ -235,6 +421,13 @@ func (a *App) CreateCard(project Project, prompt string) (card *Card, err error)
 	agent := project.Agent
 	if agent == "" {
 		agent = DefaultAgent
+	}
+
+	// Checked before launch because tmux silently falls back to $HOME when
+	// its start directory is missing, which would surface as a confusing
+	// worktree error from the agent instead of this one.
+	if !isGitRepo(a.ctx, project.Path) {
+		return nil, fmt.Errorf("project path %s is not a git repository in this environment; re-add the project here", project.Path)
 	}
 
 	worktreeName := newWorktreeName()
@@ -294,11 +487,16 @@ func (a *App) MoveCard(cardID, colID string) error {
 		return err
 	}
 
-	dstIdx := a.ColumnIndex(colID)
+	// One pipeline snapshot for the whole move: columns can be edited
+	// concurrently from the UI, and re-indexing a fresh snapshot later
+	// could deliver another column's prompt (or panic on a removed one).
+	columns := a.Columns()
+	dstIdx := slices.IndexFunc(columns, func(c Column) bool { return c.ID == colID })
 	if dstIdx < 0 {
 		return fmt.Errorf("unknown column %q", colID)
 	}
-	movedForward := dstIdx > a.ColumnIndex(card.Column)
+	srcIdx := slices.IndexFunc(columns, func(c Column) bool { return c.ID == card.Column })
+	movedForward := dstIdx > srcIdx
 
 	moved, err := a.store.MoveCard(cardID, colID, movedForward)
 	if err != nil {
@@ -308,7 +506,7 @@ func (a *App) MoveCard(cardID, colID string) error {
 	a.onChanged()
 
 	if movedForward {
-		return a.controller.SendPrompt(moved, a.Columns()[dstIdx].Prompt)
+		return a.controller.SendPrompt(moved, columns[dstIdx].Prompt)
 	}
 	return nil
 }
@@ -344,14 +542,15 @@ func (a *App) Diff(cardID string) (string, error) {
 }
 
 // OpenEditor opens the card's worktree in the user's GUI editor: the
-// command named by $BOARD_EDITOR, defaulting to VS Code's `code`. The
+// command named by $DOCKER_AGENT_BOARD_EDITOR, defaulting to VS Code's `code`. The
 // editor is started detached and reaped in the background.
 func (a *App) OpenEditor(cardID string) error {
 	card, err := a.store.GetCard(cardID)
 	if err != nil {
 		return err
 	}
-	editor := cmp.Or(os.Getenv("BOARD_EDITOR"), "code")
+	// BOARD_EDITOR is the legacy name, kept as a fallback for one release.
+	editor := cmp.Or(os.Getenv("DOCKER_AGENT_BOARD_EDITOR"), os.Getenv("BOARD_EDITOR"), "code")
 	cmd := exec.CommandContext(a.ctx, editor, card.Worktree)
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("open editor (%s): %w", editor, err)
@@ -368,14 +567,25 @@ var ErrAgentStarting = errors.New("the agent is still starting")
 // AttachCommand returns the command that attaches the caller's terminal to
 // the card's agent session. It fails with [ErrAgentStarting] until the
 // agent's control plane answers, so the user never lands on a bare launch
-// command. Before attaching, the session's header row is refreshed with the
-// card's current title and project.
+// command. An errored card is attachable regardless: its agent may have
+// died at startup, and the dead pane holds the error output the user needs
+// to read — unless the session is gone entirely (its recreation failed), in
+// which case the recorded relaunch failure, when known, beats tmux's raw
+// "can't find session". Before attaching, the session's header row is
+// refreshed with the card's current title and project.
 func (a *App) AttachCommand(cardID string) (*exec.Cmd, error) {
 	card, err := a.store.GetCard(cardID)
 	if err != nil {
 		return nil, err
 	}
-	if !a.controller.Ready(card) {
+	if card.Status == StatusError {
+		if exists, err := a.sessions.Exists(card.Session); err == nil && !exists {
+			if lerr := a.controller.LaunchError(cardID); lerr != nil {
+				return nil, fmt.Errorf("the agent could not be relaunched (%w); move the card forward to retry, or delete it", lerr)
+			}
+			return nil, errors.New("the agent's session is gone; move the card forward to relaunch it, or delete it")
+		}
+	} else if !a.controller.Ready(card) {
 		return nil, ErrAgentStarting
 	}
 	socket, err := TmuxSocketPath()

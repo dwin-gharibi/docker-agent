@@ -23,11 +23,14 @@ func removeWorktree(ctx context.Context, repoPath, worktreePath, branch string) 
 	_ = cmd.Run()
 }
 
-// isGitRepo reports whether path is inside a git working tree.
+// isGitRepo reports whether path is inside a git working tree. The output
+// is checked, not just the exit code: inside a bare repo or a .git dir the
+// command succeeds but prints "false".
 func isGitRepo(ctx context.Context, path string) bool {
 	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--is-inside-work-tree")
 	cmd.Dir = path
-	return cmd.Run() == nil
+	out, err := cmd.Output()
+	return err == nil && strings.TrimSpace(string(out)) == "true"
 }
 
 // worktreeDiff returns the full diff of all changes in the worktree relative

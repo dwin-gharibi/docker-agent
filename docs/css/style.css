@@ -435,13 +435,17 @@ details.sidebar-section[open] > summary.sidebar-heading::after {
 
 /* ===== Table of Contents (right sidebar) =====
  * Layout, font sizes and colors mirror docs.docker.com's right-column
- * \"Edit this page\" + \"Table of contents\" pattern. */
+ * \"Edit this page\" + \"Table of contents\" pattern.
+ * Sticky (not fixed) so it stays in the .main flex row and can never
+ * overlap the footer below; shown only at the ≥1280px breakpoint. */
 .toc-aside {
-  position: fixed;
+  display: none;
+  position: sticky;
   top: var(--header-height);
-  right: 0;
+  align-self: flex-start;
+  flex-shrink: 0;
   width: var(--toc-width);
-  height: calc(100vh - var(--header-height));
+  max-height: calc(100vh - var(--header-height));
   padding: 24px 24px 32px 16px;
   overflow-y: auto;
   scrollbar-width: thin;
@@ -546,9 +550,16 @@ details.sidebar-section[open] > summary.sidebar-heading::after {
 }
 
 @media (min-width: 1280px) {
+  .main {
+    display: flex;
+    align-items: flex-start;
+  }
   .content {
-    margin-left: 48px;
-    margin-right: calc(var(--toc-width) + 48px);
+    flex: 1;
+    min-width: 0;
+  }
+  .toc-aside {
+    display: block;
   }
 }
 
@@ -1610,10 +1621,6 @@ details.sidebar-section[open] > summary.sidebar-heading::after {
 }
 
 /* ===== Responsive ===== */
-@media (max-width: 1280px) {
-  .toc-aside { display: none; }
-}
-
 @media (max-width: 1024px) {
   .sidebar {
     transform: translateX(-100%);

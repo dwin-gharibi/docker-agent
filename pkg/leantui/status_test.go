@@ -6,49 +6,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
+	"github.com/docker/docker-agent/pkg/leantui/ui"
 	"github.com/docker/docker-agent/pkg/runtime"
 )
-
-func TestFormatTokens(t *testing.T) {
-	t.Parallel()
-	assert.Equal(t, "500", formatTokens(500))
-	assert.Equal(t, "999", formatTokens(999))
-	assert.Equal(t, "1.0k", formatTokens(1000))
-	assert.Equal(t, "1.2k", formatTokens(1234))
-	assert.Equal(t, "1.0M", formatTokens(1_000_000))
-	assert.Equal(t, "2.5M", formatTokens(2_500_000))
-}
-
-func TestComposeLineRightAligns(t *testing.T) {
-	t.Parallel()
-	out := composeLine("left", "right", 20)
-	assert.Equal(t, 20, displayWidth(out))
-	assert.GreaterOrEqual(t, len(out), len("left")+len("right"))
-	assert.Contains(t, out, "left")
-	assert.Contains(t, out, "right")
-}
-
-func TestComposeLineTruncatesLeft(t *testing.T) {
-	t.Parallel()
-	out := composeLine("a very long left side that does not fit", "right", 15)
-	assert.LessOrEqual(t, displayWidth(out), 15)
-	assert.Contains(t, out, "right")
-}
-
-func TestRenderBarWidth(t *testing.T) {
-	t.Parallel()
-	assert.Equal(t, contextBarWidth, displayWidth(renderBar(0.5)))
-	assert.Equal(t, contextBarWidth, displayWidth(renderBar(0)))
-	assert.Equal(t, contextBarWidth, displayWidth(renderBar(1)))
-	assert.Equal(t, contextBarWidth, displayWidth(renderBar(1.5))) // clamped
-}
-
-func TestRenderContextShowsZerosBeforeUsage(t *testing.T) {
-	t.Parallel()
-	out := renderContext(statusData{})
-	assert.NotContains(t, out, "context")
-	assert.Contains(t, out, "0% · 0/0")
-}
 
 func TestAgentInfoContextLimitShownBeforeUsage(t *testing.T) {
 	t.Parallel()
@@ -56,30 +16,8 @@ func TestAgentInfoContextLimitShownBeforeUsage(t *testing.T) {
 
 	m.handleEvent(t.Context(), runtime.AgentInfo("root", "test/model", "", "", 200_000))
 
-	assert.Equal(t, int64(200_000), m.status.contextLimit)
-	assert.Contains(t, renderContext(m.status), "0% · 0/200.0k")
-}
-
-func TestRenderStatusFitsWidth(t *testing.T) {
-	t.Parallel()
-	d := statusData{
-		workingDir:    "/home/user/project",
-		branch:        "main",
-		agent:         "coder",
-		model:         "openai/gpt-5",
-		thinking:      "high",
-		contextLength: 24_000,
-		contextLimit:  200_000,
-		tokens:        24_000,
-		cost:          0.05,
-		costKnown:     true,
-	}
-	lines := renderStatus(d, 80)
-	assert.Len(t, lines, 2)
-	assert.Contains(t, strings.Join(lines, "\n"), "$0.05")
-	for _, l := range lines {
-		assert.LessOrEqual(t, displayWidth(l), 80)
-	}
+	assert.Equal(t, int64(200_000), m.status.ContextLimit)
+	assert.Contains(t, ui.RenderContext(m.status), "0% · 0/200.0k")
 }
 
 func TestTokenUsageEventAggregatesSessionCost(t *testing.T) {
@@ -103,15 +41,15 @@ func TestTokenUsageEventAggregatesSessionCost(t *testing.T) {
 		Cost:          0.05,
 	}))
 
-	assert.Equal(t, int64(1_000), m.status.tokens)
-	assert.InDelta(t, 0.15, m.status.cost, 0.0001)
-	assert.True(t, m.status.costKnown)
-	assert.Contains(t, strings.Join(renderStatus(m.status, 80), "\n"), "$0.15")
+	assert.Equal(t, int64(1_000), m.status.Tokens)
+	assert.InDelta(t, 0.15, m.status.Cost, 0.0001)
+	assert.True(t, m.status.CostKnown)
+	assert.Contains(t, strings.Join(ui.RenderStatus(m.status, 80), "\n"), "$0.15")
 
 	m.handleEvent(t.Context(), runtime.StreamStopped("child-session", "developer", "normal"))
 
-	assert.Equal(t, int64(3_000), m.status.tokens)
-	assert.InDelta(t, 0.15, m.status.cost, 0.0001)
+	assert.Equal(t, int64(3_000), m.status.Tokens)
+	assert.InDelta(t, 0.15, m.status.Cost, 0.0001)
 }
 
 func TestTokenUsageBeforeStreamUsesFirstSessionAsRoot(t *testing.T) {
@@ -133,9 +71,9 @@ func TestTokenUsageBeforeStreamUsesFirstSessionAsRoot(t *testing.T) {
 		Cost:          0.05,
 	}))
 
-	assert.Equal(t, "root-session", m.usage.rootSessionID)
-	assert.Equal(t, int64(3_000), m.status.tokens)
-	assert.InDelta(t, 0.15, m.status.cost, 0.0001)
+	assert.Equal(t, "root-session", m.usage.RootSessionID())
+	assert.Equal(t, int64(3_000), m.status.Tokens)
+	assert.InDelta(t, 0.15, m.status.Cost, 0.0001)
 }
 
 func TestEmptySessionUsageDoesNotOverrideSessionScopedUsage(t *testing.T) {
@@ -155,6 +93,37 @@ func TestEmptySessionUsageDoesNotOverrideSessionScopedUsage(t *testing.T) {
 		Cost:          0.99,
 	}))
 
-	assert.Equal(t, int64(3_000), m.status.tokens)
-	assert.InDelta(t, 0.10, m.status.cost, 0.0001)
+	assert.Equal(t, int64(3_000), m.status.Tokens)
+	assert.InDelta(t, 0.10, m.status.Cost, 0.0001)
+}
+
+// TestSessionCompactionDrivesGaugeState verifies the status line adopts the
+// usage event's compaction threshold and flips to "compacting…" for the
+// started→completed window of a SessionCompactionEvent.
+func TestSessionCompactionDrivesGaugeState(t *testing.T) {
+	t.Parallel()
+	m := bareModel(24)
+
+	m.handleEvent(t.Context(), runtime.StreamStarted("root-session", "root"))
+	m.handleEvent(t.Context(), runtime.NewTokenUsageEvent("root-session", "root", &runtime.Usage{
+		InputTokens:         6_000,
+		OutputTokens:        3_000,
+		ContextLength:       9_000,
+		ContextLimit:        10_000,
+		CompactionThreshold: 0.95,
+	}))
+	assert.InDelta(t, 0.95, m.status.CompactionThreshold, 0.0001)
+	assert.Contains(t, ui.RenderContext(m.status), "90%")
+
+	m.handleEvent(t.Context(), runtime.SessionCompaction("root-session", "started", "root"))
+	assert.True(t, m.status.Compacting)
+	out := ui.RenderContext(m.status)
+	assert.Contains(t, out, "compacting…")
+	assert.NotContains(t, out, "90%")
+
+	m.handleEvent(t.Context(), runtime.SessionCompactionCompleted("root-session", runtime.CompactionOutcomeApplied, "root"))
+	assert.False(t, m.status.Compacting)
+	out = ui.RenderContext(m.status)
+	assert.NotContains(t, out, "compacting…")
+	assert.Contains(t, out, "90%")
 }

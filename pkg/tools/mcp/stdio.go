@@ -43,13 +43,16 @@ func (c *stdioMCPClient) Initialize(ctx context.Context, _ *gomcp.InitializeRequ
 
 	toolChanged, promptChanged := c.notificationHandlers()
 
-	// Create client options with elicitation, sampling, and notification support
+	// Create client options with elicitation, sampling, and notification support.
+	// Sampling registration is delegated to applySamplingHandlerOpts so the
+	// with-tools callback is wired eagerly even when handler fields are still
+	// nil at Initialize time — see that method for the ordering rationale.
 	opts := &gomcp.ClientOptions{
 		ElicitationHandler:       c.handleElicitationRequest,
-		CreateMessageHandler:     c.handleSamplingRequest,
 		ToolListChangedHandler:   toolChanged,
 		PromptListChangedHandler: promptChanged,
 	}
+	c.applySamplingHandlerOpts(opts)
 
 	client := gomcp.NewClient(&gomcp.Implementation{
 		Name:    "docker agent",

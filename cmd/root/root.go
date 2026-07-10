@@ -36,6 +36,19 @@ type rootFlags struct {
 	dataDir     string
 }
 
+const (
+	envConfigDir       = "DOCKER_AGENT_CONFIG_DIR"
+	cagentEnvConfigDir = "CAGENT_CONFIG_DIR"
+)
+
+// resolveConfigDir picks the config directory override with flag > env >
+// default precedence. The env fallbacks let external tools point docker-agent
+// at a non-default config dir (e.g. to locate hooks.d) without controlling
+// its argv.
+func resolveConfigDir(flagValue string) string {
+	return cmp.Or(flagValue, os.Getenv(envConfigDir), os.Getenv(cagentEnvConfigDir))
+}
+
 func NewRootCmd() *cobra.Command {
 	var flags rootFlags
 
@@ -46,15 +59,14 @@ func NewRootCmd() *cobra.Command {
 
 New to docker agent? Take the hands-on tour: docker agent getting-started`,
 		Example: `  docker-agent run
-  docker-agent run ./agent.yaml
-  docker-agent run agentcatalog/pirate`,
+  docker-agent run ./agent.yaml`,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			// Apply directory overrides before anything else so that
 			// logging, telemetry, and config loading honour them.
 			if dir := flags.cacheDir; dir != "" {
 				paths.SetCacheDir(dir)
 			}
-			if dir := flags.configDir; dir != "" {
+			if dir := resolveConfigDir(flags.configDir); dir != "" {
 				paths.SetConfigDir(dir)
 			}
 			if dir := flags.dataDir; dir != "" {
@@ -154,6 +166,7 @@ We collect anonymous usage data to help improve docker agent. To disable:
 	// Define groups
 	cmd.AddGroup(
 		&cobra.Group{ID: "core", Title: "Core Commands:"},
+		&cobra.Group{ID: "diagnose", Title: "Diagnose Commands:"},
 		&cobra.Group{ID: "advanced", Title: "Advanced Commands:"},
 	)
 
@@ -165,6 +178,8 @@ We collect anonymous usage data to help improve docker agent. To disable:
 		newEvalCmd(),
 		newShareCmd(),
 		newModelsCmd(),
+		newSetupCmd(),
+		newDoctorCmd(),
 		newDebugCmd(),
 		newAliasCmd(),
 		newSandboxCmd(),

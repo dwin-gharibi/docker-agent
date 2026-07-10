@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
+	"github.com/docker/docker-agent/pkg/chatgpt"
 	"github.com/docker/docker-agent/pkg/config/latest"
 	"github.com/docker/docker-agent/pkg/environment"
 )
@@ -734,6 +735,46 @@ func TestAvailableProviders_PrecedenceOrder(t *testing.T) {
 	assert.Equal(t, "dmr", providers[0])
 }
 
+func TestAvailableProviders_ChatGPTLogin(t *testing.T) {
+	t.Parallel()
+
+	// A ChatGPT sign-in (served as the virtual CHATGPT_OAUTH_TOKEN variable)
+	// makes the chatgpt provider available.
+	var env environment.Provider = environment.NewMapEnvProvider(map[string]string{
+		"CHATGPT_OAUTH_TOKEN": "access-token",
+	})
+	providers := AvailableProviders(t.Context(), "", env)
+	assert.Equal(t, "chatgpt", providers[0])
+
+	// An explicit OPENAI_API_KEY keeps priority so adding a sign-in never
+	// changes auto-selection for existing API-key users.
+	env = environment.NewMapEnvProvider(map[string]string{
+		"OPENAI_API_KEY":      "test-key",
+		"CHATGPT_OAUTH_TOKEN": "access-token",
+	})
+	providers = AvailableProviders(t.Context(), "", env)
+	assert.Equal(t, "openai", providers[0])
+
+	// The sign-in wins over lower-priority providers.
+	env = environment.NewMapEnvProvider(map[string]string{
+		"CHATGPT_OAUTH_TOKEN": "access-token",
+		"MISTRAL_API_KEY":     "test-key",
+	})
+	providers = AvailableProviders(t.Context(), "", env)
+	assert.Equal(t, "chatgpt", providers[0])
+}
+
+func TestAutoModelConfig_ChatGPT(t *testing.T) {
+	t.Parallel()
+
+	env := environment.NewMapEnvProvider(map[string]string{"CHATGPT_OAUTH_TOKEN": "access-token"})
+
+	modelConfig := AutoModelConfig(t.Context(), "", env, nil, nil)
+
+	assert.Equal(t, "chatgpt", modelConfig.Provider)
+	assert.Equal(t, DefaultModels["chatgpt"], modelConfig.Model)
+}
+
 func TestAutoModelConfig_UserDefaultModel(t *testing.T) {
 	t.Parallel()
 
@@ -1007,8 +1048,10 @@ func TestAutoModelFallbackError(t *testing.T) {
 		err := &AutoModelFallbackError{}
 		msg := err.Error()
 		assert.Contains(t, msg, "No model is currently available")
+		assert.Contains(t, msg, "docker agent setup")
 		assert.Contains(t, msg, "docker model pull")
 		assert.Contains(t, msg, "ANTHROPIC_API_KEY")
+		assert.Contains(t, msg, environment.ModelSetupDocsURL)
 		assert.NotContains(t, msg, "Could not initialize")
 	})
 
@@ -1089,4 +1132,26 @@ func TestProviderAPIKeyEnvVars(t *testing.T) {
 
 	// Broad, general-purpose tokens must not be forwarded as model credentials.
 	assert.NotContains(t, vars, "GITHUB_TOKEN")
+
+	// The ChatGPT OAuth access token is a subscription credential, not an
+	// API key, and must never be forwarded into isolated environments.
+	assert.NotContains(t, vars, chatgpt.TokenEnvVar)
+}
+
+func TestCloudProviderEnvVars(t *testing.T) {
+	t.Parallel()
+
+	providers := CloudProviderEnvVars()
+
+	// Must mirror the auto-selection table: same providers, same priority
+	// order, same detection variables.
+	assert.Len(t, providers, len(cloudProviders))
+	for i, p := range providers {
+		assert.Equal(t, cloudProviders[i].name, p.Provider)
+		assert.Equal(t, cloudProviders[i].envVars, p.EnvVars)
+	}
+
+	// Mutating the returned slices must not corrupt the package table.
+	providers[0].EnvVars[0] = "MUTATED"
+	assert.NotEqual(t, "MUTATED", cloudProviders[0].envVars[0])
 }

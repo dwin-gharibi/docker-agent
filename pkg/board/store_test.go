@@ -1,11 +1,14 @@
 package board
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/docker/docker-agent/pkg/paths"
 )
 
 func testStore(t *testing.T) *Store {
@@ -116,4 +119,51 @@ func TestStoreDeleteCard(t *testing.T) {
 
 	// Deleting a missing card is a no-op.
 	require.NoError(t, s.DeleteCard("c1"))
+}
+
+// TestOpenStoreSkipsNullCards proves a hand-edited or corrupted state file
+// containing null entries loads instead of panicking.
+func TestOpenStoreSkipsNullCards(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "cards.json")
+	require.NoError(t, os.WriteFile(path, []byte(`[null, {"id": "c1", "column": "dev"}]`), 0o644))
+
+	s, err := OpenStore(path)
+	require.NoError(t, err)
+	cards := s.ListCards()
+	require.Len(t, cards, 1)
+	assert.Equal(t, "c1", cards[0].ID)
+}
+
+// TestStorePortablePaths proves card paths under home are persisted
+// ~-contracted (so shared state files work across environments with
+// different home directories) and expanded again on load.
+func TestStorePortablePaths(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "cards.json")
+	s, err := OpenStore(path)
+	require.NoError(t, err)
+
+	home := paths.GetHomeDir()
+	card := &Card{
+		ID:       "c1",
+		Column:   "dev",
+		RepoPath: filepath.Join(home, "src", "repo"),
+		Worktree: filepath.Join(home, ".cagent", "worktrees", "board-abc"),
+	}
+	require.NoError(t, s.InsertCard(card))
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `"~/src/repo"`)
+	assert.Contains(t, string(data), `"~/.cagent/worktrees/board-abc"`)
+
+	s2, err := OpenStore(path)
+	require.NoError(t, err)
+	got, err := s2.GetCard("c1")
+	require.NoError(t, err)
+	assert.Equal(t, card.RepoPath, got.RepoPath)
+	assert.Equal(t, card.Worktree, got.Worktree)
 }

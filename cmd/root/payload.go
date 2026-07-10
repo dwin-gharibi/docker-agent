@@ -22,7 +22,7 @@ func (f *runExecFlags) createSessionRequest(workingDir string) runtime.CreateSes
 		AgentName:         f.agentName,
 		ToolsApproved:     f.autoApprove,
 		HideToolResults:   f.hideToolResults,
-		SessionDB:         f.sessionDB,
+		SessionDB:         sessionDBPath(f.sessionDB),
 		ResumeSessionID:   f.sessionID,
 		SnapshotsEnabled:  f.snapshotsEnabled,
 		GlobalPermissions: f.globalPermissions,

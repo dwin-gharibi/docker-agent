@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -28,7 +29,8 @@ import (
 )
 
 // newTestChatPage creates a minimal chatPage for testing queue behavior.
-// Note: This only initializes fields needed for queue testing.
+// Note: This only initializes fields needed for queue testing. The nil app
+// means busy sends fall back to the local queue instead of steering.
 // processMessage cannot be called without full initialization.
 func newTestChatPage(t *testing.T) *chatPage {
 	t.Helper()
@@ -107,6 +109,7 @@ func (queueTestRuntime) SetAgentThinkingLevel(context.Context, string, effort.Le
 func (queueTestRuntime) AvailableModels(context.Context) []runtime.ModelChoice { return nil }
 func (queueTestRuntime) SupportsModelSwitching() bool                          { return false }
 func (queueTestRuntime) OnToolsChanged(func(runtime.Event))                    {}
+func (queueTestRuntime) OnBackgroundEvent(func(runtime.Event))                 {}
 func (queueTestRuntime) QueueStatus() runtime.QueueStatus                      { return runtime.QueueStatus{} }
 func (queueTestRuntime) TogglePause(context.Context) (bool, error)             { return false, nil }
 func (queueTestRuntime) Close() error                                          { return nil }
@@ -282,8 +285,8 @@ func TestQueueFlow_BusyAgent_QueuesMessage(t *testing.T) {
 	p := newTestChatPage(t)
 	// newTestChatPage already sets working=true
 
-	// Send first message while busy
-	msg1 := messages.SendMsg{Content: "first message"}
+	// Send first explicitly queued message while busy
+	msg1 := messages.SendMsg{Content: "first message", Queue: true}
 	_, cmd := p.handleSendMsg(msg1)
 
 	// Should be queued
@@ -293,7 +296,7 @@ func TestQueueFlow_BusyAgent_QueuesMessage(t *testing.T) {
 	assert.NotNil(t, cmd)
 
 	// Send second message while still busy
-	msg2 := messages.SendMsg{Content: "second message"}
+	msg2 := messages.SendMsg{Content: "second message", Queue: true}
 	_, _ = p.handleSendMsg(msg2)
 
 	require.Len(t, p.messageQueue, 2)
@@ -301,7 +304,7 @@ func TestQueueFlow_BusyAgent_QueuesMessage(t *testing.T) {
 	assert.Equal(t, "second message", p.messageQueue[1].content)
 
 	// Send third message
-	msg3 := messages.SendMsg{Content: "third message"}
+	msg3 := messages.SendMsg{Content: "third message", Queue: true}
 	_, _ = p.handleSendMsg(msg3)
 
 	require.Len(t, p.messageQueue, 3)
@@ -315,7 +318,7 @@ func TestQueueFlow_QueueFull_RejectsMessage(t *testing.T) {
 
 	// Fill the queue to max
 	for i := range maxQueuedMessages {
-		msg := messages.SendMsg{Content: "message"}
+		msg := messages.SendMsg{Content: "message", Queue: true}
 		_, _ = p.handleSendMsg(msg)
 		assert.Len(t, p.messageQueue, i+1)
 	}
@@ -323,7 +326,7 @@ func TestQueueFlow_QueueFull_RejectsMessage(t *testing.T) {
 	require.Len(t, p.messageQueue, maxQueuedMessages)
 
 	// Try to add one more - should be rejected
-	msg := messages.SendMsg{Content: "overflow message"}
+	msg := messages.SendMsg{Content: "overflow message", Queue: true}
 	_, cmd := p.handleSendMsg(msg)
 
 	// Queue size should not change
@@ -338,9 +341,9 @@ func TestQueueFlow_PopFromQueue(t *testing.T) {
 	p := newTestChatPage(t)
 
 	// Queue some messages
-	p.handleSendMsg(messages.SendMsg{Content: "first"})
-	p.handleSendMsg(messages.SendMsg{Content: "second"})
-	p.handleSendMsg(messages.SendMsg{Content: "third"})
+	p.handleSendMsg(messages.SendMsg{Content: "first", Queue: true})
+	p.handleSendMsg(messages.SendMsg{Content: "second", Queue: true})
+	p.handleSendMsg(messages.SendMsg{Content: "third", Queue: true})
 
 	require.Len(t, p.messageQueue, 3)
 
@@ -378,9 +381,9 @@ func TestQueueFlow_ClearQueue(t *testing.T) {
 	// newTestChatPage sets working=true
 
 	// Queue some messages
-	p.handleSendMsg(messages.SendMsg{Content: "first"})
-	p.handleSendMsg(messages.SendMsg{Content: "second"})
-	p.handleSendMsg(messages.SendMsg{Content: "third"})
+	p.handleSendMsg(messages.SendMsg{Content: "first", Queue: true})
+	p.handleSendMsg(messages.SendMsg{Content: "second", Queue: true})
+	p.handleSendMsg(messages.SendMsg{Content: "third", Queue: true})
 
 	require.Len(t, p.messageQueue, 3)
 
@@ -548,4 +551,164 @@ func TestReadOnly_RejectsBypassQueueCommands(t *testing.T) {
 	assert.Empty(t, p.messageQueue)
 	assert.False(t, p.working, "read-only must not start processing a BypassQueue message")
 	assert.Nil(t, p.msgCancel, "read-only must not start a stream for a BypassQueue message")
+}
+
+// steerRecordingRuntime records Steer calls so tests can assert that busy
+// sends are injected into the ongoing stream instead of queued locally.
+type steerRecordingRuntime struct {
+	queueTestRuntime
+
+	mu       sync.Mutex
+	steerErr error
+	steers   []runtime.QueuedMessage
+}
+
+func (r *steerRecordingRuntime) Steer(_ context.Context, msg runtime.QueuedMessage) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.steerErr != nil {
+		return r.steerErr
+	}
+	r.steers = append(r.steers, msg)
+	return nil
+}
+
+func (r *steerRecordingRuntime) steered() []runtime.QueuedMessage {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]runtime.QueuedMessage(nil), r.steers...)
+}
+
+// TestSteerFlow_BusyAgent_SteersMessage pins the issue #3547 contract: a
+// plain send while the agent is working attaches to the ongoing stream via
+// the runtime steer queue instead of waiting in the local TUI queue.
+func TestSteerFlow_BusyAgent_SteersMessage(t *testing.T) {
+	t.Parallel()
+
+	rt := &steerRecordingRuntime{}
+	sess := session.New()
+	p := New(t.Context(), app.New(t.Context(), rt, sess), service.NewSessionState(sess)).(*chatPage)
+	p.working = true
+
+	_, cmd := p.handleSendMsg(messages.SendMsg{Content: "extra context"})
+
+	require.NotNil(t, cmd)
+	assert.Empty(t, p.messageQueue, "steered messages must not enter the local queue")
+
+	// Run the async steer command and verify the runtime received the message.
+	result := cmd()
+	assert.IsType(t, steerSentMsg{}, result)
+	steered := rt.steered()
+	require.Len(t, steered, 1)
+	assert.Equal(t, "extra context", steered[0].Content)
+}
+
+// TestSteerFlow_ExplicitQueue_SkipsSteering verifies the internal Queue
+// flag (used by fallbacks such as a rejected steer): a Queue-flagged send
+// while busy goes to the local queue and never touches the runtime steer
+// queue.
+func TestSteerFlow_ExplicitQueue_SkipsSteering(t *testing.T) {
+	t.Parallel()
+
+	rt := &steerRecordingRuntime{}
+	sess := session.New()
+	p := New(t.Context(), app.New(t.Context(), rt, sess), service.NewSessionState(sess)).(*chatPage)
+	p.working = true
+
+	_, cmd := p.handleSendMsg(messages.SendMsg{Content: "for later", Queue: true})
+
+	require.NotNil(t, cmd)
+	require.Len(t, p.messageQueue, 1)
+	assert.Equal(t, "for later", p.messageQueue[0].content)
+	assert.Empty(t, rt.steered())
+}
+
+// TestSteerFlow_QueueSendMode_QueuesPlainSend verifies the /settings switch:
+// with the send mode set to queue, a plain send while busy goes to the local
+// queue instead of the runtime steer queue.
+func TestSteerFlow_QueueSendMode_QueuesPlainSend(t *testing.T) {
+	t.Parallel()
+
+	rt := &steerRecordingRuntime{}
+	sess := session.New()
+	p := New(t.Context(), app.New(t.Context(), rt, sess), service.NewSessionState(sess), WithSendMode(messages.SendModeQueue)).(*chatPage)
+	p.working = true
+
+	_, cmd := p.handleSendMsg(messages.SendMsg{Content: "for later"})
+
+	require.NotNil(t, cmd)
+	require.Len(t, p.messageQueue, 1)
+	assert.Equal(t, "for later", p.messageQueue[0].content)
+	assert.Empty(t, rt.steered())
+
+	// Switching back to steer mid-session restores steering.
+	p.SetSendMode(messages.SendModeSteer)
+	_, cmd = p.handleSendMsg(messages.SendMsg{Content: "right away"})
+	require.NotNil(t, cmd)
+	assert.IsType(t, steerSentMsg{}, cmd())
+	require.Len(t, rt.steered(), 1)
+	assert.Equal(t, "right away", rt.steered()[0].Content)
+}
+
+// TestSteerFlow_SteerRejected_FallsBackToQueue verifies that a steer
+// rejection (e.g. full runtime queue) re-routes the message to the local
+// queue while the agent is still working, so it is never dropped.
+func TestSteerFlow_SteerRejected_FallsBackToQueue(t *testing.T) {
+	t.Parallel()
+
+	rt := &steerRecordingRuntime{steerErr: errors.New("steer queue full")}
+	sess := session.New()
+	p := New(t.Context(), app.New(t.Context(), rt, sess), service.NewSessionState(sess)).(*chatPage)
+	p.working = true
+
+	_, cmd := p.handleSendMsg(messages.SendMsg{Content: "extra context"})
+	require.NotNil(t, cmd)
+
+	failed, ok := cmd().(steerFailedMsg)
+	require.True(t, ok, "a rejected steer must come back as steerFailedMsg")
+	assert.Equal(t, "extra context", failed.original.Content)
+
+	_, cmd = p.Update(failed)
+	require.NotNil(t, cmd)
+	require.Len(t, p.messageQueue, 1)
+	assert.Equal(t, "extra context", p.messageQueue[0].content)
+}
+
+// TestSteerFlow_ForkSkillWhileBusy_Queues verifies fork-mode skill commands
+// are never steered: they spawn their own sub-session stream, which cannot
+// attach to the running one, so they wait in the local queue instead.
+func TestSteerFlow_ForkSkillWhileBusy_Queues(t *testing.T) {
+	t.Parallel()
+
+	skillSet := skillstool.New([]skills.Skill{{
+		Name:          "services",
+		Description:   "List services",
+		Context:       "fork",
+		InlineContent: "# Services\nList repository services.",
+	}}, t.TempDir())
+	rt := &skillDispatchRuntime{skillset: skillSet}
+	sess := session.New()
+	p := New(t.Context(), app.New(t.Context(), rt, sess), service.NewSessionState(sess)).(*chatPage)
+	p.working = true
+
+	_, cmd := p.handleSendMsg(messages.SendMsg{Content: "/services please"})
+
+	require.NotNil(t, cmd)
+	require.Len(t, p.messageQueue, 1)
+	assert.Equal(t, "/services please", p.messageQueue[0].content)
+	assert.Zero(t, rt.forkCallCount(), "fork skill must not run while another stream is active")
+}
+
+// TestSteerFlow_NoApp_FallsBackToQueue documents the defensive fallback:
+// without an app there is no runtime to steer, so busy sends queue locally.
+func TestSteerFlow_NoApp_FallsBackToQueue(t *testing.T) {
+	t.Parallel()
+
+	p := newTestChatPage(t)
+
+	_, cmd := p.handleSendMsg(messages.SendMsg{Content: "hello"})
+
+	require.NotNil(t, cmd)
+	require.Len(t, p.messageQueue, 1)
+	assert.Equal(t, "hello", p.messageQueue[0].content)
 }

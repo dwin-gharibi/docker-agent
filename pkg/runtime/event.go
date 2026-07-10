@@ -367,6 +367,11 @@ type Usage struct {
 	ContextLimit  int64         `json:"context_limit"`
 	Cost          float64       `json:"cost"`
 	LastMessage   *MessageUsage `json:"last_message,omitempty"`
+	// CompactionThreshold is the fraction of the context window at which
+	// auto-compaction triggers for the agent that produced this snapshot,
+	// so UIs can color context gauges against it. 0 means unknown;
+	// consumers should fall back to [compaction.DefaultThreshold].
+	CompactionThreshold float64 `json:"compaction_threshold,omitempty"`
 }
 
 // MessageUsage contains per-message usage data to include in TokenUsageEvent.
@@ -395,15 +400,21 @@ func NewTokenUsageEvent(sessionID, agentName string, usage *Usage) Event {
 func (e *TokenUsageEvent) GetSessionID() string { return e.SessionID }
 
 // SessionUsage builds a Usage from the session's current token counts, the
-// model's context limit, and the session's own cost.
-func SessionUsage(sess *session.Session, contextLimit int64) *Usage {
-	return &Usage{
+// model's context limit, and the session's own cost. The optional
+// compactionThreshold is the agent's configured auto-compaction trigger
+// fraction (0 or omitted when unknown), passed along verbatim for UI gauges.
+func SessionUsage(sess *session.Session, contextLimit int64, compactionThreshold ...float64) *Usage {
+	u := &Usage{
 		InputTokens:   sess.InputTokens,
 		OutputTokens:  sess.OutputTokens,
 		ContextLength: sess.InputTokens + sess.OutputTokens,
 		ContextLimit:  contextLimit,
 		Cost:          sess.OwnCost(),
 	}
+	if len(compactionThreshold) > 0 {
+		u.CompactionThreshold = compactionThreshold[0]
+	}
+	return u
 }
 
 type SessionTitleEvent struct {

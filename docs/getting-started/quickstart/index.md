@@ -21,6 +21,9 @@ $ docker agent run
 
 This starts a general-purpose assistant with sensible defaults. Just start chatting.
 
+> [!NOTE]
+> This needs a model: a cloud provider API key, or a local model pulled through Docker Model Runner. [Set Up a Model](../set-up-a-model/index.md) walks through both paths.
+
 ## Option B: Run a Pre-Built Agent from the Registry
 
 Try a ready-made agent from the [agent catalog](https://hub.docker.com/u/agentcatalog) — no YAML needed:
@@ -78,6 +81,8 @@ This gives your agent:
 - **Filesystem access** to read and write files
 - **Shell access** to run commands
 - **Think tool** for step-by-step reasoning
+
+This config needs `ANTHROPIC_API_KEY` set. See [Set Up a Model](../set-up-a-model/index.md) for where to put it, or use a local `dmr/...` model that needs no key.
 
 ```bash
 # Launch the interactive terminal UI

@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/docker/docker-agent/pkg/config"
+	"github.com/docker/docker-agent/pkg/config/latest"
 	"github.com/docker/docker-agent/pkg/environment"
 )
 
@@ -43,7 +44,7 @@ func TestBuildInstructions(t *testing.T) {
 		},
 	}
 
-	instructions := buildInstructions(ctx, runConfig)
+	instructions := buildInstructions(ctx, runConfig, "")
 
 	// Verify the instructions contain the base instructions
 	assert.Contains(t, instructions, agentBuilderInstructions)
@@ -51,6 +52,53 @@ func TestBuildInstructions(t *testing.T) {
 	// Verify the instructions contain provider guidance
 	assert.Contains(t, instructions, "Preferred model providers to use:")
 	assert.Contains(t, instructions, "models:")
+}
+
+func TestBuildInstructions_CustomProviders(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	runConfig := &config.RuntimeConfig{
+		Config: config.Config{
+			WorkingDir: t.TempDir(),
+			Providers: map[string]latest.ProviderConfig{
+				"myprovider": {
+					BaseURL:  "https://llm.corp.example.com/v1",
+					APIType:  "openai_chatcompletions",
+					TokenKey: "MYPROVIDER_API_KEY",
+				},
+				"no-creds": {
+					BaseURL:  "https://other.example.com/v1",
+					TokenKey: "UNSET_KEY",
+				},
+			},
+		},
+		EnvProviderForTests: environment.NewEnvListProvider([]string{
+			"MYPROVIDER_API_KEY=dummy",
+		}),
+	}
+
+	t.Run("without model override", func(t *testing.T) {
+		t.Parallel()
+
+		instructions := buildInstructions(ctx, runConfig, "")
+
+		assert.Contains(t, instructions, "custom providers")
+		assert.Contains(t, instructions, "base_url: https://llm.corp.example.com/v1")
+		assert.Contains(t, instructions, "api_type: openai_chatcompletions")
+		assert.Contains(t, instructions, "token_key: MYPROVIDER_API_KEY")
+		assert.Contains(t, instructions, "docker agent models --provider myprovider")
+		assert.NotContains(t, instructions, "no-creds", "providers without credentials are excluded")
+	})
+
+	t.Run("with model override", func(t *testing.T) {
+		t.Parallel()
+
+		instructions := buildInstructions(ctx, runConfig, "myprovider/corp-model")
+
+		assert.Contains(t, instructions, "model: corp-model")
+		assert.NotContains(t, instructions, "REPLACE_WITH_MODEL_ID")
+	})
 }
 
 func TestAgent(t *testing.T) {

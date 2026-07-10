@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/docker/docker-agent/pkg/leantui/ui"
 	"github.com/docker/docker-agent/pkg/runtime"
 	"github.com/docker/docker-agent/pkg/tui/service"
 	tuitypes "github.com/docker/docker-agent/pkg/tui/types"
@@ -25,13 +26,11 @@ func bareModel(height int) *model {
 	return &model{
 		width:        width,
 		height:       height,
-		r:            newRenderer(w, width, height),
-		editor:       newEditor("type here"),
-		ac:           newAutocomplete(),
-		transcript:   newTranscript(),
-		status:       statusData{workingDir: "/tmp/project"},
+		r:            ui.NewRenderer(w, width, height),
+		screen:       ui.NewScreen("/tmp/project", "", "type here"),
+		status:       ui.StatusModel{WorkingDir: "/tmp/project"},
 		sessionState: service.NewSessionState(nil),
-		usage:        newUsageTracker(),
+		usage:        ui.NewUsageTracker(),
 	}
 }
 
@@ -41,43 +40,44 @@ func TestStreamingGrowthScrollsAndRendersMarkdown(t *testing.T) {
 	m.busy = true
 	m.render() // initial frame
 
-	m.transcript.pending = &pendingBlock{kind: blockAssistant}
+	m.screen.Transcript.AppendAssistant("")
+	m.screen.Transcript.AppendAssistant("init")
 	for i := range 40 {
-		m.transcript.pending.text.WriteString("Paragraph " + strconv.Itoa(i) + " with some streamed text.\n\n")
+		m.screen.Transcript.AppendAssistant("Paragraph " + strconv.Itoa(i) + " with some streamed text.\n\n")
 		lines, cl, cc := m.buildLines()
-		require.NotPanics(t, func() { m.r.frame(lines, cl, cc) })
+		require.NotPanics(t, func() { m.r.Frame(lines, cl, cc) })
 	}
 
 	// Content far exceeds the 10-row viewport, so it must have scrolled.
-	assert.Positive(t, m.r.viewportTop)
+	assert.Positive(t, m.r.ViewportTop())
 
 	// Finalizing the stream turns it into a cached block; the visible output is
 	// unchanged because it was already rendered as markdown live.
-	m.transcript.flushPending()
-	assert.Len(t, m.transcript.blocks, 1)
+	m.screen.Transcript.FlushPending()
+	assert.Equal(t, 1, m.screen.Transcript.BlockCount())
 	require.NotPanics(t, func() {
 		lines, cl, cc := m.buildLines()
-		m.r.frame(lines, cl, cc)
+		m.r.Frame(lines, cl, cc)
 	})
 }
 
 func TestBuildLinesPlacesCursorOnInput(t *testing.T) {
 	t.Parallel()
 	m := bareModel(24)
-	m.editor.setText("hello")
+	m.screen.Editor.SetText("hello")
 
 	lines, cursorLine, cursorCol := m.buildLines()
 	require.NotEmpty(t, lines)
 	// The cursor line must point at the input row and the column past the prompt.
 	assert.Contains(t, lines[cursorLine], "hello")
-	assert.Equal(t, promptWidth+5, cursorCol)
+	assert.Equal(t, ui.PromptWidth+5, cursorCol)
 }
 
 func TestConversationLinesShowsSpinnerWhenBusy(t *testing.T) {
 	t.Parallel()
 	m := bareModel(24)
 	m.busy = true
-	lines := m.transcript.lines(80, m.spinnerFrame, m.busy, m.sessionState, nil)
+	lines := m.screen.Transcript.Lines(80, m.spinnerFrame, m.busy, m.sessionState, nil)
 	assert.Contains(t, strings.Join(lines, ""), "Working")
 }
 
@@ -85,23 +85,23 @@ func TestToolConfirmationReplacesRunningTool(t *testing.T) {
 	t.Parallel()
 	m := bareModel(24)
 	tv := shellToolView(tuitypes.ToolStatusRunning)
-	m.transcript.upsertTool("root", tv.message.ToolCall, tv.message.ToolDefinition, tuitypes.ToolStatusRunning)
-	require.Len(t, m.transcript.toolz.order, 1)
+	m.screen.Transcript.UpsertTool("root", tv.Message().ToolCall, tv.Message().ToolDefinition, tuitypes.ToolStatusRunning)
+	require.Equal(t, 1, m.screen.Transcript.ToolCount())
 
-	event := runtime.ToolCallConfirmation(tv.message.ToolCall, tv.message.ToolDefinition, "root", nil)
+	event := runtime.ToolCallConfirmation(tv.Message().ToolCall, tv.Message().ToolDefinition, "root", nil)
 	m.handleEvent(t.Context(), event)
 
-	assert.Empty(t, m.transcript.toolz.order)
-	assert.Empty(t, m.transcript.toolz.byID)
-	require.NotNil(t, m.confirm)
+	assert.Zero(t, m.screen.Transcript.ToolCount())
+	assert.Zero(t, m.screen.Transcript.ToolByIDCount())
+	require.NotNil(t, m.screen.Confirm)
 }
 
 func TestBuildLinesConfirmCursorSitsOnOptions(t *testing.T) {
 	t.Parallel()
 	m := bareModel(24)
-	m.confirm = &confirmState{
-		tool:     "shell",
-		toolView: *shellToolView(tuitypes.ToolStatusConfirmation),
+	m.screen.Confirm = &ui.ConfirmModel{
+		Tool: "shell",
+		View: *shellToolView(tuitypes.ToolStatusConfirmation),
 	}
 
 	lines, cursorLine, cursorCol := m.buildLines()

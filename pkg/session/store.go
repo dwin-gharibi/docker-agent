@@ -481,6 +481,15 @@ func NewSQLiteSessionStore(ctx context.Context, path string) (Store, error) {
 			return nil, err
 		}
 
+		// Don't attempt recovery for transient errors: a canceled context
+		// (e.g. Ctrl-C during startup) or a BUSY/LOCKED database (e.g. a
+		// second docker-agent instance holding a write lock). A fresh database
+		// can't fix those, and the reset would silently discard a perfectly
+		// healthy session history.
+		if sqliteutil.IsTransientError(err) {
+			return nil, err
+		}
+
 		// If migrations failed, try to recover by backing up the database and starting fresh
 		slog.WarnContext(ctx, "Failed to open session store, attempting recovery", "error", err)
 
@@ -592,6 +601,18 @@ func backupDatabase(path string) error {
 	return nil
 }
 
+// parseCreatedAt parses a created_at column value. A corrupt timestamp in a
+// single row must not make every session unloadable, so parse failures are
+// logged and the zero time is returned instead of an error.
+func parseCreatedAt(createdAtStr string) time.Time {
+	t, err := time.Parse(time.RFC3339, createdAtStr)
+	if err != nil {
+		slog.Warn("Invalid created_at in session database, using zero time", "value", createdAtStr, "error", err)
+		return time.Time{}
+	}
+	return t
+}
+
 // AddSession adds a new session to the store, including any messages
 func (s *SQLiteSessionStore) AddSession(ctx context.Context, session *Session) error {
 	if session.ID == "" {
@@ -663,11 +684,7 @@ func scanSession(scanner interface {
 		return nil, err
 	}
 
-	sess.CreatedAt, err = time.Parse(time.RFC3339, createdAtStr)
-	if err != nil {
-		return nil, err
-	}
-
+	sess.CreatedAt = parseCreatedAt(createdAtStr)
 	sess.WorkingDir = workingDir.String
 	sess.ParentID = parentID.String
 
@@ -875,10 +892,7 @@ func (s *SQLiteSessionStore) GetSessionSummaries(ctx context.Context) ([]Summary
 		if err := rows.Scan(&summary.ID, &summary.Title, &createdAtStr, &summary.Starred, &workingDir, &summary.NumMessages); err != nil {
 			return nil, err
 		}
-		summary.CreatedAt, err = time.Parse(time.RFC3339, createdAtStr)
-		if err != nil {
-			return nil, err
-		}
+		summary.CreatedAt = parseCreatedAt(createdAtStr)
 		summary.WorkingDir = workingDir.String
 		summaries = append(summaries, summary)
 	}

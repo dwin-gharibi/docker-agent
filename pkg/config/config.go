@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/goccy/go-yaml"
@@ -47,7 +48,11 @@ func Load(ctx context.Context, source Source) (*latest.Config, error) {
 
 	oldConfig, err := parseCurrentVersion(data, raw.Version)
 	if err != nil {
-		return nil, fmt.Errorf("parsing config file\n%s", yaml.FormatError(err, true, true))
+		msg := yaml.FormatError(err, true, true)
+		if hint := newerVersionHint(data, raw.Version, err); hint != "" {
+			msg += "\n" + hint
+		}
+		return nil, fmt.Errorf("parsing config file\n%s", msg)
 	}
 
 	config, err := migrateToLatestConfig(oldConfig, data)
@@ -146,7 +151,7 @@ func CheckRequiredEnvVars(ctx context.Context, cfg *latest.Config, modelsGateway
 		}
 	}
 
-	missing, err := gatherMissingEnvVars(ctx, cfg, modelsGateway, env)
+	missing, missingModelCreds, err := gatherMissingEnvVars(ctx, cfg, modelsGateway, env)
 	if err != nil {
 		// If there's a tool preflight error, log it but continue
 		slog.WarnContext(ctx, "Failed to preflight toolset environment variables; continuing", "error", err)
@@ -155,7 +160,8 @@ func CheckRequiredEnvVars(ctx context.Context, cfg *latest.Config, modelsGateway
 	// Return error if there are missing environment variables
 	if len(missing) > 0 {
 		return &environment.RequiredEnvError{
-			Missing: missing,
+			Missing:                 missing,
+			MissingModelCredentials: missingModelCreds,
 		}
 	}
 
@@ -169,6 +175,42 @@ func parseCurrentVersion(data []byte, version string) (any, error) {
 		return nil, fmt.Errorf("unsupported config version: %v (valid versions: %s)", version, strings.Join(slices.Sorted(maps.Keys(parsers)), ", "))
 	}
 	return parser(data)
+}
+
+// newerVersionHint returns a user-facing hint when a strict-parse failure is
+// caused by a key that a newer schema version accepts. It tries the parsers
+// for every version above the declared one, in order, and points the user at
+// the smallest version that parses the config successfully. Best-effort: a
+// newer version may accept the config for unrelated reasons (laxer schema),
+// so the original unknown-field error is always shown before the hint.
+func newerVersionHint(data []byte, version string, parseErr error) string {
+	var unknownField *yaml.UnknownFieldError
+	if !errors.As(parseErr, &unknownField) {
+		return ""
+	}
+
+	current, err := strconv.Atoi(version)
+	if err != nil {
+		return ""
+	}
+
+	parsers, _ := versions()
+	var newer []int
+	for v := range parsers {
+		if n, err := strconv.Atoi(v); err == nil && n > current {
+			newer = append(newer, n)
+		}
+	}
+	slices.Sort(newer)
+
+	for _, n := range newer {
+		v := strconv.Itoa(n)
+		if _, err := parsers[v](data); err == nil {
+			return fmt.Sprintf("hint: this key is supported by config version %s; update the top-level 'version' field (currently %s)", v, version)
+		}
+	}
+
+	return ""
 }
 
 func migrateToLatestConfig(c any, raw []byte) (latest.Config, error) {
@@ -345,30 +387,61 @@ func validateProviders(cfg *latest.Config) error {
 	}
 
 	for name, provCfg := range cfg.Providers {
-		// Validate provider name
-		if err := validateProviderName(name); err != nil {
-			return fmt.Errorf("provider '%s': %w", name, err)
+		if err := ValidateProviderConfig(name, provCfg); err != nil {
+			return err
 		}
-
-		// Validate api_type if set
-		if !providerAPITypes[provCfg.APIType] {
-			return fmt.Errorf("provider '%s': invalid api_type '%s' (must be one of: openai_chatcompletions, openai_responses)", name, provCfg.APIType)
-		}
-
-		// base_url is required for OpenAI-compatible providers (the default)
-		// but optional for native providers like anthropic, google, amazon-bedrock
-		if provCfg.BaseURL != "" {
-			if _, err := url.Parse(provCfg.BaseURL); err != nil {
-				return fmt.Errorf("provider '%s': invalid base_url '%s': %w", name, provCfg.BaseURL, err)
-			}
-		} else if isOpenAICustomProvider(provCfg) {
-			return fmt.Errorf("provider '%s': base_url is required for OpenAI-compatible providers", name)
-		}
-
-		// token_key is optional - if not set, requests will be sent without bearer token
 	}
 
 	return nil
+}
+
+// ValidateProviderConfig validates a single named provider configuration, as
+// found in the `providers` section of an agent file or in the user-level
+// config.
+func ValidateProviderConfig(name string, provCfg latest.ProviderConfig) error {
+	// Validate provider name
+	if err := validateProviderName(name); err != nil {
+		return fmt.Errorf("provider '%s': %w", name, err)
+	}
+
+	// Validate api_type if set
+	if !providerAPITypes[provCfg.APIType] {
+		return fmt.Errorf("provider '%s': invalid api_type '%s' (must be one of: openai_chatcompletions, openai_responses)", name, provCfg.APIType)
+	}
+
+	// base_url is required for OpenAI-compatible providers (the default)
+	// but optional for native providers like anthropic, google, amazon-bedrock
+	if provCfg.BaseURL != "" {
+		if _, err := url.Parse(provCfg.BaseURL); err != nil {
+			return fmt.Errorf("provider '%s': invalid base_url '%s': %w", name, provCfg.BaseURL, err)
+		}
+	} else if isOpenAICustomProvider(provCfg) {
+		return fmt.Errorf("provider '%s': base_url is required for OpenAI-compatible providers", name)
+	}
+
+	// token_key is optional - if not set, requests will be sent without bearer token
+
+	return nil
+}
+
+// MergeGlobalProviders merges user-level provider definitions (from the user
+// config) into an agent config's `providers` section. Definitions in the
+// agent file win on name conflicts. Invalid global definitions are skipped
+// with a warning so one bad user-config entry never breaks every run.
+func MergeGlobalProviders(cfg *latest.Config, global map[string]latest.ProviderConfig) {
+	for name, provCfg := range global {
+		if _, exists := cfg.Providers[name]; exists {
+			continue
+		}
+		if err := ValidateProviderConfig(name, provCfg); err != nil {
+			slog.Warn("Ignoring invalid provider from user config", "provider", name, "error", err)
+			continue
+		}
+		if cfg.Providers == nil {
+			cfg.Providers = map[string]latest.ProviderConfig{}
+		}
+		cfg.Providers[name] = provCfg
+	}
 }
 
 // isOpenAICustomProvider returns true if the provider config describes an OpenAI-compatible

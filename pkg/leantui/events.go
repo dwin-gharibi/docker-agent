@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/docker/docker-agent/pkg/leantui/ui"
 	"github.com/docker/docker-agent/pkg/runtime"
 	"github.com/docker/docker-agent/pkg/tools"
 	msgtypes "github.com/docker/docker-agent/pkg/tui/messages"
@@ -29,72 +30,72 @@ func (m *model) handleEvent(ctx context.Context, ev any) {
 		m.trackStreamStopped()
 		m.handleStreamStopped(ctx)
 	case *runtime.AgentChoiceReasoningEvent:
-		m.transcript.appendPending(blockReasoning, e.Content)
+		m.screen.Transcript.AppendReasoning(e.Content)
 	case *runtime.AgentChoiceEvent:
-		m.transcript.appendPending(blockAssistant, e.Content)
+		m.screen.Transcript.AppendAssistant(e.Content)
 	case *runtime.PartialToolCallEvent:
-		m.transcript.flushPending()
+		m.screen.Transcript.FlushPending()
 		toolDef := tools.Tool{Name: e.ToolCall.Function.Name}
 		if e.ToolDefinition != nil {
 			toolDef = *e.ToolDefinition
 		}
-		m.transcript.upsertTool(e.GetAgentName(), e.ToolCall, toolDef, tuitypes.ToolStatusPending)
+		m.screen.Transcript.UpsertTool(e.GetAgentName(), e.ToolCall, toolDef, tuitypes.ToolStatusPending)
 	case *runtime.ToolCallEvent:
-		m.transcript.flushPending()
-		m.transcript.upsertTool(e.GetAgentName(), e.ToolCall, e.ToolDefinition, tuitypes.ToolStatusRunning)
+		m.screen.Transcript.FlushPending()
+		m.screen.Transcript.UpsertTool(e.GetAgentName(), e.ToolCall, e.ToolDefinition, tuitypes.ToolStatusRunning)
 	case *runtime.ToolCallOutputEvent:
-		if tv := m.transcript.tool(e.ToolCallID); tv != nil && tv.message != nil {
-			tv.message.AppendToolOutput(e.Output)
-			if tv.message.ToolStatus == tuitypes.ToolStatusPending {
-				tv.message.ToolStatus = tuitypes.ToolStatusRunning
-				if tv.message.StartedAt == nil {
+		if tv := m.screen.Transcript.Tool(e.ToolCallID); tv != nil && tv.Message() != nil {
+			tv.Message().AppendToolOutput(e.Output)
+			if tv.Message().ToolStatus == tuitypes.ToolStatusPending {
+				tv.Message().ToolStatus = tuitypes.ToolStatusRunning
+				if tv.Message().StartedAt == nil {
 					now := time.Now()
-					tv.message.StartedAt = &now
+					tv.Message().StartedAt = &now
 				}
 			}
 		}
 	case *runtime.ToolCallResponseEvent:
-		m.transcript.finishTool(e, m.sessionState)
+		m.screen.Transcript.FinishTool(e.ToolCallID, ui.ToolResult{Response: e.Response, Result: e.Result, AgentName: e.GetAgentName(), ToolDefinition: e.ToolDefinition, Images: inlineImagesFromToolResult(e.Result)}, m.sessionState)
 	case *runtime.ToolCallConfirmationEvent:
-		m.transcript.removeTool(toolViewID(e.ToolCall))
-		toolDef := ensureToolDefinition(e.ToolCall, e.ToolDefinition)
-		m.confirm = &confirmState{
-			tool:     toolDef.Name,
-			toolView: *newToolView(e.GetAgentName(), e.ToolCall, toolDef, tuitypes.ToolStatusConfirmation),
+		m.screen.Transcript.RemoveTool(ui.ToolViewID(e.ToolCall))
+		toolDef := ui.EnsureToolDefinition(e.ToolCall, e.ToolDefinition)
+		m.screen.Confirm = &ui.ConfirmModel{
+			Tool: toolDef.Name,
+			View: *ui.NewToolView(e.GetAgentName(), e.ToolCall, toolDef, tuitypes.ToolStatusConfirmation),
 		}
 	case *runtime.TokenUsageEvent:
 		m.setTokenUsage(e.SessionID, e.Usage)
 	case *runtime.AgentInfoEvent:
-		m.status.agent = e.AgentName
+		m.status.Agent = e.AgentName
 		if m.sessionState != nil {
 			m.sessionState.SetCurrentAgentName(e.AgentName)
 		}
 		if e.Model != "" {
-			m.status.model = e.Model
+			m.status.Model = e.Model
 		}
 		if e.ContextLimit > 0 {
-			m.status.contextLimit = e.ContextLimit
+			m.status.ContextLimit = e.ContextLimit
 		}
 	case *runtime.TeamInfoEvent:
 		m.applyTeamInfo(ctx, e)
 	case *runtime.SessionCompactionEvent:
 		m.handleSessionCompaction(ctx, e)
 	case *runtime.ErrorEvent:
-		m.transcript.flushPending()
-		m.addNotice("✗ ", e.Error, stError())
+		m.screen.Transcript.FlushPending()
+		m.addNotice("✗ ", e.Error, ui.StError())
 	case *runtime.WarningEvent:
-		m.addNotice("⚠ ", e.Message, stWarning())
+		m.addNotice("⚠ ", e.Message, ui.StWarning())
 	case *runtime.ShellOutputEvent:
 		output := e.Output
-		m.transcript.addBlock(func(w int) []string { return renderToolOutput(output, w) })
+		m.screen.Transcript.AddBlock(func(w int) []string { return ui.RenderToolOutput(output, w) })
 	case *runtime.AgentSwitchingEvent:
 		if e.Switching && e.ToAgent != "" {
-			m.addNotice("→ ", "Switching to "+e.ToAgent, stMuted())
+			m.addNotice("→ ", "Switching to "+e.ToAgent, ui.StMuted())
 		}
 	case *runtime.MaxIterationsReachedEvent:
-		m.addNotice("⚠ ", "Maximum iterations reached.", stWarning())
+		m.addNotice("⚠ ", "Maximum iterations reached.", ui.StWarning())
 	case *runtime.ModelFallbackEvent:
-		m.addNotice("⚠ ", "Model "+e.FailedModel+" failed, falling back to "+e.FallbackModel+".", stWarning())
+		m.addNotice("⚠ ", "Model "+e.FailedModel+" failed, falling back to "+e.FallbackModel+".", ui.StWarning())
 	}
 }
 
@@ -102,12 +103,12 @@ func (m *model) handleUserMessageEvent(e *runtime.UserMessageEvent) {
 	if m.consumeIgnoredUserEcho(e.Message) {
 		return
 	}
-	if pending, ok := m.consumePendingUser(pendingUserSteer, e.Message); ok {
-		m.transcript.flushPending()
-		m.addUserEcho(pending.display)
+	if pending, ok := m.consumePendingUser(ui.PendingUserSteer, e.Message); ok {
+		m.screen.Transcript.FlushPending()
+		m.addUserEcho(pending.Display)
 		return
 	}
-	m.transcript.flushPending()
+	m.screen.Transcript.FlushPending()
 	m.addUserEcho(e.Message)
 }
 
@@ -125,7 +126,9 @@ func (m *model) handleSessionCompaction(ctx context.Context, e *runtime.SessionC
 	switch e.Status {
 	case "started":
 		m.busy = true
+		m.status.Compacting = true
 	case "completed":
+		m.status.Compacting = false
 		m.finishBusy(ctx)
 	}
 }
@@ -133,20 +136,20 @@ func (m *model) handleSessionCompaction(ctx context.Context, e *runtime.SessionC
 // finishBusy clears the busy state at the end of a run and starts the next
 // queued message, if any. It reports whether a queued run was started.
 func (m *model) finishBusy(ctx context.Context) bool {
-	m.transcript.flushPending()
+	m.screen.Transcript.FlushPending()
 	m.busy = false
 	m.runCancel = nil
 
 	if len(m.queue) > 0 {
 		next := m.queue[0]
-		m.queue[0] = pendingUserMessage{}
+		m.queue[0] = ui.PendingUserMessage{}
 		m.queue = m.queue[1:]
-		if pending, ok := m.consumePendingUser(pendingUserFollowUp, next.content); ok {
-			next.display = pending.display
+		if pending, ok := m.consumePendingUser(ui.PendingUserFollowUp, next.Content); ok {
+			next.Display = pending.Display
 		}
-		m.addUserEcho(next.display)
-		m.ignoreUserEcho(next.content)
-		m.startRun(ctx, next.content, nil)
+		m.addUserEcho(next.Display)
+		m.ignoreUserEcho(next.Content)
+		m.startRun(ctx, next.Content, nil)
 		return true
 	}
 	return false
@@ -161,14 +164,14 @@ func (m *model) applyTeamInfo(ctx context.Context, e *runtime.TeamInfoEvent) {
 		if a.Name != e.CurrentAgent {
 			continue
 		}
-		m.status.agent = a.Name
+		m.status.Agent = a.Name
 		switch {
 		case a.Provider != "" && a.Model != "":
-			m.status.model = a.Provider + "/" + a.Model
+			m.status.Model = a.Provider + "/" + a.Model
 		case a.Model != "":
-			m.status.model = a.Model
+			m.status.Model = a.Model
 		}
-		m.status.thinking = a.Thinking
+		m.status.Thinking = a.Thinking
 	}
 	m.refreshCommands(ctx)
 }

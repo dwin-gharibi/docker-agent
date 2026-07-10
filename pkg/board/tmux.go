@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/docker/docker-agent/pkg/paths"
 )
 
 // tmuxSessions manages the tmux sessions the board runs its agents in.
@@ -33,23 +35,30 @@ type sessionManager interface {
 	// slow to start from a session whose agent has died and must be
 	// relaunched.
 	Alive(name string) (bool, error)
+	// Exists reports whether the session exists at all, dead pane included.
+	// It tells a session holding a dead agent's output (attachable) from one
+	// that is gone entirely.
+	Exists(name string) (bool, error)
 }
 
-// tmuxSocketDir creates and validates, once per process, the per-user
-// directory holding the board's private tmux socket. The checks fail
+// socketDir creates and validates, once per process, the per-user
+// directory holding the board's unix sockets: its private tmux socket and
+// each card's agent control-plane socket. It lives under the system temp
+// dir — never under the data dir: ~/.cagent may be bind-mounted into a
+// docker sandbox, where unix sockets cannot be bound. The checks fail
 // closed: a pre-existing path owned by another user, or not a real
-// directory, must never be used for the socket.
-var tmuxSocketDir = sync.OnceValues(func() (string, error) {
+// directory, must never be used for the sockets.
+var socketDir = sync.OnceValues(func() (string, error) {
 	dir := filepath.Join(os.TempDir(), "cagent-board-"+strconv.Itoa(os.Getuid()))
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", fmt.Errorf("create tmux socket dir: %w", err)
+		return "", fmt.Errorf("create board socket dir: %w", err)
 	}
 	info, err := os.Lstat(dir)
 	if err != nil {
 		return "", err
 	}
 	if !info.IsDir() {
-		return "", fmt.Errorf("tmux socket dir %s is not a directory", dir)
+		return "", fmt.Errorf("board socket dir %s is not a directory", dir)
 	}
 	if err := checkOwner(dir, info); err != nil {
 		return "", err
@@ -59,7 +68,7 @@ var tmuxSocketDir = sync.OnceValues(func() (string, error) {
 	// else's directory.
 	if info.Mode().Perm() != 0o700 {
 		if err := os.Chmod(dir, 0o700); err != nil { //nolint:gosec // 0700 is the tightest usable mode for a directory
-			return "", fmt.Errorf("tighten tmux socket dir permissions: %w", err)
+			return "", fmt.Errorf("tighten board socket dir permissions: %w", err)
 		}
 	}
 	return dir, nil
@@ -75,7 +84,7 @@ var tmuxSocketDir = sync.OnceValues(func() (string, error) {
 // per-user 0700 directory so other local users cannot pre-create or reach
 // it. The directory is created and validated before tmux binds the socket.
 func TmuxSocketPath() (string, error) {
-	dir, err := tmuxSocketDir()
+	dir, err := socketDir()
 	if err != nil {
 		return "", err
 	}
@@ -164,6 +173,16 @@ func applyServerDefaults(ctx context.Context) {
 // owns sessionID and passes it via --session: the first run creates that
 // session, later runs resume it.
 //
+// --config-dir, --data-dir, and --cache-dir forward the board's own
+// directories so the agent resolves the same aliases, creates its worktree
+// and session under the data dir the board watches, and shares the board's
+// caches. Directory overrides are process-local flags, not inherited env,
+// so without forwarding an agent spawned in an environment whose $HOME
+// differs from the board's directories (e.g. a docker sandbox with the
+// host dirs bind-mounted) would silently use its own empty config and a
+// data dir the board never looks at. On a host with no overrides this
+// forwards the defaults — a no-op.
+//
 // --listen exposes the run's control plane on listenSocket (a unix socket
 // the board owns), so the board can observe and drive the session over HTTP
 // instead of scraping the terminal.
@@ -181,8 +200,10 @@ func agentCommand(agent, sessionID, listenSocket, worktreeName, worktreeBase, pr
 	if err != nil {
 		bin = "docker-agent"
 	}
-	cmd := fmt.Sprintf("%s run %s --yolo --session %s --listen %s",
-		shQuote(bin), shQuote(agent), shQuote(sessionID), shQuote("unix://"+listenSocket))
+	cmd := fmt.Sprintf("%s run %s --yolo --config-dir %s --data-dir %s --cache-dir %s --session %s --listen %s",
+		shQuote(bin), shQuote(agent),
+		shQuote(paths.GetConfigDir()), shQuote(paths.GetDataDir()), shQuote(paths.GetCacheDir()),
+		shQuote(sessionID), shQuote("unix://"+listenSocket))
 	if worktreeName != "" {
 		cmd += fmt.Sprintf(" --worktree=%s --worktree-base %s", shQuote(worktreeName), shQuote(worktreeBase))
 	}
@@ -247,7 +268,7 @@ func setSessionHeader(ctx context.Context, name, title, project, worktree string
 	wt := shQuote(worktree)
 	diffCmd := "git -C " + wt + " diff --color=always \"$(git -C " + wt + " merge-base HEAD " +
 		shQuote(upstreamBase(ctx, worktree)) + " || echo HEAD)\" | less -R"
-	editorCmd := "${BOARD_EDITOR:-code} " + wt
+	editorCmd := "${DOCKER_AGENT_BOARD_EDITOR:-${BOARD_EDITOR:-code}} " + wt
 
 	right := "#[range=user|diff] diff #[norange]·#[range=user|editor] editor #[norange]·" +
 		"#[range=right] #[bold]ctrl+q#[nobold] board #[norange]"
@@ -315,6 +336,17 @@ func (t tmuxSessions) Alive(name string) (bool, error) {
 	}
 	first, _, _ := strings.Cut(strings.TrimSpace(out), "\n")
 	return first == "0", nil
+}
+
+// Exists reports whether the session exists, dead pane included.
+func (t tmuxSessions) Exists(name string) (bool, error) {
+	if _, err := tmuxRun(t.ctx, "has-session", "-t", "="+name); err != nil {
+		if isNoSuchSession(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 // isNoSuchSession matches tmux's errors for a missing session or a server

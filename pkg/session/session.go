@@ -282,6 +282,26 @@ type Message struct {
 	Implicit bool `json:"implicit,omitempty"`
 }
 
+// UnmarshalJSON accepts both the current "agent_name" key and the legacy
+// "agentName" key emitted by exports prior to the rename. When "agent_name"
+// is absent or empty, a non-empty legacy value wins; absent and empty are
+// deliberately not distinguished since no producer emits both keys.
+func (m *Message) UnmarshalJSON(data []byte) error {
+	type message Message // alias to avoid infinite recursion
+	aux := struct {
+		*message
+
+		LegacyAgentName string `json:"agentName"`
+	}{message: (*message)(m)}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	if m.AgentName == "" {
+		m.AgentName = aux.LegacyAgentName
+	}
+	return nil
+}
+
 func ImplicitUserMessage(content string) *Message {
 	return ImplicitUserMessageAt(time.Now(), content)
 }

@@ -25,6 +25,15 @@ func newTestStore(t *testing.T) (*KeyringTokenStore, keyring.Keyring) {
 	return newKeyringTokenStore(ring, path), ring
 }
 
+// Register runs on every root.Execute, so a process that already materialized
+// the default store (e.g. by building a remote MCP toolset) must be able to
+// call it again without tripping the panic in SetDefaultTokenStoreFactory.
+func TestRegister_IdempotentAfterStoreCreation(t *testing.T) {
+	Register()
+	_ = mcp.NewKeyringTokenStore() // materialize the process-wide store
+	Register()                     // must be a no-op, not a panic
+}
+
 func TestKeyringTokenStore_RoundTrip(t *testing.T) {
 	t.Parallel()
 	// Use in-memory store to avoid triggering macOS keychain permission dialogs

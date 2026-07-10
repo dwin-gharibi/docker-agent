@@ -32,6 +32,10 @@ const (
 	// minGap is the minimum gap between elements when laying out side-by-side.
 	minGap = 2
 
+	// defaultSectionGap is the default number of blank lines between sidebar
+	// sections in vertical mode (the "normal" section spacing).
+	defaultSectionGap = 2
+
 	// DefaultWidth is the default sidebar width in vertical mode.
 	DefaultWidth = 40
 

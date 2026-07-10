@@ -43,6 +43,7 @@ func ResolveAlias(agentFilename string) *userconfig.Alias {
 
 	cfg, err := userconfig.Load()
 	if err != nil {
+		slog.Warn("Failed to load user config; aliases are unavailable", "error", err)
 		return nil
 	}
 
@@ -191,6 +192,8 @@ func resolve(agentFilename string) (string, error) {
 			slog.Debug("Resolved alias", "alias", agentFilename, "path", alias.Path)
 			agentFilename = alias.Path
 		}
+	} else {
+		slog.Warn("Failed to load user config; aliases are unavailable", "error", err)
 	}
 
 	// Built-in agent names (e.g. "default", "coder") are either user defined aliases or embedded agents

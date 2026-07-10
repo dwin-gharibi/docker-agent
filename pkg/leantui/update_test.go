@@ -9,6 +9,7 @@ import (
 
 	"github.com/docker/docker-agent/pkg/app"
 	"github.com/docker/docker-agent/pkg/effort"
+	"github.com/docker/docker-agent/pkg/leantui/ui"
 	"github.com/docker/docker-agent/pkg/runtime"
 	"github.com/docker/docker-agent/pkg/session"
 	"github.com/docker/docker-agent/pkg/sessiontitle"
@@ -118,6 +119,7 @@ func (r *cycleThinkingRuntime) SetAgentThinkingLevel(_ context.Context, _ string
 func (r *cycleThinkingRuntime) AvailableModels(context.Context) []runtime.ModelChoice { return nil }
 func (r *cycleThinkingRuntime) SupportsModelSwitching() bool                          { return r.supports }
 func (r *cycleThinkingRuntime) OnToolsChanged(func(runtime.Event))                    {}
+func (r *cycleThinkingRuntime) OnBackgroundEvent(func(runtime.Event))                 {}
 
 var _ runtime.Runtime = (*cycleThinkingRuntime)(nil)
 
@@ -127,11 +129,11 @@ func TestShiftTabCyclesThinkingLevel(t *testing.T) {
 	m := bareModel(24)
 	m.app = app.New(t.Context(), rt, session.New())
 
-	m.handleKey(t.Context(), key{typ: keyShiftTab})
+	m.handleKey(t.Context(), ui.Key{Typ: ui.KeyShiftTab})
 
 	assert.Equal(t, 1, rt.cycleCalls)
-	assert.Equal(t, "high", m.status.thinking)
-	assert.Empty(t, m.transcript.blocks)
+	assert.Equal(t, "high", m.status.Thinking)
+	assert.Zero(t, m.screen.Transcript.BlockCount())
 }
 
 func TestShiftTabReportsUnsupportedThinkingLevel(t *testing.T) {
@@ -140,11 +142,11 @@ func TestShiftTabReportsUnsupportedThinkingLevel(t *testing.T) {
 	m := bareModel(24)
 	m.app = app.New(t.Context(), rt, session.New())
 
-	m.handleKey(t.Context(), key{typ: keyShiftTab})
+	m.handleKey(t.Context(), ui.Key{Typ: ui.KeyShiftTab})
 
 	assert.Equal(t, 1, rt.cycleCalls)
-	assert.Empty(t, m.status.thinking)
-	assert.Len(t, m.transcript.blocks, 1)
+	assert.Empty(t, m.status.Thinking)
+	assert.Equal(t, 1, m.screen.Transcript.BlockCount())
 }
 
 func TestEffortCommandSetsThinkingLevel(t *testing.T) {
@@ -157,7 +159,7 @@ func TestEffortCommandSetsThinkingLevel(t *testing.T) {
 
 	assert.Equal(t, 1, rt.setCalls)
 	assert.Equal(t, effort.High, rt.setLevel)
-	assert.Equal(t, "high", m.status.thinking)
+	assert.Equal(t, "high", m.status.Thinking)
 }
 
 func TestEffortCommandRejectsUnknownLevel(t *testing.T) {
@@ -169,8 +171,8 @@ func TestEffortCommandRejectsUnknownLevel(t *testing.T) {
 	m.handleSetThinkingLevel(t.Context(), "turbo")
 
 	assert.Zero(t, rt.setCalls)
-	assert.Empty(t, m.status.thinking)
-	assert.Len(t, m.transcript.blocks, 1)
+	assert.Empty(t, m.status.Thinking)
+	assert.Equal(t, 1, m.screen.Transcript.BlockCount())
 }
 
 func TestEditorSubmitWhileBusySteersAndRendersAtStreamEnd(t *testing.T) {
@@ -179,8 +181,8 @@ func TestEditorSubmitWhileBusySteersAndRendersAtStreamEnd(t *testing.T) {
 	m := bareModel(24)
 	m.app = app.New(t.Context(), rt, session.New())
 	m.busy = true
-	m.transcript.appendPending(blockAssistant, "assistant is still streaming")
-	m.editor.setText("turn left")
+	m.screen.Transcript.AppendAssistant("assistant is still streaming")
+	m.screen.Editor.SetText("turn left")
 
 	m.handleEnter(t.Context())
 
@@ -190,7 +192,7 @@ func TestEditorSubmitWhileBusySteersAndRendersAtStreamEnd(t *testing.T) {
 	assert.Empty(t, m.queue)
 	assert.Len(t, m.pendingUsers, 1)
 
-	joined := strings.Join(m.transcript.lines(80, 0, true, m.sessionState, m.pendingUsers), "\n")
+	joined := strings.Join(m.screen.Transcript.Lines(80, 0, true, m.sessionState, m.pendingUsers), "\n")
 	assistantAt := strings.Index(joined, "assistant is still streaming")
 	steerAt := strings.Index(joined, "turn left")
 	assert.NotEqual(t, -1, assistantAt)
@@ -202,14 +204,14 @@ func TestSteeredUserEventConfirmsPendingAfterAssistant(t *testing.T) {
 	t.Parallel()
 	m := bareModel(24)
 	m.busy = true
-	m.transcript.appendPending(blockAssistant, "assistant response")
-	m.addPendingUser("/change", "resolved steering prompt", pendingUserSteer)
+	m.screen.Transcript.AppendAssistant("assistant response")
+	m.addPendingUser("/change", "resolved steering prompt", ui.PendingUserSteer)
 
 	m.handleEvent(t.Context(), runtime.UserMessage("resolved steering prompt\n", "session", nil, 1))
 
 	assert.Empty(t, m.pendingUsers)
-	assert.Len(t, m.transcript.blocks, 2)
-	joined := strings.Join(m.transcript.lines(80, 0, true, m.sessionState, nil), "\n")
+	assert.Equal(t, 2, m.screen.Transcript.BlockCount())
+	joined := strings.Join(m.screen.Transcript.Lines(80, 0, true, m.sessionState, nil), "\n")
 	assistantAt := strings.Index(joined, "assistant response")
 	steerAt := strings.Index(joined, "/change")
 	assert.NotEqual(t, -1, assistantAt)

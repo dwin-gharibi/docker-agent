@@ -60,17 +60,19 @@ func (m *MemoryDatabase) ensureDB(ctx context.Context) (*sql.DB, error) {
 		return m.db, nil
 	}
 
+	// Open under the file lock: the first open of a fresh database converts
+	// it to WAL mode, which needs an exclusive lock and can fail with
+	// SQLITE_BUSY (not covered by busy_timeout) if opens race.
+	lock := database.NewFileLock(m.lockPath)
+	if err := lock.Lock(ctx); err != nil {
+		return nil, err
+	}
+	defer func() { _ = lock.Unlock() }()
+
 	db, err := sqliteutil.OpenDB(ctx, m.path)
 	if err != nil {
 		return nil, err
 	}
-
-	lock := database.NewFileLock(m.lockPath)
-	if err := lock.Lock(ctx); err != nil {
-		db.Close()
-		return nil, err
-	}
-	defer func() { _ = lock.Unlock() }()
 
 	if _, err = db.ExecContext(ctx, "CREATE TABLE IF NOT EXISTS memories (id TEXT PRIMARY KEY, created_at TEXT, memory TEXT)"); err != nil {
 		db.Close()
