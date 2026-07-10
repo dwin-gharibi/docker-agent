@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -85,8 +86,7 @@ func TestNewSubSession(t *testing.T) {
 	t.Parallel()
 
 	parent := session.New(session.WithUserMessage("hello"))
-	childAgent := agent.New(
-		"worker", "a worker agent",
+	childAgent := agent.New("worker", "a worker agent",
 		agent.WithMaxIterations(10),
 	)
 
@@ -191,8 +191,7 @@ func TestSubSessionConfig_InheritsAgentLimits(t *testing.T) {
 	parent := session.New(session.WithUserMessage("hello"))
 
 	t.Run("with custom limits", func(t *testing.T) {
-		childAgent := agent.New(
-			"worker", "",
+		childAgent := agent.New("worker", "",
 			agent.WithMaxIterations(42),
 			agent.WithMaxConsecutiveToolCalls(7),
 		)
@@ -455,6 +454,60 @@ func TestRunAgent_InheritsParentPermissions(t *testing.T) {
 	parentClone := parentSession.ClonePermissions()
 	assert.Equal(t, []string{"read_file", "list_dir"}, parentClone.Allow,
 		"parent permissions must be isolated from child mutations")
+}
+
+func TestRunAgent_EndToEndPermissions(t *testing.T) {
+	t.Parallel()
+
+	var executed bool
+	agentTools := []tools.Tool{{
+		Name:       "dangerous_tool",
+		Parameters: map[string]any{},
+		Handler: func(_ context.Context, _ tools.ToolCall, _ tools.Runtime) (*tools.ToolCallResult, error) {
+			executed = true
+			return tools.ResultSuccess("executed"), nil
+		},
+	}}
+
+	workerStream := newStreamBuilder().
+		AddToolCallName("call_1", "dangerous_tool").
+		AddToolCallArguments("call_1", "{}").
+		Build()
+	parentProv := &mockProvider{id: "test/mock-model", stream: &mockStream{}}
+	workerProv := &mockProvider{id: "test/mock-model", stream: workerStream}
+
+	worker := agent.New("worker", "Worker agent",
+		agent.WithModel(workerProv),
+		agent.WithToolSets(newStubToolSet(nil, agentTools, nil)),
+	)
+	root := agent.New("root", "Root agent", agent.WithModel(parentProv))
+	agent.WithSubAgents(worker)(root)
+
+	tm := team.New(team.WithAgents(root, worker))
+	rt, err := NewLocalRuntime(
+		t.Context(), tm,
+		WithSessionCompaction(false),
+		WithModelStore(mockModelStore{}),
+	)
+	require.NoError(t, err)
+
+	parentPerms := &session.PermissionsConfig{
+		Allow: []string{"safe_tool"},
+		Deny:  []string{"dangerous_tool"},
+	}
+	parentSession := session.New(
+		session.WithUserMessage("Test"),
+		session.WithToolsApproved(true),
+		session.WithPermissions(parentPerms),
+	)
+
+	rt.RunAgent(t.Context(), agenttool.RunParams{
+		AgentName:     "worker",
+		Task:          "do something",
+		ParentSession: parentSession,
+	})
+
+	require.False(t, executed, "expected dangerous_tool to NOT be executed because it is denied by inherited permissions")
 }
 
 func TestTransferTask_PropagatesPermissions(t *testing.T) {

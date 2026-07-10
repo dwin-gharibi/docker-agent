@@ -535,8 +535,7 @@ func (r *LocalRuntime) handleTaskTransfer(ctx context.Context, sess *session.Ses
 		delegationAttrs = append(delegationAttrs, attribute.Int("cagent.delegation.task_length", len(params.Task)))
 	}
 	if genai.EmitLegacyAttributes() {
-		delegationAttrs = append(
-			delegationAttrs,
+		delegationAttrs = append(delegationAttrs,
 			attribute.String("from.agent", a.Name()),
 			attribute.String("to.agent", params.Agent),
 			attribute.String("session.id", sess.ID),
@@ -634,6 +633,5 @@ func (r *LocalRuntime) applyForceHandoff(ctx context.Context, sess *session.Sess
 			"off to agents that you see in the conversation history from previous agents, as those were " +
 			"available to different agents with different capabilities. Look at the conversation history " +
 			"for context, continue the work from where the previous agent stopped, and complete your " +
-			"part of the task.",
-	))
+			"part of the task."))
 }
