@@ -443,10 +443,12 @@ func (c *Client) CreateChatCompletionStream(
 
 	// Apply thinking budget: set reasoning_effort for reasoning models (o-series, gpt-5).
 	// Reasoning models always reason; omitting the param uses the default effort.
-	// When NoThinking is set we still need to send low effort so hidden
-	// reasoning tokens don't exhaust the max_completion_tokens budget.
-	// We use "low" instead of "minimal" because older models (o3-mini, o1)
-	// only accept low/medium/high.
+	// When NoThinking is set we still need to send an explicit effort so hidden
+	// reasoning tokens don't exhaust the max_completion_tokens budget: "none" on
+	// a genuine OpenAI vendor endpoint whose model has a real off switch
+	// (gpt-5.6+, see [sendsRealNoneEffort]), "low" otherwise — older models
+	// (o3-mini, o1) only accept low/medium/high, and "low" is the closest thing
+	// to off they have.
 	//
 	// If the caller also supplied a small MaxTokens cap, raise it to
 	// noThinkingMinOutputTokens so residual hidden reasoning can't starve
@@ -454,7 +456,11 @@ func (c *Client) CreateChatCompletionStream(
 	// the caller has imposed no cap, so there is nothing to floor.
 	if modelinfo.UsesReasoningEffort(c.ModelConfig.Model) {
 		if c.ModelOptions.NoThinking() {
-			params.ReasoningEffort = shared.ReasoningEffort("low")
+			reasoningEffort := "low"
+			if sendsRealNoneEffort(&c.ModelConfig, c.ModelOptions.OpenAIVendor()) {
+				reasoningEffort = "none"
+			}
+			params.ReasoningEffort = shared.ReasoningEffort(reasoningEffort)
 			// Hidden reasoning tokens count against the output budget even
 			// with low effort. Enforce a floor so visible text isn't starved.
 			if c.ModelConfig.MaxTokens != nil && *c.ModelConfig.MaxTokens < noThinkingMinOutputTokens {
@@ -464,7 +470,7 @@ func (c *Client) CreateChatCompletionStream(
 					params.MaxCompletionTokens = openai.Int(noThinkingMinOutputTokens)
 				}
 			}
-			slog.DebugContext(ctx, "OpenAI request using low reasoning (NoThinking)")
+			slog.DebugContext(ctx, "OpenAI request using reasoning effort (NoThinking)", "reasoning_effort", reasoningEffort)
 		} else if c.ModelConfig.ThinkingBudget != nil {
 			effortStr, err := openAIReasoningEffort(c.ModelConfig.ThinkingBudget)
 			if err != nil {
@@ -598,19 +604,24 @@ func (c *Client) CreateResponseStream(
 	// the caller has imposed no cap, so there is nothing to floor.
 	if modelinfo.UsesReasoningEffort(c.ModelConfig.Model) {
 		if c.ModelOptions.NoThinking() {
-			// Use low effort so the model spends as few output tokens as
-			// possible on reasoning, leaving room for visible text.
-			// We use "low" instead of "minimal" because older models
-			// (o3-mini, o1) only accept low/medium/high.
+			// Send an explicit effort so the model spends as few output tokens
+			// as possible on reasoning, leaving room for visible text: "none"
+			// on a genuine OpenAI vendor endpoint whose model has a real off
+			// switch (gpt-5.6+, see [sendsRealNoneEffort]), "low" otherwise —
+			// older models (o3-mini, o1) only accept low/medium/high.
+			reasoningEffort := "low"
+			if sendsRealNoneEffort(&c.ModelConfig, c.ModelOptions.OpenAIVendor()) {
+				reasoningEffort = "none"
+			}
 			params.Reasoning = shared.ReasoningParam{
-				Effort: shared.ReasoningEffort("low"),
+				Effort: shared.ReasoningEffort(reasoningEffort),
 			}
 			// Hidden reasoning tokens count against max_output_tokens even
 			// with low effort. Enforce a floor so visible text isn't starved.
 			if c.ModelConfig.MaxTokens != nil && *c.ModelConfig.MaxTokens < noThinkingMinOutputTokens {
 				params.MaxOutputTokens = param.NewOpt(noThinkingMinOutputTokens)
 			}
-			slog.DebugContext(ctx, "OpenAI responses request using low reasoning (NoThinking)")
+			slog.DebugContext(ctx, "OpenAI responses request using reasoning effort (NoThinking)", "reasoning_effort", reasoningEffort)
 		} else {
 			params.Reasoning = shared.ReasoningParam{
 				Summary: shared.ReasoningSummaryDetailed,
@@ -1268,6 +1279,39 @@ func autoSelectsResponsesAPI(provider string) bool {
 // explicit cap; if MaxTokens is unset the caller has imposed no cap and there
 // is nothing to floor.
 const noThinkingMinOutputTokens int64 = 256
+
+// sendsRealNoneEffort reports whether the NoThinking() request-option path
+// (used e.g. for title generation) should emit reasoning_effort "none"
+// instead of the "low" fallback used for models/vendors without a real
+// API-level off switch.
+//
+// gpt-5.6+ is the first OpenAI family with a genuine "none" effort, but that
+// alone is not sufficient: many built-in OpenAI-compatible aliases (xai,
+// mistral, ...) front a different vendor's models yet happen to name them
+// with the same "gpt-5.6"-shaped strings. "none" must only reach the wire
+// for a genuine OpenAI vendor endpoint: the direct openai/chatgpt/azure
+// providers, a model id explicitly qualified "openai/..." (Vercel/OpenRouter-
+// style gateways) — both covered by [modelinfo.IsOpenAIVendor] — or a named
+// custom provider (providers: section, no explicit `provider:` override)
+// whose applied config resolves to an OpenAI api_type, covered by the
+// openAIVendor parameter.
+//
+// openAIVendor is trusted internal state, not user-controllable config: it is
+// resolved once by pkg/model/provider's isOpenAIVendor (which additionally
+// knows the built-in alias registry needed to tell a genuine custom provider
+// apart from a known alias with an explicitly-set api_type like xai/mistral
+// — a registry this package cannot import without an import cycle, since
+// pkg/model/provider imports this package to build the client) and threaded
+// in via options.WithOpenAIVendor, applied by the factory after
+// applyProviderDefaults runs. Nothing under cfg.ProviderOpts feeds this
+// decision: that map is public config a user could set directly, and doing
+// so must never be able to spoof or suppress OpenAI-only wire behavior.
+func sendsRealNoneEffort(cfg *latest.ModelConfig, openAIVendor bool) bool {
+	if !modelinfo.OpenAISupportsNoneEffort(cfg.Model) {
+		return false
+	}
+	return modelinfo.IsOpenAIVendor(cfg.Provider, cfg.Model) || openAIVendor
+}
 
 // openAIReasoningEffort validates a ThinkingBudget effort string for the
 // OpenAI API. Returns the effort string or an error.

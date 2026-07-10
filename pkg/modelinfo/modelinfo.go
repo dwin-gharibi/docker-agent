@@ -49,7 +49,7 @@ import (
 // the o-series (o1/o3/o4), gpt-5 and Codex variants. Older models stay on
 // Chat Completions for compatibility.
 func SupportsResponsesAPI(modelID string) bool {
-	m := normalize(modelID)
+	m := normalizeOpenAI(modelID)
 	switch {
 	case strings.HasPrefix(m, "gpt-4.1"),
 		strings.HasPrefix(m, "gpt-5"),
@@ -66,7 +66,7 @@ func SupportsResponsesAPI(modelID string) bool {
 // All reasoning-capable OpenAI models do, except the gpt-5-chat variants
 // which are non-reasoning chat models at the API level.
 func UsesReasoningEffort(modelID string) bool {
-	m := normalize(modelID)
+	m := normalizeOpenAI(modelID)
 	if strings.HasPrefix(m, "gpt-5-chat") {
 		return false
 	}
@@ -81,7 +81,7 @@ func UsesReasoningEffort(modelID string) bool {
 // gpt-5 is excluded: it can produce visible output without reasoning, so the
 // default depends on the user's intent.
 func AlwaysReasons(modelID string) bool {
-	return isOSeries(normalize(modelID))
+	return isOSeries(normalizeOpenAI(modelID))
 }
 
 // claudeOpus46To48Prefixes lists the bare Claude Opus model families that
@@ -292,19 +292,121 @@ func IsClaudeFamily(family string) bool {
 	return strings.HasPrefix(family, "claude-")
 }
 
+// openAIQualifierPrefix is the gateway convention (Vercel AI Gateway,
+// OpenRouter, ...) for vendor-qualifying a model id, e.g.
+// "openai/gpt-5.6-sol". [normalizeOpenAI] strips it so OpenAI-specific
+// name-pattern predicates recognize the underlying OpenAI model regardless of
+// which gateway fronts it. Other vendor qualifiers (DMR's "ai/qwen3",
+// OpenRouter's "meta-llama/...") are left untouched: they name the model
+// itself, not a wrapper around an OpenAI id.
+const openAIQualifierPrefix = "openai/"
+
 // normalize returns the lowercased, whitespace-trimmed model identifier used
 // by every name-pattern predicate in this package. Provider-qualified ids as
 // used by gateways and aggregators ("openai/gpt-5-nano" on OpenRouter,
-// "openrouter/openai/o3" in custom configs) are reduced to their last path
-// segment: the predicates match on the bare model name, and without this a
-// prefixed id would silently disable model-specific behavior (e.g. a
-// thinking_budget on "openai/gpt-5-nano" was never sent as reasoning_effort).
+// "openrouter/anthropic/claude-sonnet-4-6" in custom configs) are reduced to
+// their last path segment: the predicates match on the bare model name, and
+// without this a prefixed id would silently disable model-specific behavior
+// (e.g. a thinking_budget on "anthropic/claude-opus-4.6" was never recognized
+// as adaptive-thinking-capable).
+//
+// The one exception is a trailing "openai/<model>" pair: it is an explicit
+// vendor qualifier (see [openAIQualifierPrefix]), so it is preserved rather
+// than stripped down to <model>. Stripping it unconditionally would let a
+// qualified id naming a *different* vendor's model behind an OpenAI-labeled
+// gateway slug — "openai/claude-opus-4-7", "vercel/openai/gemini-3-pro" — fall
+// through to the bare "claude-"/"gemini-" prefix checks and be misclassified.
+// OpenAI-specific predicates still get the bare name: they call
+// [normalizeOpenAI], which strips that preserved "openai/" pair afterwards.
 func normalize(modelID string) string {
 	m := strings.ToLower(strings.TrimSpace(modelID))
-	if i := strings.LastIndexByte(m, '/'); i >= 0 {
-		m = m[i+1:]
+	i := strings.LastIndexByte(m, '/')
+	if i < 0 {
+		return m
+	}
+	last := m[i+1:]
+	prefix := m[:i]
+	prevSeg := prefix
+	if j := strings.LastIndexByte(prefix, '/'); j >= 0 {
+		prevSeg = prefix[j+1:]
+	}
+	if prevSeg == "openai" {
+		return openAIQualifierPrefix + last
+	}
+	return last
+}
+
+// normalizeOpenAI is [normalize] plus stripping of a leading "openai/" gateway
+// qualifier (see [openAIQualifierPrefix]). OpenAI-specific name-pattern
+// predicates (Responses API routing, reasoning-effort detection, gpt-5.x
+// minor-version parsing) call this so a gateway-qualified id — Vercel AI
+// Gateway's "openai/gpt-5.6-sol", OpenRouter's equivalent, ... — is recognized
+// as the underlying OpenAI model regardless of which gateway fronts it.
+// Non-OpenAI predicates (Claude, Gemini, ...) must keep calling [normalize]
+// instead, or a qualified id naming a *different* vendor's model would be
+// misclassified once the prefix is removed.
+func normalizeOpenAI(modelID string) string {
+	return stripOpenAIQualifier(normalize(modelID))
+}
+
+// stripOpenAIQualifier removes a leading "openai/" gateway qualifier from an
+// already-[normalize]d model id, if present.
+func stripOpenAIQualifier(m string) string {
+	if rest, ok := strings.CutPrefix(m, openAIQualifierPrefix); ok {
+		return rest
 	}
 	return m
+}
+
+// HasOpenAIQualifier reports whether modelID is explicitly vendor-qualified
+// with an "openai/" prefix, the convention gateways (Vercel AI Gateway,
+// OpenRouter, ...) use to route a specific vendor's model through a shared
+// endpoint (e.g. "openai/gpt-5.6-sol"). It is the provider-agnostic signal
+// that a model is genuinely OpenAI's, independent of which alias/gateway
+// provider fronts it; [github.com/docker/docker-agent/pkg/model/provider]
+// uses it to gate OpenAI-only behavior (like gpt-5.6's real "none" reasoning
+// effort) onto the right providers.
+func HasOpenAIQualifier(modelID string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(modelID)), openAIQualifierPrefix)
+}
+
+// openAIVendorProviders are the provider names whose models are genuinely
+// OpenAI's own, as opposed to a third-party vendor that merely speaks the
+// OpenAI-compatible wire protocol through a built-in alias. See
+// [IsOpenAIVendor].
+var openAIVendorProviders = map[string]bool{
+	"openai":  true,
+	"chatgpt": true,
+	"azure":   true,
+}
+
+// IsOpenAIVendor reports whether a (provider, modelID) pair genuinely names an
+// OpenAI vendor endpoint, as opposed to a third-party provider that merely
+// speaks the OpenAI-compatible wire protocol (xai, mistral, and other
+// OpenAI-compatible aliases whose models are NOT OpenAI's own).
+//
+// True for:
+//   - the direct "openai" provider, "chatgpt" (the ChatGPT/Codex backend), and
+//     "azure" (Azure OpenAI Service hosts OpenAI's own models)
+//   - any provider when modelID is explicitly vendor-qualified with "openai/"
+//     (the convention gateways such as Vercel AI Gateway or OpenRouter use to
+//     route a specific vendor's model through a shared endpoint, e.g.
+//     "openai/gpt-5.6-sol"), regardless of which provider/alias fronts it
+//
+// This is the shared, import-cycle-free core of the vendor check, used to
+// gate OpenAI-only behavior (gpt-5.6's real "none" reasoning effort, its
+// xhigh/max effort tiers routed through a gateway, ...) consistently across
+// pkg/model/provider's defaults pipeline, the OpenAI client, and this
+// package's own effort-family selection ([SupportedThinkingLevels]).
+// pkg/model/provider layers one more exclusion on top for custom providers
+// (providers: section) whose registered name collides with its built-in
+// alias registry — that registry lives above modelinfo in the import graph,
+// so it cannot be folded in here.
+func IsOpenAIVendor(provider, modelID string) bool {
+	if openAIVendorProviders[strings.ToLower(strings.TrimSpace(provider))] {
+		return true
+	}
+	return HasOpenAIQualifier(modelID)
 }
 
 // isOSeries reports whether the (already-normalized) identifier names an

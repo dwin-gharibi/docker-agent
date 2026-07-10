@@ -188,6 +188,7 @@ are intentionally tiny:
 | File | Purpose |
 | --- | --- |
 | `pkg/cache/lock_js.go` | No-op file-lock stubs (single-threaded js). |
+| `pkg/userconfig/lock_js.go` | No-op file-lock stubs for the user config file (single-threaded js). |
 | `pkg/desktop/sockets_js.go` | Returns empty Docker Desktop paths. |
 | `pkg/desktop/connection_js.go` | Refuses Unix-socket / named-pipe dials. |
 | `pkg/desktop/connection_other.go` | Build tag updated to `!windows && !js`. |

@@ -7,13 +7,13 @@ models:
   default:
     first_available:
       - anthropic/claude-opus-4-8
-      - openai/gpt-5.5
+      - openai/gpt-5.6
       - google/gemini-3.5-flash
       - dmr/ai/qwen3
   fast:
     first_available:
       - anthropic/claude-haiku-4-5
-      - openai/gpt-5.4-mini
+      - openai/gpt-5.6-luna
       - google/gemini-3.1-flash-lite
       - dmr/ai/qwen3
 

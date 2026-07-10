@@ -3,7 +3,7 @@
 
 agents:
   root:
-    model: gpt-5-mini-min # <- try with gpt-5-mini-high
+    model: gpt-5-mini-min # <- try with gpt-5-mini-high, gpt-5-6-max, or gpt-5-6-none
     # model: claude-4-5-sonnet-min # <- try with claude-4-5-sonnet-high or claude-opus-4-6-adaptive
     # model: gemini-2-5-flash-dynamic-thinking # <- try with -no-thinking, -low or -high variants
     description: a helpful assistant that thinks
@@ -17,12 +17,22 @@ models:
   gpt-5-mini-min:
     provider: openai
     model: gpt-5-mini
-    thinking_budget: minimal # <- openai supports "minimal", "low", "medium", "high", "xhigh"
+    thinking_budget: minimal # <- openai supports "none", "minimal", "low", "medium", "high", "xhigh", "max" (xhigh needs gpt-5.2+; none/max need gpt-5.6+; minimal is dropped on gpt-5.6+)
 
   gpt-5-mini-high:
     provider: openai
     model: gpt-5-mini
     thinking_budget: high
+
+  gpt-5-6-max:
+    provider: openai
+    model: gpt-5.6
+    thinking_budget: max # <- gpt-5.6+ only; the top-most OpenAI effort tier
+
+  gpt-5-6-none:
+    provider: openai
+    model: gpt-5.6
+    thinking_budget: none # <- gpt-5.6+ has a real "none" effort, honored on the wire instead of just disabling thinking locally
 
   claude-4-5-sonnet-min:
     provider: anthropic

@@ -259,7 +259,7 @@ func TestAutoModelConfig(t *testing.T) {
 				"OPENAI_API_KEY": "test-key",
 			},
 			expectedProvider:  "openai",
-			expectedModel:     "gpt-5",
+			expectedModel:     "gpt-5.6",
 			expectedMaxTokens: 32000,
 		},
 		{
@@ -376,7 +376,7 @@ func TestAutoModelConfig(t *testing.T) {
 				"AI_GATEWAY_API_KEY": "test-key",
 			},
 			expectedProvider:  "vercel",
-			expectedModel:     "openai/gpt-5",
+			expectedModel:     "openai/gpt-5.6-sol",
 			expectedMaxTokens: 32000,
 		},
 		{
@@ -472,7 +472,7 @@ func TestDefaultModels(t *testing.T) {
 	}
 
 	// Test specific model values
-	assert.Equal(t, "gpt-5", DefaultModels["openai"])
+	assert.Equal(t, "gpt-5.6", DefaultModels["openai"])
 	assert.Equal(t, "claude-sonnet-4-6", DefaultModels["anthropic"])
 	assert.Equal(t, "gemini-3.5-flash", DefaultModels["google"])
 	assert.Equal(t, "ai/qwen3:latest", DefaultModels["dmr"])
@@ -487,7 +487,7 @@ func TestDefaultModels(t *testing.T) {
 	assert.Equal(t, "meta-llama/Llama-3.3-70B-Instruct-Turbo", DefaultModels["together"])
 	assert.Equal(t, "meta-llama/Llama-3.3-70B-Instruct", DefaultModels["huggingface"])
 	assert.Equal(t, "kimi-k2-0905-preview", DefaultModels["moonshot"])
-	assert.Equal(t, "openai/gpt-5", DefaultModels["vercel"])
+	assert.Equal(t, "openai/gpt-5.6-sol", DefaultModels["vercel"])
 	assert.Equal(t, "global.anthropic.claude-sonnet-4-5-20250929-v1:0", DefaultModels["amazon-bedrock"])
 	assert.Equal(t, "deepseek-v4-flash", DefaultModels["opencode-go"])
 	assert.Equal(t, "deepseek-v4-flash-free", DefaultModels["opencode-zen"])

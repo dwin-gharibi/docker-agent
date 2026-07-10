@@ -20,7 +20,15 @@ func SupportedThinkingLevels(provider, modelID string) []effort.Level {
 // thinkingLevelMap builds the per-model capability map consumed by
 // [effort.SupportedLevels].
 func thinkingLevelMap(provider, modelID string) effort.LevelMap {
-	switch providerFamily(provider) {
+	family := providerFamily(provider)
+	if family != "openai" && IsOpenAIVendor(provider, modelID) {
+		// A gateway (Vercel AI Gateway, OpenRouter, ...) fronts many vendors'
+		// models under one provider name; an explicit "openai/" qualifier on
+		// the model id pins its effort vocabulary to OpenAI's regardless of
+		// which gateway provider name is configured.
+		family = "openai"
+	}
+	switch family {
 	case "anthropic":
 		// The Anthropic effort scale starts at low ([effort.ForAnthropic]
 		// maps minimal onto low), so offering minimal would duplicate low.
@@ -30,10 +38,18 @@ func thinkingLevelMap(provider, modelID string) effort.LevelMap {
 		}
 		return m
 	case "openai":
-		if openAISupportsXHighEffort(modelID) {
-			return effort.LevelMap{effort.XHigh: true}
+		m := effort.LevelMap{}
+		for _, top := range openAITopEfforts(modelID) {
+			m[top] = true
 		}
-		return nil
+		if OpenAISupportsNoneEffort(modelID) {
+			// gpt-5.6 dropped minimal from its accepted efforts.
+			m[effort.Minimal] = false
+		}
+		if len(m) == 0 {
+			return nil
+		}
+		return m
 	case "google":
 		return nil
 	default:
@@ -45,7 +61,8 @@ func thinkingLevelMap(provider, modelID string) effort.LevelMap {
 
 // providerFamily normalises a provider type onto the model family whose API
 // defines the thinking-level vocabulary, tolerating aliases such as
-// "amazon-bedrock" (hosting Anthropic models) or "vertexai" (Gemini).
+// "amazon-bedrock" (hosting Anthropic models), "vertexai" (Gemini), or
+// "chatgpt" (the Codex backend, which serves OpenAI models).
 func providerFamily(providerType string) string {
 	p := normalize(providerType)
 	switch {
@@ -53,7 +70,7 @@ func providerFamily(providerType string) string {
 		return "anthropic"
 	case strings.Contains(p, "google"), strings.Contains(p, "gemini"), strings.Contains(p, "vertex"):
 		return "google"
-	case strings.Contains(p, "openai"), strings.Contains(p, "azure"):
+	case strings.Contains(p, "openai"), strings.Contains(p, "azure"), strings.Contains(p, "chatgpt"):
 		return "openai"
 	default:
 		return p
@@ -148,17 +165,61 @@ func claudeFamilyMinor(m string) (family string, minor int, ok bool) {
 	return "", 0, false
 }
 
-// openAISupportsXHighEffort reports whether an OpenAI model accepts
-// reasoning effort "xhigh". Only gpt-5.2 and later minor versions do; the
-// o-series and earlier gpt-5 releases top out at high.
-func openAISupportsXHighEffort(modelID string) bool {
-	m := normalize(modelID)
+// gptFiveMinor extracts the minor version from an OpenAI gpt-5.x model id,
+// tolerating -sol/-terra/-luna and dated/snapshot suffixes appended after a
+// hyphen (e.g. "gpt-5.6-sol" -> 6, "gpt-5.6-2026-07-09" -> 6). It reports
+// ok=false for non-gpt-5.x ids and for malformed minors: the minor digit run
+// is capped at two digits (a longer run is a date, not a minor version, e.g.
+// "gpt-5.20260709"), and whatever follows it must be either the end of the
+// string or a '-' — anything glued on directly without that boundary
+// ("gpt-5.6foo", "gpt-5.6.20260709") is rejected rather than silently
+// truncated.
+func gptFiveMinor(modelID string) (minor int, ok bool) {
+	m := normalizeOpenAI(modelID)
 	const prefix = "gpt-5."
-	if !strings.HasPrefix(m, prefix) {
-		return false
+	rest, found := strings.CutPrefix(m, prefix)
+	if !found {
+		return 0, false
 	}
-	minor, width := leadingInt(m[len(prefix):])
-	return width > 0 && minor >= 2
+	minor, width := leadingInt(rest)
+	if width == 0 || width > 2 {
+		return 0, false
+	}
+	if tail := rest[width:]; tail != "" && tail[0] != '-' {
+		return 0, false
+	}
+	return minor, true
+}
+
+// openAITopEfforts returns the explicit-only effort tiers (xhigh and/or max)
+// an OpenAI model accepts beyond the universal minimal/low/medium/high
+// ladder. OpenAI's ladder is cumulative (unlike Anthropic's independent
+// tiers), so a single minor-version parse suffices: gpt-5.2+ adds xhigh,
+// gpt-5.6+ (Sol/Terra/Luna) adds max on top. The o-series and gpt-5/5.0/5.1
+// top out at high.
+func openAITopEfforts(modelID string) []effort.Level {
+	minor, ok := gptFiveMinor(modelID)
+	switch {
+	case !ok || minor < 2:
+		return nil
+	case minor >= 6:
+		return []effort.Level{effort.XHigh, effort.Max}
+	default:
+		return []effort.Level{effort.XHigh}
+	}
+}
+
+// OpenAISupportsNoneEffort reports whether an OpenAI model accepts reasoning
+// effort "none" as a real, honored value rather than a config-level "turn
+// thinking off" sentinel. gpt-5.6 (Sol/Terra/Luna) is the first OpenAI
+// family to do so; it is also the first to drop "minimal" from its accepted
+// efforts, so callers use this predicate to gate both changes. Exported: the
+// defaults pipeline (pkg/model/provider) and the OpenAI client need the same
+// gate to decide whether "none" survives normalization and is sent on the
+// wire.
+func OpenAISupportsNoneEffort(modelID string) bool {
+	minor, ok := gptFiveMinor(modelID)
+	return ok && minor >= 6
 }
 
 // leadingInt parses the run of decimal digits at the start of s, returning

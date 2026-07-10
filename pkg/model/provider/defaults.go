@@ -5,6 +5,7 @@ import (
 	"context"
 	"log/slog"
 	"maps"
+	"strings"
 
 	"github.com/docker/docker-agent/pkg/config/latest"
 	"github.com/docker/docker-agent/pkg/environment"
@@ -214,7 +215,13 @@ func cloneModelConfig(cfg *latest.ModelConfig) *latest.ModelConfig {
 // applyModelDefaults applies provider-specific default values for model configuration.
 //
 // Thinking defaults policy:
-//   - thinking_budget: 0  or  thinking_budget: none  →  thinking is off (nil).
+//   - thinking_budget: 0  →  thinking is off (nil): the model's own default
+//     applies since most providers have no real "off" switch.
+//   - thinking_budget: none  →  normally normalised the same way (nil), EXCEPT
+//     on an OpenAI-family model that has a real API-level "none" effort
+//     (gpt-5.6+, see [modelinfo.OpenAISupportsNoneEffort]): there the explicit
+//     value is preserved so it actually reaches the API instead of silently
+//     falling back to the model's default ("medium").
 //   - thinking_budget explicitly set to a real value  →  kept as-is; interleaved_thinking
 //     is auto-enabled for Anthropic/Bedrock-Claude.
 //   - thinking_budget NOT set:
@@ -223,15 +230,21 @@ func cloneModelConfig(cfg *latest.ModelConfig) *latest.ModelConfig {
 //
 // NOTE: max_tokens is NOT set here; see teamloader and runtime/model_switcher.
 func applyModelDefaults(cfg *latest.ModelConfig) {
-	// Explicitly disabled → normalise to nil so providers never see it.
+	providerType := resolveProviderType(cfg)
+
+	// Explicitly disabled → normalise to nil so providers never see it,
+	// unless the model has a real "none" effort worth preserving.
 	if cfg.ThinkingBudget.IsDisabled() {
+		if preservesNoneEffort(cfg, providerType) {
+			slog.Debug("Preserving explicit none reasoning effort",
+				"provider", cfg.Provider, "model", cfg.Model)
+			return
+		}
 		cfg.ThinkingBudget = nil
 		slog.Debug("Thinking explicitly disabled",
 			"provider", cfg.Provider, "model", cfg.Model)
 		return
 	}
-
-	providerType := resolveProviderType(cfg)
 
 	// User already set a real thinking_budget — just apply side-effects.
 	if cfg.ThinkingBudget != nil {
@@ -247,6 +260,78 @@ func applyModelDefaults(cfg *latest.ModelConfig) {
 			slog.Debug("Applied default thinking for thinking-only OpenAI model",
 				"provider", cfg.Provider, "model", cfg.Model)
 		}
+	}
+}
+
+// preservesNoneEffort reports whether a disabled ThinkingBudget should be kept
+// as an explicit "none" rather than normalised to nil. It applies only to an
+// explicit string `effort: none` (as opposed to `tokens: 0`, which has no
+// dedicated API value to preserve) on an OpenAI-protocol provider that is
+// also a genuine OpenAI vendor (see [isOpenAIVendor]) whose model accepts a
+// real "none" reasoning effort. An OpenAI-compatible alias for a different
+// vendor (xai, mistral, ...) never preserves it, even if its model name
+// happens to match gpt-5.6's naming pattern.
+func preservesNoneEffort(cfg *latest.ModelConfig, providerType string) bool {
+	if cfg.ThinkingBudget == nil || !strings.EqualFold(cfg.ThinkingBudget.Effort, "none") {
+		return false
+	}
+	switch providerType {
+	case "openai", "openai_chatcompletions", "openai_responses":
+		return isOpenAIVendor(cfg) && modelinfo.OpenAISupportsNoneEffort(cfg.Model)
+	default:
+		return false
+	}
+}
+
+// isOpenAIVendor reports whether cfg's model genuinely runs against OpenAI's
+// own model catalog, as opposed to a different vendor (xai/grok, mistral,
+// deepseek, ...) that merely speaks the OpenAI-compatible wire protocol.
+//
+// resolveProviderType only identifies the transport dialect (Chat
+// Completions vs Responses vs some other OpenAI-compatible variant); many
+// unrelated providers share it through their built-in alias APIType. Vendor
+// identity needs a narrower, separate check so OpenAI-only behavior (like
+// gpt-5.6's real "none" reasoning effort) doesn't leak onto e.g. xai/mistral
+// just because they happen to share the wire format.
+//
+// Delegates the provider-name/model-qualifier core to
+// [modelinfo.IsOpenAIVendor] and layers one more exclusion on top: a
+// provider name that is NOT itself a known built-in alias (i.e. a custom
+// provider from the providers: section) whose resolved API type is an
+// OpenAI dialect. A protocol-only alias like xai/mistral never reaches this
+// branch — it IS a known alias — so its APIType fallback can never be
+// mistaken for a deliberate "this is an OpenAI endpoint" declaration.
+//
+// This result is threaded to the pkg/model/provider/openai client (which
+// cannot import this package — see modelinfo.IsOpenAIVendor's doc for the
+// import-cycle rationale) as trusted internal state via
+// options.WithOpenAIVendor, applied once by createDirectProvider after this
+// function runs on the fully-resolved (post-applyProviderDefaults) config. It
+// is never written to ProviderOpts: that map is public, user-controllable
+// config, so a user-supplied `provider_opts.openai_vendor` key must never be
+// able to spoof or suppress this decision.
+func isOpenAIVendor(cfg *latest.ModelConfig) bool {
+	if modelinfo.IsOpenAIVendor(cfg.Provider, cfg.Model) {
+		return true
+	}
+	return isUnrecognizedOpenAIProtocolProvider(cfg)
+}
+
+// isUnrecognizedOpenAIProtocolProvider reports whether cfg.Provider is NOT a
+// known built-in alias (i.e. it's a custom provider from the providers:
+// section, typically one that omits the underlying `provider:` field) whose
+// resolved api_type speaks one of the OpenAI wire dialects. This is the one
+// exclusion [modelinfo.IsOpenAIVendor] cannot express on its own, since the
+// built-in alias registry lives in this package (see [isOpenAIVendor]'s doc).
+func isUnrecognizedOpenAIProtocolProvider(cfg *latest.ModelConfig) bool {
+	if _, isBuiltinAlias := LookupAlias(cfg.Provider); isBuiltinAlias {
+		return false
+	}
+	switch resolveProviderType(cfg) {
+	case "openai", "openai_chatcompletions", "openai_responses":
+		return true
+	default:
+		return false
 	}
 }
 

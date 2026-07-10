@@ -101,7 +101,7 @@ func TestDoctorCommand_ChatGPTLoginSource(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Regexp(t, `chatgpt\s+found\s+CHATGPT_OAUTH_TOKEN\s+chatgpt-login`, output)
-	assert.Contains(t, output, "auto -> chatgpt/gpt-5.2")
+	assert.Contains(t, output, "auto -> chatgpt/gpt-5.6")
 	assert.Contains(t, output, "No issues found.")
 	assert.NotContains(t, output, "chatgpt-access-token", "secret values must never be printed")
 }
@@ -266,7 +266,7 @@ func TestDoctorCommand_JSON(t *testing.T) {
 	assert.Equal(t, dmrStatusReachable, report.DMR.Status)
 	assert.Equal(t, []string{"ai/qwen3:latest"}, report.DMR.Models)
 	assert.Equal(t, "openai", report.AutoModel.Provider)
-	assert.Equal(t, "gpt-5", report.AutoModel.Model)
+	assert.Equal(t, "gpt-5.6", report.AutoModel.Model)
 	assert.True(t, report.AutoModel.Usable)
 	assert.Empty(t, report.Issues)
 

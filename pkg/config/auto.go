@@ -148,8 +148,8 @@ func (e *AutoModelFallbackError) Error() string {
 func (e *AutoModelFallbackError) Unwrap() error { return e.Cause }
 
 var DefaultModels = map[string]string{
-	"openai":         "gpt-5",
-	"chatgpt":        "gpt-5.2",
+	"openai":         "gpt-5.6",
+	"chatgpt":        "gpt-5.6",
 	"anthropic":      "claude-sonnet-4-6",
 	"google":         "gemini-3.5-flash",
 	"dmr":            "ai/qwen3:latest",
@@ -164,7 +164,7 @@ var DefaultModels = map[string]string{
 	"together":       "meta-llama/Llama-3.3-70B-Instruct-Turbo",
 	"huggingface":    "meta-llama/Llama-3.3-70B-Instruct",
 	"moonshot":       "kimi-k2-0905-preview",
-	"vercel":         "openai/gpt-5",
+	"vercel":         "openai/gpt-5.6-sol",
 	"amazon-bedrock": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
 	"opencode-go":    "deepseek-v4-flash",
 	"opencode-zen":   "deepseek-v4-flash-free",

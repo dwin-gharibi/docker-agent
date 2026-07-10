@@ -278,8 +278,8 @@ Uses effort levels as strings:
 models:
   gpt:
     provider: openai
-    model: gpt-5
-    thinking_budget: low # minimal | low | medium | high | xhigh
+    model: gpt-5.6
+    thinking_budget: low # none | minimal | low | medium | high | xhigh | max (xhigh needs gpt-5.2+; none/max need gpt-5.6+; minimal dropped on gpt-5.6+)
 ```
 
 ### Anthropic
@@ -325,13 +325,23 @@ models:
 
 ### Disabling Thinking
 
-Works for all providers:
-
 ```yaml
 thinking_budget: none # or 0
 ```
 
-Models that always reason (OpenAI o-series, gpt-5, Gemini 3) fall back to the API default and still reason internally.
+`none` and `0` both clear docker-agent's local thinking configuration (omitting `thinking_budget` has the same effect); neither is guaranteed to reach the API as a real "off" switch:
+
+- **OpenAI gpt-5.6+** (Sol/Terra/Luna) is the only case with a genuine API-level `none` reasoning effort: docker-agent sends it as-is and the model does not reason.
+- **Older OpenAI reasoning models** (o-series, gpt-5 through gpt-5.5) have no such switch: `none`/`0` just clear the local config, and the model falls back to the API's own default effort and still reasons internally. Same for other always-reasoning models (Gemini 3).
+- Providers with a true optional-thinking switch (Gemini 2.5, Claude, local models) are fully disabled by `none`/`0`.
+
+```yaml
+models:
+  fast-responder:
+    provider: openai
+    model: gpt-5.6
+    thinking_budget: none # real API-level disable on gpt-5.6+
+```
 
 See the [Thinking / Reasoning guide](../../guides/thinking/index.md) for per-provider details, including AWS Bedrock and Docker Model Runner.
 

@@ -41,7 +41,7 @@ models:
     model: claude-haiku-4-5
   gpt:
     provider: openai
-    model: gpt-5.5
+    model: gpt-5.6
   extramax:
     model: sonnet,gpt
 

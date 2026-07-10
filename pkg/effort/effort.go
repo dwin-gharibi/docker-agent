@@ -168,10 +168,13 @@ func NextSupportedLevel(supported []Level, current Level) Level {
 // ---------------------------------------------------------------------------
 
 // ForOpenAI returns the OpenAI reasoning_effort string for l.
-// OpenAI accepts: minimal, low, medium, high, xhigh.
+// OpenAI accepts: none, minimal, low, medium, high, xhigh, max — none and max
+// are gpt-5.6+ only, minimal is dropped on gpt-5.6+, and xhigh is gpt-5.2+.
+// Per-model gating lives in pkg/modelinfo; this is the provider-wide
+// vocabulary layer, so older models still reject none/xhigh/max API-side.
 func ForOpenAI(l Level) (string, bool) {
 	switch l {
-	case Minimal, Low, Medium, High, XHigh:
+	case None, Minimal, Low, Medium, High, XHigh, Max:
 		return string(l), true
 	default:
 		return "", false

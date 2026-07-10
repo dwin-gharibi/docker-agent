@@ -12,6 +12,31 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestEmbeddedSnapshotIncludesGPT56Family is the regression test for the
+// GPT-5.6 family snapshot refresh (models.dev added gpt-5.6/-sol/-terra/-luna
+// on 2026-07-09): it guards against a stale embedded snapshot silently
+// dropping offline model resolution / pricing / context limits for the new
+// family, the same way TestEmbeddedSnapshotParses spot-checks gpt-4o.
+func TestEmbeddedSnapshotIncludesGPT56Family(t *testing.T) {
+	t.Parallel()
+
+	db := embeddedSnapshot()
+	require.NotNil(t, db)
+	openai, ok := db.Providers["openai"]
+	require.True(t, ok, "embedded snapshot must contain the openai provider")
+
+	for _, modelID := range []string{"gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"} {
+		t.Run(modelID, func(t *testing.T) {
+			t.Parallel()
+			m, ok := openai.Models[modelID]
+			require.True(t, ok, "embedded snapshot must contain openai/%s", modelID)
+			assert.Equal(t, 1050000, m.Limit.Context, "openai/%s must report the 1.05M context window", modelID)
+			assert.Equal(t, int64(128000), m.Limit.Output, "openai/%s must report the 128k max output", modelID)
+			assert.True(t, m.Reasoning, "openai/%s must be marked as a reasoning model", modelID)
+		})
+	}
+}
+
 // TestEmbeddedSnapshotParses ensures the snapshot baked into the binary is
 // valid JSON and carries a non-trivial catalog. A broken snapshot would
 // silently degrade every offline lookup, so we guard it at build time.

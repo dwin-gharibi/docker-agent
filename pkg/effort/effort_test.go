@@ -73,13 +73,13 @@ func TestForOpenAI(t *testing.T) {
 		want  string
 		ok    bool
 	}{
+		{None, "none", true},
 		{Minimal, "minimal", true},
 		{Low, "low", true},
 		{Medium, "medium", true},
 		{High, "high", true},
 		{XHigh, "xhigh", true},
-		{Max, "", false},
-		{None, "", false},
+		{Max, "max", true},
 	} {
 		t.Run(string(tt.level), func(t *testing.T) {
 			t.Parallel()

@@ -18,6 +18,7 @@ type ModelOptions struct {
 	providers        map[string]latest.ProviderConfig
 	modelsDevStore   *modelsdev.Store
 	transportWrapper func(http.RoundTripper) http.RoundTripper
+	openAIVendor     bool
 }
 
 func (c *ModelOptions) Gateway() string {
@@ -46,6 +47,19 @@ func (c *ModelOptions) Providers() map[string]latest.ProviderConfig {
 
 func (c *ModelOptions) ModelsDevStore() *modelsdev.Store {
 	return c.modelsDevStore
+}
+
+// OpenAIVendor reports whether the model this ModelOptions was built for is a
+// genuine OpenAI vendor endpoint (as opposed to a third-party provider that
+// merely speaks the OpenAI-compatible wire protocol, e.g. xai/mistral). It is
+// set exclusively by [WithOpenAIVendor], which pkg/model/provider's factory
+// calls after applyProviderDefaults has resolved custom providers and
+// built-in aliases — never by user-controllable config (YAML/provider_opts
+// cannot reach this field). The OpenAI client trusts it for gating
+// OpenAI-only wire behavior (e.g. gpt-5.6's real "none" reasoning effort)
+// that must not leak onto an OpenAI-compatible alias for a different vendor.
+func (c *ModelOptions) OpenAIVendor() bool {
+	return c.openAIVendor
 }
 
 // TransportWrapper returns the HTTP transport wrapper function registered via
@@ -127,6 +141,17 @@ func WithModelsDevStore(store *modelsdev.Store) Opt {
 	}
 }
 
+// WithOpenAIVendor records the trusted, internally-resolved "genuine OpenAI
+// vendor" bit (see [ModelOptions.OpenAIVendor]). It is meant to be called
+// exactly once, by pkg/model/provider's Registry after applyProviderDefaults
+// has resolved custom providers and built-in aliases — not from user config,
+// since no YAML/provider_opts key can invoke a Go option constructor.
+func WithOpenAIVendor(v bool) Opt {
+	return func(cfg *ModelOptions) {
+		cfg.openAIVendor = v
+	}
+}
+
 // WithHTTPTransportWrapper registers a function that wraps the HTTP transport
 // used by provider clients (Anthropic, OpenAI, and Gemini with the Gemini API
 // backend). The function receives the transport that docker-agent built
@@ -188,6 +213,9 @@ func FromModelOptions(m ModelOptions) []Opt {
 	}
 	if m.transportWrapper != nil {
 		out = append(out, WithHTTPTransportWrapper(m.transportWrapper))
+	}
+	if m.openAIVendor {
+		out = append(out, WithOpenAIVendor(true))
 	}
 	return out
 }

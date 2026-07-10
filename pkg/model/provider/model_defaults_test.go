@@ -65,6 +65,33 @@ func TestApplyModelDefaults(t *testing.T) {
 			config: &latest.ModelConfig{Provider: "xai", Model: "grok-2"},
 		},
 		{
+			name:   "xai: unrelated alias never preserves none, even with a gpt-5.6-shaped model name",
+			config: &latest.ModelConfig{Provider: "xai", Model: "gpt-5.6", ThinkingBudget: &latest.ThinkingBudget{Effort: "none"}},
+		},
+		{
+			name:   "mistral: unrelated alias never preserves none, even with a gpt-5.6-shaped model name",
+			config: &latest.ModelConfig{Provider: "mistral", Model: "gpt-5.6-sol", ThinkingBudget: &latest.ThinkingBudget{Effort: "none"}},
+		},
+		{
+			name:       "azure: genuine OpenAI vendor preserves none on gpt-5.6",
+			config:     &latest.ModelConfig{Provider: "azure", Model: "gpt-5.6", ThinkingBudget: &latest.ThinkingBudget{Effort: "none"}},
+			wantBudget: &latest.ThinkingBudget{Effort: "none"},
+		},
+		{
+			name:       "chatgpt: genuine OpenAI vendor preserves none on gpt-5.6",
+			config:     &latest.ModelConfig{Provider: "chatgpt", Model: "gpt-5.6", ThinkingBudget: &latest.ThinkingBudget{Effort: "none"}},
+			wantBudget: &latest.ThinkingBudget{Effort: "none"},
+		},
+		{
+			name:       "vercel with explicit openai/ qualified model preserves none",
+			config:     &latest.ModelConfig{Provider: "vercel", Model: "openai/gpt-5.6-sol", ThinkingBudget: &latest.ThinkingBudget{Effort: "none"}},
+			wantBudget: &latest.ThinkingBudget{Effort: "none"},
+		},
+		{
+			name:   "vercel without an openai/ qualifier does not preserve none",
+			config: &latest.ModelConfig{Provider: "vercel", Model: "gpt-5.6", ThinkingBudget: &latest.ThinkingBudget{Effort: "none"}},
+		},
+		{
 			name:   "custom openai_chatcompletions: no default thinking",
 			config: &latest.ModelConfig{Provider: "custom", Model: "custom-model", ProviderOpts: map[string]any{"api_type": "openai_chatcompletions"}},
 		},
@@ -136,6 +163,33 @@ func TestApplyModelDefaults(t *testing.T) {
 		{
 			name:   "thinking_budget: none becomes nil",
 			config: &latest.ModelConfig{Provider: "openai", Model: "gpt-4o", ThinkingBudget: &latest.ThinkingBudget{Effort: "none"}},
+		},
+		{
+			name:   "gpt-5.2: thinking_budget: none becomes nil (no real none effort)",
+			config: &latest.ModelConfig{Provider: "openai", Model: "gpt-5.2", ThinkingBudget: &latest.ThinkingBudget{Effort: "none"}},
+		},
+		{
+			name:   "anthropic: thinking_budget: none stays nil even on a model with a none-capable OpenAI sibling name",
+			config: &latest.ModelConfig{Provider: "anthropic", Model: "gpt-5.6", ThinkingBudget: &latest.ThinkingBudget{Effort: "none"}},
+		},
+		{
+			name:       "gpt-5.6: thinking_budget: none is preserved (real API none effort)",
+			config:     &latest.ModelConfig{Provider: "openai", Model: "gpt-5.6", ThinkingBudget: &latest.ThinkingBudget{Effort: "none"}},
+			wantBudget: &latest.ThinkingBudget{Effort: "none"},
+		},
+		{
+			name:       "gpt-5.6-sol: thinking_budget: NONE (case-insensitive) is preserved",
+			config:     &latest.ModelConfig{Provider: "openai", Model: "gpt-5.6-sol", ThinkingBudget: &latest.ThinkingBudget{Effort: "NONE"}},
+			wantBudget: &latest.ThinkingBudget{Effort: "NONE"},
+		},
+		{
+			name:       "gpt-5.6 via openai_responses api_type: thinking_budget: none is preserved",
+			config:     &latest.ModelConfig{Provider: "custom", Model: "gpt-5.6-terra", ProviderOpts: map[string]any{"api_type": "openai_responses"}, ThinkingBudget: &latest.ThinkingBudget{Effort: "none"}},
+			wantBudget: &latest.ThinkingBudget{Effort: "none"},
+		},
+		{
+			name:   "gpt-5.6: thinking_budget: 0 (tokens, not effort) still becomes nil",
+			config: &latest.ModelConfig{Provider: "openai", Model: "gpt-5.6", ThinkingBudget: &latest.ThinkingBudget{Tokens: 0}},
 		},
 
 		// --- Unknown / other providers: no effect ---

@@ -46,6 +46,15 @@ func TestSupportsResponsesAPI(t *testing.T) {
 		{"claude-sonnet-4-5", false},
 		{"gemini-2.5-pro", false},
 		{"", false},
+
+		// Gateway "openai/" qualified ids resolve the same as the bare model.
+		{"openai/gpt-5.6-sol", true},
+		{"OPENAI/gpt-4.1", true},
+		{"openai/gpt-4o", false},
+		// Unrelated provider-style prefixes must NOT be stripped: they are
+		// the model's actual catalog path, not an OpenAI wrapper.
+		{"ai/qwen3", false},
+		{"anthropic/claude-sonnet-4-5", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.model, func(t *testing.T) {
@@ -100,6 +109,14 @@ func TestUsesReasoningEffort(t *testing.T) {
 		{"gemini-pro", false},
 		{"text-davinci-003", false},
 		{"", false},
+
+		// Gateway "openai/" qualified ids, including the exact Vercel slug
+		// from docs/providers/vercel and pkg/config/auto.go's default.
+		{"openai/gpt-5.6-sol", true},
+		{"openai/gpt-5-chat", false},
+		// Unrelated provider-style prefixes must NOT be stripped.
+		{"ai/qwen3", false},
+		{"meta-llama/Llama-3.3-70B-Instruct-Turbo", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.model, func(t *testing.T) {
@@ -133,11 +150,78 @@ func TestAlwaysReasons(t *testing.T) {
 		{"gpt-4o", false},
 		{"claude-sonnet-4-5", false},
 		{"", false},
+		// Gateway "openai/" qualified ids resolve the same as the bare model.
+		{"openai/o3-mini", true},
+		{"openai/gpt-4o", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.model, func(t *testing.T) {
 			t.Parallel()
 			assert.Equal(t, tc.want, AlwaysReasons(tc.model))
+		})
+	}
+}
+
+// TestHasOpenAIQualifier verifies the "openai/" gateway-qualifier detector
+// used to give an OpenAI model its due even when fronted by a gateway
+// (Vercel AI Gateway, OpenRouter, ...), while leaving unrelated
+// provider-style prefixes (DMR's "ai/", OpenRouter's "meta-llama/", ...)
+// untouched.
+func TestHasOpenAIQualifier(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		model string
+		want  bool
+	}{
+		{"openai/gpt-5.6-sol", true},
+		{"OPENAI/gpt-5.6-sol", true},
+		{"  openai/gpt-5.6-sol  ", true},
+		{"openai/gpt-4o", true},
+		{"gpt-5.6-sol", false},
+		{"ai/qwen3", false},
+		{"anthropic/claude-sonnet-4-5", false},
+		{"meta-llama/Llama-3.3-70B-Instruct-Turbo", false},
+		{"", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.model, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, HasOpenAIQualifier(tc.model))
+		})
+	}
+}
+
+// TestIsOpenAIVendor verifies the shared, import-cycle-free vendor-identity
+// predicate: true for the direct openai/chatgpt/azure providers, or any
+// provider when the model id is explicitly "openai/" qualified (Vercel AI
+// Gateway, OpenRouter, ...); false for OpenAI-compatible aliases fronting a
+// different vendor's models (xai, mistral, ...), even when the model name
+// happens to look like a gpt-5.6 id.
+func TestIsOpenAIVendor(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		provider string
+		model    string
+		want     bool
+	}{
+		{"direct openai", "openai", "gpt-5.6", true},
+		{"chatgpt backend", "chatgpt", "gpt-5.6", true},
+		{"azure openai", "azure", "gpt-5.6", true},
+		{"case-insensitive provider", "OpenAI", "gpt-5.6", true},
+		{"xai is not openai even with a gpt-5.6-shaped model", "xai", "gpt-5.6", false},
+		{"mistral is not openai even with a gpt-5.6-shaped model", "mistral", "gpt-5.6-sol", false},
+		{"vercel with openai/ qualified model is openai", "vercel", "openai/gpt-5.6-sol", true},
+		{"vercel without the qualifier is not openai", "vercel", "gpt-5.6", false},
+		{"vercel with an unrelated vendor's model is not openai", "vercel", "anthropic/claude-sonnet-4.5", false},
+		{"unknown provider without qualifier is not openai", "some-custom-provider", "gpt-5.6", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, IsOpenAIVendor(tc.provider, tc.model))
 		})
 	}
 }
@@ -170,6 +254,12 @@ func TestRejectsTokenThinking(t *testing.T) {
 		{"claude-opus-4-70", false},
 		{"claude-opus-4-80", false},
 		{"", false},
+		// An "openai/" qualifier must NOT be stripped here: normalize() is
+		// generic (not OpenAI-specific), so a qualified id naming a Claude
+		// model behind an OpenAI-labeled gateway slug is not recognized as
+		// Claude by this predicate either — it simply never matches the
+		// "claude-opus-4-*" prefix once left un-stripped.
+		{"openai/claude-opus-4-7", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.model, func(t *testing.T) {
@@ -286,6 +376,11 @@ func TestUsesThinkingLevel(t *testing.T) {
 		"gemini-3.",     // dot with no version digit or dash
 		"gemini-3.1",    // dot-version but no trailing dash
 		"",
+		// An "openai/" qualifier must NOT be stripped by the generic
+		// normalize(): a weird qualified id naming a Gemini model must not
+		// be recognized as level-based thinking just because it starts
+		// with the gateway's OpenAI vendor prefix.
+		"openai/gemini-3-pro",
 	}
 
 	for _, m := range match {
@@ -426,6 +521,11 @@ func TestIsClaude(t *testing.T) {
 	assert.False(t, IsClaude(ctx, nil, modelsdev.NewID("amazon-bedrock", "amazon.titan-text-express-v1")))
 	assert.False(t, IsClaude(ctx, nil, modelsdev.NewID("google", "gemini-2.5-pro")))
 	assert.False(t, IsClaude(ctx, nil, modelsdev.ID{}))
+	// Regression: an "openai/" qualified id naming a Claude model must NOT be
+	// recognized as Claude via the bare-name fallback. The generic normalize()
+	// no longer strips the gateway qualifier, so "openai/claude-opus-4-7"
+	// never reaches the "claude-" prefix check.
+	assert.False(t, IsClaude(ctx, nil, modelsdev.NewID("vercel", "openai/claude-opus-4-7")))
 }
 
 func TestIsClaude_StoreErrorFallsBackToPattern(t *testing.T) {

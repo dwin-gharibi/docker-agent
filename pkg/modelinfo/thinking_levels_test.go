@@ -132,6 +132,48 @@ func TestSupportedThinkingLevels(t *testing.T) {
 			want:     []effort.Level{effort.None, effort.Minimal, effort.Low, effort.Medium, effort.High, effort.XHigh},
 		},
 		{
+			name:     "gpt-5.6 gets xhigh, max, and drops minimal",
+			provider: "openai",
+			modelID:  "gpt-5.6",
+			want:     []effort.Level{effort.None, effort.Low, effort.Medium, effort.High, effort.XHigh, effort.Max},
+		},
+		{
+			name:     "gpt-5.6-sol gets xhigh, max, and drops minimal",
+			provider: "openai",
+			modelID:  "gpt-5.6-sol",
+			want:     []effort.Level{effort.None, effort.Low, effort.Medium, effort.High, effort.XHigh, effort.Max},
+		},
+		{
+			name:     "gpt-5.6-terra gets xhigh, max, and drops minimal",
+			provider: "openai_responses",
+			modelID:  "gpt-5.6-terra",
+			want:     []effort.Level{effort.None, effort.Low, effort.Medium, effort.High, effort.XHigh, effort.Max},
+		},
+		{
+			name:     "gpt-5.6-luna gets xhigh, max, and drops minimal",
+			provider: "openai",
+			modelID:  "gpt-5.6-luna",
+			want:     []effort.Level{effort.None, effort.Low, effort.Medium, effort.High, effort.XHigh, effort.Max},
+		},
+		{
+			name:     "gpt-5.7 (future minor) keeps xhigh, max, and dropped minimal",
+			provider: "openai",
+			modelID:  "gpt-5.7",
+			want:     []effort.Level{effort.None, effort.Low, effort.Medium, effort.High, effort.XHigh, effort.Max},
+		},
+		{
+			name:     "chatgpt provider maps to the openai scale",
+			provider: "chatgpt",
+			modelID:  "gpt-5.6",
+			want:     []effort.Level{effort.None, effort.Low, effort.Medium, effort.High, effort.XHigh, effort.Max},
+		},
+		{
+			name:     "chatgpt provider with gpt-5.2 gets the openai scale (including minimal)",
+			provider: "chatgpt",
+			modelID:  "gpt-5.2",
+			want:     []effort.Level{effort.None, effort.Minimal, effort.Low, effort.Medium, effort.High, effort.XHigh},
+		},
+		{
 			name:     "o-series tops out at high",
 			provider: "openai",
 			modelID:  "o3",
@@ -155,12 +197,167 @@ func TestSupportedThinkingLevels(t *testing.T) {
 			modelID:  "deepseek-r1",
 			want:     []effort.Level{effort.None, effort.Low, effort.Medium, effort.High},
 		},
+		{
+			name:     "vercel with openai/ qualified gpt-5.6-sol resolves to the openai scale (xhigh, max, no minimal)",
+			provider: "vercel",
+			modelID:  "openai/gpt-5.6-sol",
+			want:     []effort.Level{effort.None, effort.Low, effort.Medium, effort.High, effort.XHigh, effort.Max},
+		},
+		{
+			name:     "vercel without the openai/ qualifier keeps the conservative scale",
+			provider: "vercel",
+			modelID:  "gpt-5.6",
+			want:     []effort.Level{effort.None, effort.Low, effort.Medium, effort.High},
+		},
+		{
+			name:     "vercel with a non-openai qualified model is not reclassified",
+			provider: "vercel",
+			modelID:  "anthropic/claude-sonnet-4.5",
+			want:     []effort.Level{effort.None, effort.Low, effort.Medium, effort.High},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			assert.Equal(t, tt.want, SupportedThinkingLevels(tt.provider, tt.modelID))
+		})
+	}
+}
+
+func TestOpenAITopEfforts(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		modelID string
+		want    []effort.Level
+	}{
+		{"gpt-5", nil},
+		{"gpt-5.1-codex", nil},
+		{"o3", nil},
+		{"gpt-5.2", []effort.Level{effort.XHigh}},
+		{"gpt-5.4-mini", []effort.Level{effort.XHigh}},
+		{"gpt-5.6", []effort.Level{effort.XHigh, effort.Max}},
+		{"gpt-5.6-sol", []effort.Level{effort.XHigh, effort.Max}},
+		{"gpt-5.6-terra", []effort.Level{effort.XHigh, effort.Max}},
+		{"gpt-5.6-luna", []effort.Level{effort.XHigh, effort.Max}},
+		{"gpt-5.7", []effort.Level{effort.XHigh, effort.Max}},
+		{"GPT-5.6-SOL", []effort.Level{effort.XHigh, effort.Max}},
+		// Valid hyphen-delimited snapshot form: still a real gpt-5.6 minor.
+		{"gpt-5.6-2026-07-09", []effort.Level{effort.XHigh, effort.Max}},
+		// Vercel-style "openai/" qualified id: normalize strips the qualifier.
+		{"openai/gpt-5.6-sol", []effort.Level{effort.XHigh, effort.Max}},
+		// Malformed/date-shaped minors must not parse as gpt-5.6+.
+		{"gpt-5.6foo", nil},
+		{"gpt-5.6.20260709", nil},
+		{"gpt-5.20260709", nil},
+		{"gpt-5.", nil},
+		{"gpt-5.abc", nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.modelID, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, openAITopEfforts(tt.modelID))
+		})
+	}
+}
+
+// TestGPTFiveMinor exercises gptFiveMinor's syntactic boundary/width checks
+// directly: it must accept bare aliases, variant suffixes, future minors,
+// and hyphen-delimited snapshot forms, while rejecting malformed or
+// date-shaped strings that merely start with the right prefix.
+func TestGPTFiveMinor(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		modelID   string
+		wantMinor int
+		wantOK    bool
+	}{
+		// Valid: bare minor and known variant suffixes.
+		{"gpt-5.6", 6, true},
+		{"gpt-5.6-sol", 6, true},
+		{"gpt-5.6-terra", 6, true},
+		{"gpt-5.6-luna", 6, true},
+		{"gpt-5.2", 2, true},
+		{"gpt-5.4-mini", 4, true},
+		// Valid: sensible future minors.
+		{"gpt-5.7", 7, true},
+		{"gpt-5.9-sol", 9, true},
+		// Valid: hyphen-delimited dated snapshot form.
+		{"gpt-5.6-2026-07-09", 6, true},
+		{"gpt-5.6-sol-2026-07-09", 6, true},
+		// Valid: case-insensitive.
+		{"GPT-5.6-SOL", 6, true},
+		// Valid: gateway "openai/" qualifier is stripped before parsing.
+		{"openai/gpt-5.6-sol", 6, true},
+
+		// Invalid: not a gpt-5.x id at all.
+		{"gpt-5", 0, false},
+		{"gpt-4.1", 0, false},
+		{"o3", 0, false},
+		{"", 0, false},
+		// Invalid: no digits after the dot.
+		{"gpt-5.", 0, false},
+		{"gpt-5.abc", 0, false},
+		// Invalid: suffix glued directly onto the digits without a hyphen
+		// boundary.
+		{"gpt-5.6foo", 0, false},
+		// Invalid: dot-separated digit run after the minor looks like a
+		// second version/date component, not a suffix.
+		{"gpt-5.6.20260709", 0, false},
+		// Invalid: an 8-digit run is a date, not a 1-2 digit minor version.
+		{"gpt-5.20260709", 0, false},
+		// Invalid: minor wider than two digits in general.
+		{"gpt-5.666", 0, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.modelID, func(t *testing.T) {
+			t.Parallel()
+			minor, ok := gptFiveMinor(tt.modelID)
+			assert.Equal(t, tt.wantOK, ok, "ok mismatch")
+			if tt.wantOK {
+				assert.Equal(t, tt.wantMinor, minor, "minor mismatch")
+			}
+		})
+	}
+}
+
+func TestOpenAISupportsNoneEffort(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		modelID string
+		want    bool
+	}{
+		{"gpt-5", false},
+		{"gpt-5.2", false},
+		{"gpt-5.4-mini", false},
+		{"gpt-5.5", false},
+		{"gpt-5.6", true},
+		{"gpt-5.6-sol", true},
+		{"gpt-5.6-terra", true},
+		{"gpt-5.6-luna", true},
+		{"gpt-5.7", true},
+		{"o3", false},
+		{"claude-opus-4-7", false},
+		// Valid hyphen-delimited snapshot form.
+		{"gpt-5.6-2026-07-09", true},
+		// Vercel-style "openai/" qualified id.
+		{"openai/gpt-5.6-sol", true},
+		{"openai/gpt-5.2", false},
+		// Malformed/date-shaped minors must not be treated as gpt-5.6+.
+		{"gpt-5.6foo", false},
+		{"gpt-5.6.20260709", false},
+		{"gpt-5.20260709", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.modelID, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, OpenAISupportsNoneEffort(tt.modelID))
 		})
 	}
 }

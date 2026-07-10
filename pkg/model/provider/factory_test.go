@@ -272,3 +272,119 @@ func TestNewWithModels_BypassModelsGatewayRouting(t *testing.T) {
 		})
 	}
 }
+
+// TestCreateDirectProvider_ResolvesOpenAIVendorOption verifies that
+// createDirectProvider computes the genuine-OpenAI-vendor bit from the fully
+// resolved (post-applyProviderDefaults) config and passes it to the leaf
+// factory via options.WithOpenAIVendor \u2014 never via ProviderOpts, which is
+// public, user-controllable config. A spoofed provider_opts.openai_vendor
+// key must have zero effect on the resolved value either way.
+func TestCreateDirectProvider_ResolvesOpenAIVendorOption(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		cfg             *latest.ModelConfig
+		customProviders map[string]latest.ProviderConfig
+		want            bool
+	}{
+		{
+			name: "direct openai provider",
+			cfg:  &latest.ModelConfig{Provider: "openai", Model: "gpt-5.6"},
+			want: true,
+		},
+		{
+			name: "azure provider",
+			cfg:  &latest.ModelConfig{Provider: "azure", Model: "gpt-5.6"},
+			want: true,
+		},
+		{
+			name: "vercel with explicit openai/-qualified model",
+			cfg:  &latest.ModelConfig{Provider: "vercel", Model: "openai/gpt-5.6-sol"},
+			want: true,
+		},
+		{
+			name: "xai alias is never a genuine OpenAI vendor",
+			cfg:  &latest.ModelConfig{Provider: "xai", Model: "gpt-5.6"},
+			want: false,
+		},
+		{
+			name: "mistral alias is never a genuine OpenAI vendor",
+			cfg:  &latest.ModelConfig{Provider: "mistral", Model: "gpt-5.6-sol"},
+			want: false,
+		},
+		{
+			name: "named custom provider with omitted underlying provider resolves to OpenAI vendor",
+			cfg:  &latest.ModelConfig{Provider: "my_openai", Model: "gpt-5.6"},
+			customProviders: map[string]latest.ProviderConfig{
+				"my_openai": {BaseURL: "https://api.openai.com/v1", TokenKey: "MY_KEY"},
+			},
+			want: true,
+		},
+		{
+			name: "custom provider explicitly pointed at anthropic is not an OpenAI vendor",
+			cfg:  &latest.ModelConfig{Provider: "claude_gateway", Model: "claude-x"},
+			customProviders: map[string]latest.ProviderConfig{
+				"claude_gateway": {Provider: "anthropic", BaseURL: "https://gateway.example.com"},
+			},
+			want: false,
+		},
+		{
+			name: "spoofed provider_opts.openai_vendor=true on xai is ignored",
+			cfg: &latest.ModelConfig{
+				Provider:     "xai",
+				Model:        "gpt-5.6",
+				ProviderOpts: map[string]any{"openai_vendor": true},
+			},
+			want: false,
+		},
+		{
+			name: "spoofed provider_opts.openai_vendor=false on a named custom OpenAI provider is ignored",
+			cfg: &latest.ModelConfig{
+				Provider:     "my_openai",
+				Model:        "gpt-5.6",
+				ProviderOpts: map[string]any{"openai_vendor": false},
+			},
+			customProviders: map[string]latest.ProviderConfig{
+				"my_openai": {BaseURL: "https://api.openai.com/v1", TokenKey: "MY_KEY"},
+			},
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var probe options.ModelOptions
+			r := NewRegistry(map[string]providerFactory{
+				"openai":                 tagFactoryCapturingOpts(&probe),
+				"openai_chatcompletions": tagFactoryCapturingOpts(&probe),
+				"openai_responses":       tagFactoryCapturingOpts(&probe),
+				"anthropic":              tagFactoryCapturingOpts(&probe),
+			})
+
+			var opts []options.Opt
+			if tt.customProviders != nil {
+				opts = append(opts, options.WithProviders(tt.customProviders))
+			}
+
+			_, err := r.createDirectProvider(t.Context(), tt.cfg, environment.NewNoEnvProvider(), opts...)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, probe.OpenAIVendor())
+		})
+	}
+}
+
+// tagFactoryCapturingOpts returns a providerFactory that replays every
+// received Opt onto into, so tests can inspect the resolved ModelOptions.
+func tagFactoryCapturingOpts(into *options.ModelOptions) providerFactory {
+	return func(_ context.Context, _ *latest.ModelConfig, _ environment.Provider, opts ...options.Opt) (Provider, error) {
+		for _, opt := range opts {
+			if opt != nil {
+				opt(into)
+			}
+		}
+		return &fakeProvider{id: modelsdev.NewID("test", "captured")}, nil
+	}
+}

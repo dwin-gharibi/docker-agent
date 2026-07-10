@@ -17,7 +17,7 @@
 models:
   gpt:
     provider: chatgpt
-    model: gpt-5.2
+    model: gpt-5.6
     thinking_budget: medium
 
 agents:

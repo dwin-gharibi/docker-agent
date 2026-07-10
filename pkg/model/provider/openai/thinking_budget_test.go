@@ -17,11 +17,13 @@ func TestOpenAIReasoningEffort_Success(t *testing.T) {
 		budget         *latest.ThinkingBudget
 		expectedEffort string
 	}{
+		{"none", &latest.ThinkingBudget{Effort: "none"}, "none"},
 		{"minimal", &latest.ThinkingBudget{Effort: "minimal"}, "minimal"},
 		{"low", &latest.ThinkingBudget{Effort: "low"}, "low"},
 		{"medium", &latest.ThinkingBudget{Effort: "medium"}, "medium"},
 		{"high", &latest.ThinkingBudget{Effort: "high"}, "high"},
 		{"xhigh", &latest.ThinkingBudget{Effort: "xhigh"}, "xhigh"},
+		{"max", &latest.ThinkingBudget{Effort: "max"}, "max"},
 		{"xhigh uppercase", &latest.ThinkingBudget{Effort: "XHIGH"}, "xhigh"},
 		{"uppercase", &latest.ThinkingBudget{Effort: "HIGH"}, "high"},
 		{"whitespace", &latest.ThinkingBudget{Effort: "  medium  "}, "medium"},

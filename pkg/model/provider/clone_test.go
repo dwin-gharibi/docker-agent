@@ -4,6 +4,7 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/docker/docker-agent/pkg/chat"
 	"github.com/docker/docker-agent/pkg/config/latest"
 	"github.com/docker/docker-agent/pkg/environment"
 	"github.com/docker/docker-agent/pkg/model/provider/options"
@@ -213,4 +215,89 @@ func TestCloneWithOptions_OverridesMaxTokens(t *testing.T) {
 		"MaxTokens should not be nil after cloning with explicit override")
 	assert.Equal(t, newMaxTokens, *clonedConfig.ModelConfig.MaxTokens,
 		"MaxTokens should be updated to the new value")
+}
+
+// TestCloneWithOptions_PreservesOpenAIVendorBit_NamedCustomProvider verifies
+// that the genuine-OpenAI-vendor bit resolved for a named custom OpenAI
+// provider (providers: section, no explicit `provider:` override) survives
+// CloneWithOptions(WithNoThinking()), the path used for e.g. title generation
+// and sampling clones. The clone re-enters createDirectProvider, which
+// recomputes isOpenAIVendor from the base config (preserved via
+// options.WithProviders through options.FromModelOptions) rather than
+// trusting a stale copy, so the wire behavior (reasoning_effort="none") must
+// hold on the clone too, not just the original provider.
+func TestCloneWithOptions_PreservesOpenAIVendorBit_NamedCustomProvider(t *testing.T) {
+	t.Parallel()
+
+	server, body := captureNamedCustomProviderRequestBody(t, "openai_chatcompletions")
+
+	customProviders := map[string]latest.ProviderConfig{
+		"my_openai": {
+			BaseURL:  server.URL,
+			TokenKey: "MY_OPENAI_TOKEN",
+			APIType:  "openai_chatcompletions",
+		},
+	}
+	modelCfg := &latest.ModelConfig{Provider: "my_openai", Model: "gpt-5.6"}
+	env := environment.NewMapEnvProvider(map[string]string{"MY_OPENAI_TOKEN": "secret"})
+
+	baseProvider, err := fullTestRegistry().New(t.Context(), modelCfg, env, options.WithProviders(customProviders))
+	require.NoError(t, err)
+	baseOpts := baseProvider.BaseConfig().ModelOptions
+	require.True(t, baseOpts.OpenAIVendor(), "base provider should resolve the OpenAI vendor bit")
+
+	cloned := CloneWithOptions(t.Context(), baseProvider, options.WithNoThinking())
+	clonedOpts := cloned.BaseConfig().ModelOptions
+	require.True(t, clonedOpts.OpenAIVendor(), "clone must preserve the OpenAI vendor bit")
+
+	stream, err := cloned.CreateChatCompletionStream(t.Context(), []chat.Message{{Role: chat.MessageRoleUser, Content: "Hi"}}, nil)
+	require.NoError(t, err)
+	defer stream.Close()
+	drainStream(t, stream)
+
+	var req struct {
+		ReasoningEffort string `json:"reasoning_effort"`
+	}
+	require.NoError(t, json.Unmarshal(body(), &req))
+	assert.Equal(t, "none", req.ReasoningEffort, "cloned NoThinking() path must still send gpt-5.6's real none effort")
+}
+
+// TestCloneWithOptions_KeepsOpenAIVendorFalse_UnrelatedAlias is the negative
+// counterpart: cloning a provider built on a known non-OpenAI alias (xai,
+// mistral) must not somehow gain the OpenAI vendor bit, so the clone's
+// NoThinking() path keeps sending "low".
+func TestCloneWithOptions_KeepsOpenAIVendorFalse_UnrelatedAlias(t *testing.T) {
+	t.Parallel()
+
+	server, body := captureNamedCustomProviderRequestBody(t, "openai_chatcompletions")
+
+	modelCfg := &latest.ModelConfig{
+		Provider: "xai",
+		Model:    "gpt-5.6",
+		BaseURL:  server.URL,
+		ProviderOpts: map[string]any{
+			"api_type": "openai_chatcompletions",
+		},
+	}
+	env := environment.NewMapEnvProvider(map[string]string{"XAI_API_KEY": "secret"})
+
+	baseProvider, err := fullTestRegistry().New(t.Context(), modelCfg, env)
+	require.NoError(t, err)
+	baseOpts := baseProvider.BaseConfig().ModelOptions
+	require.False(t, baseOpts.OpenAIVendor())
+
+	cloned := CloneWithOptions(t.Context(), baseProvider, options.WithNoThinking())
+	clonedOpts := cloned.BaseConfig().ModelOptions
+	require.False(t, clonedOpts.OpenAIVendor())
+
+	stream, err := cloned.CreateChatCompletionStream(t.Context(), []chat.Message{{Role: chat.MessageRoleUser, Content: "Hi"}}, nil)
+	require.NoError(t, err)
+	defer stream.Close()
+	drainStream(t, stream)
+
+	var req struct {
+		ReasoningEffort string `json:"reasoning_effort"`
+	}
+	require.NoError(t, json.Unmarshal(body(), &req))
+	assert.Equal(t, "low", req.ReasoningEffort)
 }

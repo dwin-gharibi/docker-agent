@@ -105,6 +105,11 @@ func (r *Registry) createDirectProvider(ctx context.Context, cfg *latest.ModelCo
 	if err := expandModelConfigEnv(ctx, enhancedCfg, env); err != nil {
 		return nil, err
 	}
+	// Resolve genuine-OpenAI-vendor identity now that custom providers and
+	// aliases are fully applied, and thread it to the leaf factory as trusted
+	// internal state rather than a ProviderOpts key (see factory.go's twin
+	// comment and options.WithOpenAIVendor for the full rationale).
+	opts = append(opts, options.WithOpenAIVendor(isOpenAIVendor(enhancedCfg)))
 	providerType := resolveProviderType(enhancedCfg)
 	factory, ok := r.factories[providerType]
 	if !ok {

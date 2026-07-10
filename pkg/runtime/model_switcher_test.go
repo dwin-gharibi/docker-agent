@@ -300,6 +300,61 @@ func TestSetAgentThinkingLevel(t *testing.T) {
 	})
 }
 
+// TestSetAgentThinkingLevel_NoneSurvivesOnGPT56 is the regression test for
+// the gpt-5.6+ "none" gating: cycling an agent's model to None on a model
+// with a real API-level none effort must produce a provider whose config
+// still carries an explicit ThinkingBudget{Effort: "none"} (not nil), so the
+// value actually reaches the OpenAI client instead of silently reverting to
+// the model's default effort. Older OpenAI models (no none effort) keep the
+// existing nil-normalize behavior.
+func TestSetAgentThinkingLevel_NoneSurvivesOnGPT56(t *testing.T) {
+	t.Parallel()
+
+	t.Run("gpt-5.6 preserves explicit none", func(t *testing.T) {
+		t.Parallel()
+		model := newConfigProvider(latest.ModelConfig{Provider: "openai", Model: "gpt-5.6", ThinkingBudget: &latest.ThinkingBudget{Effort: "high"}})
+		root := agent.New("root", "test", agent.WithModel(model))
+		r := &LocalRuntime{
+			team: team.New(team.WithAgents(root)),
+			modelSwitcherCfg: &ModelSwitcherConfig{
+				ProviderRegistry: testProviderRegistry(),
+				EnvProvider:      environment.NewMapEnvProvider(map[string]string{"OPENAI_API_KEY": "sk-test"}),
+			},
+		}
+
+		level, err := r.SetAgentThinkingLevel(t.Context(), "root", effort.None)
+		require.NoError(t, err)
+		assert.Equal(t, effort.None, level)
+
+		override := root.Model(t.Context())
+		require.NotNil(t, override)
+		budget := override.BaseConfig().ModelConfig.ThinkingBudget
+		require.NotNil(t, budget, "gpt-5.6 has a real API none effort; the budget must survive provider construction")
+		assert.Equal(t, "none", budget.Effort)
+	})
+
+	t.Run("gpt-5.2 normalizes none to nil", func(t *testing.T) {
+		t.Parallel()
+		model := newConfigProvider(latest.ModelConfig{Provider: "openai", Model: "gpt-5.2", ThinkingBudget: &latest.ThinkingBudget{Effort: "high"}})
+		root := agent.New("root", "test", agent.WithModel(model))
+		r := &LocalRuntime{
+			team: team.New(team.WithAgents(root)),
+			modelSwitcherCfg: &ModelSwitcherConfig{
+				ProviderRegistry: testProviderRegistry(),
+				EnvProvider:      environment.NewMapEnvProvider(map[string]string{"OPENAI_API_KEY": "sk-test"}),
+			},
+		}
+
+		level, err := r.SetAgentThinkingLevel(t.Context(), "root", effort.None)
+		require.NoError(t, err)
+		assert.Equal(t, effort.None, level)
+
+		override := root.Model(t.Context())
+		require.NotNil(t, override)
+		assert.Nil(t, override.BaseConfig().ModelConfig.ThinkingBudget, "gpt-5.2 has no API none effort; it must keep the nil-normalize behavior")
+	})
+}
+
 // TestCycleAgentThinkingLevel_PerModelTopTier verifies that cycling only
 // offers the top effort tiers to the Claude models whose API accepts them.
 func TestCycleAgentThinkingLevel_PerModelTopTier(t *testing.T) {
@@ -381,6 +436,65 @@ func TestCycleAgentThinkingLevel_PerModelTopTier(t *testing.T) {
 			assert.Equal(t, tt.wantCycle, got)
 		})
 	}
+}
+
+// TestCycleAgentThinkingLevel_VercelQualifiedGPT56 is the runtime regression
+// test for the second-review Vercel finding: the exact default from
+// pkg/config/auto.go ("vercel" provider, "openai/gpt-5.6-sol" model) must
+// cycle through the full gpt-5.6 ladder — including xhigh and max — even
+// though the provider name itself ("vercel") is not "openai". Minimal is
+// skipped: gpt-5.6 drops it.
+func TestCycleAgentThinkingLevel_VercelQualifiedGPT56(t *testing.T) {
+	t.Parallel()
+
+	model := newConfigProvider(latest.ModelConfig{Provider: "vercel", Model: "openai/gpt-5.6-sol"})
+	root := agent.New("root", "test", agent.WithModel(model))
+	r := &LocalRuntime{
+		team: team.New(team.WithAgents(root)),
+		modelSwitcherCfg: &ModelSwitcherConfig{
+			ProviderRegistry: testProviderRegistry(),
+			EnvProvider:      environment.NewMapEnvProvider(map[string]string{"AI_GATEWAY_API_KEY": "vck-test"}),
+		},
+	}
+
+	wantCycle := []effort.Level{effort.Low, effort.Medium, effort.High, effort.XHigh, effort.Max, effort.None}
+	var got []effort.Level
+	for range wantCycle {
+		level, err := r.CycleAgentThinkingLevel(t.Context(), "root")
+		require.NoError(t, err)
+		got = append(got, level)
+	}
+	assert.Equal(t, wantCycle, got)
+}
+
+// TestSetAgentThinkingLevel_VercelQualifiedGPT56Max verifies that "max" is
+// accepted (not rejected as unsupported) for the exact Vercel default model,
+// and that the resulting override still carries the "vercel" provider and
+// the "openai/" qualified model id.
+func TestSetAgentThinkingLevel_VercelQualifiedGPT56Max(t *testing.T) {
+	t.Parallel()
+
+	model := newConfigProvider(latest.ModelConfig{Provider: "vercel", Model: "openai/gpt-5.6-sol"})
+	root := agent.New("root", "test", agent.WithModel(model))
+	r := &LocalRuntime{
+		team: team.New(team.WithAgents(root)),
+		modelSwitcherCfg: &ModelSwitcherConfig{
+			ProviderRegistry: testProviderRegistry(),
+			EnvProvider:      environment.NewMapEnvProvider(map[string]string{"AI_GATEWAY_API_KEY": "vck-test"}),
+		},
+	}
+
+	level, err := r.SetAgentThinkingLevel(t.Context(), "root", effort.Max)
+	require.NoError(t, err)
+	assert.Equal(t, effort.Max, level)
+
+	override := root.Model(t.Context())
+	require.NotNil(t, override)
+	cfg := override.BaseConfig().ModelConfig
+	assert.Equal(t, "vercel", cfg.Provider)
+	assert.Equal(t, "openai/gpt-5.6-sol", cfg.Model)
+	require.NotNil(t, cfg.ThinkingBudget)
+	assert.Equal(t, "max", cfg.ThinkingBudget.Effort)
 }
 
 func TestIsInlineAlloySpec(t *testing.T) {
