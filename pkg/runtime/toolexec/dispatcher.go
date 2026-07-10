@@ -19,6 +19,7 @@ import (
 	"github.com/docker/docker-agent/pkg/agent"
 	"github.com/docker/docker-agent/pkg/chat"
 	"github.com/docker/docker-agent/pkg/hooks"
+	"github.com/docker/docker-agent/pkg/permissions"
 	"github.com/docker/docker-agent/pkg/session"
 	"github.com/docker/docker-agent/pkg/telemetry"
 	"github.com/docker/docker-agent/pkg/telemetry/genai"
@@ -392,6 +393,18 @@ func (c *call) approveAndRun(ctx context.Context, runTool func() CallOutcome) Ca
 			c.errorResponse(ctx, rejectMsg)
 			return CallOutcome{}
 		case hooks.DecisionAsk:
+			// A session-scoped allow grant (the interactive "T = always
+			// allow this tool" decision, stored in sess.Permissions) is an
+			// informed opt-in the user made in response to this very safety
+			// prompt. Honor it instead of asking again, otherwise "always
+			// allow" would re-prompt on every matching call. The blanket
+			// --yolo and the team/config permission layer stay subordinate
+			// to the preempt-yolo verdict — see [call.sessionPermissionsAllow].
+			if c.sessionPermissionsAllow() {
+				slog.DebugContext(ctx, "preempt-yolo Ask overridden by session permission allow", "tool", c.tc.Function.Name, "session_id", c.sess.ID)
+				c.notifyApproval(ctx, ApprovalDecisionAllow, ApprovalSourceSessionPermissionsAllow)
+				return runTool()
+			}
 			return c.askUser(ctx, runTool)
 		}
 		// DecisionAllow / "" → advisory; fall through to Decide().
@@ -452,10 +465,48 @@ func (c *call) permissionDecision(readOnlyHint bool) PermissionDecision {
 
 func (c *call) autoApprovalAfterConfirmationWait() (PermissionDecision, bool) {
 	if c.preYoloResult != nil && c.preYoloResult.Decision == hooks.DecisionAsk {
+		// Even under a preempt-yolo Ask, a session-scoped allow grant that
+		// landed while we were blocked on the resume channel (e.g. a
+		// concurrent "always allow this tool" decision) is an informed
+		// opt-in and takes effect. Mirrors approveAndRun's Stage 0: the
+		// blanket --yolo and the team/config layer stay subordinate.
+		if c.sessionPermissionsAllow() {
+			return PermissionDecision{Outcome: OutcomeAllow, Reason: ReasonChecker, Source: sessionPermissionsSource}, true
+		}
 		return PermissionDecision{}, false
 	}
 	decision := c.permissionDecision(c.tool.Annotations.ReadOnlyHint)
 	return decision, decision.Outcome == OutcomeAllow
+}
+
+// sessionPermissionsAllow reports whether the session-scoped permission
+// layer explicitly allows this call. That layer (sess.Permissions) is
+// populated by the interactive "T = always allow this tool" grant and the
+// session-permissions API/template — informed, session-scoped opt-ins —
+// as opposed to the team/config layer (global settings + agent YAML) and
+// the blanket --yolo, both of which the preempt-yolo lane must keep
+// guarding.
+//
+// It is consulted when the preempt-yolo pre_tool_use lane wants to Ask so
+// that a grant the user made in response to that safety prompt actually
+// takes effect. Deny/Ask patterns in the same layer are honored via
+// [permissions.Checker.CheckWithArgs] ordering (Deny > Allow > Ask), so a
+// session-level Deny or explicit Ask never yields an allow here.
+func (c *call) sessionPermissionsAllow() bool {
+	c.d.approvalMu.Lock()
+	defer c.d.approvalMu.Unlock()
+	if c.sess.Permissions == nil {
+		return false
+	}
+	checker := permissions.NewCheckerFromRules(
+		c.sess.Permissions.Allow,
+		c.sess.Permissions.Ask,
+		c.sess.Permissions.Deny,
+	)
+	return checker.CheckWithArgs(
+		c.tc.Function.Name,
+		ParseToolInput(c.tc.Function.Arguments),
+	) == permissions.Allow
 }
 
 func (c *call) cancellationMessage(ctx context.Context) string {
@@ -608,11 +659,17 @@ func allowSourceForDecision(d PermissionDecision) string {
 	return allowSourceForChecker(d.Source)
 }
 
+// sessionPermissionsSource is the checker source label the runtime
+// attaches to the session-scoped permission checker (see
+// pkg/runtime.permissionCheckers). It distinguishes interactive /
+// session-scoped grants from the team/config layer.
+const sessionPermissionsSource = "session permissions"
+
 // allowSourceForChecker maps a checker source label ("session permissions"
 // or "permissions configuration") onto the corresponding ApprovalSource*
 // allow constant.
 func allowSourceForChecker(checkerSource string) string {
-	if checkerSource == "session permissions" {
+	if checkerSource == sessionPermissionsSource {
 		return ApprovalSourceSessionPermissionsAllow
 	}
 	return ApprovalSourceTeamPermissionsAllow
@@ -620,7 +677,7 @@ func allowSourceForChecker(checkerSource string) string {
 
 // denySourceForChecker mirrors allowSourceForChecker for the deny path.
 func denySourceForChecker(checkerSource string) string {
-	if checkerSource == "session permissions" {
+	if checkerSource == sessionPermissionsSource {
 		return ApprovalSourceSessionPermissionsDeny
 	}
 	return ApprovalSourceTeamPermissionsDeny

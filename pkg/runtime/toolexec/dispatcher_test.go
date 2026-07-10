@@ -13,6 +13,7 @@ import (
 	"github.com/docker/docker-agent/pkg/agent"
 	"github.com/docker/docker-agent/pkg/chat"
 	"github.com/docker/docker-agent/pkg/hooks"
+	"github.com/docker/docker-agent/pkg/permissions"
 	"github.com/docker/docker-agent/pkg/runtime/toolexec"
 	"github.com/docker/docker-agent/pkg/session"
 	"github.com/docker/docker-agent/pkg/tools"
@@ -846,6 +847,113 @@ func TestDispatcher_PreToolUsePreYoloAskPreemptsYolo(t *testing.T) {
 	require.Len(t, em.responses, 1)
 	assert.True(t, em.responses[0].IsError)
 	assert.Contains(t, em.responses[0].Output, "canceled by the user")
+}
+
+// TestDispatcher_PreToolUsePreYoloAskHonorsSessionAllow pins the fix
+// for the "always allow this tool" grant being ignored under a
+// preempt-yolo hook: a session-scoped allow pattern (the interactive
+// "T" decision, stored in sess.Permissions) must auto-run a matching
+// call even when the preempt-yolo lane returns Ask. Without this the
+// user is re-prompted on every matching call despite having chosen
+// "always allow".
+func TestDispatcher_PreToolUsePreYoloAskHonorsSessionAllow(t *testing.T) {
+	t.Parallel()
+
+	a := newAgent()
+	sess := session.New()
+	// The exact pattern BuildPermissionPattern produces for a "T" grant
+	// on `mkdir foo`.
+	sess.Permissions = &session.PermissionsConfig{Allow: []string{"shell:cmd=mkdir*"}}
+
+	ran := false
+	tool := tools.Tool{
+		Name: "shell",
+		Handler: func(context.Context, tools.ToolCall, tools.Runtime) (*tools.ToolCallResult, error) {
+			ran = true
+			return tools.ResultSuccess("ok"), nil
+		},
+	}
+
+	hd := &stubHookDispatcher{
+		on: map[hooks.EventType]*hooks.Result{
+			hooks.EventPreToolUsePreYolo: {
+				Allowed:        true,
+				Decision:       hooks.DecisionAsk,
+				DecisionReason: "unknown command",
+			},
+		},
+	}
+
+	d := &toolexec.Dispatcher{
+		AgentFor: func(*session.Session) *agent.Agent { return a },
+		Hooks:    hd,
+	}
+	em := &captureEmitter{}
+
+	d.Process(t.Context(), sess, []tools.ToolCall{{
+		ID:       "x",
+		Function: tools.FunctionCall{Name: "shell", Arguments: `{"cmd":"mkdir bar"}`},
+	}}, []tools.Tool{tool}, em)
+
+	assert.True(t, ran, "session allow grant must auto-run despite preempt-yolo Ask")
+	assert.Empty(t, em.confirmations, "an informed 'always allow' grant must not re-prompt")
+}
+
+// TestDispatcher_PreToolUsePreYoloAskGuardsTeamAllow pins the boundary
+// of the fix: a matching allow pattern in the TEAM/config layer (the
+// dispatcher's Permissions checker, e.g. global settings or agent YAML)
+// must NOT override a preempt-yolo Ask — that ahead-of-time,
+// non-interactive layer is exactly what the safety lane keeps guarding.
+// Only the session-scoped layer (interactive grants) overrides.
+func TestDispatcher_PreToolUsePreYoloAskGuardsTeamAllow(t *testing.T) {
+	t.Parallel()
+
+	a := newAgent()
+	sess := session.New() // no session-scoped permissions
+
+	tool := tools.Tool{
+		Name: "shell",
+		Handler: func(context.Context, tools.ToolCall, tools.Runtime) (*tools.ToolCallResult, error) {
+			panic("must not run: team allow must stay subordinate to preempt-yolo")
+		},
+	}
+
+	hd := &stubHookDispatcher{
+		on: map[hooks.EventType]*hooks.Result{
+			hooks.EventPreToolUsePreYolo: {
+				Allowed:        true,
+				Decision:       hooks.DecisionAsk,
+				DecisionReason: "unknown command",
+			},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	d := &toolexec.Dispatcher{
+		AgentFor: func(*session.Session) *agent.Agent { return a },
+		Hooks:    hd,
+		// A team/config-layer allow that matches the call. It must be
+		// ignored on the preempt-yolo Ask path.
+		Permissions: func(*session.Session) []toolexec.NamedChecker {
+			return []toolexec.NamedChecker{{
+				Checker: permissions.NewCheckerFromRules([]string{"shell:cmd=mkdir*"}, nil, nil),
+				Source:  "permissions configuration",
+			}}
+		},
+	}
+	em := &captureEmitter{confirmed: make(chan struct{})}
+	go func() {
+		<-em.confirmed
+		cancel()
+	}()
+
+	d.Process(ctx, sess, []tools.ToolCall{{
+		ID:       "x",
+		Function: tools.FunctionCall{Name: "shell", Arguments: `{"cmd":"mkdir bar"}`},
+	}}, []tools.Tool{tool}, em)
+
+	require.Len(t, em.confirmations, 1, "team/config allow must not override preempt-yolo Ask")
 }
 
 // TestDispatcher_PreToolUsePreYoloDenyShortCircuits pins the Deny

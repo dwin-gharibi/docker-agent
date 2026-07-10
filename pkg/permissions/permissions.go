@@ -60,6 +60,19 @@ func NewChecker(cfg *latest.PermissionsConfig) *Checker {
 	}
 }
 
+// NewCheckerFromRules builds a Checker directly from allow/ask/deny
+// pattern slices, for callers that hold the rules outside a
+// [latest.PermissionsConfig] (e.g. session-scoped permissions whose
+// config type lives in the session package). Semantics are identical
+// to [NewChecker].
+func NewCheckerFromRules(allow, ask, deny []string) *Checker {
+	return &Checker{
+		allowPatterns: allow,
+		askPatterns:   ask,
+		denyPatterns:  deny,
+	}
+}
+
 // Check evaluates the permission for a given tool name without arguments.
 // This is a convenience method that calls CheckWithArgs with nil arguments.
 // Evaluation order: Deny (checked first), then Allow, then Ask (default)
