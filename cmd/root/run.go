@@ -463,6 +463,10 @@ func (f *runExecFlags) runOrExec(ctx context.Context, out *cli.Printer, args []s
 		return f.handleExecMode(ctx, out, rt, sess, args)
 	}
 
+	// startSessionCoordinator wires the App's own RunStream calls into the
+	// same busy guard RunSession/AddMessage/UpdateMessage use, so a
+	// concurrent REST call is correctly rejected with 409 instead of racing
+	// the TUI's live stream (#3590); see app.WithStreamGuard.
 	coordinatorOpt, err := f.startSessionCoordinator(ctx, out, rt, sess)
 	if err != nil {
 		return err
@@ -1104,7 +1108,8 @@ func (f *runExecFlags) createSessionSpawner(agentSource config.Source, sessStore
 		if ctrl != nil {
 			appOpts = append(appOpts, app.WithSnapshotController(ctrl))
 		}
-		if coordinatorOpt := f.recallCoordinatorOpt(spawnCtx, localRt, newSess); coordinatorOpt != nil {
+		coordinatorOpt := f.recallCoordinatorOpt(spawnCtx, localRt, newSess)
+		if coordinatorOpt != nil {
 			appOpts = append(appOpts, coordinatorOpt)
 		}
 

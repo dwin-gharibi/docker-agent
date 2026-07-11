@@ -255,6 +255,57 @@ func TestUpdateMessage_RejectsWhileSessionStreaming(t *testing.T) {
 	require.NoError(t, sm.UpdateMessage(ctx, sess.ID, msgIDStr, session.UserMessage("accepted")))
 }
 
+// TestAttachedStream_AddMessageAndUpdateMessageRejectWhileStreaming pins the
+// fix for the other #3590 blocker: runtimes attached via AttachRuntime
+// stream directly through RunStream (see pkg/app.App.Run/Retry/
+// RunWithMessage), never going through RunSession, which is the only place
+// that used to acquire activeRuntimes.streaming. Before the fix nothing held
+// that lock for an attached stream, so AddMessage/UpdateMessage wrongly
+// succeeded during a genuinely active attached stream instead of returning
+// ErrSessionBusy. AttachRuntime now returns the same lock RunSession uses;
+// the App holds it for the duration of every direct RunStream call (see
+// app.WithStreamGuard/acquireStreamGuard). This test drives a real stream
+// through that lock exactly the way the App does — NOT through
+// sm.RunSession — to prove the guard covers the attached path too.
+func TestAttachedStream_AddMessageAndUpdateMessageRejectWhileStreaming(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	store := session.NewInMemorySessionStore()
+	sess := session.New()
+	require.NoError(t, store.AddSession(ctx, sess))
+
+	msgID, err := store.AddMessage(ctx, sess.ID, session.UserMessage("original"))
+	require.NoError(t, err)
+	msgIDStr := strconv.FormatInt(msgID, 10)
+
+	sm := NewSessionManager(ctx, config.Sources{}, store, 0, &config.RuntimeConfig{})
+	release := make(chan struct{})
+	fake := &fakeRuntime{release: release}
+	guard := sm.AttachRuntime(ctx, sess.ID, fake, sess)
+
+	// Simulate the TUI/attached owner streaming directly through the
+	// runtime, exactly like pkg/app.App.acquireStreamGuard + Run do — NOT
+	// through sm.RunSession.
+	guard.Lock()
+	ch := fake.RunStream(ctx, sess)
+
+	err = sm.AddMessage(ctx, sess.ID, session.UserMessage("should be rejected"))
+	require.ErrorIs(t, err, ErrSessionBusy)
+
+	err = sm.UpdateMessage(ctx, sess.ID, msgIDStr, session.UserMessage("should be rejected"))
+	require.ErrorIs(t, err, ErrSessionBusy)
+
+	close(release)
+	for range ch {
+	}
+	guard.Unlock()
+
+	// After the attached stream ends, both must succeed normally.
+	require.NoError(t, sm.AddMessage(ctx, sess.ID, session.UserMessage("accepted")))
+	require.NoError(t, sm.UpdateMessage(ctx, sess.ID, msgIDStr, session.UserMessage("accepted")))
+}
+
 // TestServer_AddMessage_Returns409WhileSessionStreaming and
 // TestServer_UpdateMessage_Returns409WhileSessionStreaming drive the actual
 // HTTP handlers (not just SessionManager) to pin the 409-busy guard added

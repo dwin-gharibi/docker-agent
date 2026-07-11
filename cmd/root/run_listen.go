@@ -21,10 +21,16 @@ import (
 // in-process runtime even when the HTTP control plane is disabled. That lets a
 // background tool wake an idle local TUI by routing through the same injector
 // used by control-plane follow-ups.
+//
+// It also wires app.WithStreamGuard so the App's own direct RunStream calls
+// (Run/Retry/RunWithMessage) hold the same lock RunSession/AddMessage/
+// UpdateMessage use to detect an active stream, closing the gap where a
+// concurrent REST mutation could slip in during an attached/TUI stream (#3590).
 func (f *runExecFlags) recallCoordinatorOpt(ctx context.Context, rt runtime.Runtime, sess *session.Session) app.Opt {
 	sm := server.NewSessionManager(ctx, nil, rt.SessionStore(), 0, &f.runConfig)
-	sm.AttachRuntime(ctx, sess.ID, rt, sess)
+	guard := sm.AttachRuntime(ctx, sess.ID, rt, sess)
 	return func(a *app.App) {
+		app.WithStreamGuard(guard)(a)
 		sm.RegisterFollowUpInjector(sess.ID, a.InjectUserMessage)
 	}
 }
@@ -32,14 +38,15 @@ func (f *runExecFlags) recallCoordinatorOpt(ctx context.Context, rt runtime.Runt
 // startSessionCoordinator wires local recall delivery for the in-process
 // runtime and, when --listen is set, exposes that runtime over HTTP so
 // external processes can drive the running TUI (steer, followup, resume, ...).
-// It returns an app.Opt that registers the App as the attached session owner.
+// It returns an app.Opt that registers the App as the attached session owner
+// (see recallCoordinatorOpt for the stream-guard wiring shared by both paths).
 func (f *runExecFlags) startSessionCoordinator(ctx context.Context, out *cli.Printer, rt runtime.Runtime, sess *session.Session) (app.Opt, error) {
 	if f.listenAddr == "" {
 		return f.recallCoordinatorOpt(ctx, rt, sess), nil
 	}
 
 	sm := server.NewSessionManager(ctx, nil, rt.SessionStore(), 0, &f.runConfig)
-	sm.AttachRuntime(ctx, sess.ID, rt, sess)
+	guard := sm.AttachRuntime(ctx, sess.ID, rt, sess)
 
 	ln, err := server.Listen(ctx, f.listenAddr)
 	if err != nil {
@@ -71,6 +78,7 @@ func (f *runExecFlags) startSessionCoordinator(ctx context.Context, out *cli.Pri
 	}()
 
 	return func(a *app.App) {
+		app.WithStreamGuard(guard)(a)
 		sm.RegisterEventSource(sess.ID, func(ctx context.Context, send func(any)) {
 			a.SubscribeWith(ctx, func(msg tea.Msg) {
 				if ev, ok := msg.(runtime.Event); ok {

@@ -52,6 +52,7 @@ type App struct {
 	titleGenerating        atomic.Bool                 // True when title generation is in progress
 	titleGen               *sessiontitle.Generator     // Title generator for local runtime (nil for remote)
 	snapshotController     builtins.SnapshotController // Drives /undo, /snapshots, /reset; nil for runtimes that don't capture snapshots
+	streamGuard            sync.Locker                 // Held for the duration of every direct RunStream call; nil when not attached to a SessionManager (see WithStreamGuard)
 
 	startOnce  sync.Once
 	subsMu     sync.Mutex
@@ -118,6 +119,21 @@ func WithReadOnly() Opt {
 func WithSnapshotController(c builtins.SnapshotController) Opt {
 	return func(a *App) {
 		a.snapshotController = c
+	}
+}
+
+// WithStreamGuard makes the App hold l for the duration of every direct
+// RunStream call (Run, Retry, RunWithMessage). When the App is attached to a
+// SessionManager (the --listen control plane or the local recall
+// coordinator), l is the SAME lock RunSession and AddMessage/UpdateMessage
+// already use (via TryLock) to detect a session's active stream, so a
+// concurrent REST mutation correctly sees the App's own stream as busy
+// instead of racing it (#3590). Without this option (a bare App with no
+// attached SessionManager) there is nothing to race against, so omitting it
+// is safe.
+func WithStreamGuard(l sync.Locker) Opt {
+	return func(a *App) {
+		a.streamGuard = l
 	}
 }
 
@@ -474,6 +490,9 @@ func (a *App) Run(ctx context.Context, cancel context.CancelFunc, message string
 	}
 
 	go func() {
+		release := a.acquireStreamGuard()
+		defer release()
+
 		if len(attachments) > 0 {
 			multiContent := a.buildUserMultiContent(ctx, message, attachments)
 			a.session.AddMessage(session.UserMessage(message, multiContent...))
@@ -666,6 +685,22 @@ func (a *App) sendEvent(ctx context.Context, event tea.Msg) {
 	}
 }
 
+// acquireStreamGuard locks a.streamGuard (set via WithStreamGuard) and
+// returns the matching release func, or a no-op release when no guard is
+// attached (a bare App with no SessionManager to race against). Callers must
+// hold the lock for the entire direct RunStream call — acquire it before
+// mutating the session and defer the release only after the stream ends —
+// mirroring the order SessionManager.RunSession already uses so a concurrent
+// AddMessage/UpdateMessage/RunSession sees this stream as busy the same way
+// (#3590).
+func (a *App) acquireStreamGuard() func() {
+	if a.streamGuard == nil {
+		return func() {}
+	}
+	a.streamGuard.Lock()
+	return a.streamGuard.Unlock
+}
+
 // processInlineAttachment handles content that is already in memory (e.g. pasted
 // text). The content is appended to textBuilder wrapped in an XML tag for context.
 func (a *App) processInlineAttachment(att messages.Attachment, textBuilder *strings.Builder) {
@@ -690,6 +725,9 @@ func (a *App) Retry(ctx context.Context, cancel context.CancelFunc) {
 	a.cancel = cancel
 
 	go func() {
+		release := a.acquireStreamGuard()
+		defer release()
+
 		streamStarted := false
 		for event := range a.runtime.RunStream(ctx, a.session) {
 			// If context is cancelled, continue draining but don't forward events
@@ -742,6 +780,9 @@ func (a *App) RunWithMessage(ctx context.Context, cancel context.CancelFunc, msg
 	}
 
 	go func() {
+		release := a.acquireStreamGuard()
+		defer release()
+
 		a.session.AddMessage(msg)
 		for event := range a.runtime.RunStream(ctx, a.session) {
 			// If context is cancelled, continue draining but don't forward events

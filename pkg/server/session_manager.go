@@ -219,16 +219,29 @@ func (sm *SessionManager) StreamEvents(ctx context.Context, sessionID string, si
 // The internal cancellation signal is fired by [SessionManager.DeleteSession];
 // SSE streams and other lifetime-bound consumers use it (via
 // [SessionManager.StreamEvents]) to terminate when the session is detached.
-func (sm *SessionManager) AttachRuntime(ctx context.Context, sessionID string, rt runtime.Runtime, sess *session.Session) {
+//
+// It returns the same lock RunSession and AddMessage/UpdateMessage already
+// use (via TryLock) to detect and reject concurrent mutations while a stream
+// is active. Callers that stream the attached runtime directly — bypassing
+// RunSession entirely, e.g. the TUI's App.Run/Retry/RunWithMessage calling
+// rt.RunStream itself — previously left that lock unheld for the whole
+// attached/TUI stream, so a concurrent AddMessage/UpdateMessage or
+// RunSession wrongly observed the session as idle instead of 409ing (#3590).
+// The caller must hold this lock for the duration of every direct RunStream
+// call (see the pkg/app WithStreamGuard option) so the busy check sees
+// attached streams too.
+func (sm *SessionManager) AttachRuntime(ctx context.Context, sessionID string, rt runtime.Runtime, sess *session.Session) sync.Locker {
 	ctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	sm.runtimeSessions.Store(sessionID, &activeRuntimes{
+	rs := &activeRuntimes{
 		runtime: rt,
 		done:    ctx.Done(),
 		cancel:  cancel,
 		session: sess,
-	})
+	}
+	sm.runtimeSessions.Store(sessionID, rs)
 	sm.registerRecallHandler(sessionID, rt)
 	sm.markReady()
+	return &rs.streaming
 }
 
 // GetSession retrieves a session by ID.
