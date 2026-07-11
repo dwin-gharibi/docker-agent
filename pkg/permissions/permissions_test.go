@@ -544,6 +544,12 @@ func TestMatchGlob(t *testing.T) {
 		{"mcp:*", "mcp:github:create_issue", true}, // * matches everything including :
 		{"mcp:github:*", "mcp:github:create_issue", true},
 		{"mcp:github:create_*", "mcp:github:create_issue", true},
+
+		// "*" and "?" span path separators. Argument values (shell commands,
+		// paths, URLs) routinely contain "/", so wildcards must not stop at it.
+		{"*rm -rf*", "rm -rf /", true},
+		{"*/etc/*", "cat /etc/passwd", true},
+		{"a?c", "a/c", true},
 	}
 
 	for _, tt := range tests {
@@ -553,6 +559,25 @@ func TestMatchGlob(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+// TestDenyGlobCrossesPathSeparator guards against a deny rule failing open.
+//
+// A deny pattern with a non-trailing wildcard (e.g. "*rm -rf*") must match the
+// same command whether or not the argument value contains a path separator.
+// Previously it fell through to filepath.Match, whose "*" stops at "/", so the
+// rule fired for "rm -rf tmp" but silently returned Ask for "rm -rf /".
+func TestDenyGlobCrossesPathSeparator(t *testing.T) {
+	t.Parallel()
+
+	checker := NewCheckerFromRules(nil, nil, []string{"shell:cmd=*rm -rf*"})
+
+	assert.Equal(t, Deny, checker.CheckWithArgs("shell",
+		map[string]any{"cmd": "rm -rf tmp"}),
+		"deny rule should block 'rm -rf tmp'")
+	assert.Equal(t, Deny, checker.CheckWithArgs("shell",
+		map[string]any{"cmd": "rm -rf /"}),
+		"deny rule must also block 'rm -rf /'")
 }
 
 func TestArgToString(t *testing.T) {

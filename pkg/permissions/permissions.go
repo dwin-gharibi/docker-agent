@@ -4,7 +4,7 @@ package permissions
 
 import (
 	"fmt"
-	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/docker/docker-agent/pkg/config/latest"
@@ -239,17 +239,18 @@ func argToString(v any) string {
 }
 
 // matchGlob checks if a value matches a glob pattern.
-// Supports glob-style patterns using filepath.Match semantics:
-// - "*" matches any sequence of characters within a path segment
+// Supports glob-style patterns:
+// - "*" matches any sequence of characters (including path separators and spaces)
 // - "?" matches any single character
 // - "[...]" matches character classes
 //
 // Matching is case-insensitive.
 //
-// Note: filepath.Match's "*" stops at path separators, but for argument
-// matching we want "*" to match any characters including spaces.
-// We handle trailing wildcards specially to support patterns like "sudo*"
-// matching "sudo rm -rf /".
+// Note: filepath.Match's "*"/"?" stop at path separators ("/", or "\" on
+// Windows), but argument values (shell commands, file paths, URLs) routinely
+// contain "/", so matching must not depend on it. We therefore translate the
+// glob to an anchored regexp instead of using filepath.Match. Trailing
+// wildcards keep a plain prefix-match fast path (e.g. "sudo*").
 func matchGlob(pattern, value string) bool {
 	// Normalize both to lowercase for case-insensitive matching
 	pattern = strings.ToLower(pattern)
@@ -266,7 +267,70 @@ func matchGlob(pattern, value string) bool {
 		}
 	}
 
-	// Try glob pattern match (also handles exact matches)
-	matched, err := filepath.Match(pattern, value)
-	return err == nil && matched
+	// Full glob match (also handles exact matches). Unlike filepath.Match, the
+	// translated "*"/"?" span any character, so patterns match values that
+	// contain path separators.
+	re, err := globToRegexp(pattern)
+	if err != nil {
+		return false
+	}
+	return re.MatchString(value)
+}
+
+// globToRegexp translates a filepath.Match-style glob into an anchored regular
+// expression. Unlike filepath.Match, the resulting "*" and "?" match any
+// character, including path separators — argument values such as shell commands,
+// file paths and URLs routinely contain "/", and permission patterns must match
+// them regardless. Character classes ("[...]"), whose bracket syntax glob and
+// regexp share, are copied through verbatim; every other character is matched literally.
+func globToRegexp(pattern string) (*regexp.Regexp, error) {
+	var b strings.Builder
+	b.WriteString(`\A`)
+	for i := 0; i < len(pattern); {
+		switch c := pattern[i]; c {
+		case '*':
+			b.WriteString(`.*`)
+			i++
+		case '?':
+			b.WriteByte('.')
+			i++
+		case '[':
+			if end := classEnd(pattern, i); end > 0 {
+				b.WriteString(pattern[i : end+1])
+				i = end + 1
+				continue
+			}
+			// Unterminated class: match "[" literally.
+			b.WriteString(regexp.QuoteMeta("["))
+			i++
+		default:
+			b.WriteString(regexp.QuoteMeta(string(c)))
+			i++
+		}
+	}
+	b.WriteString(`\z`)
+	return regexp.Compile(b.String())
+}
+
+// classEnd returns the index of the "]" closing the character class opened at
+// start, or -1 if the class is unterminated. A "]" in the first position
+// (optionally after a leading "^" negation) is treated as a literal member,
+// matching glob semantics.
+func classEnd(pattern string, start int) int {
+	i := start + 1
+	if i < len(pattern) && pattern[i] == '^' {
+		i++
+	}
+	if i < len(pattern) && pattern[i] == ']' {
+		i++
+	}
+	for ; i < len(pattern); i++ {
+		switch pattern[i] {
+		case '\\':
+			i++
+		case ']':
+			return i
+		}
+	}
+	return -1
 }
