@@ -50,8 +50,6 @@ type SessionManager struct {
 	sessionStore    session.Store
 	Sources         config.Sources
 
-	// TODO: We have to do something about this, it's weird, session creation should send everything that is needed.
-	// This is only used for the working directory...
 	runConfig *config.RuntimeConfig
 
 	refreshInterval time.Duration
@@ -614,16 +612,13 @@ func (sm *SessionManager) RunSession(ctx context.Context, sessionID, agentFilena
 		return nil, err
 	}
 
-	rc := sm.runConfig.Clone()
-	rc.WorkingDir = sess.WorkingDir
-
 	runtimeSession, exists := sm.runtimeSessions.Load(sessionID)
 
 	streamCtx, cancel := context.WithCancel(ctx)
 	var titleGen *sessiontitle.Generator
 	if !exists {
 		var rt runtime.Runtime
-		rt, titleGen, err = sm.runtimeForSession(ctx, sess, agentFilename, currentAgent, rc)
+		rt, titleGen, err = sm.runtimeForSession(ctx, sess, agentFilename, currentAgent, sm.runConfig)
 		if err != nil {
 			cancel()
 			return nil, err
@@ -1036,7 +1031,7 @@ func (sm *SessionManager) runtimeForSession(ctx context.Context, sess *session.S
 		span.End()
 	}()
 
-	loadResult, err := sm.loadTeamWithConfig(ctx, agentFilename, rc)
+	loadResult, err := sm.loadTeamWithConfig(ctx, agentFilename, rc, teamloader.WithWorkingDir(sess.WorkingDir))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1112,13 +1107,14 @@ func (sm *SessionManager) loadTeam(ctx context.Context, agentFilename string, ru
 
 // loadTeamWithConfig is like loadTeam but also returns the loaded model and
 // provider configuration so the runtime can be wired for model switching.
-func (sm *SessionManager) loadTeamWithConfig(ctx context.Context, agentFilename string, runConfig *config.RuntimeConfig) (*teamloader.LoadResult, error) {
+func (sm *SessionManager) loadTeamWithConfig(ctx context.Context, agentFilename string, runConfig *config.RuntimeConfig, opts ...teamloader.Opt) (*teamloader.LoadResult, error) {
 	agentSource, err := sm.resolveSource(agentFilename)
 	if err != nil {
 		return nil, err
 	}
 
-	return teamloader.LoadWithConfig(ctx, agentSource, runConfig, loaderdefaults.Opts()...)
+	allOpts := append(loaderdefaults.Opts(), opts...)
+	return teamloader.LoadWithConfig(ctx, agentSource, runConfig, allOpts...)
 }
 
 // resolveSource looks up the agent source for agentFilename.

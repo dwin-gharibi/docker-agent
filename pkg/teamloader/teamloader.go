@@ -42,6 +42,7 @@ import (
 var defaultMaxTokens int64 = 32000
 
 type loadOptions struct {
+	workingDir       string
 	modelOverrides   []string
 	promptFiles      []string
 	toolsetRegistry  ToolsetRegistry
@@ -50,6 +51,13 @@ type loadOptions struct {
 }
 
 type Opt func(*loadOptions) error
+
+func WithWorkingDir(dir string) Opt {
+	return func(opts *loadOptions) error {
+		opts.workingDir = dir
+		return nil
+	}
+}
 
 func WithModelOverrides(overrides []string) Opt {
 	return func(opts *loadOptions) error {
@@ -226,7 +234,8 @@ func LoadWithConfig(ctx context.Context, agentSource config.Source, runConfig *c
 	runConfig.ProviderRegistry = loadOpts.providerRegistry
 
 	// Load agents
-	parentDir := cmp.Or(agentSource.ParentDir(), runConfig.WorkingDir)
+	workingDir := cmp.Or(loadOpts.workingDir, runConfig.WorkingDir)
+	parentDir := cmp.Or(agentSource.ParentDir(), workingDir)
 	configName := configNameFromSource(agentSource.Name())
 	var agents []*agent.Agent
 	agentsByName := make(map[string]*agent.Agent)
@@ -358,7 +367,7 @@ func LoadWithConfig(ctx context.Context, agentSource config.Source, runConfig *c
 			// always exposed and never subject to the include filter.
 			loadedSkills = append(loadedSkills, inlineSkills(agentConfig.Skills.Inline)...)
 			if len(loadedSkills) > 0 {
-				skillSet := skillstool.New(loadedSkills, runConfig.WorkingDir)
+				skillSet := skillstool.New(loadedSkills, workingDir)
 				// Resolve the additional toolsets each fork skill exposes in
 				// its sub-session from the top-level toolsets section.
 				forkToolSets, forkWarnings := forkSkillToolSets(ctx, cfg, &agentConfig, loadedSkills, parentDir, runConfig, loadOpts.toolsetRegistry, configName, expander)
