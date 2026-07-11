@@ -271,21 +271,21 @@ func (s *BM25Strategy) Initialize(ctx context.Context, docPaths []string, chunki
 }
 
 // Query searches for relevant documents using BM25 scoring
-func (s *BM25Strategy) Query(ctx context.Context, query string, numResults int, threshold float64) ([]database.SearchResult, error) {
+func (s *BM25Strategy) Query(ctx context.Context, query string, numResults int, threshold float64) ([]database.SearchResult, types.Usage, error) {
 	// Tokenize query
 	queryTerms := s.tokenize(query)
 	if len(queryTerms) == 0 {
-		return nil, errors.New("query contains no valid terms")
+		return nil, types.Usage{}, errors.New("query contains no valid terms")
 	}
 
 	// Get all documents
 	allDocs, err := s.getAllDocuments(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve documents: %w", err)
+		return nil, types.Usage{}, fmt.Errorf("failed to retrieve documents: %w", err)
 	}
 
 	if len(allDocs) == 0 {
-		return []database.SearchResult{}, nil
+		return []database.SearchResult{}, types.Usage{}, nil
 	}
 
 	// Pre-tokenize all documents once: build term frequency maps and lengths.
@@ -333,7 +333,7 @@ func (s *BM25Strategy) Query(ctx context.Context, query string, numResults int, 
 		scores = scores[:numResults]
 	}
 
-	return scores, nil
+	return scores, types.Usage{}, nil
 }
 
 // CheckAndReindexChangedFiles checks for file changes and re-indexes if needed

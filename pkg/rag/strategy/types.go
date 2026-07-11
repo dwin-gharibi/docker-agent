@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/docker/docker-agent/pkg/rag/database"
+	"github.com/docker/docker-agent/pkg/rag/types"
 )
 
 // Strategy defines the interface for different retrieval strategies.
@@ -14,7 +15,7 @@ type Strategy interface {
 
 	// Query searches for relevant documents using the strategy's retrieval method.
 	// numResults is the maximum number of candidates to retrieve (before fusion).
-	Query(ctx context.Context, query string, numResults int, threshold float64) ([]database.SearchResult, error)
+	Query(ctx context.Context, query string, numResults int, threshold float64) ([]database.SearchResult, types.Usage, error)
 
 	// CheckAndReindexChangedFiles checks for file changes and re-indexes if needed.
 	CheckAndReindexChangedFiles(ctx context.Context, docPaths []string, chunking ChunkingConfig) error

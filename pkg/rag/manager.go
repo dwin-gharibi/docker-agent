@@ -236,7 +236,7 @@ func (m *Manager) Initialize(ctx context.Context) (err error) {
 
 // Query searches for relevant documents using all configured strategies
 // If multiple strategies are configured, results are combined using the fusion strategy
-func (m *Manager) Query(ctx context.Context, query string) (results []database.SearchResult, err error) {
+func (m *Manager) Query(ctx context.Context, query string) (results []database.SearchResult, usage types.Usage, err error) {
 	// Start a `retrieval {rag_name}` span per the OTel GenAI semconv.
 	// The query text itself is sensitive so we never capture it on the
 	// span here — content capture is gated by a separate environment
@@ -270,13 +270,13 @@ func (m *Manager) Query(ctx context.Context, query string) (results []database.S
 			// `:=`) so the deferred span closure sees the live values
 			// even if a future change replaces the explicit
 			// `return X, Y` form below with a bare `return`.
-			results, err = strategyImpl.Query(ctx, query, strategyCfg.Limit, strategyCfg.Threshold)
+			results, usage, err = strategyImpl.Query(ctx, query, strategyCfg.Limit, strategyCfg.Threshold)
 			if err != nil {
 				slog.ErrorContext(ctx, "[RAG Manager] Strategy query failed",
 					"rag_name", m.name,
 					"strategy", strategyName,
 					"error", err)
-				return nil, err
+				return nil, types.Usage{}, err
 			}
 
 			slog.DebugContext(ctx, "[RAG Manager] Single strategy results",
@@ -309,7 +309,7 @@ func (m *Manager) Query(ctx context.Context, query string) (results []database.S
 					"num_results", len(results))
 			}
 
-			return results, nil
+			return results, usage, nil
 		}
 	}
 
@@ -321,6 +321,7 @@ func (m *Manager) Query(ctx context.Context, query string) (results []database.S
 	type strategyResult struct {
 		name    string
 		results []database.SearchResult
+		usage   types.Usage
 		err     error
 	}
 
@@ -337,10 +338,11 @@ func (m *Manager) Query(ctx context.Context, query string) (results []database.S
 			"strategy_threshold", strategyCfg.Threshold)
 
 		go func(name string, strategyImpl strategy.Strategy, cfg strategy.Config) {
-			results, err := strategyImpl.Query(ctx, query, cfg.Limit, cfg.Threshold)
+			results, usage, err := strategyImpl.Query(ctx, query, cfg.Limit, cfg.Threshold)
 			resultsChan <- strategyResult{
 				name:    name,
 				results: results,
+				usage:   usage,
 				err:     err,
 			}
 		}(strategyName, strategyImpl, strategyCfg)
@@ -356,8 +358,10 @@ func (m *Manager) Query(ctx context.Context, query string) (results []database.S
 				"rag_name", m.name,
 				"strategy", result.name,
 				"error", result.err)
-			return nil, fmt.Errorf("strategy %s failed: %w", result.name, result.err)
+			return nil, types.Usage{}, fmt.Errorf("strategy %s failed: %w", result.name, result.err)
 		}
+		
+		usage.Add(result.usage)
 
 		slog.DebugContext(ctx, "[RAG Manager] Strategy returned results",
 			"rag_name", m.name,
@@ -375,7 +379,7 @@ func (m *Manager) Query(ctx context.Context, query string) (results []database.S
 
 	// Safety check: fusion should never be nil with multiple strategies
 	if m.fusion == nil {
-		return nil, errors.New("fusion strategy is nil but multiple strategies are configured (this is a bug)")
+		return nil, types.Usage{}, errors.New("fusion strategy is nil but multiple strategies are configured (this is a bug)")
 	}
 
 	fusedResults, err := m.fusion.Fuse(strategyResults)
@@ -383,7 +387,7 @@ func (m *Manager) Query(ctx context.Context, query string) (results []database.S
 		slog.ErrorContext(ctx, "[RAG Manager] Fusion failed",
 			"rag_name", m.name,
 			"error", err)
-		return nil, fmt.Errorf("failed to fuse results: %w", err)
+		return nil, types.Usage{}, fmt.Errorf("failed to fuse results: %w", err)
 	}
 
 	slog.DebugContext(ctx, "[RAG Manager] Fusion complete",
@@ -421,7 +425,7 @@ func (m *Manager) Query(ctx context.Context, query string) (results []database.S
 	// For queries during agent execution, usage should be added to agent's session
 	// This requires passing session context through the RAG tool
 
-	return fusedResults, nil
+	return fusedResults, usage, nil
 }
 
 // Helper to get strategy names for logging

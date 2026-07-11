@@ -13,6 +13,7 @@ import (
 	"github.com/docker/docker-agent/pkg/modelerrors"
 	"github.com/docker/docker-agent/pkg/rag/database"
 	"github.com/docker/docker-agent/pkg/rag/strategy"
+	"github.com/docker/docker-agent/pkg/rag/types"
 )
 
 // failingReranker counts calls and always fails with a fixed error.
@@ -35,8 +36,8 @@ func (s *staticStrategy) Initialize(context.Context, []string, strategy.Chunking
 	return nil
 }
 
-func (s *staticStrategy) Query(context.Context, string, int, float64) ([]database.SearchResult, error) {
-	return s.results, nil
+func (s *staticStrategy) Query(context.Context, string, int, float64) ([]database.SearchResult, types.Usage, error) {
+	return s.results, types.Usage{}, nil
 }
 
 func (s *staticStrategy) CheckAndReindexChangedFiles(context.Context, []string, strategy.ChunkingConfig) error {
@@ -83,7 +84,7 @@ func TestQueryDisablesRerankerAfterNonRetryableError(t *testing.T) {
 	m, reranker := newRerankTestManager(t, rerankErr)
 
 	for range 3 {
-		results, err := m.Query(t.Context(), "some query")
+		results, _, err := m.Query(t.Context(), "some query")
 		require.NoError(t, err, "rerank failures must not fail the query")
 		assert.Len(t, results, 2, "original results are returned as fallback")
 	}
@@ -101,7 +102,7 @@ func TestQueryKeepsRerankerOnTransientError(t *testing.T) {
 	m, reranker := newRerankTestManager(t, rerankErr)
 
 	for range 3 {
-		results, err := m.Query(t.Context(), "some query")
+		results, _, err := m.Query(t.Context(), "some query")
 		require.NoError(t, err)
 		assert.Len(t, results, 2)
 	}
@@ -114,7 +115,7 @@ func TestQueryKeepsRerankerOnContextCancellation(t *testing.T) {
 	t.Parallel()
 	m, reranker := newRerankTestManager(t, context.Canceled)
 
-	results, err := m.Query(t.Context(), "some query")
+	results, _, err := m.Query(t.Context(), "some query")
 	require.NoError(t, err)
 	assert.Len(t, results, 2)
 	assert.Equal(t, int64(1), reranker.calls.Load())

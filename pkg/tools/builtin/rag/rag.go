@@ -13,6 +13,7 @@ import (
 	"github.com/docker/docker-agent/pkg/config/latest"
 	"github.com/docker/docker-agent/pkg/rag"
 	ragtypes "github.com/docker/docker-agent/pkg/rag/types"
+	"github.com/docker/docker-agent/pkg/telemetry"
 	"github.com/docker/docker-agent/pkg/tools"
 )
 
@@ -172,9 +173,13 @@ func (t *ToolSet) handleQueryRAG(ctx context.Context, args queryRAGArgs) (*tools
 		return nil, errors.New("query cannot be empty")
 	}
 
-	results, err := t.manager.Query(ctx, args.Query)
+	results, usage, err := t.manager.Query(ctx, args.Query)
 	if err != nil {
 		return nil, fmt.Errorf("RAG query failed: %w", err)
+	}
+
+	if usage.TotalTokens > 0 || usage.Cost > 0 {
+		telemetry.RecordTokenUsage(ctx, t.toolName, usage.TotalTokens, 0, usage.Cost)
 	}
 
 	out := make([]queryResult, 0, len(results))
