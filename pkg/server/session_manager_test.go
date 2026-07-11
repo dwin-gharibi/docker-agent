@@ -306,6 +306,126 @@ func TestAttachedStream_AddMessageAndUpdateMessageRejectWhileStreaming(t *testin
 	require.NoError(t, sm.UpdateMessage(ctx, sess.ID, msgIDStr, session.UserMessage("accepted")))
 }
 
+// blockingStore wraps a session.Store and blocks inside AddMessage/
+// UpdateMessage until release is closed, letting a test pause the manager
+// mid-mutation — after the busy check has already passed — to observe
+// whether a concurrent attached stream can slip in before the mutation
+// actually completes. entered is closed the instant the blocked call is
+// reached, so the test can synchronize on it instead of sleeping.
+type blockingStore struct {
+	session.Store
+
+	release chan struct{}
+	entered chan struct{}
+}
+
+func (s *blockingStore) AddMessage(ctx context.Context, sessionID string, msg *session.Message) (int64, error) {
+	close(s.entered)
+	<-s.release
+	return s.Store.AddMessage(ctx, sessionID, msg)
+}
+
+func (s *blockingStore) UpdateMessage(ctx context.Context, messageID int64, msg *session.Message) error {
+	close(s.entered)
+	<-s.release
+	return s.Store.UpdateMessage(ctx, messageID, msg)
+}
+
+// assertAttachedGuardBlockedDuringMutation drives the reviewer's
+// deterministic "blocking-store" probe (#3590 finding A1): it starts
+// mutate (an AddMessage or UpdateMessage call) against a store that blocks
+// mid-write, waits for the busy check inside mutate to have already passed
+// (store.entered closes), and then tries to acquire the attached-stream
+// guard exactly the way pkg/app.App.acquireStreamGuard does (a plain
+// Lock(), not TryLock()). Before the #3590 fix, AddMessage/UpdateMessage
+// released activeRuntimes.streaming immediately after the busy check, so
+// the guard acquisition below would succeed while mutate was still
+// blocked inside the store write — an attached stream starting between
+// the busy check and the mutation completing. With the fix (the streaming
+// lock held via defer until mutate returns), the guard acquisition must
+// stay blocked until mutate has fully returned.
+func assertAttachedGuardBlockedDuringMutation(t *testing.T, guard sync.Locker, store *blockingStore, mutate func() error) {
+	t.Helper()
+
+	mutateErrCh := make(chan error, 1)
+	go func() { mutateErrCh <- mutate() }()
+
+	select {
+	case <-store.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the mutation to reach the blocking store")
+	}
+
+	guardAcquired := make(chan struct{})
+	go func() {
+		guard.Lock()
+		close(guardAcquired)
+	}()
+
+	select {
+	case <-guardAcquired:
+		t.Fatal("attached stream guard acquired before the REST mutation completed")
+	case <-time.After(100 * time.Millisecond):
+		// Expected: the guard stays held across the in-flight mutation.
+	}
+
+	close(store.release)
+	require.NoError(t, <-mutateErrCh)
+
+	select {
+	case <-guardAcquired:
+		guard.Unlock()
+	case <-time.After(2 * time.Second):
+		t.Fatal("attached stream guard never acquired after the REST mutation completed")
+	}
+}
+
+// TestReview_AttachedGuardCannotStartBetweenBusyCheckAndMutation_AddMessage
+// is the reviewer's deterministic regression probe for #3590 finding A1:
+// AddMessage must hold activeRuntimes.streaming across its entire mutation,
+// not just across the busy check, otherwise an attached stream (the only
+// consumer of that lock outside RunSession — see AttachRuntime) can start
+// in the gap between the check passing and the store write completing.
+func TestReview_AttachedGuardCannotStartBetweenBusyCheckAndMutation_AddMessage(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	sess := session.New()
+	inner := session.NewInMemorySessionStore()
+	require.NoError(t, inner.AddSession(ctx, sess))
+	store := &blockingStore{Store: inner, release: make(chan struct{}), entered: make(chan struct{})}
+
+	sm := NewSessionManager(ctx, config.Sources{}, store, 0, &config.RuntimeConfig{})
+	guard := sm.AttachRuntime(ctx, sess.ID, &fakeRuntime{}, sess)
+
+	assertAttachedGuardBlockedDuringMutation(t, guard, store, func() error {
+		return sm.AddMessage(ctx, sess.ID, session.UserMessage("mutating"))
+	})
+}
+
+// TestReview_AttachedGuardCannotStartBetweenBusyCheckAndMutation_UpdateMessage
+// mirrors the AddMessage probe above for UpdateMessage.
+func TestReview_AttachedGuardCannotStartBetweenBusyCheckAndMutation_UpdateMessage(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	sess := session.New()
+	inner := session.NewInMemorySessionStore()
+	require.NoError(t, inner.AddSession(ctx, sess))
+	msgID, err := inner.AddMessage(ctx, sess.ID, session.UserMessage("original"))
+	require.NoError(t, err)
+	msgIDStr := strconv.FormatInt(msgID, 10)
+
+	store := &blockingStore{Store: inner, release: make(chan struct{}), entered: make(chan struct{})}
+
+	sm := NewSessionManager(ctx, config.Sources{}, store, 0, &config.RuntimeConfig{})
+	guard := sm.AttachRuntime(ctx, sess.ID, &fakeRuntime{}, sess)
+
+	assertAttachedGuardBlockedDuringMutation(t, guard, store, func() error {
+		return sm.UpdateMessage(ctx, sess.ID, msgIDStr, session.UserMessage("mutating"))
+	})
+}
+
 // TestServer_AddMessage_Returns409WhileSessionStreaming and
 // TestServer_UpdateMessage_Returns409WhileSessionStreaming drive the actual
 // HTTP handlers (not just SessionManager) to pin the 409-busy guard added

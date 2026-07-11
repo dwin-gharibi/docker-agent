@@ -1289,19 +1289,24 @@ func (sm *SessionManager) GetAgentToolCount(ctx context.Context, agentFilename, 
 // active RunStream: session.Session.mu makes the append itself race-free,
 // but a message added mid-stream (mid-tool-call in particular) can still
 // desynchronize the in-flight turn from what the model/tools expect, so we
-// also reject at the API boundary. The check reuses the same activeRuntimes
-// streaming lock RunSession uses, so it can never race a stream that starts
-// between the check and the mutation below: both require sm.mux, which this
-// method holds for its entire body.
+// also reject at the API boundary. The busy check TryLocks the same
+// activeRuntimes.streaming lock RunSession/AttachRuntime use, and — unlike
+// a bare check-then-release probe — HOLDS it across the entire mutation
+// below, releasing only via defer once AddMessage returns. sm.mux alone
+// cannot close this gap: an attached runtime's stream (see AttachRuntime,
+// pkg/app's WithStreamGuard) only ever acquires streaming, never sm.mux, so
+// a stream that starts the instant after the TryLock check but before the
+// store write completes would otherwise interleave with it (#3590).
 func (sm *SessionManager) AddMessage(ctx context.Context, sessionID string, msg *session.Message) error {
 	sm.mux.Lock()
 	defer sm.mux.Unlock()
 
-	if rt, ok := sm.runtimeSessions.Load(sessionID); ok {
+	rt, ok := sm.runtimeSessions.Load(sessionID)
+	if ok {
 		if !rt.streaming.TryLock() {
 			return ErrSessionBusy
 		}
-		rt.streaming.Unlock()
+		defer rt.streaming.Unlock()
 	}
 
 	_, err := sm.sessionStore.AddMessage(ctx, sessionID, msg)
@@ -1310,7 +1315,7 @@ func (sm *SessionManager) AddMessage(ctx context.Context, sessionID string, msg 
 	}
 
 	// If the session is actively running, update the in-memory session
-	if rt, ok := sm.runtimeSessions.Load(sessionID); ok && rt.session != nil {
+	if ok && rt.session != nil {
 		rt.session.AddMessage(msg)
 	}
 
@@ -1320,7 +1325,8 @@ func (sm *SessionManager) AddMessage(ctx context.Context, sessionID string, msg 
 // UpdateMessage updates a message in a session.
 //
 // Rejected with ErrSessionBusy while the session has an active RunStream;
-// see AddMessage's comment for why and how the check is race-free.
+// see AddMessage's comment for why the busy check holds streaming across
+// the whole mutation instead of releasing it right after the check.
 func (sm *SessionManager) UpdateMessage(ctx context.Context, sessionID, msgID string, msg *session.Message) error {
 	sm.mux.Lock()
 	defer sm.mux.Unlock()
@@ -1329,7 +1335,7 @@ func (sm *SessionManager) UpdateMessage(ctx context.Context, sessionID, msgID st
 		if !rt.streaming.TryLock() {
 			return ErrSessionBusy
 		}
-		rt.streaming.Unlock()
+		defer rt.streaming.Unlock()
 	}
 
 	// Parse msgID as int64
