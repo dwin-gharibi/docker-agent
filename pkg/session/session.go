@@ -579,14 +579,21 @@ func cloneSchemaValue(v any) any {
 
 // Session helper methods
 
-// AddMessage adds a message to the session
-func (s *Session) AddMessage(msg *Message) {
+// AddMessage adds a message to the session and returns the index the new
+// item occupies in s.Messages. Callers that need to stamp an event with the
+// message's position (e.g. UserMessageEvent.SessionPosition) must use this
+// return value rather than a separate len(sess.Messages)-1 read: the latter
+// races with concurrent AddMessage/ApplyCompaction calls (e.g. from a live
+// HTTP AddMessage while a stream is running) and can also observe a later,
+// larger length than the one that matched this append.
+func (s *Session) AddMessage(msg *Message) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if msg != nil {
 		capToolResultContent(&msg.Message, s.MaxToolResultTokens)
 	}
 	s.Messages = append(s.Messages, NewMessageItem(msg))
+	return len(s.Messages) - 1
 }
 
 // SetUsage records cumulative input/output token counts under s.mu.
@@ -1023,6 +1030,29 @@ func (s *Session) MessageCount() int {
 		}
 	}
 	return n
+}
+
+// ItemCount returns the total number of items in s.Messages — messages,
+// sub-sessions, summaries, and recorded errors alike. Unlike MessageCount,
+// it counts every item, matching what len(s.Messages) would return outside
+// the lock. Hot paths that need "the index the next appended item will
+// occupy" (e.g. before calling AddSubSession) should use this instead of
+// reading len(sess.Messages) directly, which races with concurrent
+// AddMessage/ApplyCompaction.
+func (s *Session) ItemCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.Messages)
+}
+
+// MessagesSnapshot returns a lock-safe copy of the session's items, deep-
+// copying each Message so the result cannot alias a concurrent AddMessage /
+// UpdateMessage mutation. It is the exported counterpart of snapshotItems for
+// callers outside this package (e.g. pkg/server's ForkSession) that need to
+// iterate Messages without racing session.mu; in-package callers should keep
+// using snapshotItems directly.
+func (s *Session) MessagesSnapshot() []Item {
+	return s.snapshotItems()
 }
 
 // TotalCost computes the total cost of a session by walking all messages,
