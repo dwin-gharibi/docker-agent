@@ -337,13 +337,14 @@ func extractMessages(sess *session.Session, _ *agent.Agent, contextLimit int64, 
 // firstKeptSessionIndex translates a split index produced against the
 // chat-message list returned by [gatherCompactionInput] back to an
 // index in sess.Messages, suitable for the new summary's
-// FirstKeptEntry. Out-of-range splits map to len(sess.Messages),
+// FirstKeptEntry. Out-of-range splits map to sess.ItemCount(),
 // matching the "compact everything; keep nothing of the tail"
 // sentinel that session.buildSessionSummaryMessages handles by
-// skipping the conversation loop.
+// skipping the conversation loop. ItemCount takes sess.mu so this
+// stays race-free against a concurrent AddMessage/ApplyCompaction.
 func firstKeptSessionIndex(sess *session.Session, sessIndices []int, splitIdx int) int {
 	if splitIdx >= len(sessIndices) {
-		return len(sess.Messages)
+		return sess.ItemCount()
 	}
 	return sessIndices[splitIdx]
 }

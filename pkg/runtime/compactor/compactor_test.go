@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -389,6 +390,30 @@ func TestFirstKeptSessionIndex_SplitZeroOnEmptyInputUsesSafeSentinel(t *testing.
 	// firstKeptSessionIndex. Both branches (>= len(sessIndices) and
 	// the indexed lookup) must yield len(sess.Messages) here.
 	assert.Equal(t, len(sess.Messages), firstKeptSessionIndex(sess, sessIndices, 0))
+}
+
+// TestFirstKeptSessionIndexConcurrent pins the data-race fix for issue
+// #3590: firstKeptSessionIndex's out-of-range sentinel must read the
+// session's item count through the locked ItemCount accessor, not
+// len(sess.Messages) directly, so it stays race-free against a concurrent
+// AddMessage/ApplyCompaction on the same live session (e.g. a live HTTP
+// AddMessage arriving mid-compaction). Run with -race; before the fix,
+// len(sess.Messages) aliases the live backing array and races the
+// concurrent AddMessage goroutine below.
+func TestFirstKeptSessionIndexConcurrent(t *testing.T) {
+	t.Parallel()
+
+	sess := session.New()
+	var wg sync.WaitGroup
+	for range 100 {
+		wg.Go(func() {
+			sess.AddMessage(session.UserMessage("u"))
+		})
+		wg.Go(func() {
+			_ = firstKeptSessionIndex(sess, nil, 0)
+		})
+	}
+	wg.Wait()
 }
 
 // TestGatherCompactionInput_PriorSummaryWithoutFirstKeptEntry covers
