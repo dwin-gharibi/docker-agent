@@ -1,14 +1,20 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -188,6 +194,142 @@ func TestRunSession_MessagesNotAddedWhenBusy(t *testing.T) {
 
 	close(release)
 	for range ch1 {
+	}
+}
+
+// TestAddMessage_RejectsWhileSessionStreaming verifies the 409-busy guard
+// added for issue #3590: AddMessage must reject with ErrSessionBusy while
+// the session has an active RunStream. session.Session.mu already makes the
+// append itself race-free, but a message injected mid-stream (mid-tool-call
+// in particular) can still desynchronize the turn from what the model/tools
+// expect, so the API layer also rejects it outright.
+func TestAddMessage_RejectsWhileSessionStreaming(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	sess := session.New()
+	release := make(chan struct{})
+	fake := &fakeRuntime{release: release}
+	sm := newTestSessionManager(t, sess, fake)
+
+	ch, err := sm.RunSession(ctx, sess.ID, "agent", "root", []api.Message{{Content: "hi"}}, "")
+	require.NoError(t, err)
+
+	err = sm.AddMessage(ctx, sess.ID, session.UserMessage("should be rejected"))
+	require.ErrorIs(t, err, ErrSessionBusy)
+
+	close(release)
+	for range ch {
+	}
+
+	// After the stream ends, AddMessage must succeed normally.
+	require.NoError(t, sm.AddMessage(ctx, sess.ID, session.UserMessage("accepted")))
+}
+
+// TestUpdateMessage_RejectsWhileSessionStreaming mirrors
+// TestAddMessage_RejectsWhileSessionStreaming for UpdateMessage.
+func TestUpdateMessage_RejectsWhileSessionStreaming(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	sess := session.New()
+	release := make(chan struct{})
+	fake := &fakeRuntime{release: release}
+	sm := newTestSessionManager(t, sess, fake)
+
+	msgID, err := sm.sessionStore.AddMessage(ctx, sess.ID, session.UserMessage("original"))
+	require.NoError(t, err)
+	msgIDStr := strconv.FormatInt(msgID, 10)
+
+	ch, err := sm.RunSession(ctx, sess.ID, "agent", "root", []api.Message{{Content: "hi"}}, "")
+	require.NoError(t, err)
+
+	err = sm.UpdateMessage(ctx, sess.ID, msgIDStr, session.UserMessage("should be rejected"))
+	require.ErrorIs(t, err, ErrSessionBusy)
+
+	close(release)
+	for range ch {
+	}
+
+	// After the stream ends, UpdateMessage must succeed normally.
+	require.NoError(t, sm.UpdateMessage(ctx, sess.ID, msgIDStr, session.UserMessage("accepted")))
+}
+
+// TestServer_AddMessage_Returns409WhileSessionStreaming and
+// TestServer_UpdateMessage_Returns409WhileSessionStreaming drive the actual
+// HTTP handlers (not just SessionManager) to pin the 409-busy guard added
+// for issue #3590 end to end: ErrSessionBusy from the manager must surface
+// as echo.NewHTTPError(http.StatusConflict, ...), mirroring how runAgent
+// already maps it.
+func TestServer_AddMessage_Returns409WhileSessionStreaming(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	sess := session.New()
+	release := make(chan struct{})
+	fake := &fakeRuntime{release: release}
+	sm := newTestSessionManager(t, sess, fake)
+	srv := NewWithManager(sm, "")
+
+	ch, err := sm.RunSession(ctx, sess.ID, "agent", "root", []api.Message{{Content: "hi"}}, "")
+	require.NoError(t, err)
+
+	body, err := json.Marshal(api.AddMessageRequest{Message: session.UserMessage("should be rejected")})
+	require.NoError(t, err)
+
+	e := echo.New()
+	req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/api/sessions/"+sess.ID+"/messages", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("id")
+	c.SetParamValues(sess.ID)
+
+	err = srv.addMessage(c)
+	var httpErr *echo.HTTPError
+	require.ErrorAs(t, err, &httpErr)
+	assert.Equal(t, http.StatusConflict, httpErr.Code)
+
+	close(release)
+	for range ch {
+	}
+}
+
+func TestServer_UpdateMessage_Returns409WhileSessionStreaming(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	sess := session.New()
+	release := make(chan struct{})
+	fake := &fakeRuntime{release: release}
+	sm := newTestSessionManager(t, sess, fake)
+	srv := NewWithManager(sm, "")
+
+	msgID, err := sm.sessionStore.AddMessage(ctx, sess.ID, session.UserMessage("original"))
+	require.NoError(t, err)
+
+	ch, err := sm.RunSession(ctx, sess.ID, "agent", "root", []api.Message{{Content: "hi"}}, "")
+	require.NoError(t, err)
+
+	body, err := json.Marshal(api.UpdateMessageRequest{Message: session.UserMessage("should be rejected")})
+	require.NoError(t, err)
+
+	e := echo.New()
+	msgIDStr := strconv.FormatInt(msgID, 10)
+	req := httptest.NewRequestWithContext(ctx, http.MethodPatch, "/api/sessions/"+sess.ID+"/messages/"+msgIDStr, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("id", "msg_id")
+	c.SetParamValues(sess.ID, msgIDStr)
+
+	err = srv.updateMessage(c)
+	var httpErr *echo.HTTPError
+	require.ErrorAs(t, err, &httpErr)
+	assert.Equal(t, http.StatusConflict, httpErr.Code)
+
+	close(release)
+	for range ch {
 	}
 }
 

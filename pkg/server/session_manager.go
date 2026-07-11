@@ -1271,9 +1271,25 @@ func (sm *SessionManager) GetAgentToolCount(ctx context.Context, agentFilename, 
 }
 
 // AddMessage adds a message to a session.
+//
+// It rejects the mutation with ErrSessionBusy while the session has an
+// active RunStream: session.Session.mu makes the append itself race-free,
+// but a message added mid-stream (mid-tool-call in particular) can still
+// desynchronize the in-flight turn from what the model/tools expect, so we
+// also reject at the API boundary. The check reuses the same activeRuntimes
+// streaming lock RunSession uses, so it can never race a stream that starts
+// between the check and the mutation below: both require sm.mux, which this
+// method holds for its entire body.
 func (sm *SessionManager) AddMessage(ctx context.Context, sessionID string, msg *session.Message) error {
 	sm.mux.Lock()
 	defer sm.mux.Unlock()
+
+	if rt, ok := sm.runtimeSessions.Load(sessionID); ok {
+		if !rt.streaming.TryLock() {
+			return ErrSessionBusy
+		}
+		rt.streaming.Unlock()
+	}
 
 	_, err := sm.sessionStore.AddMessage(ctx, sessionID, msg)
 	if err != nil {
@@ -1289,9 +1305,19 @@ func (sm *SessionManager) AddMessage(ctx context.Context, sessionID string, msg 
 }
 
 // UpdateMessage updates a message in a session.
+//
+// Rejected with ErrSessionBusy while the session has an active RunStream;
+// see AddMessage's comment for why and how the check is race-free.
 func (sm *SessionManager) UpdateMessage(ctx context.Context, sessionID, msgID string, msg *session.Message) error {
 	sm.mux.Lock()
 	defer sm.mux.Unlock()
+
+	if rt, ok := sm.runtimeSessions.Load(sessionID); ok {
+		if !rt.streaming.TryLock() {
+			return ErrSessionBusy
+		}
+		rt.streaming.Unlock()
+	}
 
 	// Parse msgID as int64
 	var msgPos int64
