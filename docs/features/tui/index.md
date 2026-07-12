@@ -149,7 +149,7 @@ When a parent agent calls `transfer_task` to delegate work to a sub-agent, the T
 
 **Sidebar — Transfer box:** As soon as the delegation starts, an animated **Transfer** box appears below the agent roster, showing the direction of the handoff with a traveling dot:
 
-```
+```text
 ╭─ Transfer ─────────────────╮
 │  parent  ●──────►  child   │
 ╰────────────────────────────╯
@@ -159,7 +159,7 @@ The box stays visible for at least 1.5 seconds. Once the sub-agent produces its 
 
 **Sidebar — Return box:** When the sub-agent finishes and control returns to the parent, a brief **Return** box animates the reverse direction for up to 1.5 seconds, then disappears:
 
-```
+```text
 ╭─ Return ───────────────────╮
 │  child  ●──────►  parent   │
 ╰────────────────────────────╯
@@ -167,7 +167,7 @@ The box stays visible for at least 1.5 seconds. Once the sub-agent produces its 
 
 **Chat — return transition:** Alongside the sidebar Return animation, the chat shows a one-line static transition between the two agent badges:
 
-```
+```text
 [child]  returned control to  [parent]
 ```
 
