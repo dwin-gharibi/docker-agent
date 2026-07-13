@@ -53,7 +53,7 @@ require (
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 	github.com/natefinch/atomic v1.0.1
 	github.com/openai/openai-go/v3 v3.42.0
-	github.com/pb33f/libopenapi v0.38.5
+	github.com/pb33f/libopenapi v0.38.6
 	github.com/rivo/uniseg v0.4.7
 	github.com/rumpl/harness v0.0.0-20260612213434-3f63cb8efc05
 	github.com/smacker/go-tree-sitter v0.0.0-20240827094217-dd81d9e9be82
