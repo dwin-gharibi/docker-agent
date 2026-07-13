@@ -3,6 +3,7 @@ package supervisor
 import (
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -118,12 +119,36 @@ func TestSetPendingEvent_RoundTrip(t *testing.T) {
 
 	s.SetPendingEvent("A", event)
 
-	assert.Equal(t, event, s.runners["A"].PendingEvent, "event is stored on the runner")
+	assert.Equal(t, []tea.Msg{event}, s.runners["A"].PendingEvents, "event is stored on the runner")
 	assert.False(t, s.runners["A"].NeedsAttn, "SetPendingEvent must NOT raise NeedsAttn (the user is already aware)")
 
 	got := s.ConsumePendingEvent("A")
 	assert.Equal(t, event, got)
-	assert.Nil(t, s.runners["A"].PendingEvent, "event is cleared after consumption")
+	assert.Empty(t, s.runners["A"].PendingEvents, "event is cleared after consumption")
+}
+
+// TestSetPendingEvent_Queue verifies that multiple events queued for the same
+// inactive session are replayed in FIFO order and that SetPendingEvent
+// re-queues at the front, ahead of anything queued behind it (#3584).
+func TestSetPendingEvent_Queue(t *testing.T) {
+	t.Parallel()
+	s := newTestSupervisor([]string{"A"}, "B")
+
+	type fakeEvent struct{ id int }
+	first := &fakeEvent{id: 1}
+	second := &fakeEvent{id: 2}
+
+	s.runners["A"].PendingEvents = []tea.Msg{first, second}
+
+	// Re-stash a third event (e.g. the live dialog instance for the event the
+	// user was looking at) ahead of the two already queued.
+	stashed := &fakeEvent{id: 0}
+	s.SetPendingEvent("A", stashed)
+
+	assert.Equal(t, stashed, s.ConsumePendingEvent("A"))
+	assert.Equal(t, first, s.ConsumePendingEvent("A"))
+	assert.Equal(t, second, s.ConsumePendingEvent("A"))
+	assert.Nil(t, s.ConsumePendingEvent("A"), "queue is drained")
 }
 
 // TestSetPendingEvent_UnknownSession is a no-op (and must not panic).
@@ -133,7 +158,7 @@ func TestSetPendingEvent_UnknownSession(t *testing.T) {
 
 	s.SetPendingEvent("does-not-exist", "payload")
 
-	assert.Nil(t, s.runners["A"].PendingEvent, "unrelated runner is untouched")
+	assert.Empty(t, s.runners["A"].PendingEvents, "unrelated runner is untouched")
 }
 
 // --- #3217: session-aware stream lifecycle tests ---
@@ -167,7 +192,7 @@ func TestStreamStarted_SubSessionDoesNotDropPendingEvent(t *testing.T) {
 	s := newTestSupervisor([]string{"sess-A", "sess-B"}, "sess-B") // sess-A is background
 
 	elicitation := runtime.ElicitationRequest("confirm?", "form", nil, "", "eid-1", nil, "agent")
-	s.runners["sess-A"].PendingEvent = elicitation
+	s.runners["sess-A"].PendingEvents = []tea.Msg{elicitation}
 	s.runners["sess-A"].NeedsAttn = true
 	s.runners["sess-A"].IsRunning = true // already running a top-level turn
 
@@ -177,7 +202,7 @@ func TestStreamStarted_SubSessionDoesNotDropPendingEvent(t *testing.T) {
 		SessionID: "child-xyz",
 	})
 
-	require.NotNil(t, s.runners["sess-A"].PendingEvent,
+	require.NotEmpty(t, s.runners["sess-A"].PendingEvents,
 		"nested StreamStarted must NOT clear the parent's pending elicitation")
 	assert.True(t, s.runners["sess-A"].NeedsAttn,
 		"nested StreamStarted must NOT clear NeedsAttn")
@@ -193,7 +218,7 @@ func TestStreamStopped_SubSessionDoesNotDropPendingEvent(t *testing.T) {
 	s := newTestSupervisor([]string{"sess-A", "sess-B"}, "sess-B")
 
 	elicitation := runtime.ElicitationRequest("confirm?", "form", nil, "", "eid-2", nil, "agent")
-	s.runners["sess-A"].PendingEvent = elicitation
+	s.runners["sess-A"].PendingEvents = []tea.Msg{elicitation}
 	s.runners["sess-A"].NeedsAttn = true
 	s.runners["sess-A"].IsRunning = true
 
@@ -203,7 +228,7 @@ func TestStreamStopped_SubSessionDoesNotDropPendingEvent(t *testing.T) {
 		SessionID: "child-xyz",
 	})
 
-	require.NotNil(t, s.runners["sess-A"].PendingEvent,
+	require.NotEmpty(t, s.runners["sess-A"].PendingEvents,
 		"nested StreamStopped must NOT clear the parent's pending elicitation")
 	assert.True(t, s.runners["sess-A"].NeedsAttn,
 		"nested StreamStopped must NOT clear NeedsAttn")
@@ -218,9 +243,9 @@ func TestStreamStarted_TopLevelSupersedesStalePending(t *testing.T) {
 	t.Parallel()
 	s := newTestSupervisor([]string{"sess-A"}, "sess-A")
 
-	s.runners["sess-A"].PendingEvent = runtime.ElicitationRequest(
+	s.runners["sess-A"].PendingEvents = []tea.Msg{runtime.ElicitationRequest(
 		"old?", "form", nil, "", "eid-stale", nil, "agent",
-	)
+	)}
 	s.runners["sess-A"].IsRunning = false
 
 	// New top-level turn starts.
@@ -229,7 +254,7 @@ func TestStreamStarted_TopLevelSupersedesStalePending(t *testing.T) {
 		SessionID: "sess-A",
 	})
 
-	assert.Nil(t, s.runners["sess-A"].PendingEvent,
+	assert.Empty(t, s.runners["sess-A"].PendingEvents,
 		"top-level StreamStarted must supersede any stale pending event")
 	assert.True(t, s.runners["sess-A"].IsRunning,
 		"top-level StreamStarted must set IsRunning")
@@ -259,7 +284,7 @@ func TestStreamStopped_TopLevelClearsPendingAndNeedsAttn(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newTestSupervisor([]string{"sess-A"}, "sess-B")
-			s.runners["sess-A"].PendingEvent = tc.pending
+			s.runners["sess-A"].PendingEvents = []tea.Msg{tc.pending}
 			s.runners["sess-A"].NeedsAttn = true
 			s.runners["sess-A"].IsRunning = true
 
@@ -268,8 +293,8 @@ func TestStreamStopped_TopLevelClearsPendingAndNeedsAttn(t *testing.T) {
 				SessionID: "sess-A",
 			})
 
-			assert.Nil(t, s.runners["sess-A"].PendingEvent,
-				"top-level StreamStopped must clear PendingEvent")
+			assert.Empty(t, s.runners["sess-A"].PendingEvents,
+				"top-level StreamStopped must clear PendingEvents")
 			assert.False(t, s.runners["sess-A"].NeedsAttn,
 				"top-level StreamStopped must clear NeedsAttn")
 			assert.False(t, s.runners["sess-A"].IsRunning,
@@ -285,9 +310,9 @@ func TestStreamStarted_EmptySessionID_TreatedAsTopLevel(t *testing.T) {
 	t.Parallel()
 	s := newTestSupervisor([]string{"sess-A"}, "sess-A")
 
-	s.runners["sess-A"].PendingEvent = runtime.ElicitationRequest(
+	s.runners["sess-A"].PendingEvents = []tea.Msg{runtime.ElicitationRequest(
 		"old?", "form", nil, "", "eid-old", nil, "agent",
-	)
+	)}
 
 	// Emitter omits SessionID (empty string).
 	s.handleRuntimeEvent("sess-A", &runtime.StreamStartedEvent{
@@ -295,7 +320,7 @@ func TestStreamStarted_EmptySessionID_TreatedAsTopLevel(t *testing.T) {
 		SessionID: "",
 	})
 
-	assert.Nil(t, s.runners["sess-A"].PendingEvent,
+	assert.Empty(t, s.runners["sess-A"].PendingEvents,
 		"empty SessionID must be treated as top-level and supersede stale pending event")
 	assert.True(t, s.runners["sess-A"].IsRunning)
 }

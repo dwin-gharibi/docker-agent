@@ -19,15 +19,21 @@ import (
 
 // SessionRunner represents a running session.
 type SessionRunner struct {
-	ID           string
-	App          *app.App
-	WorkingDir   string
-	Title        string
-	IsRunning    bool    // True when stream is active
-	NeedsAttn    bool    // True when user attention is needed
-	PendingEvent tea.Msg // Event that triggered attention (for replay on tab switch)
-	cancel       context.CancelFunc
-	cleanup      func()
+	ID         string
+	App        *app.App
+	WorkingDir string
+	Title      string
+	IsRunning  bool // True when stream is active
+	NeedsAttn  bool // True when user attention is needed
+	// PendingEvents queues attention events (tool confirmation, max
+	// iterations, elicitation) that arrived while this tab was inactive, in
+	// arrival order, for replay when the user switches to it. A single slot
+	// used to overwrite an earlier event with a later one, silently dropping
+	// it (#3584) — e.g. two concurrent background-job elicitations on the
+	// same unfocused tab would leave only the second visible.
+	PendingEvents []tea.Msg
+	cancel        context.CancelFunc
+	cleanup       func()
 }
 
 // SessionSpawner is a function that creates new sessions.
@@ -179,14 +185,14 @@ func (s *Supervisor) handleRuntimeEvent(sessionID string, msg tea.Msg) {
 	case *runtime.StreamStartedEvent:
 		if isTopLevelStream(runner.ID, ev.SessionID) {
 			runner.IsRunning = true
-			runner.PendingEvent = nil // New top-level stream supersedes any stale pending event
+			runner.PendingEvents = nil // New top-level stream supersedes any stale pending events
 			s.notifyTabsUpdated()
 		}
 
 	case *runtime.StreamStoppedEvent:
 		if isTopLevelStream(runner.ID, ev.SessionID) {
 			runner.IsRunning = false
-			runner.PendingEvent = nil // Clear any pending attention event since the top-level stream ended
+			runner.PendingEvents = nil // Clear any pending attention events since the top-level stream ended
 			runner.NeedsAttn = false
 			s.notifyTabsUpdated()
 		}
@@ -199,7 +205,7 @@ func (s *Supervisor) handleRuntimeEvent(sessionID string, msg tea.Msg) {
 		// These require user attention
 		if sessionID != s.activeID {
 			runner.NeedsAttn = true
-			runner.PendingEvent = msg
+			runner.PendingEvents = append(runner.PendingEvents, msg)
 			s.notifyTabsUpdated()
 			// Ring the terminal bell to alert the user
 			if p := s.program; p != nil {
@@ -274,24 +280,25 @@ func (s *Supervisor) SwitchTo(sessionID string) *SessionRunner {
 	return runner
 }
 
-// ConsumePendingEvent returns and clears the pending event for the given session.
-// Returns nil if no event is pending.
+// ConsumePendingEvent pops and returns the oldest pending event for the given
+// session (FIFO). Returns nil if none is pending.
 func (s *Supervisor) ConsumePendingEvent(sessionID string) tea.Msg {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	runner, ok := s.runners[sessionID]
-	if !ok || runner.PendingEvent == nil {
+	if !ok || len(runner.PendingEvents) == 0 {
 		return nil
 	}
 
-	event := runner.PendingEvent
-	runner.PendingEvent = nil
+	event := runner.PendingEvents[0]
+	runner.PendingEvents = runner.PendingEvents[1:]
 	return event
 }
 
-// SetPendingEvent stores an attention event for the given session so it can
-// be replayed when the user later switches to that tab. Used to re-stash a
+// SetPendingEvent re-queues an attention event at the FRONT of the given
+// session's pending queue, ahead of anything queued behind it, so it can be
+// replayed when the user later switches to that tab. Used to re-stash a
 // background dialog's originating event when the user navigates away from
 // the tab that opened it.
 //
@@ -303,7 +310,7 @@ func (s *Supervisor) SetPendingEvent(sessionID string, event tea.Msg) {
 	defer s.mu.Unlock()
 
 	if runner, ok := s.runners[sessionID]; ok {
-		runner.PendingEvent = event
+		runner.PendingEvents = append([]tea.Msg{event}, runner.PendingEvents...)
 	}
 }
 
