@@ -303,7 +303,11 @@ type LocalRuntime struct {
 	recallMu      sync.RWMutex
 	recallHandler RecallHandler
 
-	// onToolsChanged is called when an MCP toolset reports a tool list change.
+	// onToolsChanged is called when an MCP toolset reports a tool list
+	// change. Protected by toolsChangedMu because MCP change-notification
+	// goroutines call emitToolsChanged concurrently, mirroring
+	// onBackgroundEvent/backgroundEventMu below.
+	toolsChangedMu sync.RWMutex
 	onToolsChanged func(Event)
 
 	// onBackgroundEvent is called for events surfaced from detached
@@ -1428,7 +1432,9 @@ func (r *LocalRuntime) ResetStartupInfo() {
 // reports a tool list change outside of a RunStream. This allows the UI
 // to update the tool count immediately.
 func (r *LocalRuntime) OnToolsChanged(handler func(Event)) {
+	r.toolsChangedMu.Lock()
 	r.onToolsChanged = handler
+	r.toolsChangedMu.Unlock()
 
 	for _, name := range r.team.AgentNames() {
 		a, err := r.team.Agent(name)
@@ -1446,7 +1452,10 @@ func (r *LocalRuntime) OnToolsChanged(handler func(Event)) {
 // emitToolsChanged is the callback registered on MCP toolsets. It re-reads
 // the current agent's full tool list and pushes a ToolsetInfo event.
 func (r *LocalRuntime) emitToolsChanged() {
-	if r.onToolsChanged == nil {
+	r.toolsChangedMu.RLock()
+	handler := r.onToolsChanged
+	r.toolsChangedMu.RUnlock()
+	if handler == nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.ctx(), toolsChangedTimeout)
@@ -1456,7 +1465,7 @@ func (r *LocalRuntime) emitToolsChanged() {
 	if err != nil {
 		return
 	}
-	r.onToolsChanged(ToolsetInfo(len(agentTools), false, r.currentAgentName()))
+	handler(ToolsetInfo(len(agentTools), false, r.currentAgentName()))
 }
 
 // OnBackgroundEvent registers a handler that receives events surfaced from
