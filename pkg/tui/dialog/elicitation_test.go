@@ -6,6 +6,7 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -790,4 +791,265 @@ func TestElicitationDialog_UserScrollUp_NotSnappedBack(t *testing.T) {
 	_ = dialog.View()
 	assert.Equal(t, 0, dialog.scrollview.ScrollOffset(),
 		"re-rendering must not auto-scroll back down to the focused option")
+}
+
+// TestElicitationDialog_ResizeReanchorsFocus pins that a window resize —
+// which rewraps long field titles and shifts the focused field far from the
+// old scroll offset — brings the focused control back into view on the next
+// render, and that this reanchor is one-shot: later ordinary renders must
+// not override a deliberate user scroll.
+func TestElicitationDialog_ResizeReanchorsFocus(t *testing.T) {
+	t.Parallel()
+
+	props := map[string]any{}
+	for i := range 6 {
+		name := "field" + string(rune('a'+i))
+		props[name] = map[string]any{
+			"type":  "string",
+			"title": "Field " + string(rune('A'+i)) + ": " + strings.Repeat("very long title ", 3),
+		}
+	}
+	schema := map[string]any{"type": "object", "properties": props}
+
+	dialog := NewElicitationDialog("Fill in:", schema, nil).(*ElicitationDialog)
+	_, _ = dialog.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	_ = dialog.View()
+
+	// Focus the last field; the wide layout scrolls it into view.
+	dialog.focusField(len(dialog.fields) - 1)
+	_ = dialog.View()
+	require.Equal(t, 1, dialog.fieldGeoms[dialog.currentField].labelHeight,
+		"test setup: titles must fit on one row at 120 columns")
+	staleOffset := dialog.scrollview.ScrollOffset()
+
+	// Shrink to 20 columns: every title above the focused field now wraps
+	// over several rows, pushing the focused input far below the old offset.
+	_, _ = dialog.Update(tea.WindowSizeMsg{Width: 20, Height: 30})
+	_ = dialog.View()
+
+	require.Greater(t, dialog.fieldGeoms[dialog.currentField].labelHeight, 1,
+		"test setup: titles must wrap at 20 columns")
+	first, last := dialog.focusRange()
+	require.GreaterOrEqual(t, first, 0)
+	require.Greater(t, first, staleOffset+dialog.scrollview.VisibleHeight()-1,
+		"test setup: rewrapping must push the focused field below the pre-resize viewport")
+
+	offset := dialog.scrollview.ScrollOffset()
+	visEnd := offset + dialog.scrollview.VisibleHeight() - 1
+	assert.GreaterOrEqual(t, first, offset, "focused input must be at or below the scroll offset after resize")
+	assert.LessOrEqual(t, last, visEnd, "focused input must be visible after resize")
+
+	// The reanchor is one-shot: a deliberate scroll away from the focused
+	// field must survive subsequent ordinary renders.
+	dialog.scrollview.ScrollToTop()
+	_ = dialog.View()
+	assert.Equal(t, 0, dialog.scrollview.ScrollOffset(),
+		"ordinary re-render after the resize reanchor must not auto-scroll back to the focused field")
+}
+
+// TestElicitationDialog_ResizeFreeFormInput_NoJump pins that resizing a
+// free-form dialog (no schema fields, so nothing to reanchor to) neither
+// panics nor moves the user's scroll position.
+func TestElicitationDialog_ResizeFreeFormInput_NoJump(t *testing.T) {
+	t.Parallel()
+
+	longMessage := strings.Repeat("Long question line. ", 40)
+	dialog := NewElicitationDialog(longMessage, nil, nil).(*ElicitationDialog)
+	_, _ = dialog.Update(tea.WindowSizeMsg{Width: 120, Height: 16})
+	_ = dialog.View()
+
+	require.True(t, dialog.scrollview.NeedsScrollbar())
+	require.Equal(t, 0, dialog.scrollview.ScrollOffset(), "dialog must open scrolled to the top")
+
+	_, _ = dialog.Update(tea.WindowSizeMsg{Width: 20, Height: 16})
+	_ = dialog.View()
+	assert.Equal(t, 0, dialog.scrollview.ScrollOffset(),
+		"resizing a free-form dialog must not move the scroll position")
+}
+
+// squashText strips ANSI sequences and removes all whitespace, so wrapped
+// output can be compared against its source text regardless of where the
+// wrapping primitive breaks lines (word boundaries or mid-token).
+func squashText(s string) string {
+	return strings.Join(strings.Fields(ansi.Strip(s)), "")
+}
+
+// clickBodyLine simulates a left mouse click on the given line of the
+// scrollable body, translated to absolute screen coordinates via the
+// click-zone cache populated by View().
+func clickBodyLine(t *testing.T, d *ElicitationDialog, line int) {
+	t.Helper()
+	require.NotZero(t, d.scrollableRow, "View() must run before simulating clicks")
+	relY := line - d.scrollview.ScrollOffset()
+	require.GreaterOrEqual(t, relY, 0, "line %d must be inside the viewport", line)
+	require.Less(t, relY, d.scrollview.VisibleHeight(), "line %d must be inside the viewport", line)
+	_, _ = d.Update(tea.MouseClickMsg{X: 3, Y: d.scrollableRow + relY, Button: tea.MouseLeft})
+}
+
+// assertBodyTextFits asserts that no body line carries visible text wider
+// than the scrollview's inner width — wider text would be silently clipped.
+// Trailing padding spaces are ignored: the body is padded to its widest part
+// (e.g. the textinput renders one cell wider than its set width) and the
+// scrollview trims that padding back off without losing anything.
+func assertBodyTextFits(t *testing.T, bodyLines []string, innerWidth int) {
+	t.Helper()
+	for i, line := range bodyLines {
+		text := strings.TrimRight(ansi.Strip(line), " ")
+		assert.LessOrEqual(t, ansi.StringWidth(text), innerWidth,
+			"body line %d visible text must fit the scrollview width, got %q", i, text)
+	}
+}
+
+// TestElicitationDialog_LongFieldTitleWraps pins that an agent-supplied field
+// title wider than the dialog's content width wraps across multiple rows
+// instead of being silently clipped by the scrollview.
+func TestElicitationDialog_LongFieldTitleWraps(t *testing.T) {
+	t.Parallel()
+
+	longTitle := "Please choose the deployment strategy that best matches your current production rollout constraints and compliance requirements"
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"strategy": map[string]any{"type": "string", "title": longTitle},
+		},
+	}
+
+	dialog := NewElicitationDialog("Question:", schema, nil).(*ElicitationDialog)
+	_, _ = dialog.Update(tea.WindowSizeMsg{Width: 60, Height: 30})
+	_ = dialog.View()
+
+	l := dialog.layout()
+	innerWidth := max(1, l.contentWidth-dialog.scrollview.ReservedCols())
+	require.Greater(t, ansi.StringWidth(longTitle), innerWidth,
+		"test setup: the title must be wider than the body width")
+
+	require.Len(t, dialog.fieldGeoms, 1)
+	assert.Greater(t, dialog.fieldGeoms[0].labelHeight, 1, "long title must wrap over several rows")
+
+	assert.Contains(t, squashText(strings.Join(l.bodyLines, "\n")), squashText(longTitle),
+		"the full title must survive wrapping")
+	assertBodyTextFits(t, l.bodyLines, innerWidth)
+}
+
+// TestElicitationDialog_LongEnumOptionWrapsAndClicks pins that a long enum
+// option — including an unbroken token wider than the dialog — wraps without
+// losing text, and that every wrapped row still selects that option on click.
+func TestElicitationDialog_LongEnumOptionWrapsAndClicks(t *testing.T) {
+	t.Parallel()
+
+	longOption := "retry with exponential backoff " + strings.Repeat("x", 80)
+	schema := map[string]any{
+		"type":  "string",
+		"title": "Pick one",
+		"enum":  []any{"deploy-canary", longOption, "rollback"},
+	}
+
+	dialog := NewElicitationDialog("Choose:", schema, nil).(*ElicitationDialog)
+	_, _ = dialog.Update(tea.WindowSizeMsg{Width: 60, Height: 40})
+	_ = dialog.View()
+
+	require.Len(t, dialog.fieldGeoms, 1)
+	geom := dialog.fieldGeoms[0]
+	require.Len(t, geom.optionStarts, 3)
+	require.Greater(t, geom.optionHeights[1], 1, "long option must wrap over several rows")
+
+	l := dialog.layout()
+	innerWidth := max(1, l.contentWidth-dialog.scrollview.ReservedCols())
+	assert.Contains(t, squashText(strings.Join(l.bodyLines, "\n")), squashText(longOption),
+		"the full option text, including the unbroken token, must survive wrapping")
+	assertBodyTextFits(t, l.bodyLines, innerWidth)
+
+	// Every wrapped row of the long option must select it on click.
+	start := dialog.fieldStarts[0]
+	for row := range geom.optionHeights[1] {
+		dialog.enumIndexes[0] = 0
+		clickBodyLine(t, dialog, start+geom.optionStarts[1]+row)
+		assert.Equal(t, 1, dialog.enumIndexes[0], "click on wrapped row %d must select the long option", row)
+	}
+
+	// Options shifted down by the wrapping must still map correctly.
+	clickBodyLine(t, dialog, start+geom.optionStarts[2])
+	assert.Equal(t, 2, dialog.enumIndexes[0])
+
+	// Label rows must not select any option.
+	clickBodyLine(t, dialog, start)
+	assert.Equal(t, 2, dialog.enumIndexes[0], "clicking the label must not change the selection")
+}
+
+// TestElicitationDialog_WrappedOptionFocusStaysVisible pins that
+// ensureFocusVisible accounts for wrapped option rows: walking the selection
+// through multi-row options in a small viewport keeps every row of the
+// selected option on screen.
+func TestElicitationDialog_WrappedOptionFocusStaysVisible(t *testing.T) {
+	t.Parallel()
+
+	longMessage := strings.Repeat("Long question line. ", 30)
+	enumValues := make([]any, 0, 8)
+	for i := range 8 {
+		enumValues = append(enumValues, "option "+string(rune('A'+i))+" "+strings.Repeat("verbose descriptive choice text ", 3))
+	}
+	schema := map[string]any{"type": "string", "title": "Pick one", "enum": enumValues}
+
+	dialog := NewElicitationDialog(longMessage, schema, nil).(*ElicitationDialog)
+	_, _ = dialog.Update(tea.WindowSizeMsg{Width: 60, Height: 16})
+	_ = dialog.View()
+
+	require.True(t, dialog.scrollview.NeedsScrollbar(), "long message + wrapped options must require scrolling")
+	require.Greater(t, dialog.fieldGeoms[0].optionHeights[0], 1, "test setup: options must wrap")
+
+	// Walk the selection down through every option; each step must bring the
+	// whole wrapped option into the viewport.
+	for range len(enumValues) - 1 {
+		dialog.moveSelection(1)
+		_ = dialog.View()
+
+		idx := dialog.enumIndexes[0]
+		geom := dialog.fieldGeoms[0]
+		first := dialog.fieldStarts[0] + geom.optionStarts[idx]
+		last := first + geom.optionHeights[idx] - 1
+		offset := dialog.scrollview.ScrollOffset()
+		visEnd := offset + dialog.scrollview.VisibleHeight() - 1
+		assert.GreaterOrEqual(t, first, offset, "option %d first row must be visible", idx)
+		assert.LessOrEqual(t, last, visEnd, "option %d last row must be visible", idx)
+	}
+}
+
+// TestElicitationDialog_ExplicitNewlinesShiftRows pins that explicit newlines
+// in agent-supplied labels are preserved and that click geometry accounts for
+// the extra rows: a boolean's Yes/No rows sit below the full multi-row label
+// instead of being addressed by the old one-row-per-label offsets.
+func TestElicitationDialog_ExplicitNewlinesShiftRows(t *testing.T) {
+	t.Parallel()
+
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"confirm": map[string]any{
+				"type":  "boolean",
+				"title": "Proceed with the change?\n(this cannot be undone)",
+			},
+		},
+	}
+
+	dialog := NewElicitationDialog("Careful:", schema, nil).(*ElicitationDialog)
+	_, _ = dialog.Update(tea.WindowSizeMsg{Width: 80, Height: 30})
+	_ = dialog.View()
+
+	require.Len(t, dialog.fieldGeoms, 1)
+	geom := dialog.fieldGeoms[0]
+	require.Equal(t, 2, geom.labelHeight, "explicit newline must produce a second label row")
+	require.Equal(t, []int{2, 3}, geom.optionStarts, "Yes/No rows must start below the full label")
+
+	start := dialog.fieldStarts[0]
+
+	// Row 2 is "Yes" (the old one-row-per-label math mapped it to "No").
+	clickBodyLine(t, dialog, start+2)
+	assert.True(t, dialog.boolValues[0], "row below the two-line label must be Yes")
+
+	clickBodyLine(t, dialog, start+3)
+	assert.False(t, dialog.boolValues[0], "next row must be No")
+
+	// The label's second row must not toggle anything.
+	clickBodyLine(t, dialog, start+1)
+	assert.False(t, dialog.boolValues[0])
 }
