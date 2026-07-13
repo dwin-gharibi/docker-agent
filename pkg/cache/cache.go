@@ -32,6 +32,7 @@
 package cache
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -41,6 +42,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/docker/docker-agent/pkg/atomicfile"
 )
 
 // Config describes how a Cache should normalize keys and where it should
@@ -322,11 +325,10 @@ func lockFile(path string) (func(), error) {
 
 // writeJSON atomically writes entries to path as pretty-printed JSON.
 //
-// The new content is written to a sibling temp file, fsync'd, and renamed
-// over the destination. POSIX guarantees the rename is atomic, so a
-// concurrent reader sees either the previous content or the new content
-// in full — never a partial write. The parent directory is fsync'd
-// after the rename so the rename itself is durable across an OS crash.
+// atomicfile.Write publishes via a sibling temp file + fsync + rename, so a
+// concurrent reader sees either the previous content or the new content in
+// full — never a partial write. The parent directory is fsync'd after the
+// rename so the rename itself is durable across an OS crash.
 func writeJSON(path string, entries map[string]string) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -338,28 +340,8 @@ func writeJSON(path string, entries map[string]string) error {
 		return fmt.Errorf("marshaling cache: %w", err)
 	}
 
-	tmp, err := os.CreateTemp(dir, ".cache-*.json")
-	if err != nil {
-		return fmt.Errorf("creating temp cache file: %w", err)
-	}
-	tmpName := tmp.Name()
-	// Cleanup on any error path; harmless once Rename has moved the file.
-	defer os.Remove(tmpName)
-
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return fmt.Errorf("writing temp cache file: %w", err)
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return fmt.Errorf("syncing temp cache file: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("closing temp cache file: %w", err)
-	}
-
-	if err := os.Rename(tmpName, path); err != nil {
-		return fmt.Errorf("renaming cache file: %w", err)
+	if err := atomicfile.Write(path, bytes.NewReader(data), 0o600); err != nil {
+		return fmt.Errorf("writing cache file %q: %w", path, err)
 	}
 
 	syncDir(dir)

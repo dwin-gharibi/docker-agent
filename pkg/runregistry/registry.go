@@ -5,6 +5,7 @@
 package runregistry
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/docker/docker-agent/pkg/atomicfile"
 	"github.com/docker/docker-agent/pkg/paths"
 )
 
@@ -87,43 +89,11 @@ func (r *Registry) Write(rec Record) (func(), error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := writeAtomic(path, buf, 0o600); err != nil {
+	if err := atomicfile.Write(path, bytes.NewReader(buf), 0o600); err != nil {
 		return nil, err
 	}
 
 	return func() { _ = os.Remove(path) }, nil
-}
-
-// writeAtomic writes data to path through a sibling temp file + rename so
-// readers never observe a partially-written file.
-func writeAtomic(path string, data []byte, perm os.FileMode) error {
-	dir, name := filepath.Split(path)
-	tmp, err := os.CreateTemp(dir, name+".*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	cleanup := func() { _ = os.Remove(tmpName) }
-
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		cleanup()
-		return err
-	}
-	if err := tmp.Chmod(perm); err != nil {
-		_ = tmp.Close()
-		cleanup()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		cleanup()
-		return err
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		cleanup()
-		return err
-	}
-	return nil
 }
 
 // List returns every record currently registered. Stale records (whose pid is

@@ -2,6 +2,9 @@ package gateway
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -88,4 +91,22 @@ func TestParseServerRef(t *testing.T) {
 	t.Parallel()
 	assert.Equal(t, "github-official", ParseServerRef("docker:github-official"))
 	assert.Equal(t, "github-official", ParseServerRef("github-official"))
+}
+
+func TestSaveToDisk_RoundTrip(t *testing.T) {
+	t.Parallel()
+
+	// The cache directory does not exist yet: saveToDisk must create it.
+	path := filepath.Join(t.TempDir(), "nested", catalogCacheFileName)
+	saveToDisk(path, testCatalog, `W/"abc"`)
+
+	cached := loadFromDisk(path)
+	assert.Equal(t, testCatalog, cached.Catalog)
+	assert.Equal(t, `W/"abc"`, cached.ETag)
+
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(path)
+		require.NoError(t, err)
+		assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+	}
 }

@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/docker/docker-agent/pkg/atomicfile"
 	"github.com/docker/docker-agent/pkg/paths"
 	"github.com/docker/docker-agent/pkg/remote"
 )
@@ -204,42 +206,13 @@ func saveToDisk(path string, catalog Catalog, etag string) {
 	}
 
 	dir := filepath.Dir(path)
-
-	// Write to a temp file and rename so readers never see a partial file.
-	// Try creating the temp file first; only create the directory if needed.
-	tmp, err := os.CreateTemp(dir, ".mcp_catalog_*.tmp")
-	if err != nil {
-		if !os.IsNotExist(err) {
-			slog.Warn("Failed to create MCP catalog temp file", "error", err)
-			return
-		}
-		if mkErr := os.MkdirAll(dir, 0o755); mkErr != nil { //nolint:gosec // shared with other docker MCP gateway processes
-			slog.Warn("Failed to create MCP catalog cache directory", "error", mkErr)
-			return
-		}
-		tmp, err = os.CreateTemp(dir, ".mcp_catalog_*.tmp")
-		if err != nil {
-			slog.Warn("Failed to create MCP catalog temp file", "error", err)
-			return
-		}
-	}
-	tmpName := tmp.Name()
-
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
-		slog.Warn("Failed to write MCP catalog temp file", "error", err)
-		return
-	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmpName)
-		slog.Warn("Failed to close MCP catalog temp file", "error", err)
+	if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // shared with other docker MCP gateway processes
+		slog.Warn("Failed to create MCP catalog cache directory", "error", err)
 		return
 	}
 
-	if err := os.Rename(tmpName, path); err != nil {
-		os.Remove(tmpName)
-		slog.Warn("Failed to rename MCP catalog cache file", "error", err)
+	if err := atomicfile.Write(path, bytes.NewReader(data), 0o600); err != nil {
+		slog.Warn("Failed to write MCP catalog cache file", "error", err)
 	}
 }
 
