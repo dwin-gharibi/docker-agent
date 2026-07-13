@@ -215,12 +215,17 @@ func (m *Manager) Initialize(ctx context.Context) (err error) {
 		}()
 	}
 
-	// Wait for all strategies to complete
+	// Wait for all strategies to complete. On cancellation the buffered
+	// channel lets abandoned strategy goroutines send and exit.
 	var firstError error
 	for range len(m.strategies) {
-		res := <-resultsChan
-		if res.err != nil && firstError == nil {
-			firstError = res.err
+		select {
+		case res := <-resultsChan:
+			if res.err != nil && firstError == nil {
+				firstError = res.err
+			}
+		case <-ctx.Done():
+			return ctx.Err()
 		}
 	}
 
@@ -346,10 +351,16 @@ func (m *Manager) Query(ctx context.Context, query string) (results []database.S
 		}(strategyName, strategyImpl, strategyCfg)
 	}
 
-	// Collect results from all strategies
+	// Collect results from all strategies. On cancellation the buffered
+	// channel lets abandoned strategy goroutines send and exit.
 	strategyResults := make(map[string][]database.SearchResult)
 	for range len(m.strategies) {
-		result := <-resultsChan
+		var result strategyResult
+		select {
+		case result = <-resultsChan:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 
 		if result.err != nil {
 			slog.ErrorContext(ctx, "[RAG Manager] Strategy query failed",
