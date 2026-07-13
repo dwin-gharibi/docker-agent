@@ -199,10 +199,12 @@ func (a *App) Start(ctx context.Context) {
 		// including background-job (run_background_agent) sub-sessions whose
 		// RunStream has no live UI reading its own events channel — so they
 		// always reach the TUI as a dialog. This is the runtime's single,
-		// exactly-once delivery point for elicitation requests (#3584); the
-		// swap-based bridge is a separate best-effort path for remote/SSE
-		// consumers only and never also reaches this sink, so no App-side
-		// dedupe is needed here.
+		// exactly-once delivery point for elicitation requests (#3584). For a
+		// foreground request the swap-based bridge best-effort-sends the same
+		// event on the very RunStream channel Run/Retry/RunWithMessage read
+		// from below; those loops skip ElicitationRequestEvents so this sink
+		// stays the sole route into a.events and a foreground request never
+		// opens two dialogs (#3584 review).
 		a.runtime.OnElicitationRequest(func(event runtime.Event) {
 			a.sendEvent(ctx, event)
 		})
@@ -524,6 +526,13 @@ func (a *App) Run(ctx context.Context, cancel context.CancelFunc, message string
 				continue
 			}
 
+			// Already delivered via the OnElicitationRequest sink (Start); skip
+			// the bridge's secondary copy on this channel to avoid a second
+			// dialog for the same request (#3584).
+			if isElicitationRequestEvent(event) {
+				continue
+			}
+
 			// Clear titleGenerating flag when title is generated (from server for remote runtime)
 			if _, ok := event.(*runtime.SessionTitleEvent); ok {
 				a.titleGenerating.Store(false)
@@ -697,6 +706,21 @@ func (a *App) sendEvent(ctx context.Context, event tea.Msg) {
 	}
 }
 
+// isElicitationRequestEvent reports whether event is an
+// *runtime.ElicitationRequestEvent. Start registers an OnElicitationRequest
+// sink that delivers every elicitation request into a.events synchronously
+// and exactly once (elicitationHandler, #3584). For a foreground request
+// that sink delivery and the best-effort bridge secondary delivery land on
+// the very same RunStream channel these loops read from, so any loop that
+// forwards RunStream events into a.events verbatim must skip this event type
+// to avoid a second dialog for the same request — mirroring the exclusion
+// agent_delegation.go's runCollecting already applies for background
+// sub-sessions sharing the bridge slot.
+func isElicitationRequestEvent(event runtime.Event) bool {
+	_, ok := event.(*runtime.ElicitationRequestEvent)
+	return ok
+}
+
 // acquireStreamGuard locks a.streamGuard (set via WithStreamGuard) and
 // returns the matching release func, or a no-op release when no guard is
 // attached (a bare App with no SessionManager to race against). Callers must
@@ -749,6 +773,13 @@ func (a *App) Retry(ctx context.Context, cancel context.CancelFunc) {
 				if _, ok := event.(*runtime.StreamStoppedEvent); ok {
 					a.sendEvent(context.WithoutCancel(ctx), event)
 				}
+				continue
+			}
+
+			// Already delivered via the OnElicitationRequest sink (Start); skip
+			// the bridge's secondary copy on this channel to avoid a second
+			// dialog for the same request (#3584).
+			if isElicitationRequestEvent(event) {
 				continue
 			}
 
@@ -806,6 +837,13 @@ func (a *App) RunWithMessage(ctx context.Context, cancel context.CancelFunc, msg
 					// context so the stop event still reaches subscribers.
 					a.sendEvent(context.WithoutCancel(ctx), event)
 				}
+				continue
+			}
+
+			// Already delivered via the OnElicitationRequest sink (Start); skip
+			// the bridge's secondary copy on this channel to avoid a second
+			// dialog for the same request (#3584).
+			if isElicitationRequestEvent(event) {
 				continue
 			}
 

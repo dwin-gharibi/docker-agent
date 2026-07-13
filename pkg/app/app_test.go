@@ -917,3 +917,79 @@ func TestApp_CompactLiveSession_ForwardsRuntimeError(t *testing.T) {
 	err := app.CompactLiveSession(t.Context(), "x", "")
 	require.ErrorContains(t, err, "not live")
 }
+
+// composedElicitationMockRuntime reproduces the production wiring that
+// exists once both the OnElicitationRequest sink (registered by App.Start)
+// and a live RunStream (read directly by App.Run/Retry/RunWithMessage) are
+// present for the same foreground request. LocalRuntime.elicitationHandler
+// delivers a request to the sink synchronously and exactly once, then
+// separately best-effort-sends the same event on the elicitation bridge —
+// which, for a foreground stream, is the very channel RunStream returns.
+// This mock drives both paths the same way so tests can assert on the
+// combined result App actually observes (#3584).
+type composedElicitationMockRuntime struct {
+	mockRuntime
+
+	handler func(runtime.Event)
+}
+
+func (m *composedElicitationMockRuntime) OnElicitationRequest(handler func(runtime.Event)) {
+	m.handler = handler
+}
+
+func (m *composedElicitationMockRuntime) RunStream(_ context.Context, sess *session.Session) <-chan runtime.Event {
+	ch := make(chan runtime.Event, 8)
+	go func() {
+		defer close(ch)
+		ch <- runtime.StreamStarted(sess.ID, "mock")
+
+		ev := runtime.ElicitationRequest("need input", "form", nil, "", "eid-1", "", sess.ID, nil, "mock")
+		if m.handler != nil {
+			m.handler(ev) // reliable sink delivery (elicitationHandler, #3584)
+		}
+		ch <- ev // best-effort bridge delivery on the same RunStream channel
+
+		ch <- runtime.StreamStopped(sess.ID, "mock", "normal")
+	}()
+	return ch
+}
+
+// TestReview_ForegroundElicitationIsNotDeliveredTwice is the reviewer's
+// regression probe for the #3584 double-delivery bug: a foreground
+// LocalRuntime elicitation request reached a.events via BOTH the
+// OnElicitationRequest sink (Start) and the RunStream forwarding loop
+// (Run), producing two dialogs for one request. Exactly one
+// ElicitationRequestEvent must reach the app's event stream per request.
+func TestReview_ForegroundElicitationIsNotDeliveredTwice(t *testing.T) {
+	t.Parallel()
+
+	rt := &composedElicitationMockRuntime{}
+	events := make(chan tea.Msg, 16)
+	app := &App{runtime: rt, session: session.New(), events: events}
+
+	app.Start(t.Context())
+	require.NotNil(t, rt.handler, "Start must register the OnElicitationRequest handler")
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	app.Run(ctx, cancel, "hello", nil)
+
+	elicitations := 0
+	deadline := time.After(2 * time.Second)
+drain:
+	for {
+		select {
+		case msg := <-events:
+			if _, ok := msg.(*runtime.ElicitationRequestEvent); ok {
+				elicitations++
+			}
+			if _, ok := msg.(*runtime.StreamStoppedEvent); ok {
+				break drain
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for the stream to stop")
+		}
+	}
+
+	assert.Equal(t, 1, elicitations, "a single foreground elicitation must open exactly one dialog")
+}
