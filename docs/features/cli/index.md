@@ -199,6 +199,24 @@ $ docker agent models --provider openai
 $ docker agent models --format json | jq
 ```
 
+### `docker agent toolsets`
+
+List the built-in toolset types available for use in an agent configuration. Each type can be referenced under `toolsets:` in an agent YAML file. Use this to discover what's available without leaving the terminal.
+
+```bash
+$ docker agent toolsets [flags]
+```
+
+| Flag             | Default | Description                       |
+| ---------------- | ------- | --------------------------------- |
+| `--format <fmt>` | `table` | Output format: `table` or `json`. |
+
+```bash
+# Examples
+$ docker agent toolsets                                # human-readable table
+$ docker agent toolsets --format json | jq             # machine-readable (type, summary, docs URL)
+```
+
 ### `docker agent setup`
 
 Set up a model interactively. Three paths: pick a cloud provider, paste its API key, and choose where to store it (macOS Keychain, `pass`, or the docker agent env file `~/.config/cagent/.env`); check Docker Model Runner and pull a local model (no API key needed); or register a custom OpenAI-compatible provider (endpoint URL, API format, and API key variable) saved to your [user configuration](../../providers/custom/index.md#global-providers-user-configuration) so its models work everywhere via `--model <name>/<model>`. Ends with the exact command to start chatting. Secret values are never printed.
