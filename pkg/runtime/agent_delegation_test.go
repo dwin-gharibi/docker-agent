@@ -299,8 +299,7 @@ func TestSubSessionInheritsPermissions(t *testing.T) {
 	assert.Equal(t, perms.Deny, s.Permissions.Deny)
 	assert.Equal(t, perms.Ask, s.Permissions.Ask)
 
-	// Verify the gap flagged in PR review: even if ToolsApproved is true (yolo flag),
-	// the inherited Deny should correctly override the yolo flag during dispatch.
+	// Even with ToolsApproved set (yolo), an inherited Deny must win during dispatch.
 	s.ToolsApproved = true
 
 	checker := permissions.NewChecker(&latest.PermissionsConfig{
@@ -410,8 +409,7 @@ func TestRunAgent_InheritsParentPermissions(t *testing.T) {
 	agent.WithSubAgents(worker)(root)
 
 	tm := team.New(team.WithAgents(root, worker))
-	rt, err := NewLocalRuntime(
-		t.Context(), tm,
+	rt, err := NewLocalRuntime(t.Context(), tm,
 		WithSessionCompaction(false),
 		WithModelStore(mockModelStore{}),
 	)
@@ -501,11 +499,21 @@ func TestRunAgent_EndToEndPermissions(t *testing.T) {
 		session.WithPermissions(parentPerms),
 	)
 
-	rt.RunAgent(t.Context(), agenttool.RunParams{
+	result := rt.RunAgent(t.Context(), agenttool.RunParams{
 		AgentName:     "worker",
 		Task:          "do something",
 		ParentSession: parentSession,
 	})
+	require.Empty(t, result.ErrMsg, "RunAgent should succeed")
+
+	var childSession *session.Session
+	for _, item := range parentSession.Messages {
+		if item.SubSession != nil {
+			childSession = item.SubSession
+			break
+		}
+	}
+	require.NotNil(t, childSession, "parent must have a sub-session")
 
 	require.False(t, executed, "expected dangerous_tool to NOT be executed because it is denied by inherited permissions")
 }
@@ -521,8 +529,7 @@ func TestTransferTask_PropagatesPermissions(t *testing.T) {
 	agent.WithSubAgents(librarian)(root)
 
 	tm := team.New(team.WithAgents(root, librarian))
-	rt, err := NewLocalRuntime(
-		t.Context(), tm,
+	rt, err := NewLocalRuntime(t.Context(), tm,
 		WithSessionCompaction(false),
 		WithModelStore(mockModelStore{}),
 	)

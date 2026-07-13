@@ -57,7 +57,7 @@ docker-agent dispatches the following hook events:
 | `on_max_iterations`         | When the runtime reaches its configured `max_iterations` limit                    | No         |
 | `on_agent_switch`           | When the runtime moves the active agent (transfer_task, handoff, return)          | No         |
 | `on_session_resume`         | When the user explicitly approves continuation past `max_iterations`              | No         |
-| `on_tool_approval_decision` | After the runtime's approval chain (yolo / permissions / readonly / ask) resolves | No         |
+| `on_tool_approval_decision` | After the runtime's approval chain (permissions / yolo / readonly / ask) resolves | No         |
 | `worktree_create`           | After `docker agent run --worktree` creates a git worktree, before the session     | Yes        |
 
 > [!NOTE]
@@ -713,7 +713,7 @@ At every transfer the runtime ships a snapshot of the previous agent's model end
 
 ### Tool-Approval-Decision: who-approved-what audit trail
 
-`on_tool_approval_decision` fires after the runtime's tool-approval chain (yolo / permissions / readonly / pre_tool_use hooks / interactive prompt) has resolved a verdict for a tool call. `approval_decision` is `allow`, `deny`, or `canceled`; `approval_source` is a stable classifier of which step produced the verdict. Observational only — it gives audit pipelines a single, structured "who approved what" record without re-implementing the chain.
+`on_tool_approval_decision` fires after the runtime's tool-approval chain (permissions / yolo / readonly / pre_tool_use hooks / interactive prompt) has resolved a verdict for a tool call. `approval_decision` is `allow`, `deny`, or `canceled`; `approval_source` is a stable classifier of which step produced the verdict. Observational only — it gives audit pipelines a single, structured "who approved what" record without re-implementing the chain.
 
 ### Worktree-Create: prepare an isolated checkout
 

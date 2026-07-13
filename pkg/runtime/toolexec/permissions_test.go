@@ -27,6 +27,20 @@ func TestDecide_DenyOverridesYolo(t *testing.T) {
 	assert.Equal(t, PermissionDecision{Outcome: OutcomeDeny, Reason: ReasonChecker, Source: "team"}, d)
 }
 
+func TestDecide_YoloAllowsWhenNoCheckerMatches(t *testing.T) {
+	t.Parallel()
+	d := Decide(true, nil, "shell", nil, false)
+	assert.Equal(t, PermissionDecision{Outcome: OutcomeAllow, Reason: ReasonYolo}, d)
+}
+
+func TestDecide_YoloOverridesForceAsk(t *testing.T) {
+	t.Parallel()
+	d := Decide(true, []NamedChecker{
+		{Checker: newChecker(t, nil, []string{"shell"}, nil), Source: "team"},
+	}, "shell", nil, false)
+	assert.Equal(t, PermissionDecision{Outcome: OutcomeAllow, Reason: ReasonYolo}, d)
+}
+
 func TestDecide_DenyFromCheckerWins(t *testing.T) {
 	t.Parallel()
 	d := Decide(false, []NamedChecker{

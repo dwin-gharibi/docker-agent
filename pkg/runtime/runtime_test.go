@@ -2521,7 +2521,7 @@ func TestTransferTaskPersistsSubSessionOnError(t *testing.T) {
 func TestDenyOverridesYoloMode(t *testing.T) {
 	t.Parallel()
 
-	// Test that --yolo flag takes precedence over deny permissions
+	// Test that deny permissions take precedence over the --yolo flag
 	permChecker := permissions.NewChecker(&latest.PermissionsConfig{
 		Deny: []string{"dangerous_tool"},
 	})
@@ -2599,7 +2599,7 @@ func TestYoloMode_OverridesForceAsk(t *testing.T) {
 	require.NoError(t, err)
 
 	sess := session.New(session.WithUserMessage("Test"), session.WithToolsApproved(true))
-	sess.NonInteractive = true
+	sess.NonInteractive = true // fail fast instead of hanging on askUser if this regresses
 	require.True(t, sess.ToolsApproved)
 
 	calls := []tools.ToolCall{{
@@ -2621,7 +2621,7 @@ func TestYoloMode_OverridesForceAsk(t *testing.T) {
 func TestSessionDenyOverridesYoloMode(t *testing.T) {
 	t.Parallel()
 
-	// Test that --yolo flag takes precedence over session-level deny
+	// Test that session-level deny takes precedence over the --yolo flag
 	var executed bool
 	agentTools := []tools.Tool{{
 		Name:       "blocked_tool",
