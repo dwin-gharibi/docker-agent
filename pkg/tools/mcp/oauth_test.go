@@ -927,7 +927,9 @@ func TestOAuthHTTPClientWithHeaders_StripsDefaultPort(t *testing.T) {
 	t.Parallel()
 
 	client := oauthHTTPClientWithHeaders("https://mcp.example.com:443/mcp",
-		func(context.Context) map[string]string { return map[string]string{"X-Grafana-URL": "https://instance.grafana.net/"} }, false)
+		func(context.Context) map[string]string {
+			return map[string]string{"X-Grafana-URL": "https://instance.grafana.net/"}
+		}, false)
 	hst, ok := client.Transport.(*hostScopedHeaderTransport)
 	require.True(t, ok, "expected a host-scoped transport when headers are configured")
 	assert.Equal(t, "mcp.example.com", hst.host,

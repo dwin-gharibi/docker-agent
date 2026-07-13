@@ -248,7 +248,9 @@ func TestOAuthHTTPClientWithHeaders_ScopesHeadersToMCPHost(t *testing.T) {
 	}))
 	defer thirdParty.Close()
 
-	headerFactory := func(context.Context) map[string]string { return map[string]string{"X-Grafana-URL": "https://instance.grafana.net/"} }
+	headerFactory := func(context.Context) map[string]string {
+		return map[string]string{"X-Grafana-URL": "https://instance.grafana.net/"}
+	}
 	client := oauthHTTPClientWithHeaders(mcpServer.URL, headerFactory, true)
 
 	mcpReq, err := http.NewRequestWithContext(t.Context(), http.MethodGet, mcpServer.URL, http.NoBody)

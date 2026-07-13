@@ -112,7 +112,7 @@ func CreateToolSet(ctx context.Context, toolset latest.Toolset, runConfig *confi
 	case toolset.Remote.URL != "":
 		expander := js.NewJsExpander(envProvider)
 		remoteURL := expander.Expand(ctx, toolset.Remote.URL, nil)
-		
+
 		var headerFactory func(context.Context) map[string]string
 		if len(toolset.Remote.Headers) > 0 {
 			headerFactory = func(reqCtx context.Context) map[string]string {
