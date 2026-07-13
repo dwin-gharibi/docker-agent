@@ -35,6 +35,7 @@ func TestLayoutSettingsFromConfig(t *testing.T) {
 	got := layoutSettingsFromConfig(userconfig.LayoutSettings{
 		SidebarPosition: "bottom",
 		SectionSpacing:  "compact",
+		HideSessionPath: true,
 		HideUsage:       true,
 		HideAgents:      true,
 		HideTools:       true,
@@ -43,6 +44,7 @@ func TestLayoutSettingsFromConfig(t *testing.T) {
 	assert.Equal(t, messages.LayoutSettings{
 		SidebarPosition: messages.SidebarBottom,
 		SectionSpacing:  messages.SpacingCompact,
+		HideSessionPath: true,
 		HideUsage:       true,
 		HideAgents:      true,
 		HideTools:       true,
@@ -56,6 +58,7 @@ func TestSaveSettingsToUserConfig_RoundTrip(t *testing.T) {
 	saved := messages.LayoutSettings{
 		SidebarPosition: messages.SidebarLeft,
 		SectionSpacing:  messages.SpacingRelaxed,
+		HideSessionPath: true,
 		HideTools:       true,
 	}
 	require.NoError(t, saveSettingsToUserConfig(saved, messages.SendModeQueue))
@@ -97,4 +100,22 @@ func TestSaveSettingsToUserConfig_OmitsDefaultPosition(t *testing.T) {
 	assert.Empty(t, layout.SidebarPosition, "the default position is not written out")
 	assert.Empty(t, layout.SectionSpacing, "the default spacing is not written out")
 	assert.True(t, layout.HideUsage)
+}
+
+func TestSaveSettingsToUserConfig_HideSessionPathKeepsEntry(t *testing.T) {
+	setupSettingsConfigTest(t)
+
+	saved := messages.LayoutSettings{
+		SidebarPosition: messages.SidebarRight,
+		SectionSpacing:  messages.SpacingNormal,
+		HideSessionPath: true,
+	}
+	require.NoError(t, saveSettingsToUserConfig(saved, messages.SendModeSteer))
+
+	cfg, err := userconfig.Load()
+	require.NoError(t, err)
+	layout := cfg.GetSettings().Layout
+	require.NotNil(t, layout, "hide_session_path alone must keep the layout entry")
+	assert.True(t, layout.HideSessionPath)
+	assert.Equal(t, saved, layoutSettingsFromConfig(userconfig.Get().GetLayout()))
 }

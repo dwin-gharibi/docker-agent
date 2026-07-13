@@ -72,6 +72,7 @@ func (s SectionSpacing) BlankLines() int {
 type LayoutSettings struct {
 	SidebarPosition SidebarPosition
 	SectionSpacing  SectionSpacing
+	HideSessionPath bool
 	HideUsage       bool
 	HideAgents      bool
 	HideTools       bool

@@ -407,10 +407,11 @@ func WithSendMode(mode msgtypes.SendMode) PageOption {
 // sectionVisibility maps layout settings to the sidebar's visibility config.
 func sectionVisibility(settings msgtypes.LayoutSettings) sidebar.SectionVisibility {
 	return sidebar.SectionVisibility{
-		HideUsage:  settings.HideUsage,
-		HideAgents: settings.HideAgents,
-		HideTools:  settings.HideTools,
-		HideTodos:  settings.HideTodos,
+		HideSessionPath: settings.HideSessionPath,
+		HideUsage:       settings.HideUsage,
+		HideAgents:      settings.HideAgents,
+		HideTools:       settings.HideTools,
+		HideTodos:       settings.HideTodos,
 	}
 }
 

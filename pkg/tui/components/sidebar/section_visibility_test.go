@@ -63,6 +63,30 @@ func TestRenderSections_HideTools(t *testing.T) {
 	assert.Contains(t, out, "Token Usage")
 }
 
+func TestRenderSections_HideSessionPath(t *testing.T) {
+	t.Parallel()
+
+	s := newVisibilityTestSidebar(t)
+	s.workingDirectory = "~/projects/myapp"
+	s.gitBranchName = "main"
+
+	out := renderedSections(s)
+	require.Contains(t, out, "~/projects/myapp (main)")
+	visibleLines := len(s.renderSections(40))
+
+	s.SetSectionVisibility(SectionVisibility{HideSessionPath: true})
+	out = renderedSections(s)
+
+	assert.NotContains(t, out, "~/projects/myapp")
+	assert.NotContains(t, out, "(main)", "the branch suffix goes with the path")
+	assert.Contains(t, out, "Session", "the session tab and title stay visible")
+	assert.Contains(t, out, "Token Usage", "other sections stay visible")
+
+	hiddenLines := len(s.renderSections(40))
+	assert.Equal(t, visibleLines-2, hiddenLines,
+		"hiding the path drops its line and separator without leaving a blank row")
+}
+
 func TestRenderSections_HideAgentsClearsClickZones(t *testing.T) {
 	t.Parallel()
 
@@ -89,6 +113,45 @@ func TestCollapsedViewModel_HideUsage(t *testing.T) {
 	s.SetSectionVisibility(SectionVisibility{HideUsage: true})
 	vm = s.computeCollapsedViewModel(60)
 	assert.Empty(t, vm.UsageSummary, "collapsed band omits usage when hidden")
+}
+
+func TestCollapsedViewModel_HideSessionPath(t *testing.T) {
+	t.Parallel()
+
+	s := newVisibilityTestSidebar(t)
+	s.workingDirectory = "~/projects/myapp"
+
+	vm := s.computeCollapsedViewModel(60)
+	require.NotEmpty(t, vm.WorkingDir)
+
+	s.SetSectionVisibility(SectionVisibility{HideSessionPath: true})
+	vm = s.computeCollapsedViewModel(60)
+	assert.Empty(t, vm.WorkingDir, "collapsed band omits the path when hidden")
+	require.NotEmpty(t, vm.UsageSummary)
+
+	rendered := ansi.Strip(RenderCollapsedView(vm))
+	assert.NotContains(t, rendered, "myapp")
+	assert.Contains(t, rendered, ansi.Strip(vm.UsageSummary), "usage keeps its band row")
+}
+
+func TestCollapsedView_HiddenPathLeavesNoBlankRow(t *testing.T) {
+	t.Parallel()
+
+	s := newVisibilityTestSidebar(t)
+	s.workingDirectory = "~/projects/myapp"
+	s.gitBranchName = ""
+
+	withPath := s.computeCollapsedViewModel(60).LineCount()
+
+	s.SetSectionVisibility(SectionVisibility{HideSessionPath: true, HideUsage: true})
+	vm := s.computeCollapsedViewModel(60)
+	assert.Equal(t, withPath-1, vm.LineCount(), "the path+usage row disappears entirely")
+
+	lines := strings.Split(RenderCollapsedView(vm), "\n")
+	assert.Len(t, lines, vm.LineCount()-1, "LineCount includes the divider, the render does not")
+	for _, line := range lines {
+		assert.NotEmpty(t, strings.TrimSpace(ansi.Strip(line)), "no blank metadata row may remain")
+	}
 }
 
 func TestCollapsedInfoLine_ShowsAgentsToolsTodos(t *testing.T) {

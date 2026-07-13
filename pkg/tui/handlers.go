@@ -919,6 +919,7 @@ func layoutSettingsFromConfig(l userconfig.LayoutSettings) messages.LayoutSettin
 	return messages.LayoutSettings{
 		SidebarPosition: messages.ParseSidebarPosition(l.SidebarPosition),
 		SectionSpacing:  messages.ParseSectionSpacing(l.SectionSpacing),
+		HideSessionPath: l.HideSessionPath,
 		HideUsage:       l.HideUsage,
 		HideAgents:      l.HideAgents,
 		HideTools:       l.HideTools,
@@ -956,6 +957,7 @@ func saveSettingsToUserConfig(s messages.LayoutSettings, mode messages.SendMode)
 		cfg.Settings.Layout = &userconfig.LayoutSettings{
 			SidebarPosition: position,
 			SectionSpacing:  spacing,
+			HideSessionPath: s.HideSessionPath,
 			HideUsage:       s.HideUsage,
 			HideAgents:      s.HideAgents,
 			HideTools:       s.HideTools,

@@ -382,7 +382,7 @@ The **Visuals** tab customizes the layout. It shows a live schematic preview of 
 
 - **Sidebar position**: `Right` (default), `Left`, `Top`, or `Bottom`. Left/right keep the full vertical sidebar next to the chat; top/bottom render it as a compact horizontal band above or below the chat (session title, working directory, usage, plus a one-line summary of the current agent, tools, and todos).
 - **Section spacing**: `Compact`, `Normal` (default), or `Relaxed`, the number of blank lines between the sidebar sections (1, 2, or 3).
-- **Sidebar sections**: toggle the visibility of the **Token usage**, **Agents**, **Tools**, and **Todos** sections. The session block (title and working directory) is always shown.
+- **Sidebar sections**: toggle the visibility of the **Session path** (the working directory line, including its git branch) and the **Token usage**, **Agents**, **Tools**, and **Todos** sections. The session title is always shown.
 
 The **Behavior** tab controls how messages are handled:
 
@@ -397,6 +397,7 @@ settings:
   layout:
     sidebar_position: left # right (default), left, top, bottom
     section_spacing: compact # normal (default), compact, relaxed
+    hide_session_path: false
     hide_usage: true
     hide_agents: false
     hide_tools: false

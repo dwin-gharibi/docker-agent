@@ -45,10 +45,11 @@ const (
 // SectionVisibility controls which optional sidebar sections are rendered.
 // The zero value shows everything.
 type SectionVisibility struct {
-	HideUsage  bool
-	HideAgents bool
-	HideTools  bool
-	HideTodos  bool
+	HideSessionPath bool
+	HideUsage       bool
+	HideAgents      bool
+	HideTools       bool
+	HideTodos       bool
 }
 
 // Model represents a sidebar component
@@ -763,10 +764,11 @@ func (m *model) HandleClickType(x, y int) (ClickResult, string) {
 		}
 
 		// In collapsed mode, working dir line follows the title section.
+		// A hidden session path renders no line and must not keep a hit target.
 		vm := m.computeCollapsedViewModel(m.contentWidth(false))
 		wdStartY := vm.titleSectionLines()
 		wdLines := linesNeeded(lipgloss.Width(vm.WorkingDir), vm.ContentWidth)
-		if m.workingDirectory != "" && y >= wdStartY && y < wdStartY+wdLines {
+		if m.workingDirectory != "" && !m.sectionVisibility.HideSessionPath && y >= wdStartY && y < wdStartY+wdLines {
 			return ClickWorkingDir, ""
 		}
 
@@ -790,8 +792,9 @@ func (m *model) HandleClickType(x, y int) (ClickResult, string) {
 		}
 	}
 
-	// Working dir is at: verticalStarY + titleLines (title) + 1 (empty separator)
-	if m.workingDirectory != "" && contentY == verticalStarY+titleLines+1 {
+	// Working dir is at: verticalStarY + titleLines (title) + 1 (empty separator).
+	// A hidden session path renders no line and must not keep a hit target.
+	if m.workingDirectory != "" && !m.sectionVisibility.HideSessionPath && contentY == verticalStarY+titleLines+1 {
 		return ClickWorkingDir, ""
 	}
 
@@ -1016,9 +1019,10 @@ func (m *model) workingDirWithBranch() string {
 }
 
 // workingDirLine renders the working directory with the sidebar's accent
-// block, shared by the vertical Session tab and the collapsed band.
+// block, shared by the vertical Session tab and the collapsed band. Empty
+// when the session path is hidden via section visibility.
 func (m *model) workingDirLine() string {
-	if m.workingDirectory == "" {
+	if m.workingDirectory == "" || m.sectionVisibility.HideSessionPath {
 		return ""
 	}
 	return styles.TabAccentStyle.Render("█") + styles.TabPrimaryStyle.Render(" "+m.workingDirWithBranch())
@@ -1740,13 +1744,12 @@ func (m *model) sessionInfo(contentWidth int) string {
 		titleLine = star + m.sessionTitle
 	}
 
-	lines := []string{
-		titleLine,
-		"",
-	}
+	lines := []string{titleLine}
 
-	if m.workingDirectory != "" {
-		lines = append(lines, m.workingDirLine())
+	// The separator only exists for the path line, so a hidden path leaves
+	// no blank row behind.
+	if wd := m.workingDirLine(); wd != "" {
+		lines = append(lines, "", wd)
 	}
 
 	return m.renderTab("Session", strings.Join(lines, "\n"), contentWidth)

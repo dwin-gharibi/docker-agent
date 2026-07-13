@@ -44,6 +44,9 @@ func TestSettingsDialogNavigation(t *testing.T) {
 	require.Equal(t, rowSpacing, d.selected[tabVisuals])
 
 	d.Update(down)
+	require.Equal(t, rowSessionPath, d.selected[tabVisuals])
+
+	d.Update(down)
 	require.Equal(t, rowUsage, d.selected[tabVisuals])
 
 	for range 10 {
@@ -150,6 +153,23 @@ func TestSettingsDialogTogglesSection(t *testing.T) {
 
 	d.Update(tea.KeyPressMsg{Code: tea.KeySpace})
 	assert.False(t, d.current.HideUsage, "space must toggle back")
+}
+
+func TestSettingsDialogTogglesSessionPath(t *testing.T) {
+	t.Parallel()
+
+	d := newTestSettingsDialog(t, messages.LayoutSettings{})
+	d.selected[tabVisuals] = rowSessionPath
+
+	_, cmd := d.Update(tea.KeyPressMsg{Code: tea.KeySpace})
+	msgs := collectMsgs(cmd)
+	require.Len(t, msgs, 1)
+	preview, ok := msgs[0].(messages.PreviewLayoutMsg)
+	require.True(t, ok, "toggling the session path must emit a live preview")
+	assert.True(t, preview.Layout.HideSessionPath, "space must hide the session path")
+
+	d.Update(tea.KeyPressMsg{Code: tea.KeySpace})
+	assert.False(t, d.current.HideSessionPath, "space must toggle back")
 }
 
 func TestSettingsDialogTogglesSendModeWithoutPreview(t *testing.T) {
@@ -259,6 +279,7 @@ func TestSettingsDialogViewShowsVisualsRows(t *testing.T) {
 	assert.Contains(t, view, "Right")
 	assert.Contains(t, view, "Section spacing")
 	assert.Contains(t, view, "Normal")
+	assert.Contains(t, view, "Session path")
 	assert.Contains(t, view, "Token usage")
 	assert.Contains(t, view, "Agents")
 	assert.Contains(t, view, "Tools")
@@ -291,14 +312,17 @@ func TestRenderLayoutPreviewReflectsSections(t *testing.T) {
 	full := ansi.Strip(renderLayoutPreview(messages.LayoutSettings{}, previewMaxWidth))
 	assert.Contains(t, full, "chat")
 	assert.Contains(t, full, "input")
-	assert.Contains(t, full, "session")
+	assert.Contains(t, full, "session/path", "a visible session path shows in the session label")
 	assert.Contains(t, full, "usage")
 	assert.Contains(t, full, "todos")
 
 	trimmed := ansi.Strip(renderLayoutPreview(messages.LayoutSettings{
-		HideUsage: true,
-		HideTodos: true,
+		HideSessionPath: true,
+		HideUsage:       true,
+		HideTodos:       true,
 	}, previewMaxWidth))
+	assert.NotContains(t, trimmed, "session/path", "a hidden session path shortens the session label")
+	assert.Contains(t, trimmed, "session")
 	assert.NotContains(t, trimmed, "usage")
 	assert.NotContains(t, trimmed, "todos")
 	assert.Contains(t, trimmed, "agents")
@@ -313,9 +337,16 @@ func TestRenderLayoutPreviewPositions(t *testing.T) {
 		assert.Contains(t, preview, "session", "position %s", position)
 	}
 
-	// Band layouts list the sections on a single line.
+	// Band layouts list the sections on a single line; the full label is
+	// wider than the band and gets truncated at its tail.
 	band := ansi.Strip(renderLayoutPreview(messages.LayoutSettings{SidebarPosition: messages.SidebarTop}, previewMaxWidth))
-	assert.Contains(t, band, "session · usage · agents · tools · todos")
+	assert.Contains(t, band, "session/path · usage · agents · tools")
+
+	hidden := ansi.Strip(renderLayoutPreview(messages.LayoutSettings{
+		SidebarPosition: messages.SidebarTop,
+		HideSessionPath: true,
+	}, previewMaxWidth))
+	assert.Contains(t, hidden, "session · usage · agents · tools · todos")
 
 	// Narrow widths truncate the band list instead of overflowing.
 	narrow := ansi.Strip(renderLayoutPreview(messages.LayoutSettings{SidebarPosition: messages.SidebarTop}, previewMinWidth))

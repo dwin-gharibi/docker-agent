@@ -38,6 +38,7 @@ var settingsTabLabels = [tabCount]string{"Visuals", "Behavior"}
 const (
 	rowPosition = iota
 	rowSpacing
+	rowSessionPath
 	rowUsage
 	rowAgents
 	rowTools
@@ -224,6 +225,8 @@ func (d *settingsDialog) changeValue(delta int) tea.Cmd {
 		d.current.SidebarPosition = cycleValue(sidebarPositions, d.current.SidebarPosition, delta)
 	case rowSpacing:
 		d.current.SectionSpacing = cycleValue(sectionSpacings, d.current.SectionSpacing, delta)
+	case rowSessionPath:
+		d.current.HideSessionPath = !d.current.HideSessionPath
 	case rowUsage:
 		d.current.HideUsage = !d.current.HideUsage
 	case rowAgents:
@@ -335,6 +338,7 @@ func (d *settingsDialog) renderVisualsTab(content *Content, inner int) {
 		AddContent(d.renderSelectorRow(rowSpacing, "Section spacing", spacingLabels[d.current.SectionSpacing], inner)).
 		AddSpace().
 		AddContent(styles.MutedStyle.Render("Sidebar sections")).
+		AddContent(d.renderToggleRow(rowSessionPath, "Session path", d.current.HideSessionPath)).
 		AddContent(d.renderToggleRow(rowUsage, "Token usage", d.current.HideUsage)).
 		AddContent(d.renderToggleRow(rowAgents, "Agents", d.current.HideAgents)).
 		AddContent(d.renderToggleRow(rowTools, "Tools", d.current.HideTools)).
@@ -409,9 +413,15 @@ func (d *settingsDialog) renderToggleRow(row int, label string, hidden bool) str
 }
 
 // visibleSectionLabels returns the sidebar section labels that are visible
-// under the given settings. The session block is always shown.
+// under the given settings. The session block is always shown; its label
+// reads "session/path" while the session path is visible and "session" once
+// it is hidden.
 func visibleSectionLabels(s messages.LayoutSettings) []string {
-	labels := []string{"session"}
+	sessionLabel := "session/path"
+	if s.HideSessionPath {
+		sessionLabel = "session"
+	}
+	labels := []string{sessionLabel}
 	if !s.HideUsage {
 		labels = append(labels, "usage")
 	}

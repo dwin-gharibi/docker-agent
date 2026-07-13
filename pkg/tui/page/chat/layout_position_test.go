@@ -152,6 +152,27 @@ func TestSetLayoutSettingsForwardsVisibilityToSidebar(t *testing.T) {
 	assert.True(t, sl.sidebarOnLeft)
 }
 
+func TestSectionVisibilityMapsAllFields(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, sidebar.SectionVisibility{}, sectionVisibility(msgtypes.LayoutSettings{}),
+		"the default layout hides nothing")
+
+	assert.Equal(t, sidebar.SectionVisibility{
+		HideSessionPath: true,
+		HideUsage:       true,
+		HideAgents:      true,
+		HideTools:       true,
+		HideTodos:       true,
+	}, sectionVisibility(msgtypes.LayoutSettings{
+		HideSessionPath: true,
+		HideUsage:       true,
+		HideAgents:      true,
+		HideTools:       true,
+		HideTodos:       true,
+	}))
+}
+
 func TestSetLayoutSettingsBeforeSizingReturnsNil(t *testing.T) {
 	t.Parallel()
 
