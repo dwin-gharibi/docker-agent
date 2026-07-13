@@ -1572,8 +1572,13 @@ func (r *LocalRuntime) EmitStartupInfo(ctx context.Context, sess *session.Sessio
 		// parent agent's state: this event carries the parent session_id,
 		// and sub-agents emit their own token_usage events with their own
 		// session_id during live streaming.
-		for i := range slices.Backward(sess.Messages) {
-			item := &sess.Messages[i]
+		//
+		// MessagesSnapshot takes sess.mu so this cannot race a concurrent
+		// AddMessage/ApplyCompaction (e.g. a live HTTP AddMessage arriving
+		// while startup info is being emitted for a restored session).
+		items := sess.MessagesSnapshot()
+		for i := range slices.Backward(items) {
+			item := &items[i]
 			if !item.IsMessage() || item.Message.Message.Role != chat.MessageRoleAssistant {
 				continue
 			}

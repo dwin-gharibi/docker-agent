@@ -251,8 +251,8 @@ func RunLLM(ctx context.Context, args LLMArgs) (result *Result, err error) {
 // a hook supplies its own summary so the kept-tail policy stays
 // consistent across the two strategies.
 func ComputeFirstKeptEntry(sess *session.Session, contextLimit int64) int {
-	messages, sessIndices := gatherCompactionInput(sess)
-	return firstKeptSessionIndex(sess, sessIndices, compaction.SplitIndexForKeep(messages, keepTokenBudget(contextLimit)))
+	messages, sessIndices, itemCount := gatherCompactionInput(sess)
+	return firstKeptSessionIndex(sessIndices, itemCount, compaction.SplitIndexForKeep(messages, keepTokenBudget(contextLimit)))
 }
 
 // gatherCompactionInput is a thin wrapper around
@@ -272,13 +272,19 @@ func ComputeFirstKeptEntry(sess *session.Session, contextLimit int64) int {
 // past the prior summary, and tracking origin indices in sess.Messages
 // — lives on Session itself so it can run under sess.mu.RLock and stay
 // race-safe against concurrent AddMessage / ApplyCompaction calls.
-func gatherCompactionInput(sess *session.Session) ([]chat.Message, []int) {
-	messages, sessIndices := sess.CompactionInput()
+//
+// The returned itemCount is the SAME snapshot's total item count
+// (session.Session.CompactionInput's third return value); callers must use
+// it — not a fresh sess.ItemCount() call — for any out-of-range sentinel
+// derived from messages/sessIndices, or the boundary can describe a later
+// session length than the snapshot it is supposed to describe (#3590).
+func gatherCompactionInput(sess *session.Session) (messages []chat.Message, sessIndices []int, itemCount int) {
+	messages, sessIndices, itemCount = sess.CompactionInput()
 	for i := range messages {
 		messages[i].Cost = 0
 		messages[i].CacheControl = false
 	}
-	return messages, sessIndices
+	return messages, sessIndices, itemCount
 }
 
 // extractMessages returns the messages to send to the compaction
@@ -297,10 +303,10 @@ func gatherCompactionInput(sess *session.Session) ([]chat.Message, []int) {
 // (contextLimit − summary budget − prompt-overhead), older messages
 // are dropped from the front of the to-compact list to make room.
 func extractMessages(sess *session.Session, _ *agent.Agent, contextLimit int64, additionalPrompt string) ([]chat.Message, int) {
-	messages, sessIndices := gatherCompactionInput(sess)
+	messages, sessIndices, itemCount := gatherCompactionInput(sess)
 
 	splitIdx := compaction.SplitIndexForKeep(messages, keepTokenBudget(contextLimit))
-	firstKeptEntry := firstKeptSessionIndex(sess, sessIndices, splitIdx)
+	firstKeptEntry := firstKeptSessionIndex(sessIndices, itemCount, splitIdx)
 	messages = messages[:splitIdx]
 
 	systemPromptMessage := chat.Message{
@@ -337,13 +343,19 @@ func extractMessages(sess *session.Session, _ *agent.Agent, contextLimit int64, 
 // firstKeptSessionIndex translates a split index produced against the
 // chat-message list returned by [gatherCompactionInput] back to an
 // index in sess.Messages, suitable for the new summary's
-// FirstKeptEntry. Out-of-range splits map to len(sess.Messages),
-// matching the "compact everything; keep nothing of the tail"
-// sentinel that session.buildSessionSummaryMessages handles by
-// skipping the conversation loop.
-func firstKeptSessionIndex(sess *session.Session, sessIndices []int, splitIdx int) int {
+// FirstKeptEntry. Out-of-range splits map to itemCount, matching the
+// "compact everything; keep nothing of the tail" sentinel that
+// session.buildSessionSummaryMessages handles by skipping the
+// conversation loop.
+//
+// itemCount MUST come from the same [session.Session.CompactionInput]
+// snapshot as sessIndices (i.e. via gatherCompactionInput), not a fresh
+// sess.ItemCount() call: the live session can already hold an append
+// that landed after the snapshot was taken, which would describe a
+// boundary the snapshot never had (#3590).
+func firstKeptSessionIndex(sessIndices []int, itemCount, splitIdx int) int {
 	if splitIdx >= len(sessIndices) {
-		return len(sess.Messages)
+		return itemCount
 	}
 	return sessIndices[splitIdx]
 }

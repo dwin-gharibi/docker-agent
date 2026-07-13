@@ -860,9 +860,10 @@ func TestCompactionInput(t *testing.T) {
 	t.Run("empty session returns empty", func(t *testing.T) {
 		t.Parallel()
 		sess := New()
-		messages, sessIndices := sess.CompactionInput()
+		messages, sessIndices, itemCount := sess.CompactionInput()
 		assert.Empty(t, messages)
 		assert.Empty(t, sessIndices)
+		assert.Zero(t, itemCount)
 	})
 
 	t.Run("system messages on the session are filtered out", func(t *testing.T) {
@@ -875,12 +876,13 @@ func TestCompactionInput(t *testing.T) {
 			newMsg(chat.MessageRoleUser, "u2"),
 		}))
 
-		messages, sessIndices := sess.CompactionInput()
+		messages, sessIndices, itemCount := sess.CompactionInput()
 		require.Len(t, messages, 3)
 		assert.Equal(t, []int{1, 2, 4}, sessIndices)
 		assert.Equal(t, "u1", messages[0].Content)
 		assert.Equal(t, "a1", messages[1].Content)
 		assert.Equal(t, "u2", messages[2].Content)
+		assert.Equal(t, len(sess.Messages), itemCount)
 	})
 
 	t.Run("prior summary surfaces synthetic message and starts at FirstKeptEntry", func(t *testing.T) {
@@ -896,7 +898,7 @@ func TestCompactionInput(t *testing.T) {
 		}
 		sess := New(WithMessages(items))
 
-		messages, sessIndices := sess.CompactionInput()
+		messages, sessIndices, itemCount := sess.CompactionInput()
 
 		require.Len(t, messages, 5)
 		assert.Equal(t, chat.MessageRoleUser, messages[0].Role)
@@ -905,6 +907,7 @@ func TestCompactionInput(t *testing.T) {
 		// kept-tail then resumes at the prior FirstKeptEntry, skipping
 		// the (non-message) summary item itself.
 		assert.Equal(t, []int{4, 2, 3, 5, 6}, sessIndices)
+		assert.Equal(t, len(items), itemCount)
 	})
 
 	t.Run("prior summary without FirstKeptEntry starts strictly after the summary", func(t *testing.T) {
@@ -918,10 +921,11 @@ func TestCompactionInput(t *testing.T) {
 		}
 		sess := New(WithMessages(items))
 
-		messages, sessIndices := sess.CompactionInput()
+		messages, sessIndices, itemCount := sess.CompactionInput()
 
 		require.Len(t, messages, 3)
 		assert.Equal(t, []int{2, 3, 4}, sessIndices)
+		assert.Equal(t, len(items), itemCount)
 	})
 
 	t.Run("returned messages are independent copies safe to mutate", func(t *testing.T) {
@@ -935,7 +939,7 @@ func TestCompactionInput(t *testing.T) {
 			}}),
 		}))
 
-		messages, _ := sess.CompactionInput()
+		messages, _, _ := sess.CompactionInput()
 		require.Len(t, messages, 1)
 
 		messages[0].Cost = 0

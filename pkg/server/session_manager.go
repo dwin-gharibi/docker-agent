@@ -217,16 +217,29 @@ func (sm *SessionManager) StreamEvents(ctx context.Context, sessionID string, si
 // The internal cancellation signal is fired by [SessionManager.DeleteSession];
 // SSE streams and other lifetime-bound consumers use it (via
 // [SessionManager.StreamEvents]) to terminate when the session is detached.
-func (sm *SessionManager) AttachRuntime(ctx context.Context, sessionID string, rt runtime.Runtime, sess *session.Session) {
+//
+// It returns the same lock RunSession and AddMessage/UpdateMessage already
+// use (via TryLock) to detect and reject concurrent mutations while a stream
+// is active. Callers that stream the attached runtime directly — bypassing
+// RunSession entirely, e.g. the TUI's App.Run/Retry/RunWithMessage calling
+// rt.RunStream itself — previously left that lock unheld for the whole
+// attached/TUI stream, so a concurrent AddMessage/UpdateMessage or
+// RunSession wrongly observed the session as idle instead of 409ing (#3590).
+// The caller must hold this lock for the duration of every direct RunStream
+// call (see the pkg/app WithStreamGuard option) so the busy check sees
+// attached streams too.
+func (sm *SessionManager) AttachRuntime(ctx context.Context, sessionID string, rt runtime.Runtime, sess *session.Session) sync.Locker {
 	ctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	sm.runtimeSessions.Store(sessionID, &activeRuntimes{
+	rs := &activeRuntimes{
 		runtime: rt,
 		done:    ctx.Done(),
 		cancel:  cancel,
 		session: sess,
-	})
+	}
+	sm.runtimeSessions.Store(sessionID, rs)
 	sm.registerRecallHandler(sessionID, rt)
 	sm.markReady()
+	return &rs.streaming
 }
 
 // GetSession retrieves a session by ID.
@@ -458,12 +471,18 @@ func (sm *SessionManager) ForkSession(ctx context.Context, sessionID string, use
 // userMessageOrdinalToItemIndex maps a 0-based user-message ordinal
 // into an index in the parent's Session.Messages Item slice. Returns
 // ErrForkOutOfRange or ErrForkInSubSession on invalid input.
+//
+// It walks a MessagesSnapshot rather than s.Messages directly: s is the
+// live, shared session pointer returned by InMemorySessionStore.GetSession,
+// which a concurrent HTTP AddMessage or the runtime's own compaction can
+// still be mutating while ForkSession runs.
 func userMessageOrdinalToItemIndex(s *session.Session, ordinal int) (int, error) {
 	if ordinal < 0 {
 		return 0, fmt.Errorf("%w: %d", ErrForkOutOfRange, ordinal)
 	}
+	items := s.MessagesSnapshot()
 	seen := 0
-	for i, item := range s.Messages {
+	for i, item := range items {
 		switch {
 		case item.IsMessage():
 			// Mirror GetAllMessages: system messages don't count.
@@ -1261,9 +1280,30 @@ func (sm *SessionManager) GetAgentToolCount(ctx context.Context, agentFilename, 
 }
 
 // AddMessage adds a message to a session.
+//
+// It rejects the mutation with ErrSessionBusy while the session has an
+// active RunStream: session.Session.mu makes the append itself race-free,
+// but a message added mid-stream (mid-tool-call in particular) can still
+// desynchronize the in-flight turn from what the model/tools expect, so we
+// also reject at the API boundary. The busy check TryLocks the same
+// activeRuntimes.streaming lock RunSession/AttachRuntime use, and — unlike
+// a bare check-then-release probe — HOLDS it across the entire mutation
+// below, releasing only via defer once AddMessage returns. sm.mux alone
+// cannot close this gap: an attached runtime's stream (see AttachRuntime,
+// pkg/app's WithStreamGuard) only ever acquires streaming, never sm.mux, so
+// a stream that starts the instant after the TryLock check but before the
+// store write completes would otherwise interleave with it (#3590).
 func (sm *SessionManager) AddMessage(ctx context.Context, sessionID string, msg *session.Message) error {
 	sm.mux.Lock()
 	defer sm.mux.Unlock()
+
+	rt, ok := sm.runtimeSessions.Load(sessionID)
+	if ok {
+		if !rt.streaming.TryLock() {
+			return ErrSessionBusy
+		}
+		defer rt.streaming.Unlock()
+	}
 
 	_, err := sm.sessionStore.AddMessage(ctx, sessionID, msg)
 	if err != nil {
@@ -1271,7 +1311,7 @@ func (sm *SessionManager) AddMessage(ctx context.Context, sessionID string, msg 
 	}
 
 	// If the session is actively running, update the in-memory session
-	if rt, ok := sm.runtimeSessions.Load(sessionID); ok && rt.session != nil {
+	if ok && rt.session != nil {
 		rt.session.AddMessage(msg)
 	}
 
@@ -1279,9 +1319,20 @@ func (sm *SessionManager) AddMessage(ctx context.Context, sessionID string, msg 
 }
 
 // UpdateMessage updates a message in a session.
+//
+// Rejected with ErrSessionBusy while the session has an active RunStream;
+// see AddMessage's comment for why the busy check holds streaming across
+// the whole mutation instead of releasing it right after the check.
 func (sm *SessionManager) UpdateMessage(ctx context.Context, sessionID, msgID string, msg *session.Message) error {
 	sm.mux.Lock()
 	defer sm.mux.Unlock()
+
+	if rt, ok := sm.runtimeSessions.Load(sessionID); ok {
+		if !rt.streaming.TryLock() {
+			return ErrSessionBusy
+		}
+		defer rt.streaming.Unlock()
+	}
 
 	// Parse msgID as int64
 	var msgPos int64

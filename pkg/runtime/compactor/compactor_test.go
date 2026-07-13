@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -284,15 +285,15 @@ func TestGatherCompactionInput_NoPriorSummary(t *testing.T) {
 		session.NewMessageItem(&session.Message{Message: chat.Message{Role: chat.MessageRoleUser, Content: "u2"}}),
 	}))
 
-	messages, sessIndices := gatherCompactionInput(sess)
+	messages, sessIndices, itemCount := gatherCompactionInput(sess)
 	require.Len(t, messages, 3)
 	assert.Equal(t, []int{1, 2, 4}, sessIndices)
 
-	assert.Equal(t, 1, firstKeptSessionIndex(sess, sessIndices, 0))
-	assert.Equal(t, 2, firstKeptSessionIndex(sess, sessIndices, 1))
-	assert.Equal(t, 4, firstKeptSessionIndex(sess, sessIndices, 2))
+	assert.Equal(t, 1, firstKeptSessionIndex(sessIndices, itemCount, 0))
+	assert.Equal(t, 2, firstKeptSessionIndex(sessIndices, itemCount, 1))
+	assert.Equal(t, 4, firstKeptSessionIndex(sessIndices, itemCount, 2))
 	// Past the end: returns len(sess.Messages) (compact-everything sentinel).
-	assert.Equal(t, len(sess.Messages), firstKeptSessionIndex(sess, sessIndices, 3))
+	assert.Equal(t, len(sess.Messages), firstKeptSessionIndex(sessIndices, itemCount, 3))
 }
 
 // TestGatherCompactionInput_WithPriorSummary pins the regression where
@@ -332,7 +333,7 @@ func TestGatherCompactionInput_WithPriorSummary(t *testing.T) {
 	}
 	sess := session.New(session.WithMessages(items))
 
-	messages, sessIndices := gatherCompactionInput(sess)
+	messages, sessIndices, itemCount := gatherCompactionInput(sess)
 
 	// Expected filtered list:
 	//   [0]: synthetic Session Summary user message (origin: prior summary at idx 10)
@@ -350,16 +351,16 @@ func TestGatherCompactionInput_WithPriorSummary(t *testing.T) {
 	// A split that keeps the last two messages should map to items[13]
 	// (the user message at idx 13), not to items[5] which is what the
 	// old count-from-zero implementation produced.
-	assert.Equal(t, 13, firstKeptSessionIndex(sess, sessIndices, 5))
+	assert.Equal(t, 13, firstKeptSessionIndex(sessIndices, itemCount, 5))
 
 	// A split that keeps the entire post-summary tail (everything from
 	// items[8] onwards including the prior summary) maps the synthetic
 	// message back to its originating summary index so the prior
 	// summary item is preserved across the new compaction.
-	assert.Equal(t, 10, firstKeptSessionIndex(sess, sessIndices, 0))
+	assert.Equal(t, 10, firstKeptSessionIndex(sessIndices, itemCount, 0))
 
 	// Out-of-range split: compact everything, keep nothing.
-	assert.Equal(t, len(sess.Messages), firstKeptSessionIndex(sess, sessIndices, len(messages)))
+	assert.Equal(t, len(sess.Messages), firstKeptSessionIndex(sessIndices, itemCount, len(messages)))
 }
 
 // TestFirstKeptSessionIndex_SplitZeroOnEmptyInputUsesSafeSentinel
@@ -384,11 +385,73 @@ func TestFirstKeptSessionIndex_SplitZeroOnEmptyInputUsesSafeSentinel(t *testing.
 
 	sess := session.New()
 	var sessIndices []int
+	itemCount := sess.ItemCount()
 
 	// Empty input is the only legitimate way splitIdx==0 reaches
 	// firstKeptSessionIndex. Both branches (>= len(sessIndices) and
-	// the indexed lookup) must yield len(sess.Messages) here.
-	assert.Equal(t, len(sess.Messages), firstKeptSessionIndex(sess, sessIndices, 0))
+	// the indexed lookup) must yield itemCount here.
+	assert.Equal(t, itemCount, firstKeptSessionIndex(sessIndices, itemCount, 0))
+}
+
+// TestGatherCompactionInputConcurrent extends session's own
+// TestCompactionInputConcurrent (pkg/session/session_race_test.go) to the
+// compactor's own boundary computation: gatherCompactionInput plus
+// firstKeptSessionIndex must stay race-free when called concurrently with
+// AddMessage on the same live session. firstKeptSessionIndex itself no
+// longer touches the session (it now takes the snapshot's own itemCount
+// instead of calling sess.ItemCount() — see
+// TestGatherCompactionInput_OutOfRangeSentinelMatchesSnapshotCount below for
+// why), so the only thing left to prove race-free here is
+// gatherCompactionInput's snapshot read itself.
+func TestGatherCompactionInputConcurrent(t *testing.T) {
+	t.Parallel()
+
+	sess := session.New()
+	var wg sync.WaitGroup
+	for range 100 {
+		wg.Go(func() {
+			sess.AddMessage(session.UserMessage("u"))
+		})
+		wg.Go(func() {
+			_, sessIndices, itemCount := gatherCompactionInput(sess)
+			_ = firstKeptSessionIndex(sessIndices, itemCount, 0)
+		})
+	}
+	wg.Wait()
+}
+
+// TestGatherCompactionInput_OutOfRangeSentinelMatchesSnapshotCount pins the
+// other #3590 blocker: the out-of-range sentinel returned by
+// firstKeptSessionIndex must describe the SAME snapshot gatherCompactionInput
+// produced sessIndices from, not whatever sess.ItemCount() returns when read
+// later. A reviewer probe demonstrated the bug directly: the sentinel
+// described a session length one longer (200001) than the snapshot it was
+// supposedly derived from (200000) once a message was appended in between.
+// This reproduces that shape deterministically — no goroutines or -race
+// needed, since the bug was a logic error (reading two different sources of
+// truth), not a data race.
+func TestGatherCompactionInput_OutOfRangeSentinelMatchesSnapshotCount(t *testing.T) {
+	t.Parallel()
+
+	sess := session.New(session.WithMessages([]session.Item{
+		session.NewMessageItem(&session.Message{Message: chat.Message{Role: chat.MessageRoleUser, Content: "u1"}}),
+		session.NewMessageItem(&session.Message{Message: chat.Message{Role: chat.MessageRoleAssistant, Content: "a1"}}),
+	}))
+
+	_, sessIndices, itemCount := gatherCompactionInput(sess)
+	snapshotCount := len(sess.Messages)
+	require.Equal(t, snapshotCount, itemCount)
+
+	// A message "races in" after the snapshot was taken, e.g. a concurrent
+	// HTTP AddMessage landing mid-compaction.
+	sess.AddMessage(session.UserMessage("late arrival"))
+	require.Equal(t, snapshotCount+1, sess.ItemCount(), "sanity: the live session grew past the snapshot")
+
+	// The out-of-range sentinel must still describe the snapshot count, not
+	// the now-longer live session.
+	got := firstKeptSessionIndex(sessIndices, itemCount, len(sessIndices))
+	assert.Equal(t, snapshotCount, got)
+	assert.NotEqual(t, sess.ItemCount(), got)
 }
 
 // TestGatherCompactionInput_PriorSummaryWithoutFirstKeptEntry covers
@@ -412,7 +475,7 @@ func TestGatherCompactionInput_PriorSummaryWithoutFirstKeptEntry(t *testing.T) {
 	}
 	sess := session.New(session.WithMessages(items))
 
-	messages, sessIndices := gatherCompactionInput(sess)
+	messages, sessIndices, _ := gatherCompactionInput(sess)
 
 	// Filtered list: synthetic-summary, items[3], items[4].
 	// items[0..1] are excluded because they were compacted into the

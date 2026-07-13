@@ -58,8 +58,8 @@ func (r *LocalRuntime) registerDefaultTools() {
 
 // appendSteerAndEmit adds a steer message to the session and emits the corresponding event.
 func (r *LocalRuntime) appendSteerAndEmit(sess *session.Session, sm QueuedMessage, events EventSink) {
-	sess.AddMessage(session.UserMessage(sm.Content, sm.MultiContent...))
-	events.Emit(UserMessage(sm.Content, sess.ID, sm.MultiContent, len(sess.Messages)-1))
+	pos := sess.AddMessage(session.UserMessage(sm.Content, sm.MultiContent...))
+	events.Emit(UserMessage(sm.Content, sess.ID, sm.MultiContent, pos))
 }
 
 // drainAndEmitSteered drains all messages from the steer queue and injects
@@ -372,7 +372,7 @@ func (r *LocalRuntime) runStreamLoop(ctx context.Context, sess *session.Session,
 	// signal here too: "a real user prompt is at the tail of the session".
 	if sess.SendUserMessage && len(messages) > 0 {
 		lastMsg := messages[len(messages)-1]
-		sink.Emit(UserMessage(lastMsg.Content, sess.ID, lastMsg.MultiContent, len(sess.Messages)-1))
+		sink.Emit(UserMessage(lastMsg.Content, sess.ID, lastMsg.MultiContent, sess.ItemCount()-1))
 
 		// user_prompt_submit fires once per real user message, after
 		// session_start and before the first model call.
@@ -959,8 +959,8 @@ func (r *LocalRuntime) runTurn(
 		// undivided agent turn.
 		if followUp, ok := r.followUpQueue.Dequeue(ctx); ok {
 			userMsg := session.UserMessage(followUp.Content, followUp.MultiContent...)
-			sess.AddMessage(userMsg)
-			events.Emit(UserMessage(followUp.Content, sess.ID, followUp.MultiContent, len(sess.Messages)-1))
+			pos := sess.AddMessage(userMsg)
+			events.Emit(UserMessage(followUp.Content, sess.ID, followUp.MultiContent, pos))
 			stop, msg, ctxMsgs := r.executeUserFollowupSubmitHooks(ctx, sess, a, followUp.Content, events)
 			if stop {
 				slog.WarnContext(ctx, "user_followup_submit hook signalled run termination",

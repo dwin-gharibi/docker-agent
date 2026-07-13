@@ -1,14 +1,20 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -188,6 +194,313 @@ func TestRunSession_MessagesNotAddedWhenBusy(t *testing.T) {
 
 	close(release)
 	for range ch1 {
+	}
+}
+
+// TestAddMessage_RejectsWhileSessionStreaming verifies the 409-busy guard
+// added for issue #3590: AddMessage must reject with ErrSessionBusy while
+// the session has an active RunStream. session.Session.mu already makes the
+// append itself race-free, but a message injected mid-stream (mid-tool-call
+// in particular) can still desynchronize the turn from what the model/tools
+// expect, so the API layer also rejects it outright.
+func TestAddMessage_RejectsWhileSessionStreaming(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	sess := session.New()
+	release := make(chan struct{})
+	fake := &fakeRuntime{release: release}
+	sm := newTestSessionManager(t, sess, fake)
+
+	ch, err := sm.RunSession(ctx, sess.ID, "agent", "root", []api.Message{{Content: "hi"}}, "")
+	require.NoError(t, err)
+
+	err = sm.AddMessage(ctx, sess.ID, session.UserMessage("should be rejected"))
+	require.ErrorIs(t, err, ErrSessionBusy)
+
+	close(release)
+	for range ch {
+	}
+
+	// After the stream ends, AddMessage must succeed normally.
+	require.NoError(t, sm.AddMessage(ctx, sess.ID, session.UserMessage("accepted")))
+}
+
+// TestUpdateMessage_RejectsWhileSessionStreaming mirrors
+// TestAddMessage_RejectsWhileSessionStreaming for UpdateMessage.
+func TestUpdateMessage_RejectsWhileSessionStreaming(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	sess := session.New()
+	release := make(chan struct{})
+	fake := &fakeRuntime{release: release}
+	sm := newTestSessionManager(t, sess, fake)
+
+	msgID, err := sm.sessionStore.AddMessage(ctx, sess.ID, session.UserMessage("original"))
+	require.NoError(t, err)
+	msgIDStr := strconv.FormatInt(msgID, 10)
+
+	ch, err := sm.RunSession(ctx, sess.ID, "agent", "root", []api.Message{{Content: "hi"}}, "")
+	require.NoError(t, err)
+
+	err = sm.UpdateMessage(ctx, sess.ID, msgIDStr, session.UserMessage("should be rejected"))
+	require.ErrorIs(t, err, ErrSessionBusy)
+
+	close(release)
+	for range ch {
+	}
+
+	// After the stream ends, UpdateMessage must succeed normally.
+	require.NoError(t, sm.UpdateMessage(ctx, sess.ID, msgIDStr, session.UserMessage("accepted")))
+}
+
+// TestAttachedStream_AddMessageAndUpdateMessageRejectWhileStreaming pins the
+// fix for the other #3590 blocker: runtimes attached via AttachRuntime
+// stream directly through RunStream (see pkg/app.App.Run/Retry/
+// RunWithMessage), never going through RunSession, which is the only place
+// that used to acquire activeRuntimes.streaming. Before the fix nothing held
+// that lock for an attached stream, so AddMessage/UpdateMessage wrongly
+// succeeded during a genuinely active attached stream instead of returning
+// ErrSessionBusy. AttachRuntime now returns the same lock RunSession uses;
+// the App holds it for the duration of every direct RunStream call (see
+// app.WithStreamGuard/acquireStreamGuard). This test drives a real stream
+// through that lock exactly the way the App does — NOT through
+// sm.RunSession — to prove the guard covers the attached path too.
+func TestAttachedStream_AddMessageAndUpdateMessageRejectWhileStreaming(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	store := session.NewInMemorySessionStore()
+	sess := session.New()
+	require.NoError(t, store.AddSession(ctx, sess))
+
+	msgID, err := store.AddMessage(ctx, sess.ID, session.UserMessage("original"))
+	require.NoError(t, err)
+	msgIDStr := strconv.FormatInt(msgID, 10)
+
+	sm := NewSessionManager(ctx, config.Sources{}, store, 0, &config.RuntimeConfig{})
+	release := make(chan struct{})
+	fake := &fakeRuntime{release: release}
+	guard := sm.AttachRuntime(ctx, sess.ID, fake, sess)
+
+	// Simulate the TUI/attached owner streaming directly through the
+	// runtime, exactly like pkg/app.App.acquireStreamGuard + Run do — NOT
+	// through sm.RunSession.
+	guard.Lock()
+	ch := fake.RunStream(ctx, sess)
+
+	err = sm.AddMessage(ctx, sess.ID, session.UserMessage("should be rejected"))
+	require.ErrorIs(t, err, ErrSessionBusy)
+
+	err = sm.UpdateMessage(ctx, sess.ID, msgIDStr, session.UserMessage("should be rejected"))
+	require.ErrorIs(t, err, ErrSessionBusy)
+
+	close(release)
+	for range ch {
+	}
+	guard.Unlock()
+
+	// After the attached stream ends, both must succeed normally.
+	require.NoError(t, sm.AddMessage(ctx, sess.ID, session.UserMessage("accepted")))
+	require.NoError(t, sm.UpdateMessage(ctx, sess.ID, msgIDStr, session.UserMessage("accepted")))
+}
+
+// blockingStore wraps a session.Store and blocks inside AddMessage/
+// UpdateMessage until release is closed, letting a test pause the manager
+// mid-mutation — after the busy check has already passed — to observe
+// whether a concurrent attached stream can slip in before the mutation
+// actually completes. entered is closed the instant the blocked call is
+// reached, so the test can synchronize on it instead of sleeping.
+type blockingStore struct {
+	session.Store
+
+	release chan struct{}
+	entered chan struct{}
+}
+
+func (s *blockingStore) AddMessage(ctx context.Context, sessionID string, msg *session.Message) (int64, error) {
+	close(s.entered)
+	<-s.release
+	return s.Store.AddMessage(ctx, sessionID, msg)
+}
+
+func (s *blockingStore) UpdateMessage(ctx context.Context, messageID int64, msg *session.Message) error {
+	close(s.entered)
+	<-s.release
+	return s.Store.UpdateMessage(ctx, messageID, msg)
+}
+
+// assertAttachedGuardBlockedDuringMutation drives the reviewer's
+// deterministic "blocking-store" probe (#3590 finding A1): it starts
+// mutate (an AddMessage or UpdateMessage call) against a store that blocks
+// mid-write, waits for the busy check inside mutate to have already passed
+// (store.entered closes), and then tries to acquire the attached-stream
+// guard exactly the way pkg/app.App.acquireStreamGuard does (a plain
+// Lock(), not TryLock()). Before the #3590 fix, AddMessage/UpdateMessage
+// released activeRuntimes.streaming immediately after the busy check, so
+// the guard acquisition below would succeed while mutate was still
+// blocked inside the store write — an attached stream starting between
+// the busy check and the mutation completing. With the fix (the streaming
+// lock held via defer until mutate returns), the guard acquisition must
+// stay blocked until mutate has fully returned.
+func assertAttachedGuardBlockedDuringMutation(t *testing.T, guard sync.Locker, store *blockingStore, mutate func() error) {
+	t.Helper()
+
+	mutateErrCh := make(chan error, 1)
+	go func() { mutateErrCh <- mutate() }()
+
+	select {
+	case <-store.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the mutation to reach the blocking store")
+	}
+
+	guardAcquired := make(chan struct{})
+	go func() {
+		guard.Lock()
+		close(guardAcquired)
+	}()
+
+	select {
+	case <-guardAcquired:
+		t.Fatal("attached stream guard acquired before the REST mutation completed")
+	case <-time.After(100 * time.Millisecond):
+		// Expected: the guard stays held across the in-flight mutation.
+	}
+
+	close(store.release)
+	require.NoError(t, <-mutateErrCh)
+
+	select {
+	case <-guardAcquired:
+		guard.Unlock()
+	case <-time.After(2 * time.Second):
+		t.Fatal("attached stream guard never acquired after the REST mutation completed")
+	}
+}
+
+// TestReview_AttachedGuardCannotStartBetweenBusyCheckAndMutation_AddMessage
+// is the reviewer's deterministic regression probe for #3590 finding A1:
+// AddMessage must hold activeRuntimes.streaming across its entire mutation,
+// not just across the busy check, otherwise an attached stream (the only
+// consumer of that lock outside RunSession — see AttachRuntime) can start
+// in the gap between the check passing and the store write completing.
+func TestReview_AttachedGuardCannotStartBetweenBusyCheckAndMutation_AddMessage(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	sess := session.New()
+	inner := session.NewInMemorySessionStore()
+	require.NoError(t, inner.AddSession(ctx, sess))
+	store := &blockingStore{Store: inner, release: make(chan struct{}), entered: make(chan struct{})}
+
+	sm := NewSessionManager(ctx, config.Sources{}, store, 0, &config.RuntimeConfig{})
+	guard := sm.AttachRuntime(ctx, sess.ID, &fakeRuntime{}, sess)
+
+	assertAttachedGuardBlockedDuringMutation(t, guard, store, func() error {
+		return sm.AddMessage(ctx, sess.ID, session.UserMessage("mutating"))
+	})
+}
+
+// TestReview_AttachedGuardCannotStartBetweenBusyCheckAndMutation_UpdateMessage
+// mirrors the AddMessage probe above for UpdateMessage.
+func TestReview_AttachedGuardCannotStartBetweenBusyCheckAndMutation_UpdateMessage(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	sess := session.New()
+	inner := session.NewInMemorySessionStore()
+	require.NoError(t, inner.AddSession(ctx, sess))
+	msgID, err := inner.AddMessage(ctx, sess.ID, session.UserMessage("original"))
+	require.NoError(t, err)
+	msgIDStr := strconv.FormatInt(msgID, 10)
+
+	store := &blockingStore{Store: inner, release: make(chan struct{}), entered: make(chan struct{})}
+
+	sm := NewSessionManager(ctx, config.Sources{}, store, 0, &config.RuntimeConfig{})
+	guard := sm.AttachRuntime(ctx, sess.ID, &fakeRuntime{}, sess)
+
+	assertAttachedGuardBlockedDuringMutation(t, guard, store, func() error {
+		return sm.UpdateMessage(ctx, sess.ID, msgIDStr, session.UserMessage("mutating"))
+	})
+}
+
+// TestServer_AddMessage_Returns409WhileSessionStreaming and
+// TestServer_UpdateMessage_Returns409WhileSessionStreaming drive the actual
+// HTTP handlers (not just SessionManager) to pin the 409-busy guard added
+// for issue #3590 end to end: ErrSessionBusy from the manager must surface
+// as echo.NewHTTPError(http.StatusConflict, ...), mirroring how runAgent
+// already maps it.
+func TestServer_AddMessage_Returns409WhileSessionStreaming(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	sess := session.New()
+	release := make(chan struct{})
+	fake := &fakeRuntime{release: release}
+	sm := newTestSessionManager(t, sess, fake)
+	srv := NewWithManager(sm, "")
+
+	ch, err := sm.RunSession(ctx, sess.ID, "agent", "root", []api.Message{{Content: "hi"}}, "")
+	require.NoError(t, err)
+
+	body, err := json.Marshal(api.AddMessageRequest{Message: session.UserMessage("should be rejected")})
+	require.NoError(t, err)
+
+	e := echo.New()
+	req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/api/sessions/"+sess.ID+"/messages", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("id")
+	c.SetParamValues(sess.ID)
+
+	err = srv.addMessage(c)
+	var httpErr *echo.HTTPError
+	require.ErrorAs(t, err, &httpErr)
+	assert.Equal(t, http.StatusConflict, httpErr.Code)
+
+	close(release)
+	for range ch {
+	}
+}
+
+func TestServer_UpdateMessage_Returns409WhileSessionStreaming(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	sess := session.New()
+	release := make(chan struct{})
+	fake := &fakeRuntime{release: release}
+	sm := newTestSessionManager(t, sess, fake)
+	srv := NewWithManager(sm, "")
+
+	msgID, err := sm.sessionStore.AddMessage(ctx, sess.ID, session.UserMessage("original"))
+	require.NoError(t, err)
+
+	ch, err := sm.RunSession(ctx, sess.ID, "agent", "root", []api.Message{{Content: "hi"}}, "")
+	require.NoError(t, err)
+
+	body, err := json.Marshal(api.UpdateMessageRequest{Message: session.UserMessage("should be rejected")})
+	require.NoError(t, err)
+
+	e := echo.New()
+	msgIDStr := strconv.FormatInt(msgID, 10)
+	req := httptest.NewRequestWithContext(ctx, http.MethodPatch, "/api/sessions/"+sess.ID+"/messages/"+msgIDStr, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetParamNames("id", "msg_id")
+	c.SetParamValues(sess.ID, msgIDStr)
+
+	err = srv.updateMessage(c)
+	var httpErr *echo.HTTPError
+	require.ErrorAs(t, err, &httpErr)
+	assert.Equal(t, http.StatusConflict, httpErr.Code)
+
+	close(release)
+	for range ch {
 	}
 }
 
@@ -441,6 +754,46 @@ func TestForkSession_CopiesHistoryBeforeUserMessage(t *testing.T) {
 	loaded, err := store.GetSession(ctx, forked.ID)
 	require.NoError(t, err)
 	assert.Equal(t, forked.ID, loaded.ID)
+}
+
+// TestForkSession_ConcurrentWithLiveSessionMutation pins the data-race fix
+// for issue #3590: InMemorySessionStore.GetSession returns the live, shared
+// *Session pointer (not a copy), so ForkSession's index computation
+// (userMessageOrdinalToItemIndex) and session.ForkSession's own copy must
+// both go through locked snapshots to stay safe against a concurrent
+// AddMessage on that same live session — e.g. the HTTP AddMessage handler
+// racing a TUI fork action. Run with -race; before the fix, iterating
+// s.Messages directly races the concurrent AddMessage goroutine below.
+func TestForkSession_ConcurrentWithLiveSessionMutation(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	store := session.NewInMemorySessionStore()
+	parent := session.New()
+	parent.Title = "Parent Title"
+	parent.Messages = []session.Item{
+		session.NewMessageItem(session.UserMessage("first user")),
+		session.NewMessageItem(session.NewAgentMessage("root", &chat.Message{
+			Role:    chat.MessageRoleAssistant,
+			Content: "first answer",
+		})),
+	}
+	require.NoError(t, store.AddSession(ctx, parent))
+
+	sm := NewSessionManager(ctx, config.Sources{}, store, 0, &config.RuntimeConfig{})
+
+	var wg sync.WaitGroup
+	for range 50 {
+		wg.Go(func() {
+			parent.AddMessage(session.UserMessage("concurrent"))
+		})
+		wg.Go(func() {
+			if _, err := sm.ForkSession(ctx, parent.ID, 0); err != nil {
+				t.Errorf("ForkSession: %v", err)
+			}
+		})
+	}
+	wg.Wait()
 }
 
 // Regression: repeated forks of the same parent must pick (fork 1),

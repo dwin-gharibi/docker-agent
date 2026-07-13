@@ -730,6 +730,9 @@ func (s *Server) addMessage(c echo.Context) error {
 	}
 
 	if err := s.sm.AddMessage(c.Request().Context(), sessionID, req.Message); err != nil {
+		if errors.Is(err, ErrSessionBusy) {
+			return echo.NewHTTPError(http.StatusConflict, err.Error())
+		}
 		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("failed to add message: %v", err))
 	}
 
@@ -749,6 +752,9 @@ func (s *Server) updateMessage(c echo.Context) error {
 	}
 
 	if err := s.sm.UpdateMessage(c.Request().Context(), sessionID, msgID, req.Message); err != nil {
+		if errors.Is(err, ErrSessionBusy) {
+			return echo.NewHTTPError(http.StatusConflict, err.Error())
+		}
 		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("failed to update message: %v", err))
 	}
 

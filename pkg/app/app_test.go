@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -132,6 +133,80 @@ func (m *retryMockRuntime) RunStream(_ context.Context, sess *session.Session) <
 		ch <- runtime.StreamStopped(sess.ID, "mock", "normal")
 	}()
 	return ch
+}
+
+// blockingRunStreamRuntime's RunStream blocks until release is closed (or
+// ctx is cancelled), letting tests observe a streamGuard held for the
+// stream's actual duration instead of racing a fake runtime that returns
+// immediately.
+type blockingRunStreamRuntime struct {
+	mockRuntime
+
+	release chan struct{}
+}
+
+func (r *blockingRunStreamRuntime) RunStream(ctx context.Context, _ *session.Session) <-chan runtime.Event {
+	ch := make(chan runtime.Event)
+	go func() {
+		defer close(ch)
+		select {
+		case <-r.release:
+		case <-ctx.Done():
+		}
+	}()
+	return ch
+}
+
+// TestApp_Run_HoldsStreamGuardForStreamDuration pins the #3590 fix: Run must
+// hold the WithStreamGuard lock for the entire direct RunStream call, not
+// just while scheduling it, so a concurrent SessionManager.AddMessage/
+// UpdateMessage/RunSession sharing the same lock (see AttachRuntime) sees
+// the attached stream as busy for as long as it is genuinely active.
+func TestApp_Run_HoldsStreamGuardForStreamDuration(t *testing.T) {
+	t.Parallel()
+
+	release := make(chan struct{})
+	rt := &blockingRunStreamRuntime{release: release}
+	var guard sync.Mutex
+
+	app := &App{
+		runtime:     rt,
+		session:     session.New(),
+		events:      make(chan tea.Msg, 16),
+		streamGuard: &guard,
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	app.Run(ctx, cancel, "hello", nil)
+
+	// isLocked probes guard without leaking a spurious lock acquisition:
+	// TryLock succeeding would otherwise leave the test goroutine holding
+	// the mutex, making the later "released" check hang forever.
+	isLocked := func() bool {
+		if guard.TryLock() {
+			guard.Unlock()
+			return false
+		}
+		return true
+	}
+
+	require.Eventually(t, isLocked, time.Second, time.Millisecond, "streamGuard should be held while RunStream is active")
+
+	close(release)
+
+	require.Eventually(t, func() bool { return !isLocked() }, time.Second, time.Millisecond, "streamGuard should be released once RunStream ends")
+}
+
+// TestApp_AcquireStreamGuard_NoopWhenUnset verifies that a bare App with no
+// WithStreamGuard option (the common case: no attached SessionManager) never
+// blocks on a nil lock.
+func TestApp_AcquireStreamGuard_NoopWhenUnset(t *testing.T) {
+	t.Parallel()
+
+	app := &App{}
+	release := app.acquireStreamGuard()
+	require.NotPanics(t, release)
 }
 
 func TestApp_Retry_SuppressesReEmittedUserMessage(t *testing.T) {

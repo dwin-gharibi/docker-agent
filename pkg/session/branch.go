@@ -36,7 +36,12 @@ func branchSessionWithTitle(parent *Session, branchAtPosition int, titleFn func(
 	if parent == nil {
 		return nil, errors.New("parent session is nil")
 	}
-	if branchAtPosition < 0 || branchAtPosition > len(parent.Messages) {
+
+	// Snapshot under parent.mu (like Clone) so a concurrent AddMessage/
+	// ApplyCompaction — e.g. from a live HTTP stream on the same session —
+	// cannot race with this read or shift branchAtPosition mid-copy.
+	items := parent.snapshotItems()
+	if branchAtPosition < 0 || branchAtPosition > len(items) {
 		return nil, fmt.Errorf("branch position %d out of range", branchAtPosition)
 	}
 
@@ -45,7 +50,7 @@ func branchSessionWithTitle(parent *Session, branchAtPosition int, titleFn func(
 
 	branched.Messages = make([]Item, 0, branchAtPosition)
 	for i := range branchAtPosition {
-		cloned, err := cloneSessionItem(parent.Messages[i])
+		cloned, err := cloneSessionItem(items[i])
 		if err != nil {
 			return nil, err
 		}
@@ -159,8 +164,12 @@ func cloneSubSession(src *Session) (*Session, error) {
 	copySessionMetadata(cloned, src, src.Title)
 	cloned.CreatedAt = src.CreatedAt
 
-	cloned.Messages = make([]Item, 0, len(src.Messages))
-	for _, item := range src.Messages {
+	// Snapshot under src.mu: a sub-session created by a background agent
+	// task can still be actively appended to while the top-level session is
+	// being branched/forked.
+	items := src.snapshotItems()
+	cloned.Messages = make([]Item, 0, len(items))
+	for _, item := range items {
 		clonedItem, err := cloneSessionItem(item)
 		if err != nil {
 			return nil, err
