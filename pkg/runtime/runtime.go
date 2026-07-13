@@ -224,7 +224,7 @@ type LocalRuntime struct {
 	managedOAuth              bool
 	unmanagedOAuthRedirectURI string
 	nonInteractive            bool
-	startupInfoEmitted        bool                   // Track if startup info has been emitted to avoid unnecessary duplication
+	startupInfoEmitted        atomic.Bool            // Track if startup info has been emitted to avoid unnecessary duplication
 	elicitationRequestCh      chan ElicitationResult // Channel for receiving elicitation responses
 	elicitation               elicitationBridge      // Owns the per-stream events channel for outbound elicitation requests
 	sessionStore              session.Store
@@ -1421,7 +1421,7 @@ func (r *LocalRuntime) PermissionsInfo() *PermissionsInfo {
 // This should be called when replacing a session to allow re-emission of
 // agent, team, and toolset info to the UI.
 func (r *LocalRuntime) ResetStartupInfo() {
-	r.startupInfoEmitted = false
+	r.startupInfoEmitted.Store(false)
 }
 
 // OnToolsChanged registers a handler that is called when an MCP toolset
@@ -1526,11 +1526,13 @@ func (r *LocalRuntime) EmitAgentInfo(ctx context.Context, events EventSink) {
 // When sess is non-nil and contains token data, a TokenUsageEvent is also emitted so that the
 // sidebar can display context usage percentage on session restore.
 func (r *LocalRuntime) EmitStartupInfo(ctx context.Context, sess *session.Session, events EventSink) {
-	// Prevent duplicate emissions
-	if r.startupInfoEmitted {
+	// CompareAndSwap makes the check-and-set atomic: App.Start emits from a
+	// spawned goroutine while reEmitStartupInfo (e.g. on /new session) resets
+	// and re-emits from another, and a plain bool check-then-set race would
+	// let both goroutines through or miss an emission.
+	if !r.startupInfoEmitted.CompareAndSwap(false, true) {
 		return
 	}
-	r.startupInfoEmitted = true
 
 	a := r.CurrentAgent()
 
