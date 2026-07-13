@@ -550,6 +550,22 @@ func TestMatchGlob(t *testing.T) {
 		{"*rm -rf*", "rm -rf /", true},
 		{"*/etc/*", "cat /etc/passwd", true},
 		{"a?c", "a/c", true},
+
+		// ...and they span newlines too: shell commands are often multi-line
+		// (heredocs, "&&" chains).
+		{"*rm -rf*", "echo hi\nrm -rf /", true},
+		{"*b*", "a\nb", true},
+		{"a?b", "a\nb", true},
+
+		// Multi-byte UTF-8 in patterns keeps matching literally.
+		{"café", "café", true},
+		{"*café*", "xx café yy", true},
+
+		// "\" escapes the next character, inside and outside classes.
+		{`foo\*`, "foo*", true},
+		{`foo\*`, "foobar", false},
+		{`[\d]`, "d", true}, // literal "d", not regexp's digit class
+		{`[\d]`, "5", false},
 	}
 
 	for _, tt := range tests {
@@ -578,6 +594,9 @@ func TestDenyGlobCrossesPathSeparator(t *testing.T) {
 	assert.Equal(t, Deny, checker.CheckWithArgs("shell",
 		map[string]any{"cmd": "rm -rf /"}),
 		"deny rule must also block 'rm -rf /'")
+	assert.Equal(t, Deny, checker.CheckWithArgs("shell",
+		map[string]any{"cmd": "echo hi\nrm -rf /"}),
+		"deny rule must also block a multi-line command")
 }
 
 func TestArgToString(t *testing.T) {
