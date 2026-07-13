@@ -1004,3 +1004,276 @@ func storedToolResultContent(t *testing.T, sess *session.Session, toolCallID str
 	require.Failf(t, "tool result not found", "tool_call_id=%s", toolCallID)
 	return ""
 }
+
+// --- #3584 review item 3: session-scoped elicitation sink for API/server runtimes ---
+
+// TestSessionElicitationSink_MakesSessionEventSourceReplayable pins the fix
+// for review item 3: before this, only pkg/app (the TUI) ever registered an
+// OnElicitationRequest sink, so every API/server-created runtime had none —
+// elicitationHandler's headless fast-decline path ("no sink means no UI")
+// therefore fired for every background elicitation raised through the API,
+// even though a remote/SSE client could otherwise answer it.
+// runtimeForSession registers sessionElicitationSink on every runtime it
+// builds; this exercises that exact closure (without needing a full
+// runtime/team) and confirms the session gains a replayable event source it
+// didn't have before.
+func TestSessionElicitationSink_MakesSessionEventSourceReplayable(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	sm := NewSessionManager(ctx, config.Sources{}, session.NewInMemorySessionStore(), 0, &config.RuntimeConfig{})
+
+	require.False(t, sm.HasEventSource("sess-1"),
+		"a session that was never attached and produced no out-of-band event must have no event source")
+
+	sink := sm.sessionElicitationSink("sess-1")
+	ev := runtime.ElicitationRequest("need input", "form", nil, "", "eid-1", "", "bg-child", nil, "agent")
+	sink(ev)
+
+	require.True(t, sm.HasEventSource("sess-1"),
+		"the sink must lazily create a session-scoped event source on first use")
+
+	streamCtx, cancel := context.WithCancel(ctx)
+	var mu sync.Mutex
+	var replayed []any
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ok := sm.StreamEvents(streamCtx, "sess-1", nil, func(_ uint64, event any) {
+			mu.Lock()
+			defer mu.Unlock()
+			replayed = append(replayed, event)
+		})
+		assert.True(t, ok)
+	}()
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(replayed) == 1
+	}, 2*time.Second, time.Millisecond)
+	cancel()
+	<-done
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, replayed, 1)
+	assert.Same(t, ev, replayed[0], "the elicitation event must be replayable via GET .../events")
+}
+
+// TestSessionElicitationSink_ReusesEventLogAcrossCalls verifies the sink
+// doesn't clobber an existing event log (e.g. one already registered via
+// RegisterEventSource for an attached session) and that repeated sink
+// invocations accumulate rather than overwrite.
+func TestSessionElicitationSink_ReusesEventLogAcrossCalls(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	sm := NewSessionManager(ctx, config.Sources{}, session.NewInMemorySessionStore(), 0, &config.RuntimeConfig{})
+
+	sink := sm.sessionElicitationSink("sess-2")
+	first := runtime.ElicitationRequest("first", "form", nil, "", "eid-1", "", "bg-child-1", nil, "agent")
+	second := runtime.ElicitationRequest("second", "form", nil, "", "eid-2", "", "bg-child-2", nil, "agent")
+	sink(first)
+	sink(second)
+
+	seq, ok := sm.LastEventSeq("sess-2")
+	require.True(t, ok)
+	assert.Equal(t, uint64(2), seq, "both sink deliveries must land in the same event log")
+
+	streamCtx, cancel := context.WithCancel(ctx)
+	var mu sync.Mutex
+	var replayed []any
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ok := sm.StreamEvents(streamCtx, "sess-2", nil, func(_ uint64, event any) {
+			mu.Lock()
+			defer mu.Unlock()
+			replayed = append(replayed, event)
+		})
+		assert.True(t, ok)
+	}()
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(replayed) == 2
+	}, 2*time.Second, time.Millisecond)
+	cancel()
+	<-done
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, replayed, 2)
+	assert.Same(t, first, replayed[0])
+	assert.Same(t, second, replayed[1])
+}
+
+// TestRuntimeForSession_RegistersSessionScopedElicitationSink is an
+// end-to-end check that runtimeForSession actually wires
+// sessionElicitationSink onto every runtime it builds (not just that the
+// sink mechanics work in isolation, per the tests above). It uses a
+// harness-backed agent (harness: type: claude-code) so no model provider or
+// API key is needed — runtime construction only requires *a* valid agent,
+// per LocalRuntime's "has no valid model" guard.
+//
+// Crucially, this drives the sink through the RETURNED runtime itself (via
+// EmitElicitationRequestForTesting) rather than reconstructing a fresh
+// sm.sessionElicitationSink(...) closure and calling that in isolation: the
+// latter would keep passing even if runtimeForSession's
+// `run.OnElicitationRequest(...)` registration were deleted, since it never
+// actually exercises what got wired onto `run` (#3584 re-review should-fix
+// 1).
+func TestRuntimeForSession_RegistersSessionScopedElicitationSink(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	cfg := []byte(`agents:
+  root:
+    description: Test agent
+    instruction: Be helpful.
+    harness:
+      type: claude-code
+`)
+	store := session.NewInMemorySessionStore()
+	sess := session.New()
+	require.NoError(t, store.AddSession(ctx, sess))
+
+	sources := config.Sources{"agent.yaml": config.NewBytesSource("agent.yaml", cfg)}
+	sm := NewSessionManager(ctx, sources, store, 0, &config.RuntimeConfig{})
+
+	require.False(t, sm.HasEventSource(sess.ID))
+
+	run, _, err := sm.runtimeForSession(ctx, sess, "agent.yaml", "", &config.RuntimeConfig{})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = run.Close() })
+
+	lr, ok := run.(*runtime.LocalRuntime)
+	require.True(t, ok, "runtimeForSession is expected to build a *runtime.LocalRuntime, got %T", run)
+
+	// Simulate what elicitationHandler does when it raises a background
+	// elicitation, but through the sink runtimeForSession actually registered
+	// on this specific runtime instance, not a freshly built one.
+	lr.EmitElicitationRequestForTesting(runtime.ElicitationRequest("need input", "form", nil, "", "eid-1", "", sess.ID, nil, "root"))
+	require.True(t, sm.HasEventSource(sess.ID),
+		"runtimeForSession must leave the session able to surface out-of-band elicitations")
+}
+
+// --- #3584 re-review blocker: lazily-created event logs must actually close on delete ---
+
+// TestReview_DeleteSessionClosesLazyElicitationEventLog is the regression
+// test for the #3584 re-review blocker: ensureEventLog handed lazily-created
+// (API-only) event logs a no-op cancel function, so DeleteSession's
+// unconditional pe.cancel() call did nothing to the underlying eventLog — a
+// client already streaming GET /api/sessions/:id/events for such a session
+// would never receive a terminal session_exited event and would never see
+// its stream close, contradicting the end-of-session contract documented on
+// Server.sessionEvents (and docs/features/api-server/index.md). This proves
+// the lazily-created log is actually closed on deletion: session_exited is
+// delivered and the blocked StreamEvents call returns.
+func TestReview_DeleteSessionClosesLazyElicitationEventLog(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	store := session.NewInMemorySessionStore()
+	sm := NewSessionManager(ctx, config.Sources{}, store, 0, &config.RuntimeConfig{})
+
+	sess := session.New()
+	require.NoError(t, store.AddSession(ctx, sess))
+
+	// Lazily create the session's event log the way runtimeForSession's
+	// sessionElicitationSink does for a background job's elicitation — no
+	// runtime/RegisterEventSource pump is ever registered for this session.
+	sm.sessionElicitationSink(sess.ID)(runtime.ElicitationRequest("need input", "form", nil, "", "eid-1", "", sess.ID, nil, "root"))
+	require.True(t, sm.HasEventSource(sess.ID))
+
+	streamCtx, cancelStream := context.WithCancel(ctx)
+	defer cancelStream()
+	var mu sync.Mutex
+	var received []any
+	streamDone := make(chan struct{})
+	go func() {
+		defer close(streamDone)
+		sm.StreamEvents(streamCtx, sess.ID, nil, func(_ uint64, event any) {
+			mu.Lock()
+			defer mu.Unlock()
+			received = append(received, event)
+		})
+	}()
+
+	// Wait for the replay of the elicitation event so the stream is known to
+	// be actively connected (not merely about to start) before we delete.
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(received) == 1
+	}, 2*time.Second, time.Millisecond)
+
+	require.NoError(t, sm.DeleteSession(ctx, sess.ID))
+
+	select {
+	case <-streamDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("StreamEvents must return once the session is deleted; a no-op cancel on the lazily-created event log leaves connected /events streams blocked forever")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, received, 2, "expected the elicitation event followed by a terminal session_exited event")
+	exited, ok := received[1].(sessionExitedEvent)
+	require.True(t, ok, "expected sessionExitedEvent, got %T", received[1])
+	assert.Equal(t, "session_exited", exited.Type)
+}
+
+// TestReview_BatchDeleteSessionsClosesLazyElicitationEventLog is the batch
+// variant of the above: BatchDeleteSessions goes through the same
+// pe.cancel() call per session, so it shares the exact same bug and fix.
+func TestReview_BatchDeleteSessionsClosesLazyElicitationEventLog(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	store := session.NewInMemorySessionStore()
+	sm := NewSessionManager(ctx, config.Sources{}, store, 0, &config.RuntimeConfig{})
+
+	sess := session.New()
+	require.NoError(t, store.AddSession(ctx, sess))
+
+	sm.sessionElicitationSink(sess.ID)(runtime.ElicitationRequest("need input", "form", nil, "", "eid-1", "", sess.ID, nil, "root"))
+	require.True(t, sm.HasEventSource(sess.ID))
+
+	streamCtx, cancelStream := context.WithCancel(ctx)
+	defer cancelStream()
+	var mu sync.Mutex
+	var received []any
+	streamDone := make(chan struct{})
+	go func() {
+		defer close(streamDone)
+		sm.StreamEvents(streamCtx, sess.ID, nil, func(_ uint64, event any) {
+			mu.Lock()
+			defer mu.Unlock()
+			received = append(received, event)
+		})
+	}()
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(received) == 1
+	}, 2*time.Second, time.Millisecond)
+
+	deleted, failed := sm.BatchDeleteSessions(ctx, []string{sess.ID})
+	assert.Equal(t, 1, deleted)
+	assert.Empty(t, failed)
+
+	select {
+	case <-streamDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("StreamEvents must return once the session is batch-deleted; a no-op cancel on the lazily-created event log leaves connected /events streams blocked forever")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, received, 2, "expected the elicitation event followed by a terminal session_exited event")
+	exited, ok := received[1].(sessionExitedEvent)
+	require.True(t, ok, "expected sessionExitedEvent, got %T", received[1])
+	assert.Equal(t, "session_exited", exited.Type)
+}

@@ -157,6 +157,54 @@ func (sm *SessionManager) HasEventSource(sessionID string) bool {
 	return ok
 }
 
+// ensureEventLog returns sessionID's [pumpedEventLog], creating a bare one —
+// ring buffer only, no pump goroutine — if none is registered yet. Used by
+// appendSessionEvent to give a session a replayable event route even when it
+// was never attached via RegisterEventSource (the common case for a session
+// created directly by the API server rather than an external embedder like
+// the TUI).
+//
+// cancel closes the log (delivering session_exited and disconnecting any
+// live listener) instead of being a no-op: there is no external source pump
+// to stop, but DeleteSession/BatchDeleteSessions call pe.cancel()
+// unconditionally expecting it to end the log's lifetime. A no-op here left
+// a connected GET /api/sessions/:id/events request on a lazily-created log
+// blocked forever after deletion — it never saw session_exited and never
+// closed, contradicting the end-of-session contract documented on
+// Server.sessionEvents (#3584 re-review).
+func (sm *SessionManager) ensureEventLog(sessionID string) *pumpedEventLog {
+	if pe, ok := sm.eventLogs.Load(sessionID); ok {
+		return pe
+	}
+	log := newEventLog(defaultEventLogCapacity)
+	pe := &pumpedEventLog{log: log, cancel: func() { log.close("session ended") }}
+	actual, _ := sm.eventLogs.LoadOrStore(sessionID, pe)
+	return actual
+}
+
+// appendSessionEvent appends event to sessionID's event log, creating the
+// log on demand (see ensureEventLog) if this is the first out-of-band event
+// the session has ever produced. Registered as the runtime's
+// OnElicitationRequest sink in runtimeForSession (#3584 review item 3).
+func (sm *SessionManager) appendSessionEvent(sessionID string, event any) {
+	sm.ensureEventLog(sessionID).log.append(event)
+}
+
+// sessionElicitationSink returns the OnElicitationRequest handler that
+// runtimeForSession registers on every API/server-created runtime: it
+// appends the event to sessionID's (lazily created) event log, giving
+// out-of-band elicitations — chiefly from detached background jobs — a
+// session-scoped route to any client polling/streaming
+// GET /api/sessions/:id/events, instead of the runtime treating an absent
+// local sink as "no UI" and auto-declining (#3584 review item 3). Split out
+// as its own method so the exact wiring is unit-testable without spinning up
+// a real runtime/team.
+func (sm *SessionManager) sessionElicitationSink(sessionID string) func(runtime.Event) {
+	return func(ev runtime.Event) {
+		sm.appendSessionEvent(sessionID, ev)
+	}
+}
+
 // LastEventSeq returns the most recent event sequence number for sessionID,
 // so a snapshot can advertise the exact point from which a client should tail.
 // Returns 0 and false when no event log exists.
@@ -1122,6 +1170,22 @@ func (sm *SessionManager) runtimeForSession(ctx context.Context, sess *session.S
 	if err != nil {
 		return nil, nil, err
 	}
+
+	// Give this session an out-of-band, session-scoped route for
+	// elicitations raised while nobody is synchronously reading this
+	// specific RunSession call's stream — most notably background jobs
+	// (run_background_agent) that outlive the request that started them.
+	// Before this, only pkg/app (the TUI) ever registered an
+	// OnElicitationRequest sink; every API/server-created runtime had none,
+	// so elicitationHandler's headless fast-decline path ("no sink means no
+	// UI") fired for every background elicitation raised through the API,
+	// even though RemoteRuntime.OnElicitationRequest's contract promises
+	// remote/SSE clients CAN answer them via ResumeElicitation. Appending to
+	// this session's event log makes the request replayable via GET
+	// /api/sessions/:id/events (lazily creating the log if this session was
+	// never attached with RegisterEventSource) and answerable via the
+	// existing POST .../elicitation route (#3584 review item 3).
+	run.OnElicitationRequest(sm.sessionElicitationSink(sess.ID))
 
 	// Apply any stored per-agent model overrides so that a session
 	// resumed (or freshly created with overrides via CreateSession) uses
