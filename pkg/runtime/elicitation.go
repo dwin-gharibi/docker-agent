@@ -356,6 +356,23 @@ func (r *LocalRuntime) OnElicitationRequest(handler func(Event)) {
 	r.onElicitationRequest = handler
 }
 
+// MirrorsElicitationOnRunStream marks LocalRuntime as a runtime whose
+// OnElicitationRequest sink is the single, exactly-once delivery point for
+// an elicitation request even though elicitationHandler ALSO best-effort-
+// sends the very same event on the RunStream channel, for the benefit of
+// out-of-process consumers reading RunStream directly (see
+// elicitationBridge). Embedders that forward RunStream events verbatim into
+// their own event bus (e.g. pkg/app.App) use this marker — via an optional
+// capability check, since it is not part of the Runtime interface — to know
+// they must skip *ElicitationRequestEvent to avoid delivering the same
+// request twice.
+//
+// RemoteRuntime deliberately does NOT implement this: its
+// OnElicitationRequest is a no-op, so the copy on its RunStream is the ONLY
+// delivery and callers must not skip it (#3584 review — an earlier fix
+// skipped unconditionally and silently dropped every remote elicitation).
+func (r *LocalRuntime) MirrorsElicitationOnRunStream() {}
+
 // emitElicitationRequest forwards an elicitation request event to the
 // registered sink, if any. Besides [LocalRuntime.EmitElicitationRequestForTesting],
 // this is the ONLY call site that invokes the sink (see elicitationHandler):

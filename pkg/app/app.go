@@ -198,13 +198,15 @@ func (a *App) Start(ctx context.Context) {
 		// Forward elicitation requests raised anywhere in the runtime —
 		// including background-job (run_background_agent) sub-sessions whose
 		// RunStream has no live UI reading its own events channel — so they
-		// always reach the TUI as a dialog. This is the runtime's single,
-		// exactly-once delivery point for elicitation requests (#3584). For a
-		// foreground request the swap-based bridge best-effort-sends the same
-		// event on the very RunStream channel Run/Retry/RunWithMessage read
-		// from below; those loops skip ElicitationRequestEvents so this sink
-		// stays the sole route into a.events and a foreground request never
-		// opens two dialogs (#3584 review).
+		// always reach the TUI as a dialog. For runtimes that mirror sink
+		// deliveries onto their RunStream channel too (LocalRuntime: the
+		// swap-based bridge best-effort-sends the same event on the very
+		// RunStream channel Run/Retry/RunWithMessage read from below), this
+		// sink is the single, exactly-once delivery point and those loops skip
+		// the mirrored copy (see mustSkipMirroredElicitation). Runtimes that
+		// don't mirror it (RemoteRuntime, whose OnElicitationRequest below is
+		// a no-op) deliver elicitations only through that RunStream copy,
+		// which those loops forward unfiltered (#3584 review).
 		a.runtime.OnElicitationRequest(func(event runtime.Event) {
 			a.sendEvent(ctx, event)
 		})
@@ -513,6 +515,7 @@ func (a *App) Run(ctx context.Context, cancel context.CancelFunc, message string
 		} else {
 			a.session.AddMessage(session.UserMessage(message))
 		}
+		skipMirroredElicitation := mustSkipMirroredElicitation(a.runtime)
 		for event := range a.runtime.RunStream(ctx, a.session) {
 			// If context is cancelled, continue draining but don't forward events
 			// — except StreamStoppedEvent, which must always propagate so the
@@ -526,10 +529,12 @@ func (a *App) Run(ctx context.Context, cancel context.CancelFunc, message string
 				continue
 			}
 
-			// Already delivered via the OnElicitationRequest sink (Start); skip
-			// the bridge's secondary copy on this channel to avoid a second
-			// dialog for the same request (#3584).
-			if isElicitationRequestEvent(event) {
+			// Already delivered via the OnElicitationRequest sink (Start) for
+			// runtimes that mirror it onto RunStream too; skip that duplicate
+			// copy to avoid a second dialog for the same request. Runtimes that
+			// deliver ONLY via RunStream (e.g. RemoteRuntime) are unaffected —
+			// mustSkipMirroredElicitation is false for them (#3584 review).
+			if skipMirroredElicitation && isElicitationRequestEvent(event) {
 				continue
 			}
 
@@ -707,17 +712,37 @@ func (a *App) sendEvent(ctx context.Context, event tea.Msg) {
 }
 
 // isElicitationRequestEvent reports whether event is an
-// *runtime.ElicitationRequestEvent. Start registers an OnElicitationRequest
-// sink that delivers every elicitation request into a.events synchronously
-// and exactly once (elicitationHandler, #3584). For a foreground request
-// that sink delivery and the best-effort bridge secondary delivery land on
-// the very same RunStream channel these loops read from, so any loop that
-// forwards RunStream events into a.events verbatim must skip this event type
-// to avoid a second dialog for the same request — mirroring the exclusion
-// agent_delegation.go's runCollecting already applies for background
-// sub-sessions sharing the bridge slot.
+// *runtime.ElicitationRequestEvent.
 func isElicitationRequestEvent(event runtime.Event) bool {
 	_, ok := event.(*runtime.ElicitationRequestEvent)
+	return ok
+}
+
+// elicitationSinkMirror is an optional runtime capability satisfied by
+// runtimes whose OnElicitationRequest sink is the single, exactly-once
+// delivery point for elicitation requests even though the runtime ALSO
+// best-effort-mirrors the same event onto its RunStream channel, for the
+// benefit of out-of-process consumers reading RunStream directly (see
+// runtime.LocalRuntime.MirrorsElicitationOnRunStream and elicitationHandler,
+// #3584).
+type elicitationSinkMirror interface {
+	MirrorsElicitationOnRunStream()
+}
+
+// mustSkipMirroredElicitation reports whether rt implements
+// elicitationSinkMirror, i.e. whether Start's OnElicitationRequest sink
+// (below) already delivers every elicitation from rt exactly once, making
+// any *runtime.ElicitationRequestEvent read directly off RunStream a
+// duplicate that Run/Retry/RunWithMessage must skip to avoid a second
+// dialog for the same request.
+//
+// Runtimes that do NOT implement it (RemoteRuntime, whose
+// OnElicitationRequest is a documented no-op) deliver elicitations ONLY via
+// RunStream, so that copy is the sole delivery and must reach a.events
+// unfiltered — an earlier fix skipped this event unconditionally and
+// silently dropped every remote elicitation as a result (#3584 review).
+func mustSkipMirroredElicitation(rt runtime.Runtime) bool {
+	_, ok := rt.(elicitationSinkMirror)
 	return ok
 }
 
@@ -765,6 +790,7 @@ func (a *App) Retry(ctx context.Context, cancel context.CancelFunc) {
 		defer release()
 
 		streamStarted := false
+		skipMirroredElicitation := mustSkipMirroredElicitation(a.runtime)
 		for event := range a.runtime.RunStream(ctx, a.session) {
 			// If context is cancelled, continue draining but don't forward events
 			// — except StreamStoppedEvent, which must always propagate so the
@@ -776,10 +802,12 @@ func (a *App) Retry(ctx context.Context, cancel context.CancelFunc) {
 				continue
 			}
 
-			// Already delivered via the OnElicitationRequest sink (Start); skip
-			// the bridge's secondary copy on this channel to avoid a second
-			// dialog for the same request (#3584).
-			if isElicitationRequestEvent(event) {
+			// Already delivered via the OnElicitationRequest sink (Start) for
+			// runtimes that mirror it onto RunStream too; skip that duplicate
+			// copy to avoid a second dialog for the same request. Runtimes that
+			// deliver ONLY via RunStream (e.g. RemoteRuntime) are unaffected —
+			// mustSkipMirroredElicitation is false for them (#3584 review).
+			if skipMirroredElicitation && isElicitationRequestEvent(event) {
 				continue
 			}
 
@@ -827,6 +855,7 @@ func (a *App) RunWithMessage(ctx context.Context, cancel context.CancelFunc, msg
 		defer release()
 
 		a.session.AddMessage(msg)
+		skipMirroredElicitation := mustSkipMirroredElicitation(a.runtime)
 		for event := range a.runtime.RunStream(ctx, a.session) {
 			// If context is cancelled, continue draining but don't forward events
 			// — except StreamStoppedEvent, which must always propagate so the
@@ -840,10 +869,12 @@ func (a *App) RunWithMessage(ctx context.Context, cancel context.CancelFunc, msg
 				continue
 			}
 
-			// Already delivered via the OnElicitationRequest sink (Start); skip
-			// the bridge's secondary copy on this channel to avoid a second
-			// dialog for the same request (#3584).
-			if isElicitationRequestEvent(event) {
+			// Already delivered via the OnElicitationRequest sink (Start) for
+			// runtimes that mirror it onto RunStream too; skip that duplicate
+			// copy to avoid a second dialog for the same request. Runtimes that
+			// deliver ONLY via RunStream (e.g. RemoteRuntime) are unaffected —
+			// mustSkipMirroredElicitation is false for them (#3584 review).
+			if skipMirroredElicitation && isElicitationRequestEvent(event) {
 				continue
 			}
 

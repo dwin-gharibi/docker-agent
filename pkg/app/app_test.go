@@ -937,6 +937,12 @@ func (m *composedElicitationMockRuntime) OnElicitationRequest(handler func(runti
 	m.handler = handler
 }
 
+// MirrorsElicitationOnRunStream marks this mock as reproducing LocalRuntime's
+// mirrored-delivery contract (runtime.LocalRuntime.MirrorsElicitationOnRunStream),
+// so App's RunStream-forwarding loops must skip the duplicate copy this mock
+// also pushes onto RunStream below.
+func (m *composedElicitationMockRuntime) MirrorsElicitationOnRunStream() {}
+
 func (m *composedElicitationMockRuntime) RunStream(_ context.Context, sess *session.Session) <-chan runtime.Event {
 	ch := make(chan runtime.Event, 8)
 	go func() {
@@ -952,6 +958,70 @@ func (m *composedElicitationMockRuntime) RunStream(_ context.Context, sess *sess
 		ch <- runtime.StreamStopped(sess.ID, "mock", "normal")
 	}()
 	return ch
+}
+
+// remoteLikeMockRuntime mirrors RemoteRuntime's elicitation contract: its
+// OnElicitationRequest sink is a no-op (mockRuntime's default; see
+// pkg/runtime/remote_runtime.go's OnElicitationRequest) and every
+// elicitation request arrives ONLY as a *runtime.ElicitationRequestEvent on
+// the RunStream channel, exactly like remote_runtime.go's RunStream
+// forwarding loop. It deliberately does NOT implement
+// elicitationSinkMirror, so App must not skip this event for it.
+type remoteLikeMockRuntime struct {
+	mockRuntime
+}
+
+func (m *remoteLikeMockRuntime) RunStream(_ context.Context, sess *session.Session) <-chan runtime.Event {
+	ch := make(chan runtime.Event, 8)
+	go func() {
+		defer close(ch)
+		ch <- runtime.StreamStarted(sess.ID, "mock")
+		ch <- runtime.ElicitationRequest("need input", "form", nil, "", "eid-1", "", sess.ID, nil, "mock")
+		ch <- runtime.StreamStopped(sess.ID, "mock", "normal")
+	}()
+	return ch
+}
+
+// TestReview_RemoteRuntimeElicitationIsStillDelivered is the regression probe
+// for the over-broad fix to the #3584 double-delivery bug: commit 2ad095ae0
+// made App.Run/Retry/RunWithMessage skip every
+// *runtime.ElicitationRequestEvent read off RunStream UNCONDITIONALLY, which
+// also silently dropped elicitations for runtimes whose OnElicitationRequest
+// sink is a no-op and that deliver ONLY via RunStream (RemoteRuntime) — a
+// remote-backed session showed zero dialogs instead of one. A runtime that
+// does not mirror sink deliveries onto RunStream must have that event pass
+// through to a.events untouched.
+func TestReview_RemoteRuntimeElicitationIsStillDelivered(t *testing.T) {
+	t.Parallel()
+
+	rt := &remoteLikeMockRuntime{}
+	events := make(chan tea.Msg, 16)
+	app := &App{runtime: rt, session: session.New(), events: events}
+
+	app.Start(t.Context())
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	app.Run(ctx, cancel, "hello", nil)
+
+	elicitations := 0
+	deadline := time.After(2 * time.Second)
+drain:
+	for {
+		select {
+		case msg := <-events:
+			if _, ok := msg.(*runtime.ElicitationRequestEvent); ok {
+				elicitations++
+			}
+			if _, ok := msg.(*runtime.StreamStoppedEvent); ok {
+				break drain
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for the stream to stop")
+		}
+	}
+
+	assert.Equal(t, 1, elicitations, "a remote/no-sink runtime's elicitation must still reach the app via RunStream")
 }
 
 // TestReview_ForegroundElicitationIsNotDeliveredTwice is the reviewer's
