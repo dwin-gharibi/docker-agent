@@ -467,6 +467,15 @@ func (r *Runner) runDockerAgentInContainer(ctx context.Context, imageID string, 
 
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	cmd.Env = append(env, os.Environ()...)
+	// On cancellation send SIGINT instead of the default SIGKILL: the docker
+	// CLI proxies SIGINT to the container (SIGKILL is never proxied and would
+	// leave the container running daemon-side). The container's exit also
+	// triggers --rm removal. WaitDelay force-kills the CLI if the container
+	// doesn't stop in time.
+	cmd.Cancel = func() error {
+		return cmd.Process.Signal(os.Interrupt)
+	}
+	cmd.WaitDelay = 10 * time.Second
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, fmt.Errorf("creating stdout pipe: %w", err)
