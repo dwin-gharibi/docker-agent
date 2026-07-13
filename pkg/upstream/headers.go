@@ -50,12 +50,12 @@ type headerTransport struct {
 
 func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	req = req.Clone(req.Context())
-	
+
 	var headers map[string]string
 	if t.headerFactory != nil {
 		headers = t.headerFactory(req.Context())
 	}
-	
+
 	for key, value := range ResolveHeaders(req.Context(), headers) {
 		req.Header.Set(key, value)
 	}
