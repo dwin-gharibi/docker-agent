@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -65,4 +66,49 @@ func TestWorktreeDiffInLocalOnlyRepo(t *testing.T) {
 	diff, err = worktreeDiff(ctx, filepath.Join(dir, "missing"))
 	require.NoError(t, err)
 	assert.Empty(t, diff)
+}
+
+func TestCopyIndex(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+
+	dir := newLocalRepo(t)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "f.txt"), []byte("hi\n"), 0o644))
+	git(t, dir, "add", ".")
+
+	indexCopy, cleanup, err := copyIndex(ctx, dir)
+	require.NoError(t, err)
+
+	want, err := os.ReadFile(filepath.Join(dir, ".git", "index"))
+	require.NoError(t, err)
+	got, err := os.ReadFile(indexCopy)
+	require.NoError(t, err)
+	assert.Equal(t, want, got)
+
+	// Unix mode bits are not enforced on Windows.
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(indexCopy)
+		require.NoError(t, err)
+		assert.Equal(t, os.FileMode(0o600), info.Mode().Perm(), "index copy must not be group- or world-readable")
+	}
+
+	cleanup()
+	_, err = os.Stat(indexCopy)
+	assert.True(t, os.IsNotExist(err))
+}
+
+func TestCopyIndexMissingSource(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+
+	// A fresh repository has no index file until the first git add.
+	dir := newLocalRepo(t)
+
+	indexCopy, cleanup, err := copyIndex(ctx, dir)
+	require.NoError(t, err)
+	defer cleanup()
+
+	got, err := os.ReadFile(indexCopy)
+	require.NoError(t, err)
+	assert.Empty(t, got)
 }

@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/docker/docker-agent/pkg/atomicfile"
 )
 
 // removeWorktree removes a card's git worktree and its branch. Best-effort:
@@ -79,31 +81,31 @@ func copyIndex(ctx context.Context, worktree string) (string, func(), error) {
 	}
 	indexPath := strings.TrimSpace(out)
 
-	tmp, err := os.CreateTemp("", "board-index-*")
+	tmpDir, err := os.MkdirTemp("", "board-index-*")
 	if err != nil {
 		return "", nil, err
 	}
-	cleanup := func() { _ = os.Remove(tmp.Name()) }
+	cleanup := func() { _ = os.RemoveAll(tmpDir) }
 
+	indexCopy := filepath.Join(tmpDir, "index")
 	err = func() error {
-		defer func() { _ = tmp.Close() }()
 		src, err := os.Open(indexPath)
 		if os.IsNotExist(err) {
-			return nil // no index yet: start from an empty one
+			// No index yet: start from an empty one.
+			return atomicfile.Write(indexCopy, bytes.NewReader(nil), 0o600)
 		}
 		if err != nil {
 			return err
 		}
 		defer func() { _ = src.Close() }()
-		_, err = io.Copy(tmp, src)
-		return err
+		return atomicfile.Write(indexCopy, src, 0o600)
 	}()
 	if err != nil {
 		cleanup()
 		return "", nil, fmt.Errorf("copy index: %w", err)
 	}
 
-	return tmp.Name(), cleanup, nil
+	return indexCopy, cleanup, nil
 }
 
 // upstreamBase returns the ref worktrees branch from and diffs compare
