@@ -21,6 +21,7 @@ import (
 	"github.com/docker/docker-agent/pkg/tools/builtin/openurl"
 	"github.com/docker/docker-agent/pkg/tools/builtin/plan"
 	"github.com/docker/docker-agent/pkg/tools/builtin/rag"
+	"github.com/docker/docker-agent/pkg/tools/builtin/scheduler"
 	"github.com/docker/docker-agent/pkg/tools/builtin/sessioncontext"
 	"github.com/docker/docker-agent/pkg/tools/builtin/sessionplan"
 	"github.com/docker/docker-agent/pkg/tools/builtin/shell"
@@ -57,6 +58,9 @@ func DefaultToolsetCreators() map[string]teamloader.ToolsetCreator {
 		},
 		"think": func(_ context.Context, _ latest.Toolset, _ string, _ *config.RuntimeConfig, _ string) (tools.ToolSet, error) {
 			return think.CreateToolSet()
+		},
+		"scheduler": func(_ context.Context, _ latest.Toolset, _ string, _ *config.RuntimeConfig, _ string) (tools.ToolSet, error) {
+			return scheduler.CreateToolSet()
 		},
 		"shell": func(ctx context.Context, toolset latest.Toolset, _ string, runConfig *config.RuntimeConfig, _ string) (tools.ToolSet, error) {
 			return shell.CreateToolSet(ctx, toolset, runConfig)
