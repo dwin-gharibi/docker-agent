@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/docker/docker-agent/pkg/chat"
@@ -134,7 +135,7 @@ type Store interface {
 
 type InMemorySessionStore struct {
 	sessions  *concurrent.Map[string, *Session]
-	messageID int64 // simple counter for message IDs
+	messageID atomic.Int64 // counter for message IDs, incremented via Add(1)
 }
 
 func NewInMemorySessionStore() Store {
@@ -280,10 +281,10 @@ func (s *InMemorySessionStore) AddMessage(_ context.Context, sessionID string, m
 	// concurrently by another goroutine (snapshotItems → cloneMessage),
 	// and writing msg.ID directly races with those reads.
 	stored := cloneMessage(msg)
-	s.messageID++
-	stored.ID = s.messageID
+	id := s.messageID.Add(1)
+	stored.ID = id
 	session.AddMessage(stored)
-	return s.messageID, nil
+	return id, nil
 }
 
 // UpdateMessage updates an existing message by its ID.
