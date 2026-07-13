@@ -982,6 +982,32 @@ func (m *remoteLikeMockRuntime) RunStream(_ context.Context, sess *session.Sessi
 	return ch
 }
 
+// countElicitationDeliveries drains events until a *runtime.StreamStoppedEvent
+// (or a 2s timeout) and returns how many *runtime.ElicitationRequestEvent
+// values were observed along the way. Shared by every regression test below
+// so the drain/timeout logic isn't re-authored (and potentially
+// mis-authored) per entry point.
+func countElicitationDeliveries(t *testing.T, events <-chan tea.Msg) int {
+	t.Helper()
+
+	n := 0
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case msg := <-events:
+			if _, ok := msg.(*runtime.ElicitationRequestEvent); ok {
+				n++
+			}
+			if _, ok := msg.(*runtime.StreamStoppedEvent); ok {
+				return n
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for the stream to stop")
+			return n
+		}
+	}
+}
+
 // TestReview_RemoteRuntimeElicitationIsStillDelivered is the regression probe
 // for the over-broad fix to the #3584 double-delivery bug: commit 2ad095ae0
 // made App.Run/Retry/RunWithMessage skip every
@@ -1004,24 +1030,7 @@ func TestReview_RemoteRuntimeElicitationIsStillDelivered(t *testing.T) {
 	defer cancel()
 	app.Run(ctx, cancel, "hello", nil)
 
-	elicitations := 0
-	deadline := time.After(2 * time.Second)
-drain:
-	for {
-		select {
-		case msg := <-events:
-			if _, ok := msg.(*runtime.ElicitationRequestEvent); ok {
-				elicitations++
-			}
-			if _, ok := msg.(*runtime.StreamStoppedEvent); ok {
-				break drain
-			}
-		case <-deadline:
-			t.Fatal("timed out waiting for the stream to stop")
-		}
-	}
-
-	assert.Equal(t, 1, elicitations, "a remote/no-sink runtime's elicitation must still reach the app via RunStream")
+	assert.Equal(t, 1, countElicitationDeliveries(t, events), "a remote/no-sink runtime's elicitation must still reach the app via RunStream")
 }
 
 // TestReview_ForegroundElicitationIsNotDeliveredTwice is the reviewer's
@@ -1044,22 +1053,101 @@ func TestReview_ForegroundElicitationIsNotDeliveredTwice(t *testing.T) {
 	defer cancel()
 	app.Run(ctx, cancel, "hello", nil)
 
-	elicitations := 0
-	deadline := time.After(2 * time.Second)
-drain:
-	for {
-		select {
-		case msg := <-events:
-			if _, ok := msg.(*runtime.ElicitationRequestEvent); ok {
-				elicitations++
-			}
-			if _, ok := msg.(*runtime.StreamStoppedEvent); ok {
-				break drain
-			}
-		case <-deadline:
-			t.Fatal("timed out waiting for the stream to stop")
-		}
-	}
+	assert.Equal(t, 1, countElicitationDeliveries(t, events), "a single foreground elicitation must open exactly one dialog")
+}
 
-	assert.Equal(t, 1, elicitations, "a single foreground elicitation must open exactly one dialog")
+// TestMustSkipMirroredElicitation_ConcreteRuntimeClassification pins
+// mustSkipMirroredElicitation's classification of the two CONCRETE
+// production runtimes, not just marker-shaped mocks. The composed/remote
+// regression tests above exercise independent mock types that each
+// hand-declare whether they implement elicitationSinkMirror; they never
+// touch runtime.LocalRuntime or runtime.RemoteRuntime, so an inverted
+// production mapping (marker removed from LocalRuntime, or added to
+// RemoteRuntime) would leave every other test in this file green (#3584
+// review — mutation testing proof). *runtime.LocalRuntime and
+// *runtime.RemoteRuntime are asserted directly here; a nil pointer of each
+// concrete type is enough since mustSkipMirroredElicitation only performs a
+// type assertion and never calls a method on rt.
+func TestMustSkipMirroredElicitation_ConcreteRuntimeClassification(t *testing.T) {
+	t.Parallel()
+
+	assert.True(t, mustSkipMirroredElicitation((*runtime.LocalRuntime)(nil)),
+		"LocalRuntime mirrors OnElicitationRequest sink deliveries onto RunStream; App must skip the duplicate RunStream copy")
+	assert.False(t, mustSkipMirroredElicitation((*runtime.RemoteRuntime)(nil)),
+		"RemoteRuntime delivers elicitations ONLY via RunStream (its OnElicitationRequest sink is a no-op); App must not skip that copy")
+}
+
+// elicitationEntryPoint names one of App's three RunStream-forwarding entry
+// points and how to invoke it, so the delivery coverage below can drive all
+// three through one table instead of duplicating the drive/drain logic.
+type elicitationEntryPoint struct {
+	name   string
+	invoke func(app *App, ctx context.Context, cancel context.CancelFunc)
+}
+
+var elicitationEntryPoints = []elicitationEntryPoint{
+	{"Run", func(app *App, ctx context.Context, cancel context.CancelFunc) {
+		app.Run(ctx, cancel, "hello", nil)
+	}},
+	{"Retry", func(app *App, ctx context.Context, cancel context.CancelFunc) {
+		app.Retry(ctx, cancel)
+	}},
+	{"RunWithMessage", func(app *App, ctx context.Context, cancel context.CancelFunc) {
+		app.RunWithMessage(ctx, cancel, session.UserMessage("hello"))
+	}},
+}
+
+// TestElicitationDeliveryAcrossEntryPoints is the mutation-hardened
+// regression coverage for the #3584 double-delivery fix across ALL THREE
+// RunStream-forwarding entry points. Before forwardRunStreamEvents
+// centralized the gating logic, Run, Retry, and RunWithMessage each carried
+// their own independent copy of it — only Run was ever driven through a
+// mirrored and an unmirrored runtime, so breaking delivery in Retry (e.g.
+// dropping the remote/unmirrored copy) or RunWithMessage (e.g. failing to
+// dedupe the mirrored copy) left `go test ./pkg/app` green (#3584 review,
+// mutation-testing proof). Every entry point must deliver exactly one
+// dialog for both a mirrored/local-shaped runtime (sink AND RunStream both
+// fire; the RunStream copy must be skipped) and an unmirrored/remote-shaped
+// runtime (RunStream is the only delivery; it must pass through).
+func TestElicitationDeliveryAcrossEntryPoints(t *testing.T) {
+	t.Parallel()
+
+	for _, ep := range elicitationEntryPoints {
+		t.Run(ep.name, func(t *testing.T) {
+			t.Parallel()
+
+			t.Run("mirrored runtime delivers exactly once", func(t *testing.T) {
+				t.Parallel()
+
+				rt := &composedElicitationMockRuntime{}
+				events := make(chan tea.Msg, 16)
+				app := &App{runtime: rt, session: session.New(), events: events}
+				app.Start(t.Context())
+				require.NotNil(t, rt.handler, "Start must register the OnElicitationRequest handler")
+
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				ep.invoke(app, ctx, cancel)
+
+				assert.Equal(t, 1, countElicitationDeliveries(t, events),
+					"a mirrored/local-shaped runtime's foreground elicitation must open exactly one dialog")
+			})
+
+			t.Run("unmirrored runtime still delivers once", func(t *testing.T) {
+				t.Parallel()
+
+				rt := &remoteLikeMockRuntime{}
+				events := make(chan tea.Msg, 16)
+				app := &App{runtime: rt, session: session.New(), events: events}
+				app.Start(t.Context())
+
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				ep.invoke(app, ctx, cancel)
+
+				assert.Equal(t, 1, countElicitationDeliveries(t, events),
+					"an unmirrored/remote-shaped runtime's elicitation must still reach the app via RunStream")
+			})
+		})
+	}
 }

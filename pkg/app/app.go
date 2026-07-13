@@ -515,36 +515,7 @@ func (a *App) Run(ctx context.Context, cancel context.CancelFunc, message string
 		} else {
 			a.session.AddMessage(session.UserMessage(message))
 		}
-		skipMirroredElicitation := mustSkipMirroredElicitation(a.runtime)
-		for event := range a.runtime.RunStream(ctx, a.session) {
-			// If context is cancelled, continue draining but don't forward events
-			// — except StreamStoppedEvent, which must always propagate so the
-			// supervisor can mark the session as no longer running.
-			if ctx.Err() != nil {
-				if _, ok := event.(*runtime.StreamStoppedEvent); ok {
-					// ctx is cancelled; detach cancellation but keep its trace
-					// context so the stop event still reaches subscribers.
-					a.sendEvent(context.WithoutCancel(ctx), event)
-				}
-				continue
-			}
-
-			// Already delivered via the OnElicitationRequest sink (Start) for
-			// runtimes that mirror it onto RunStream too; skip that duplicate
-			// copy to avoid a second dialog for the same request. Runtimes that
-			// deliver ONLY via RunStream (e.g. RemoteRuntime) are unaffected —
-			// mustSkipMirroredElicitation is false for them (#3584 review).
-			if skipMirroredElicitation && isElicitationRequestEvent(event) {
-				continue
-			}
-
-			// Clear titleGenerating flag when title is generated (from server for remote runtime)
-			if _, ok := event.(*runtime.SessionTitleEvent); ok {
-				a.titleGenerating.Store(false)
-			}
-
-			a.sendEvent(ctx, event)
-		}
+		a.forwardRunStreamEvents(ctx, a.runtime.RunStream(ctx, a.session), nil)
 	}()
 }
 
@@ -746,6 +717,56 @@ func mustSkipMirroredElicitation(rt runtime.Runtime) bool {
 	return ok
 }
 
+// forwardRunStreamEvents drains ch and forwards each event to a.events,
+// applying the bookkeeping shared by Run, Retry, and RunWithMessage. This is
+// the SINGLE place that decides whether a RunStream event reaches a.events:
+// centralizing it here (instead of three copies of the same loop) is what
+// lets one set of tests cover all three entry points, and makes it
+// impossible for one of them to silently regress independently of the
+// others (#3584 review — Retry and RunWithMessage had duplicated this exact
+// logic untested).
+//
+// filter, when non-nil, runs after the elicitation-mirroring skip below and
+// may itself veto forwarding an event by returning false. Retry uses it to
+// suppress the pre-StreamStarted re-emitted user message; Run and
+// RunWithMessage pass nil.
+func (a *App) forwardRunStreamEvents(ctx context.Context, ch <-chan runtime.Event, filter func(event runtime.Event) (forward bool)) {
+	skipMirroredElicitation := mustSkipMirroredElicitation(a.runtime)
+	for event := range ch {
+		// If context is cancelled, continue draining but don't forward events
+		// — except StreamStoppedEvent, which must always propagate so the
+		// supervisor can mark the session as no longer running.
+		if ctx.Err() != nil {
+			if _, ok := event.(*runtime.StreamStoppedEvent); ok {
+				// ctx is cancelled; detach cancellation but keep its trace
+				// context so the stop event still reaches subscribers.
+				a.sendEvent(context.WithoutCancel(ctx), event)
+			}
+			continue
+		}
+
+		// Already delivered via the OnElicitationRequest sink (Start) for
+		// runtimes that mirror it onto RunStream too; skip that duplicate
+		// copy to avoid a second dialog for the same request. Runtimes that
+		// deliver ONLY via RunStream (e.g. RemoteRuntime) are unaffected —
+		// mustSkipMirroredElicitation is false for them (#3584 review).
+		if skipMirroredElicitation && isElicitationRequestEvent(event) {
+			continue
+		}
+
+		if filter != nil && !filter(event) {
+			continue
+		}
+
+		// Clear titleGenerating flag when title is generated (from server for remote runtime)
+		if _, ok := event.(*runtime.SessionTitleEvent); ok {
+			a.titleGenerating.Store(false)
+		}
+
+		a.sendEvent(ctx, event)
+	}
+}
+
 // acquireStreamGuard locks a.streamGuard (set via WithStreamGuard) and
 // returns the matching release func, or a no-op release when no guard is
 // attached (a bare App with no SessionManager to race against). Callers must
@@ -790,42 +811,17 @@ func (a *App) Retry(ctx context.Context, cancel context.CancelFunc) {
 		defer release()
 
 		streamStarted := false
-		skipMirroredElicitation := mustSkipMirroredElicitation(a.runtime)
-		for event := range a.runtime.RunStream(ctx, a.session) {
-			// If context is cancelled, continue draining but don't forward events
-			// — except StreamStoppedEvent, which must always propagate so the
-			// supervisor can mark the session as no longer running.
-			if ctx.Err() != nil {
-				if _, ok := event.(*runtime.StreamStoppedEvent); ok {
-					a.sendEvent(context.WithoutCancel(ctx), event)
-				}
-				continue
-			}
-
-			// Already delivered via the OnElicitationRequest sink (Start) for
-			// runtimes that mirror it onto RunStream too; skip that duplicate
-			// copy to avoid a second dialog for the same request. Runtimes that
-			// deliver ONLY via RunStream (e.g. RemoteRuntime) are unaffected —
-			// mustSkipMirroredElicitation is false for them (#3584 review).
-			if skipMirroredElicitation && isElicitationRequestEvent(event) {
-				continue
-			}
-
+		a.forwardRunStreamEvents(ctx, a.runtime.RunStream(ctx, a.session), func(event runtime.Event) bool {
 			switch event.(type) {
 			case *runtime.StreamStartedEvent:
 				streamStarted = true
 			case *runtime.UserMessageEvent:
 				if !streamStarted {
-					continue
+					return false
 				}
 			}
-
-			if _, ok := event.(*runtime.SessionTitleEvent); ok {
-				a.titleGenerating.Store(false)
-			}
-
-			a.sendEvent(ctx, event)
-		}
+			return true
+		})
 	}()
 }
 
@@ -855,36 +851,7 @@ func (a *App) RunWithMessage(ctx context.Context, cancel context.CancelFunc, msg
 		defer release()
 
 		a.session.AddMessage(msg)
-		skipMirroredElicitation := mustSkipMirroredElicitation(a.runtime)
-		for event := range a.runtime.RunStream(ctx, a.session) {
-			// If context is cancelled, continue draining but don't forward events
-			// — except StreamStoppedEvent, which must always propagate so the
-			// supervisor can mark the session as no longer running.
-			if ctx.Err() != nil {
-				if _, ok := event.(*runtime.StreamStoppedEvent); ok {
-					// ctx is cancelled; detach cancellation but keep its trace
-					// context so the stop event still reaches subscribers.
-					a.sendEvent(context.WithoutCancel(ctx), event)
-				}
-				continue
-			}
-
-			// Already delivered via the OnElicitationRequest sink (Start) for
-			// runtimes that mirror it onto RunStream too; skip that duplicate
-			// copy to avoid a second dialog for the same request. Runtimes that
-			// deliver ONLY via RunStream (e.g. RemoteRuntime) are unaffected —
-			// mustSkipMirroredElicitation is false for them (#3584 review).
-			if skipMirroredElicitation && isElicitationRequestEvent(event) {
-				continue
-			}
-
-			// Clear titleGenerating flag when title is generated (from server for remote runtime)
-			if _, ok := event.(*runtime.SessionTitleEvent); ok {
-				a.titleGenerating.Store(false)
-			}
-
-			a.sendEvent(ctx, event)
-		}
+		a.forwardRunStreamEvents(ctx, a.runtime.RunStream(ctx, a.session), nil)
 	}()
 }
 
