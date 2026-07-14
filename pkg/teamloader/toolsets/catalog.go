@@ -15,6 +15,7 @@ var BuiltinToolsets = []BuiltinToolsetInfo{
 	builtinToolset("background_jobs", "background-jobs", "Run and manage long-running shell commands"),
 	builtinToolset("fetch", "fetch", "Read content from HTTP/HTTPS URLs"),
 	builtinToolset("filesystem", "filesystem", "Read, write, list, search, and navigate files and directories"),
+	builtinToolset("git", "git", "Read-only git repository inspection: status, log, branches, show, blame"),
 	builtinToolset("lsp", "lsp", "Connect to Language Server Protocol servers for code intelligence"),
 	builtinToolset("mcp", "mcp", "Extend agents with external tools via the Model Context Protocol"),
 	builtinToolset("mcp_catalog", "mcp-catalog", "Discover and activate remote MCP servers from the Docker MCP Catalog"),
