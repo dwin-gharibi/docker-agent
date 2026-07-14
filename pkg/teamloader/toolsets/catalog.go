@@ -34,6 +34,7 @@ var BuiltinToolsets = []BuiltinToolsetInfo{
 	builtinToolset("think", "think", "Step-by-step reasoning scratchpad for planning"),
 	builtinToolset("todo", "todo", "Manage a task list for complex multi-step workflows"),
 	builtinToolset("user_prompt", "user-prompt", "Ask the user questions and collect interactive input"),
+	builtinToolset("webhook", "webhook", "Send outbound notifications (Slack, Discord, Telegram, IFTTT, Teams, and more)"),
 }
 
 func builtinToolset(toolsetType, docsSlug, summary string) BuiltinToolsetInfo {
