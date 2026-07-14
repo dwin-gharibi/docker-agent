@@ -24,6 +24,7 @@ var BuiltinToolsets = []BuiltinToolsetInfo{
 	builtinToolset("openapi", "openapi", "Generate tools automatically from an OpenAPI specification"),
 	builtinToolset("plan", "plan", "Shared persistent scratchpad for multi-agent collaboration"),
 	builtinToolset("rag", "rag", "Search document knowledge bases with hybrid retrieval (RAG)"),
+	builtinToolset("sandbox", "sandbox", "Run code snippets in an ephemeral, isolated container"),
 	builtinToolset("script", "script", "Define custom shell scripts as named tools with typed parameters"),
 	builtinToolset("session_context", "session_context", "Reference a previous session as context in the current one"),
 	builtinToolset("session_plan", "session_plan", "Per-session plan tracker for the draft/review/execute workflow"),
