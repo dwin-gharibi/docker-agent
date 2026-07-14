@@ -18,6 +18,7 @@ Built-in tools are included with docker-agent and require no external dependenci
 | Type | Description | Page |
 | --- | --- | --- |
 | `filesystem` | Read, write, list, search, navigate | [Filesystem](../../tools/filesystem/index.md) |
+| `git` | Read-only repository inspection (status, log, branches, show, blame) | [Git](../../tools/git/index.md) |
 | `shell` | Execute shell commands synchronously | [Shell](../../tools/shell/index.md) |
 | `background_jobs` | Run and manage long-running shell commands | [Background Jobs](../../tools/background-jobs/index.md) |
 | `think` | Reasoning scratchpad | [Think](../../tools/think/index.md) |
