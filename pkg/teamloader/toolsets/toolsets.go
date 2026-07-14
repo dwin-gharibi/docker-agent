@@ -13,6 +13,7 @@ import (
 	"github.com/docker/docker-agent/pkg/tools/builtin/backgroundjobs"
 	"github.com/docker/docker-agent/pkg/tools/builtin/fetch"
 	"github.com/docker/docker-agent/pkg/tools/builtin/filesystem"
+	gittool "github.com/docker/docker-agent/pkg/tools/builtin/git"
 	"github.com/docker/docker-agent/pkg/tools/builtin/lsp"
 	"github.com/docker/docker-agent/pkg/tools/builtin/mcpcatalog"
 	"github.com/docker/docker-agent/pkg/tools/builtin/memory"
@@ -72,6 +73,9 @@ func DefaultToolsetCreators() map[string]teamloader.ToolsetCreator {
 		},
 		"fetch": func(_ context.Context, toolset latest.Toolset, _ string, runConfig *config.RuntimeConfig, _ string) (tools.ToolSet, error) {
 			return fetch.CreateToolSet(toolset, runConfig)
+		},
+		"git": func(_ context.Context, _ latest.Toolset, _ string, runConfig *config.RuntimeConfig, _ string) (tools.ToolSet, error) {
+			return gittool.CreateToolSet(runConfig)
 		},
 		"mcp": func(ctx context.Context, toolset latest.Toolset, _ string, runConfig *config.RuntimeConfig, _ string) (tools.ToolSet, error) {
 			return mcp.CreateToolSet(ctx, toolset, runConfig)
