@@ -83,6 +83,9 @@ type Settings struct {
 	// CacheStablePrompts keeps changing trusted context out of the frozen system
 	// prefix and appends chronological updates instead. Defaults to false.
 	CacheStablePrompts *bool `yaml:"cache_stable_prompts,omitempty"`
+	// WarnOnCacheMiss shows a warning when a model call after the first one in
+	// a session reports no cached input tokens. Defaults to false.
+	WarnOnCacheMiss *bool `yaml:"warn_on_cache_miss,omitempty"`
 	// Permissions defines global permission patterns applied across all sessions
 	// and agents. These act as user-wide defaults; session-level and agent-level
 	// permissions override them.
@@ -219,6 +222,11 @@ func (s *Settings) SnapshotsEnabled() bool {
 // CacheStablePromptsEnabled reports whether chronological instruction updates are enabled.
 func (s *Settings) CacheStablePromptsEnabled() bool {
 	return s != nil && s.CacheStablePrompts != nil && *s.CacheStablePrompts
+}
+
+// CacheMissWarningsEnabled reports whether cache-miss notifications are enabled.
+func (s *Settings) CacheMissWarningsEnabled() bool {
+	return s != nil && s.WarnOnCacheMiss != nil && *s.WarnOnCacheMiss
 }
 
 // GlobalHooks returns the user-level hooks config, if configured. Invalid

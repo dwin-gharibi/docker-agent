@@ -112,6 +112,7 @@ type Preferences struct {
 	RestoreTabs        bool
 	Snapshot           bool
 	CacheStablePrompts bool
+	WarnOnCacheMiss    bool
 	Lean               bool
 	TabTitleMaxLength  int
 	Sound              bool

@@ -60,6 +60,7 @@ const (
 const (
 	rowSound = iota
 	rowSoundThreshold
+	rowWarnOnCacheMiss
 	notificationsRowCount
 )
 
@@ -272,6 +273,8 @@ func (d *settingsDialog) changeValue(delta int) tea.Cmd {
 			if d.current.Sound {
 				d.current.SoundThreshold = stepValue(d.current.SoundThreshold, delta, 1, 1, 300)
 			}
+		case rowWarnOnCacheMiss:
+			d.current.WarnOnCacheMiss = !d.current.WarnOnCacheMiss
 		}
 	}
 	return nil
@@ -382,7 +385,8 @@ func (d *settingsDialog) renderBehaviorTab(content *Content, inner int) {
 func (d *settingsDialog) renderNotificationsTab(content *Content, inner int) {
 	content.AddSpace().
 		AddContent(d.renderToggleRow(rowSound, "Sound on task completion", d.current.Sound)).
-		AddContent(d.renderStepperRow(rowSoundThreshold, "Sound threshold", d.current.SoundThreshold, "seconds", inner, !d.current.Sound))
+		AddContent(d.renderStepperRow(rowSoundThreshold, "Sound threshold", d.current.SoundThreshold, "seconds", inner, !d.current.Sound)).
+		AddContent(d.renderToggleRow(rowWarnOnCacheMiss, "Warn when a turn misses the cache", d.current.WarnOnCacheMiss))
 }
 
 func (d *settingsDialog) renderSendModeOption(opt sendModeOption) string {
