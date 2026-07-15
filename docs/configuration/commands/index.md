@@ -20,8 +20,13 @@ Commands come in three shapes:
 | Shape | What it does |
 | --- | --- |
 | [Prompt command](#prompt-commands) | Sends a prompt to the current agent |
-| [URL command](#url-commands) | Opens a link in the user's browser (TUI only) |
-| [Agent-switching command](#agent-switching-commands) | Switches the active agent, optionally with a prompt |
+| [URL command](#url-commands) | Opens a link in the user's browser (full TUI only) |
+| [Agent-switching command](#agent-switching-commands) | Switches the active agent, optionally with a prompt (full TUI and CLI) |
+
+> [!IMPORTANT]
+> **Behavior differs by frontend**
+>
+> `url` and `agent` are only fully honored in the **full TUI**, which checks `url` before `agent` (a URL command opens the browser and stops there; an agent-switching command switches before sending any instruction). The **lean TUI** doesn't special-case either field — it only resolves a command's expanded text and sends it as a chat message, so a URL-only command silently sends whatever trailing text followed the slash (often nothing, opening no browser) and an agent-switching command sends its instruction to the *current* agent instead of the target. The **CLI** (`docker agent run agent.yaml /command`) switches agents like the full TUI, but has no browser to open, so `url` has no effect there.
 
 ## Prompt Commands
 
@@ -50,12 +55,33 @@ commands:
 
 Commands support JavaScript template literal syntax (`${env.VAR}`) for environment variable interpolation, with optional `||` defaults and ternary expressions — the same syntax as agent `instruction` and `description`. Undefined variables expand to the empty string. See [Variable Expansion in Config Fields](../overview/index.md#variable-expansion-in-config-fields) for the full picture.
 
-Prompt commands also accept positional arguments (`$1`, `$2`, …) and bang commands (`` !`command` ``) inside `instruction`, letting a command template text typed after the slash or shell out for extra context.
+Prompt commands can also reference the text typed after the slash and call tools, using the same `${...}` expansion engine as `${env.VAR}`:
+
+- `${args[0]}`, `${args[1]}`, … — individual positional arguments (whitespace-tokenized; quoted substrings keep their spaces together).
+- `${args}` or `${args.join(" ")}` — the full argument list.
+- `${tool_name({key: value, ...})}` — calls an agent tool and inlines its output. JS expressions are evaluated before tool commands, so tool output is never itself re-evaluated as JS.
+- `` !tool_name(key=value) `` — legacy bang syntax for the same tool-call inlining; still supported alongside `${tool_name({...})}`.
+
+If `instruction` uses none of the `${args...}` placeholders, any text typed after the slash is appended to the resolved instruction automatically.
+
+```yaml
+commands:
+  fix:
+    description: "Fix a file, with optional extra options"
+    instruction: "Fix the file ${args[0]} with options ${args[1]}"
+  run:
+    description: "Run a command with all the typed arguments"
+    instruction: 'Run command with args: ${args.join(" ")}'
+  lint:
+    description: "Show the current lint output"
+    instruction: 'Lint: ${shell({cmd: "task lint"})}'
+```
 
 ```bash
 # Run commands from the CLI too
 $ docker agent run agent.yaml /df
 $ docker agent run agent.yaml /greet
+$ docker agent run agent.yaml /fix main.go --verbose
 $ PROJECT_NAME=myapp ENV=production docker agent run agent.yaml /deploy
 ```
 
@@ -86,9 +112,9 @@ The `{{session_id}}` token is replaced at invocation time with the current sessi
 URLs are validated before being handed to the OS opener: a parseable URL with a non-empty scheme is required, and flag-like inputs (those starting with `-`) are rejected to prevent argument injection.
 
 > [!NOTE]
-> **TUI only**
+> **Full TUI only**
 >
-> URL commands have no effect when run from the CLI (`docker agent run agent.yaml /docs` does nothing outside the TUI) — there's no browser to open a link in.
+> URL commands only open a browser in the full TUI. They have no effect on the CLI (`docker agent run agent.yaml /docs` does nothing outside the TUI — there's no browser to open a link in) and no effect in the lean TUI either, which doesn't check the `url` field at all.
 
 See [`examples/url_commands.yaml`](https://github.com/docker/docker-agent/blob/main/examples/url_commands.yaml) for a complete example.
 
@@ -107,7 +133,7 @@ agents:
       # Switch to planner with a pre-filled prompt
       plan:
         agent: planner
-        instruction: "Create a detailed plan for: $1"
+        instruction: "Create a detailed plan for: ${args.join(' ')}"
       # Switch to reviewer; any text after /review is forwarded
       review:
         agent: reviewer
@@ -123,7 +149,7 @@ agents:
     instruction: You review code and suggest improvements.
 ```
 
-When `agent` is set **without** `instruction`, any text typed after the slash command (e.g. `/review fix the auth bug`) is forwarded as a prompt to the target agent. When both are set, the agent is switched first, then the instruction is sent to the new agent. Either way, the target agent must be listed in the current agent's `sub_agents` array.
+When `agent` is set **without** `instruction`, any text typed after the slash command (e.g. `/review fix the auth bug`) is forwarded as a prompt to the target agent. When both are set, the agent is switched first, then the instruction is sent to the new agent. Either way, the target can be **any agent defined in the team**, not just one of the current agent's own `sub_agents` — `sub_agents` above is shown because `planner` and `reviewer` also happen to be delegation targets, not because `agent:` requires it.
 
 Agent switching stays in the same session — the target agent sees the full conversation history, and the user must explicitly switch back (there's no automatic return). This is different from the two other ways agents hand off work:
 
@@ -185,8 +211,8 @@ The TUI ships its own slash commands (`/new`, `/compact`, `/sessions`, `/setting
 | Property | Type | Description |
 | --- | --- | --- |
 | `description` | string | Shown in completion dialogs and help text. |
-| `instruction` | string | The prompt sent to the agent. Supports bang commands (`` !`command` ``) and positional arguments (`$1`, `$2`, …). |
-| `agent` | string | Name of a sub-agent to switch to when this command is invoked. Must be defined in `sub_agents`. When set without `instruction`, any text typed after the slash command is forwarded as a prompt to the target agent. |
-| `url` | string | URL to open in the user's default browser when this command is invoked, instead of sending a prompt to the agent. The token `{{session_id}}` is replaced at invocation time with the current session ID (URL-query-escaped). |
+| `instruction` | string | The prompt sent to the agent. Supports argument expansion (`${args[0]}`, `${args.join(" ")}`, …), tool calls (`${tool_name({...})}`), and the legacy bang syntax `!tool_name(...)`. |
+| `agent` | string | Name of an agent in the team to switch to when this command is invoked — any agent in the team's `agents:` map, not just one of the current agent's `sub_agents`. When set without `instruction`, any text typed after the slash command is forwarded as a prompt to the target agent. |
+| `url` | string | URL to open in the user's default browser when this command is invoked, instead of sending a prompt to the agent (full TUI only — see [URL Commands](#url-commands)). The token `{{session_id}}` is replaced at invocation time with the current session ID (URL-query-escaped). |
 
-`instruction` and `agent` can be combined (the agent is switched first, then the instruction is sent to the new agent). If `url` is set, it takes precedence over `agent` and `instruction` — the command only opens the browser. The simple string form is shorthand for `{ instruction: "..." }`.
+`instruction` and `agent` can be combined (the agent is switched first, then the instruction is sent to the new agent). In the full TUI, if `url` is set, it takes precedence over `agent` and `instruction` — the command only opens the browser; the lean TUI and CLI don't check `url` at all, so a URL-only command instead sends its (usually empty) resolved text as a prompt. See [Behavior differs by frontend](#what-slash-commands-are) above. The simple string form is shorthand for `{ instruction: "..." }`.
