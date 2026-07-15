@@ -3,6 +3,11 @@
 All notable changes to this project will be documented in this file.
 
 
+## [v1.107.0] - 2026-07-15
+
+Maintenance release with dependency updates.
+
+
 ## [v1.103.0] - 2026-07-09
 
 This release polishes the agent picker UI, adds context-usage gauge warning states, improves config handling, and expands sandbox template tooling.
@@ -4658,3 +4663,5 @@ This release improves the terminal user interface with better error handling and
 [v1.102.0]: https://github.com/docker/docker-agent/releases/tag/v1.102.0
 
 [v1.103.0]: https://github.com/docker/docker-agent/releases/tag/v1.103.0
+
+[v1.107.0]: https://github.com/docker/docker-agent/releases/tag/v1.107.0
