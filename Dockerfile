@@ -53,6 +53,10 @@ RUN --mount=type=bind,from=osxcross,src=/osxsdk,target=/xx-sdk \
     set -ex
     if [ "$TARGETOS" != "darwin" ]; then
       export XX_GO_PREFER_C_COMPILER=zig
+    else
+      # clang 21 (alpine 3.23) rejects xx's default "10.16" Big Sur alias with
+      # -Werror,-Woverriding-deployment-version when targeting arm64.
+      export MACOSX_VERSION_MIN=11.0
     fi
     xx-go build -trimpath -tags no_audio -ldflags "-s -w -linkmode=external -X 'github.com/docker/docker-agent/pkg/version.Version=$GIT_TAG' -X 'github.com/docker/docker-agent/pkg/version.Commit=$GIT_COMMIT'" -o /binaries/docker-agent-$TARGETOS-$TARGETARCH .
     xx-verify --static /binaries/docker-agent-$TARGETOS-$TARGETARCH
