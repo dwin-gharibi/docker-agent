@@ -525,7 +525,8 @@ func (r *LocalRuntime) runStreamLoop(ctx context.Context, sess *session.Session,
 		// trigger and the UI context gauge (issue #3241); it equals the primary
 		// window unless a smaller compaction model is configured.
 		contextLimit := r.effectiveContextLimit(ctx, a, r.resolveContextLimit(ctx, model, modelID))
-		if contextLimit > 0 && r.sessionCompactionEnabled(a) && compaction.ShouldCompact(sess.InputTokens, sess.OutputTokens, 0, contextLimit, a.CompactionThreshold()) {
+		inputTokens, outputTokens := sess.Usage()
+		if contextLimit > 0 && r.sessionCompactionEnabled(a) && compaction.ShouldCompact(inputTokens, outputTokens, 0, contextLimit, a.CompactionThreshold()) {
 			r.compactWithReason(ctx, sess, "", compactionReasonThreshold, sink)
 		}
 
@@ -1160,17 +1161,18 @@ func (r *LocalRuntime) compactIfNeeded(
 		addedTokens += estimator.EstimateMessageTokens(&newMessages[i].Message)
 	}
 
-	if !compaction.ShouldCompact(sess.InputTokens, sess.OutputTokens, addedTokens, contextLimit, a.CompactionThreshold()) {
+	inputTokens, outputTokens := sess.Usage()
+	if !compaction.ShouldCompact(inputTokens, outputTokens, addedTokens, contextLimit, a.CompactionThreshold()) {
 		return
 	}
 
 	slog.InfoContext(ctx, "Proactive compaction: tool results pushed estimated context past the compaction threshold",
 		"agent", a.Name(),
-		"input_tokens", sess.InputTokens,
-		"output_tokens", sess.OutputTokens,
+		"input_tokens", inputTokens,
+		"output_tokens", outputTokens,
 		"added_estimated_tokens", addedTokens,
 		"estimator_scale", estimator.Scale(),
-		"estimated_total", sess.InputTokens+sess.OutputTokens+addedTokens,
+		"estimated_total", inputTokens+outputTokens+addedTokens,
 		"context_limit", contextLimit,
 	)
 	r.compactWithReason(ctx, sess, "", compactionReasonThreshold, events)

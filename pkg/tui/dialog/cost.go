@@ -238,7 +238,10 @@ func (d *costDialog) gatherCostData() costData {
 
 	var walkSession func(sess *session.Session)
 	walkSession = func(sess *session.Session) {
-		for _, item := range sess.Messages {
+		// Iterate a locked snapshot: runtime goroutines append to the live
+		// Messages slice while the dialog renders. The snapshot releases
+		// sess.mu before the recursive sub-session accessors take theirs.
+		for _, item := range sess.MessagesSnapshot() {
 			switch {
 			case item.IsMessage():
 				msg := item.Message
@@ -264,7 +267,7 @@ func (d *costDialog) gatherCostData() costData {
 
 	// Fall back to remote mode if no per-message data was found.
 	if !data.hasPerMessageData {
-		for _, record := range d.session.MessageUsageHistory {
+		for _, record := range d.session.MessageUsageHistorySnapshot() {
 			addRecord(record.AgentName, record.Model, record.Cost, &record.Usage)
 		}
 	}
@@ -278,11 +281,12 @@ func (d *costDialog) gatherCostData() costData {
 
 	// Fall back to session-level totals (e.g. past sessions without per-message data).
 	if !data.hasPerMessageData {
+		inputTokens, outputTokens := d.session.Usage()
 		data.total = totalUsage{
 			cost: d.session.TotalCost(),
 			Usage: chat.Usage{
-				InputTokens:  d.session.InputTokens,
-				OutputTokens: d.session.OutputTokens,
+				InputTokens:  inputTokens,
+				OutputTokens: outputTokens,
 			},
 		}
 	}

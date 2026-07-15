@@ -90,7 +90,7 @@ func Run(ctx context.Context, out *Printer, cfg Config, rt runtime.Runtime, sess
 		ctx = telemetry.WithClient(ctx, telemetryClient)
 	}
 
-	sess.Title = "Running agent"
+	sess.SetTitle("Running agent")
 	// If the last received event was an error, return it. That way the exit code
 	// will be non-zero if the agent failed.
 	var lastErr error

@@ -484,7 +484,7 @@ func (a *App) Run(ctx context.Context, cancel context.CancelFunc, message string
 	a.cancel = cancel
 
 	// If this is the first message and no title exists, start local title generation
-	if a.session.Title == "" && a.titleGen != nil {
+	if a.session.TitleSnapshot() == "" && a.titleGen != nil {
 		a.titleGenerating.Store(true)
 		go a.generateTitle(ctx, []string{message})
 	}
@@ -764,7 +764,7 @@ func (a *App) RunWithMessage(ctx context.Context, cancel context.CancelFunc, msg
 	a.cancel = cancel
 
 	// If this is the first message and no title exists, start local title generation
-	if a.session.Title == "" && a.titleGen != nil {
+	if a.session.TitleSnapshot() == "" && a.titleGen != nil {
 		a.titleGenerating.Store(true)
 		// Extract text content from the message for title generation
 		userMessage := msg.Message.Content

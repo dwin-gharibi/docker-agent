@@ -180,7 +180,7 @@ func (s *InMemorySessionStore) GetSessionSummaries(_ context.Context) ([]Summary
 		}
 		summaries = append(summaries, Summary{
 			ID:          value.ID,
-			Title:       value.Title,
+			Title:       value.TitleSnapshot(),
 			CreatedAt:   value.CreatedAt,
 			Starred:     value.Starred,
 			NumMessages: value.MessageCount(),
@@ -436,9 +436,7 @@ func (s *InMemorySessionStore) UpdateSessionTokens(_ context.Context, sessionID 
 	if !exists {
 		return ErrNotFound
 	}
-	session.InputTokens = inputTokens
-	session.OutputTokens = outputTokens
-	session.Cost = cost
+	session.SetTokensAndCost(inputTokens, outputTokens, cost)
 	return nil
 }
 
@@ -451,7 +449,7 @@ func (s *InMemorySessionStore) UpdateSessionTitle(_ context.Context, sessionID, 
 	if !exists {
 		return ErrNotFound
 	}
-	session.Title = title
+	session.SetTitle(title)
 	return nil
 }
 

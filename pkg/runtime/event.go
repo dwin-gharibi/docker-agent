@@ -404,10 +404,13 @@ func (e *TokenUsageEvent) GetSessionID() string { return e.SessionID }
 // compactionThreshold is the agent's configured auto-compaction trigger
 // fraction (0 or omitted when unknown), passed along verbatim for UI gauges.
 func SessionUsage(sess *session.Session, contextLimit int64, compactionThreshold ...float64) *Usage {
+	// Usage() snapshots both counters under sess.mu so a concurrent
+	// SetUsage/ApplyCompaction cannot tear the pair.
+	input, output := sess.Usage()
 	u := &Usage{
-		InputTokens:   sess.InputTokens,
-		OutputTokens:  sess.OutputTokens,
-		ContextLength: sess.InputTokens + sess.OutputTokens,
+		InputTokens:   input,
+		OutputTokens:  output,
+		ContextLength: input + output,
 		ContextLimit:  contextLimit,
 		Cost:          sess.OwnCost(),
 	}

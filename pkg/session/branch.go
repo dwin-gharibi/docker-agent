@@ -46,7 +46,7 @@ func branchSessionWithTitle(parent *Session, branchAtPosition int, titleFn func(
 	}
 
 	branched := New()
-	copySessionMetadata(branched, parent, titleFn(parent.Title))
+	copySessionMetadata(branched, parent, titleFn(parent.TitleSnapshot()))
 
 	branched.Messages = make([]Item, 0, branchAtPosition)
 	for i := range branchAtPosition {
@@ -161,7 +161,7 @@ func cloneSubSession(src *Session) (*Session, error) {
 	}
 
 	cloned := New()
-	copySessionMetadata(cloned, src, src.Title)
+	copySessionMetadata(cloned, src, src.TitleSnapshot())
 	cloned.CreatedAt = src.CreatedAt
 
 	// Snapshot under src.mu: a sub-session created by a background agent
@@ -185,7 +185,7 @@ func copySessionMetadata(dst, src *Session, title string) {
 	if src == nil || dst == nil {
 		return
 	}
-	dst.Title = title
+	dst.SetTitle(title)
 	dst.ToolsApproved = src.ToolsApproved
 	dst.HideToolResults = src.HideToolResults
 	dst.WorkingDir = src.WorkingDir
@@ -386,6 +386,5 @@ func recalculateSessionTotals(sess *Session) {
 		}
 	}
 
-	sess.InputTokens = inputTokens
-	sess.OutputTokens = outputTokens
+	sess.SetUsage(inputTokens, outputTokens)
 }

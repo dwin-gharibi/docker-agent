@@ -116,7 +116,10 @@ type Error struct {
 
 // Session represents the agent's state including conversation history and variables
 type Session struct {
-	// mu protects Messages from concurrent read/write access.
+	// mu protects Messages and the scalar metadata that is written
+	// cross-goroutine (Title, InputTokens, OutputTokens, Cost, ...) from
+	// concurrent read/write access. Shared-session readers must go through
+	// the locked accessors (TitleSnapshot, Usage, TokensAndCost, ...).
 	mu sync.RWMutex `json:"-"`
 
 	// now and newID are per-session sources of time and identity. They are
@@ -137,7 +140,8 @@ type Session struct {
 	// and never used internally. The session's own "id" is always a fresh UUID.
 	InputID string `json:"input_id,omitempty"`
 
-	// Title is the title of the session, set by the runtime
+	// Title is the title of the session, set by the runtime. Protected by
+	// mu: shared-session callers must go through SetTitle/TitleSnapshot.
 	Title string `json:"title"`
 
 	// Evals contains evaluation criteria for this session (used by eval framework)
@@ -207,6 +211,9 @@ type Session struct {
 	// Starred indicates if this session has been starred by the user
 	Starred bool `json:"starred"`
 
+	// InputTokens, OutputTokens, and Cost are cumulative usage counters
+	// protected by mu: shared-session callers must go through
+	// SetTokensAndCost/SetUsage and TokensAndCost/Usage.
 	InputTokens  int64   `json:"input_tokens"`
 	OutputTokens int64   `json:"output_tokens"`
 	Cost         float64 `json:"cost"`
@@ -614,6 +621,48 @@ func (s *Session) Usage() (input, output int64) {
 	return s.InputTokens, s.OutputTokens
 }
 
+// TokensAndCost returns a consistent snapshot of the cumulative token
+// counts together with the session-level cost, the read-side counterpart
+// to SetTokensAndCost.
+func (s *Session) TokensAndCost() (inputTokens, outputTokens int64, cost float64) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.InputTokens, s.OutputTokens, s.Cost
+}
+
+// SetTokensAndCost atomically records the cumulative token counts
+// together with the session-level cost under s.mu. Granular store
+// updates (e.g. InMemorySessionStore.UpdateSessionTokens) and event
+// importers write these fields cross-goroutine with readers such as
+// the persistence observer's UpdateSession snapshot, which reads them
+// under the same lock.
+func (s *Session) SetTokensAndCost(inputTokens, outputTokens int64, cost float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.InputTokens = inputTokens
+	s.OutputTokens = outputTokens
+	s.Cost = cost
+}
+
+// SetTitle updates the session title under s.mu. Title writers (title
+// generation, HTTP title updates, granular store updates) run on
+// different goroutines than readers like the UpdateSession snapshot,
+// so direct field writes would race.
+func (s *Session) SetTitle(title string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Title = title
+}
+
+// TitleSnapshot returns the session title under s.mu, the read-side
+// counterpart to SetTitle. Named TitleSnapshot because the Title field
+// and a method cannot share the name.
+func (s *Session) TitleSnapshot() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.Title
+}
+
 // ApplyCompaction atomically resets the session's cumulative token
 // counts and appends a summary item under s.mu so concurrent readers
 // (e.g. the persistence observer's UpdateSession snapshot) cannot
@@ -760,6 +809,15 @@ func (s *Session) AddMessageUsageRecord(agentName, model string, cost float64, u
 	})
 }
 
+// MessageUsageHistorySnapshot returns a copy of the per-message usage
+// records, the lock-safe read-side counterpart to AddMessageUsageRecord for
+// callers on other goroutines (e.g. the TUI cost dialog).
+func (s *Session) MessageUsageHistorySnapshot() []MessageUsageRecord {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return slices.Clone(s.MessageUsageHistory)
+}
+
 // AddAttachedFile records absPath as a file the user attached to this session.
 // The path must be absolute; relative paths are silently dropped (with a debug
 // log) since they would be ambiguous to sub-agents started in a fresh working
@@ -870,7 +928,7 @@ func WithWorkingDir(workingDir string) Opt {
 
 func WithTitle(title string) Opt {
 	return func(s *Session) {
-		s.Title = title
+		s.SetTitle(title)
 	}
 }
 

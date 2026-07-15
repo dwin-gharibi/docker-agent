@@ -18,7 +18,7 @@ func TestAddMessageUsageRecordConcurrent(t *testing.T) {
 		})
 	}
 	wg.Wait()
-	if got := len(s.MessageUsageHistory); got != 100 {
+	if got := len(s.MessageUsageHistorySnapshot()); got != 100 {
 		t.Errorf("expected 100 records, got %d", got)
 	}
 }
@@ -155,4 +155,167 @@ func TestForkSessionConcurrentWithSubSessionMutation(t *testing.T) {
 		})
 	}
 	wg.Wait()
+}
+
+// TestSetTitleAndSetTokensAndCost pins the setter value contracts: SetTitle
+// stores the given title (including via the WithTitle constructor option)
+// and SetTokensAndCost stores both token counts and the session cost
+// together.
+func TestSetTitleAndSetTokensAndCost(t *testing.T) {
+	t.Parallel()
+
+	s := New(WithTitle("initial"))
+	if got := s.TitleSnapshot(); got != "initial" {
+		t.Errorf("expected title %q, got %q", "initial", got)
+	}
+
+	s.SetTitle("renamed")
+	if got := s.TitleSnapshot(); got != "renamed" {
+		t.Errorf("expected title %q, got %q", "renamed", got)
+	}
+
+	s.SetTokensAndCost(11, 22, 0.5)
+	input, output, cost := s.TokensAndCost()
+	if input != 11 || output != 22 {
+		t.Errorf("expected usage (11, 22), got (%d, %d)", input, output)
+	}
+	if cost != 0.5 {
+		t.Errorf("expected cost 0.5, got %v", cost)
+	}
+}
+
+// TestSetTitleSetTokensAndCostConcurrent pins the data-race fix for the
+// session's scalar metadata: Title, InputTokens/OutputTokens, and Cost used
+// to be written directly cross-goroutine (e.g. the server's title updates
+// racing the persistence observer's UpdateSession snapshot). SetTitle and
+// SetTokensAndCost must take s.mu so writers cannot race each other or the
+// locked readers (TitleSnapshot, Usage, TokensAndCost). Run with -race.
+//
+// Every SetTokensAndCost call writes a related (input, output, cost) triple;
+// the post-Wait check asserts the surviving triple is internally consistent,
+// pinning that the three fields are assigned atomically rather than torn
+// across concurrent calls. The assertion is order-independent, so it cannot
+// flake on scheduling.
+func TestSetTitleSetTokensAndCostConcurrent(t *testing.T) {
+	t.Parallel()
+
+	s := New()
+	var wg sync.WaitGroup
+	for i := range 100 {
+		n := int64(i + 1)
+		wg.Go(func() {
+			s.SetTitle("concurrent title")
+		})
+		wg.Go(func() {
+			s.SetTokensAndCost(n, 2*n, float64(n)/2)
+		})
+		wg.Go(func() {
+			_, _ = s.Usage()
+		})
+		wg.Go(func() {
+			_ = s.TitleSnapshot()
+		})
+		wg.Go(func() {
+			_, _, _ = s.TokensAndCost()
+		})
+	}
+	wg.Wait()
+
+	input, output, cost := s.TokensAndCost()
+	if output != 2*input || cost != float64(input)/2 {
+		t.Errorf("torn token/cost triple: input=%d output=%d cost=%v", input, output, cost)
+	}
+	if got := s.TitleSnapshot(); got != "concurrent title" {
+		t.Errorf("expected title %q, got %q", "concurrent title", got)
+	}
+}
+
+// TestInMemoryStoreGranularUpdatesConcurrent pins the data-race fix for
+// InMemorySessionStore.UpdateSessionTokens and UpdateSessionTitle: they used
+// to write the live session's Title/InputTokens/OutputTokens/Cost fields
+// directly, racing each other and the UpdateSession snapshot (which reads
+// those fields under session.mu). Both must route through the session's
+// locked setters. Run with -race.
+func TestInMemoryStoreGranularUpdatesConcurrent(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	store := NewInMemorySessionStore()
+	sess := New()
+	if err := store.AddSession(ctx, sess); err != nil {
+		t.Fatalf("AddSession: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	for i := range 100 {
+		n := int64(i + 1)
+		wg.Go(func() {
+			if err := store.UpdateSessionTokens(ctx, sess.ID, n, n, float64(n)); err != nil {
+				t.Errorf("UpdateSessionTokens: %v", err)
+			}
+		})
+		wg.Go(func() {
+			if err := store.UpdateSessionTitle(ctx, sess.ID, "concurrent title"); err != nil {
+				t.Errorf("UpdateSessionTitle: %v", err)
+			}
+		})
+		wg.Go(func() {
+			if err := store.UpdateSession(ctx, sess); err != nil {
+				t.Errorf("UpdateSession: %v", err)
+			}
+		})
+	}
+	wg.Wait()
+}
+
+// TestInMemoryStoreGetSessionSummariesConcurrent pins the read-side of the
+// same fix: GetSessionSummaries reads each live session's Title, so it must
+// go through the locked accessor (TitleSnapshot) to stay safe against
+// concurrent SetTitle/granular store updates on the shared pointer. Run
+// with -race; with a direct value.Title read the detector flags the
+// concurrent SetTitle write.
+func TestInMemoryStoreGetSessionSummariesConcurrent(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	store := NewInMemorySessionStore()
+	sess := New()
+	if err := store.AddSession(ctx, sess); err != nil {
+		t.Fatalf("AddSession: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	for i := range 100 {
+		n := int64(i + 1)
+		wg.Go(func() {
+			if err := store.UpdateSessionTitle(ctx, sess.ID, "concurrent title"); err != nil {
+				t.Errorf("UpdateSessionTitle: %v", err)
+			}
+		})
+		wg.Go(func() {
+			sess.SetTitle("direct title")
+		})
+		wg.Go(func() {
+			if err := store.UpdateSessionTokens(ctx, sess.ID, n, n, float64(n)); err != nil {
+				t.Errorf("UpdateSessionTokens: %v", err)
+			}
+		})
+		wg.Go(func() {
+			if _, err := store.GetSessionSummaries(ctx); err != nil {
+				t.Errorf("GetSessionSummaries: %v", err)
+			}
+		})
+	}
+	wg.Wait()
+
+	summaries, err := store.GetSessionSummaries(ctx)
+	if err != nil {
+		t.Fatalf("GetSessionSummaries: %v", err)
+	}
+	if len(summaries) != 1 {
+		t.Fatalf("expected 1 summary, got %d", len(summaries))
+	}
+	if got := summaries[0].Title; got != "concurrent title" && got != "direct title" {
+		t.Errorf("unexpected title %q", got)
+	}
 }

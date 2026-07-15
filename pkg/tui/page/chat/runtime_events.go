@@ -236,8 +236,7 @@ func (p *chatPage) handleTokenUsage(msg *runtime.TokenUsageEvent) {
 			// values into the parent would overwrite the parent's own
 			// context-tracking counters.
 			if msg.SessionID == "" || msg.SessionID == sess.ID {
-				sess.InputTokens = msg.Usage.InputTokens
-				sess.OutputTokens = msg.Usage.OutputTokens
+				sess.SetUsage(msg.Usage.InputTokens, msg.Usage.OutputTokens)
 			}
 
 			// Track per-message usage for /cost dialog

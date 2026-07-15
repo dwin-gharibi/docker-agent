@@ -1400,7 +1400,7 @@ func (r *LocalRuntime) Close() error {
 
 // UpdateSessionTitle persists the session title via the session store.
 func (r *LocalRuntime) UpdateSessionTitle(ctx context.Context, sess *session.Session, title string) error {
-	sess.Title = title
+	sess.SetTitle(title)
 	if r.sessionStore != nil {
 		return r.sessionStore.UpdateSession(ctx, sess)
 	}
@@ -1569,7 +1569,11 @@ func (r *LocalRuntime) EmitStartupInfo(ctx context.Context, sess *session.Sessio
 	// Use TotalCost (not OwnCost) because this is a restore/branch context:
 	// sub-sessions won't emit their own events, so the parent must include
 	// their costs.
-	if sess != nil && (sess.InputTokens > 0 || sess.OutputTokens > 0) {
+	var restoredInput, restoredOutput int64
+	if sess != nil {
+		restoredInput, restoredOutput = sess.Usage()
+	}
+	if restoredInput > 0 || restoredOutput > 0 {
 		contextLimit := r.contextLimitForAgentModel(ctx, a, modelID)
 		usage := SessionUsage(sess, contextLimit, a.CompactionThreshold())
 		usage.Cost = sess.TotalCost()
