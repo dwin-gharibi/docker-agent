@@ -546,6 +546,13 @@ func (r *LocalRuntime) AvailableModels(ctx context.Context) []ModelChoice {
 		if cfg.Provider != "" && cfg.Model != "" {
 			r.populateCatalogMetadata(ctx, &choice, cfg.Provider, cfg.Model)
 		}
+		// A config-declared price table overrides the catalogue's.
+		if cfg.Cost != nil {
+			choice.InputCost = cfg.Cost.Input
+			choice.OutputCost = cfg.Cost.Output
+			choice.CacheReadCost = cfg.Cost.CacheRead
+			choice.CacheWriteCost = cfg.Cost.CacheWrite
+		}
 		choices = append(choices, choice)
 	}
 	configuredDuration := time.Since(configuredStart)

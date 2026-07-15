@@ -1659,6 +1659,10 @@
         "capabilities": {
           "$ref": "#/definitions/CapabilitiesConfig",
           "description": "Explicit attachment capability override for models the models.dev catalogue does not describe correctly (custom OpenAI-compatible providers, local models like Ollama, or dropped model versions). When set, the declared flags are authoritative and no models.dev lookup is performed; when omitted, capabilities are detected automatically. Without it, such models fall back to text-only and their image/PDF attachments are silently dropped."
+        },
+        "cost": {
+          "$ref": "#/definitions/CostConfig",
+          "description": "Explicit token pricing (USD per 1M tokens), overriding the models.dev catalogue. Used for per-turn cost computation, session cost tracking, the /model picker, and the after_llm_call hook's cost field. Makes an uncatalogued model (custom base_url provider, local or private deployment) 'priced' instead of billing $0. Prices must not be negative; an all-zero table means 'priced, free'. Cannot be combined with first_available."
         }
       },
       "additionalProperties": false
@@ -1674,6 +1678,33 @@
         "pdf": {
           "type": "boolean",
           "description": "Whether the model accepts PDF (application/pdf) attachments"
+        }
+      },
+      "additionalProperties": false
+    },
+    "CostConfig": {
+      "type": "object",
+      "description": "Explicit token pricing for a model, in USD per one million tokens. Takes precedence over the models.dev catalogue and prices models the catalogue does not know.",
+      "properties": {
+        "input": {
+          "type": "number",
+          "minimum": 0,
+          "description": "USD price per 1M input tokens"
+        },
+        "output": {
+          "type": "number",
+          "minimum": 0,
+          "description": "USD price per 1M output tokens"
+        },
+        "cache_read": {
+          "type": "number",
+          "minimum": 0,
+          "description": "USD price per 1M cached input tokens"
+        },
+        "cache_write": {
+          "type": "number",
+          "minimum": 0,
+          "description": "USD price per 1M cache-write tokens"
         }
       },
       "additionalProperties": false

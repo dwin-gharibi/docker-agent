@@ -16,6 +16,7 @@ import (
 	"github.com/docker/docker-agent/pkg/agent"
 	"github.com/docker/docker-agent/pkg/chat"
 	"github.com/docker/docker-agent/pkg/compaction"
+	"github.com/docker/docker-agent/pkg/config/latest"
 	"github.com/docker/docker-agent/pkg/httpclient"
 	"github.com/docker/docker-agent/pkg/model/provider"
 	"github.com/docker/docker-agent/pkg/modelsdev"
@@ -515,6 +516,9 @@ func (r *LocalRuntime) runStreamLoop(ctx context.Context, sess *session.Session,
 		if err != nil {
 			slog.DebugContext(ctx, "Failed to get model definition", "error", err)
 		}
+		// A config-declared price table takes precedence over the
+		// catalogue and prices models the catalogue doesn't know.
+		m = applyConfigCost(m, modelID, model.BaseConfig().ModelConfig.Cost)
 		// We can only compact if we know the context limit.
 		// resolveContextLimit prefers provider_opts.context_size when set
 		// (some providers — notably Docker Model Runner — use it to size
@@ -1002,6 +1006,31 @@ func (r *LocalRuntime) Run(ctx context.Context, sess *session.Session) ([]sessio
 		}
 	}
 	return sess.GetAllMessages(), nil
+}
+
+// applyConfigCost overlays a config-declared price table (USD per 1M tokens)
+// onto the catalogue entry, returning m untouched when there is no override.
+// It never mutates m: the store caches entries shared across sessions. When
+// the model is uncatalogued (m == nil) a minimal entry is synthesized so the
+// call is still priced — this is the escape hatch for custom endpoints that
+// models.dev cannot describe.
+func applyConfigCost(m *modelsdev.Model, id modelsdev.ID, cost *latest.CostConfig) *modelsdev.Model {
+	if cost == nil {
+		return m
+	}
+	var out modelsdev.Model
+	if m != nil {
+		out = *m
+	} else {
+		out.Name = id.Model
+	}
+	out.Cost = &modelsdev.Cost{
+		Input:      cost.Input,
+		Output:     cost.Output,
+		CacheRead:  cost.CacheRead,
+		CacheWrite: cost.CacheWrite,
+	}
+	return &out
 }
 
 // computeMessageCost returns the USD cost of a single model response,
