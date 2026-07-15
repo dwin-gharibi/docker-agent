@@ -94,6 +94,11 @@ type Model interface {
 	AddAgentReturn(fromAgent, toAgent string) tea.Cmd
 	LoadFromSession(sess *session.Session) tea.Cmd
 
+	// StopAnimations unregisters every view from the animation coordinator.
+	// Call it when the list is discarded or its host view goes away, so
+	// abandoned spinners do not keep the tick stream alive.
+	StopAnimations()
+
 	RemoveSpinner()
 	ScrollToBottom() tea.Cmd
 	AdjustBottomSlack(delta int)
@@ -1449,6 +1454,7 @@ func (m *model) LoadFromSession(sess *session.Session) tea.Cmd {
 		appendSessionMessage(toolMsg, view)
 	}
 
+	m.StopAnimations()
 	m.messages = nil
 	m.views = nil
 	m.renderedItems.Clear()
@@ -2305,4 +2311,10 @@ func (m *model) commitInlineEdit() tea.Cmd {
 type InlineEditCommittedMsg struct {
 	SessionPosition int
 	Content         string
+}
+
+func (m *model) StopAnimations() {
+	for _, v := range m.views {
+		animation.StopView(v)
+	}
 }
