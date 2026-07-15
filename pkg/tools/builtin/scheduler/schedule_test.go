@@ -32,6 +32,10 @@ func TestParseWhen(t *testing.T) {
 		{"at in past", "at:2020-01-01T00:00:00Z", time.Time{}, 0, true},
 		{"every zero", "every:0s", time.Time{}, 0, true},
 		{"every negative", "every:-5m", time.Time{}, 0, true},
+		{"every below floor", "every:100ms", time.Time{}, 0, true},
+		{"every just below floor", "every:59s", time.Time{}, 0, true},
+		{"every at floor", "every:1m", testNow.Add(time.Minute), time.Minute, false},
+		{"short one-shot allowed", "in:1s", testNow.Add(time.Second), 0, false},
 		{"in bad duration", "in:abc", time.Time{}, 0, true},
 	}
 
