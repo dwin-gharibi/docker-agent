@@ -13,7 +13,7 @@ import (
 
 func newTestSettingsDialog(t *testing.T, layout messages.LayoutSettings) *settingsDialog {
 	t.Helper()
-	d, ok := NewSettingsDialog(layout, messages.SendModeSteer, true).(*settingsDialog)
+	d, ok := NewSettingsDialog(messages.Preferences{Layout: layout, SendMode: messages.SendModeSteer, SplitDiffView: true, TabTitleMaxLength: 20, SoundThreshold: 10}, true).(*settingsDialog)
 	require.True(t, ok)
 	d.Init()
 	d.Update(tea.WindowSizeMsg{Width: 100, Height: 50})
@@ -24,11 +24,11 @@ func TestSettingsDialogNormalizesValues(t *testing.T) {
 	t.Parallel()
 
 	d := newTestSettingsDialog(t, messages.LayoutSettings{})
-	assert.Equal(t, messages.SidebarRight, d.current.SidebarPosition)
+	assert.Equal(t, messages.SidebarRight, d.current.Layout.SidebarPosition)
 
-	raw, ok := NewSettingsDialog(messages.LayoutSettings{}, messages.SendMode("bogus"), true).(*settingsDialog)
+	raw, ok := NewSettingsDialog(messages.Preferences{SendMode: messages.SendMode("bogus")}, true).(*settingsDialog)
 	require.True(t, ok)
-	assert.Equal(t, messages.SendModeSteer, raw.currentMode, "unknown send mode normalizes to steer")
+	assert.Equal(t, messages.SendModeSteer, raw.current.SendMode, "unknown send mode normalizes to steer")
 }
 
 func TestSettingsDialogNavigation(t *testing.T) {
@@ -38,64 +38,65 @@ func TestSettingsDialogNavigation(t *testing.T) {
 	down := tea.KeyPressMsg{Code: tea.KeyDown}
 	up := tea.KeyPressMsg{Code: tea.KeyUp}
 
-	require.Equal(t, rowPosition, d.selected[tabVisuals])
+	require.Equal(t, rowTheme, d.selected[tabAppearance])
 
 	d.Update(down)
-	require.Equal(t, rowSpacing, d.selected[tabVisuals])
+	require.Equal(t, rowPosition, d.selected[tabAppearance])
 
 	d.Update(down)
-	require.Equal(t, rowSessionPath, d.selected[tabVisuals])
+	require.Equal(t, rowSpacing, d.selected[tabAppearance])
 
 	d.Update(down)
-	require.Equal(t, rowUsage, d.selected[tabVisuals])
+	require.Equal(t, rowSessionPath, d.selected[tabAppearance])
 
-	for range 10 {
+	for range 20 {
 		d.Update(down)
 	}
-	require.Equal(t, rowTodos, d.selected[tabVisuals], "down must stop at the last row")
+	require.Equal(t, rowHideToolResults, d.selected[tabAppearance], "down must stop at the last row")
 
 	d.Update(up)
-	require.Equal(t, rowTools, d.selected[tabVisuals])
+	require.Equal(t, rowExpandThinking, d.selected[tabAppearance])
 }
 
 func TestSettingsDialogTabSwitching(t *testing.T) {
 	t.Parallel()
 
 	d := newTestSettingsDialog(t, messages.LayoutSettings{})
-	require.Equal(t, tabVisuals, d.tab)
+	require.Equal(t, tabAppearance, d.tab)
 
 	d.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	assert.Equal(t, tabBehavior, d.tab)
 
 	d.Update(tea.KeyPressMsg{Code: tea.KeyTab})
-	assert.Equal(t, tabVisuals, d.tab, "tab wraps around")
+	assert.Equal(t, tabNotifications, d.tab)
+
+	d.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	assert.Equal(t, tabAppearance, d.tab, "tab wraps around")
 
 	d.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
-	assert.Equal(t, tabBehavior, d.tab, "shift+tab cycles backwards")
+	assert.Equal(t, tabNotifications, d.tab, "shift+tab cycles backwards")
 }
 
 func TestSettingsDialogWithoutVisualsTab(t *testing.T) {
 	t.Parallel()
 
-	d, ok := NewSettingsDialog(messages.LayoutSettings{}, messages.SendModeSteer, false).(*settingsDialog)
+	d, ok := NewSettingsDialog(messages.Preferences{SendMode: messages.SendModeSteer}, false).(*settingsDialog)
 	require.True(t, ok)
 	d.Update(tea.WindowSizeMsg{Width: 100, Height: 50})
 
-	require.Equal(t, tabBehavior, d.tab, "without visuals the dialog opens on the behavior tab")
-
-	d.Update(tea.KeyPressMsg{Code: tea.KeyTab})
-	assert.Equal(t, tabBehavior, d.tab, "tab must not reach the hidden visuals tab")
+	require.Equal(t, tabAppearance, d.tab)
 
 	view := ansi.Strip(d.View())
-	assert.NotContains(t, view, "Visuals")
+	assert.Contains(t, view, "Appearance")
 	assert.NotContains(t, view, "Sidebar position")
-	assert.Contains(t, view, "While agent is working")
+	assert.Contains(t, view, "Split diff view")
 }
 
 func TestSettingsDialogCyclesPositionAndPreviews(t *testing.T) {
 	t.Parallel()
 
 	d := newTestSettingsDialog(t, messages.LayoutSettings{})
+	d.selected[tabAppearance] = rowPosition
 
 	_, cmd := d.Update(tea.KeyPressMsg{Code: tea.KeyRight})
 	require.NotNil(t, cmd)
@@ -106,21 +107,21 @@ func TestSettingsDialogCyclesPositionAndPreviews(t *testing.T) {
 	assert.Equal(t, messages.SidebarLeft, preview.Layout.SidebarPosition)
 
 	d.Update(tea.KeyPressMsg{Code: tea.KeyRight})
-	assert.Equal(t, messages.SidebarTop, d.current.SidebarPosition)
+	assert.Equal(t, messages.SidebarTop, d.current.Layout.SidebarPosition)
 
 	// Cycling backwards from the start wraps around.
-	d.current.SidebarPosition = messages.SidebarRight
+	d.current.Layout.SidebarPosition = messages.SidebarRight
 	d.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
-	assert.Equal(t, messages.SidebarBottom, d.current.SidebarPosition)
+	assert.Equal(t, messages.SidebarBottom, d.current.Layout.SidebarPosition)
 }
 
 func TestSettingsDialogCyclesSpacingAndPreviews(t *testing.T) {
 	t.Parallel()
 
 	d := newTestSettingsDialog(t, messages.LayoutSettings{})
-	require.Equal(t, messages.SpacingNormal, d.current.SectionSpacing,
+	require.Equal(t, messages.SpacingNormal, d.current.Layout.SectionSpacing,
 		"empty spacing normalizes to normal")
-	d.selected[tabVisuals] = rowSpacing
+	d.selected[tabAppearance] = rowSpacing
 
 	_, cmd := d.Update(tea.KeyPressMsg{Code: tea.KeyRight})
 	require.NotNil(t, cmd)
@@ -131,18 +132,18 @@ func TestSettingsDialogCyclesSpacingAndPreviews(t *testing.T) {
 	assert.Equal(t, messages.SpacingRelaxed, preview.Layout.SectionSpacing)
 
 	d.Update(tea.KeyPressMsg{Code: tea.KeyRight})
-	assert.Equal(t, messages.SpacingCompact, d.current.SectionSpacing, "cycling wraps around")
+	assert.Equal(t, messages.SpacingCompact, d.current.Layout.SectionSpacing, "cycling wraps around")
 
-	d.current.SectionSpacing = messages.SpacingNormal
+	d.current.Layout.SectionSpacing = messages.SpacingNormal
 	d.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
-	assert.Equal(t, messages.SpacingCompact, d.current.SectionSpacing)
+	assert.Equal(t, messages.SpacingCompact, d.current.Layout.SectionSpacing)
 }
 
 func TestSettingsDialogTogglesSection(t *testing.T) {
 	t.Parallel()
 
 	d := newTestSettingsDialog(t, messages.LayoutSettings{})
-	d.selected[tabVisuals] = rowUsage
+	d.selected[tabAppearance] = rowUsage
 
 	_, cmd := d.Update(tea.KeyPressMsg{Code: tea.KeySpace})
 	msgs := collectMsgs(cmd)
@@ -152,14 +153,14 @@ func TestSettingsDialogTogglesSection(t *testing.T) {
 	assert.True(t, preview.Layout.HideUsage, "space must hide the usage section")
 
 	d.Update(tea.KeyPressMsg{Code: tea.KeySpace})
-	assert.False(t, d.current.HideUsage, "space must toggle back")
+	assert.False(t, d.current.Layout.HideUsage, "space must toggle back")
 }
 
 func TestSettingsDialogTogglesSessionPath(t *testing.T) {
 	t.Parallel()
 
 	d := newTestSettingsDialog(t, messages.LayoutSettings{})
-	d.selected[tabVisuals] = rowSessionPath
+	d.selected[tabAppearance] = rowSessionPath
 
 	_, cmd := d.Update(tea.KeyPressMsg{Code: tea.KeySpace})
 	msgs := collectMsgs(cmd)
@@ -169,7 +170,7 @@ func TestSettingsDialogTogglesSessionPath(t *testing.T) {
 	assert.True(t, preview.Layout.HideSessionPath, "space must hide the session path")
 
 	d.Update(tea.KeyPressMsg{Code: tea.KeySpace})
-	assert.False(t, d.current.HideSessionPath, "space must toggle back")
+	assert.False(t, d.current.Layout.HideSessionPath, "space must toggle back")
 }
 
 func TestSettingsDialogTogglesSendModeWithoutPreview(t *testing.T) {
@@ -178,21 +179,21 @@ func TestSettingsDialogTogglesSendModeWithoutPreview(t *testing.T) {
 	d := newTestSettingsDialog(t, messages.LayoutSettings{})
 	d.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	require.Equal(t, tabBehavior, d.tab)
-	require.Equal(t, messages.SendModeSteer, d.currentMode)
+	require.Equal(t, messages.SendModeSteer, d.current.SendMode)
 
 	_, cmd := d.Update(tea.KeyPressMsg{Code: tea.KeyRight})
 	assert.Nil(t, cmd, "the send mode has no live preview")
-	assert.Equal(t, messages.SendModeQueue, d.currentMode)
+	assert.Equal(t, messages.SendModeQueue, d.current.SendMode)
 
 	d.Update(tea.KeyPressMsg{Code: tea.KeyRight})
-	assert.Equal(t, messages.SendModeSteer, d.currentMode, "cycling wraps around")
+	assert.Equal(t, messages.SendModeSteer, d.current.SendMode, "cycling wraps around")
 }
 
 func TestSettingsDialogApplyEmitsApplySettings(t *testing.T) {
 	t.Parallel()
 
 	d := newTestSettingsDialog(t, messages.LayoutSettings{})
-	d.selected[tabVisuals] = rowTools
+	d.selected[tabAppearance] = rowTools
 	d.Update(tea.KeyPressMsg{Code: tea.KeySpace})
 	d.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	d.Update(tea.KeyPressMsg{Code: tea.KeyRight})
@@ -204,8 +205,8 @@ func TestSettingsDialogApplyEmitsApplySettings(t *testing.T) {
 	require.True(t, ok)
 	applied, ok := msgs[1].(messages.ApplySettingsMsg)
 	require.True(t, ok)
-	assert.True(t, applied.Layout.HideTools)
-	assert.Equal(t, messages.SendModeQueue, applied.SendMode)
+	assert.True(t, applied.Preferences.Layout.HideTools)
+	assert.Equal(t, messages.SendModeQueue, applied.Preferences.SendMode)
 }
 
 func TestSettingsDialogApplySendModeChangeOnly(t *testing.T) {
@@ -220,13 +221,14 @@ func TestSettingsDialogApplySendModeChangeOnly(t *testing.T) {
 	require.Len(t, msgs, 2)
 	applied, ok := msgs[1].(messages.ApplySettingsMsg)
 	require.True(t, ok, "a send-mode-only change must still be applied")
-	assert.Equal(t, messages.SendModeQueue, applied.SendMode)
+	assert.Equal(t, messages.SendModeQueue, applied.Preferences.SendMode)
 }
 
 func TestSettingsDialogApplyWithoutChangesOnlyCloses(t *testing.T) {
 	t.Parallel()
 
 	d := newTestSettingsDialog(t, messages.LayoutSettings{})
+	d.selected[tabAppearance] = rowPosition
 
 	_, cmd := d.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	msgs := collectMsgs(cmd)
@@ -240,6 +242,7 @@ func TestSettingsDialogEscapeRestoresOriginal(t *testing.T) {
 
 	original := messages.LayoutSettings{SidebarPosition: messages.SidebarLeft, SectionSpacing: messages.SpacingNormal}
 	d := newTestSettingsDialog(t, original)
+	d.selected[tabAppearance] = rowPosition
 	d.Update(tea.KeyPressMsg{Code: tea.KeyRight})
 
 	_, cmd := d.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
@@ -273,7 +276,7 @@ func TestSettingsDialogViewShowsVisualsRows(t *testing.T) {
 	view := ansi.Strip(d.View())
 
 	assert.Contains(t, view, "Settings")
-	assert.Contains(t, view, "Visuals")
+	assert.Contains(t, view, "Appearance")
 	assert.Contains(t, view, "Behavior")
 	assert.Contains(t, view, "Sidebar position")
 	assert.Contains(t, view, "Right")
@@ -304,6 +307,61 @@ func TestSettingsDialogViewShowsBehaviorRows(t *testing.T) {
 	view = ansi.Strip(d.View())
 	assert.Contains(t, view, "● Queue", "the mark moves to the chosen mode")
 	assert.Contains(t, view, "○ Steer")
+}
+
+func TestStepValueClamps(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name                     string
+		current, delta, expected int
+	}{
+		{name: "increments", current: 10, delta: 1, expected: 12},
+		{name: "decrements", current: 10, delta: -1, expected: 8},
+		{name: "minimum", current: 1, delta: -1, expected: 1},
+		{name: "maximum", current: 20, delta: 1, expected: 20},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, stepValue(tt.current, tt.delta, 2, 1, 20))
+		})
+	}
+}
+
+func TestSettingsDialogThemeRowOpensPicker(t *testing.T) {
+	t.Parallel()
+
+	d := newTestSettingsDialog(t, messages.LayoutSettings{})
+	_, cmd := d.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	require.NotNil(t, cmd)
+	_, ok := cmd().(messages.OpenThemePickerMsg)
+	assert.True(t, ok)
+}
+
+func TestSettingsDialogConfirmsYOLOBeforeEnabling(t *testing.T) {
+	t.Parallel()
+
+	d := newTestSettingsDialog(t, messages.LayoutSettings{})
+	d.tab = tabBehavior
+	d.selected[tabBehavior] = rowYOLO
+	d.Update(tea.KeyPressMsg{Code: tea.KeySpace})
+	assert.False(t, d.current.YOLO)
+	assert.True(t, d.confirmYOLO)
+	d.Update(tea.KeyPressMsg{Code: tea.KeySpace})
+	assert.True(t, d.current.YOLO)
+	assert.False(t, d.confirmYOLO)
+}
+
+func TestSettingsDialogSoundThresholdDisabledWhenSoundOff(t *testing.T) {
+	t.Parallel()
+
+	d := newTestSettingsDialog(t, messages.LayoutSettings{})
+	d.tab = tabNotifications
+	d.moveSelection(1)
+	assert.Equal(t, rowSound, d.selected[tabNotifications], "disabled threshold is skipped")
+	d.Update(tea.KeyPressMsg{Code: tea.KeySpace})
+	d.moveSelection(1)
+	assert.Equal(t, rowSoundThreshold, d.selected[tabNotifications])
 }
 
 func TestRenderLayoutPreviewReflectsSections(t *testing.T) {

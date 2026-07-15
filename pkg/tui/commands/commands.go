@@ -389,35 +389,13 @@ func builtInSettingsCommands() []Item {
 	return []Item{
 		{
 			ID:           "settings.open",
-			Label:        "Settings",
+			Label:        "Preferences",
 			SlashCommand: "/settings",
-			Description:  "Open settings: layout visuals and message send behavior",
+			Description:  "Manage appearance, behavior, and notification preferences",
 			Category:     "Settings",
 			Immediate:    true,
 			Execute: func(string) tea.Cmd {
 				return core.CmdHandler(messages.OpenSettingsDialogMsg{})
-			},
-		},
-		{
-			ID:           "settings.split-diff",
-			Label:        "Split Diff",
-			SlashCommand: "/split-diff",
-			Description:  "Toggle split diff view mode",
-			Category:     "Settings",
-			Immediate:    true,
-			Execute: func(string) tea.Cmd {
-				return core.CmdHandler(messages.ToggleSplitDiffMsg{})
-			},
-		},
-		{
-			ID:           "settings.theme",
-			Label:        "Theme",
-			SlashCommand: "/theme",
-			Description:  "Change the color theme",
-			Category:     "Settings",
-			Immediate:    true,
-			Execute: func(string) tea.Cmd {
-				return core.CmdHandler(messages.OpenThemePickerMsg{})
 			},
 		},
 	}
