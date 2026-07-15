@@ -87,7 +87,7 @@ func (f *fakeRuntime) Run(context.Context, *session.Session) ([]session.Message,
 	return nil, nil
 }
 
-func (f *fakeRuntime) ResumeElicitation(context.Context, tools.ElicitationAction, map[string]any) error {
+func (f *fakeRuntime) ResumeElicitation(context.Context, tools.ElicitationAction, map[string]any, ...string) error {
 	return nil
 }
 func (f *fakeRuntime) SessionStore() session.Store { return nil }
@@ -127,6 +127,7 @@ func (f *fakeRuntime) AvailableModels(context.Context) []runtime.ModelChoice { r
 func (f *fakeRuntime) SupportsModelSwitching() bool                          { return false }
 func (f *fakeRuntime) OnToolsChanged(func(runtime.Event))                    {}
 func (f *fakeRuntime) OnBackgroundEvent(func(runtime.Event))                 {}
+func (f *fakeRuntime) OnElicitationRequest(func(runtime.Event))              {}
 func (f *fakeRuntime) Close() error                                          { return nil }
 
 // captureWriter is a goroutine-safe sink for the connection's outbound

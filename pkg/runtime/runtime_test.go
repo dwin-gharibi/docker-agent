@@ -4312,11 +4312,75 @@ func TestRunAgentPersistsSubSessionOnError(t *testing.T) {
 		"parent session must record the sub-session even when the background agent errored")
 }
 
+// TestRunAgentImmediateFailureEmitsNoZeroUsageEvent guards runCollecting's
+// final authoritative snapshot: a background child that fails before
+// recording any usage or cost (here the provider errors on stream creation)
+// must not surface a zero-usage TokenUsageEvent — it would add an empty
+// sub-session row to the UI and clobber per-agent context accounting. The
+// guard keys off the child's recorded usage alone and skips the event — and
+// the context-limit lookup — before any model resolution; the model store
+// still resolves a real limit so a wrongly emitted event would carry one.
+func TestRunAgentImmediateFailureEmitsNoZeroUsageEvent(t *testing.T) {
+	t.Parallel()
+
+	parentProv := &mockProvider{id: "test/mock-model", stream: &mockStream{}}
+	failingProv := &mockProviderWithError{id: "test/mock-model"}
+
+	worker := agent.New("worker", "Worker agent", agent.WithModel(failingProv))
+	root := agent.New("root", "Root agent", agent.WithModel(parentProv))
+	agent.WithSubAgents(worker)(root)
+
+	rt, err := NewLocalRuntime(t.Context(), team.New(team.WithAgents(root, worker)),
+		WithSessionCompaction(false),
+		WithModelStore(mockModelStoreWithCostAndLimit{limit: 100_000, cost: modelsdev.Cost{Input: 10, Output: 20}}))
+	require.NoError(t, err)
+
+	var forwarded []Event
+	rt.OnBackgroundEvent(func(event Event) { forwarded = append(forwarded, event) })
+
+	sess := session.New(session.WithUserMessage("Test"), session.WithToolsApproved(true))
+	result := rt.RunAgent(t.Context(), agenttool.RunParams{
+		AgentName:     "worker",
+		Task:          "do something",
+		ParentSession: sess,
+	})
+	require.NotEmpty(t, result.ErrMsg, "RunAgent should surface the sub-session error")
+
+	assert.Empty(t, forwarded,
+		"a child that failed before any billed work must not emit a zero-usage snapshot")
+}
+
+// mockModelStoreWithCostAndLimit prices tokens so usage snapshots carry a
+// nonzero cost, in addition to a resolvable context limit.
+type mockModelStoreWithCostAndLimit struct {
+	ModelStore
+
+	limit int
+	cost  modelsdev.Cost
+}
+
+func (m mockModelStoreWithCostAndLimit) GetModel(_ context.Context, _ modelsdev.ID) (*modelsdev.Model, error) {
+	return &modelsdev.Model{Limit: modelsdev.Limit{Context: m.limit}, Cost: &m.cost}, nil
+}
+
+// lastAttachedSubSession returns the most recent sub-session recorded on sess.
+func lastAttachedSubSession(sess *session.Session) *session.Session {
+	var sub *session.Session
+	for _, item := range sess.Messages {
+		if item.SubSession != nil {
+			sub = item.SubSession
+		}
+	}
+	return sub
+}
+
 // TestRunAgentForwardsTokenUsageOutOfBand verifies runCollecting surfaces the
 // background sub-session's TokenUsageEvents through OnBackgroundEvent — the
 // out-of-band path that lets the TUI keep per-agent context accounting for
 // background agents — tagged with the sub-session id and the worker's name,
-// and forwards nothing else.
+// and forwards nothing else. The last event is the authoritative final
+// snapshot runCollecting emits before attaching the child, and must match
+// the child's final recorded state.
 func TestRunAgentForwardsTokenUsageOutOfBand(t *testing.T) {
 	t.Parallel()
 
@@ -4329,7 +4393,8 @@ func TestRunAgentForwardsTokenUsageOutOfBand(t *testing.T) {
 	agent.WithSubAgents(worker)(root)
 
 	tm := team.New(team.WithAgents(root, worker))
-	rt, err := NewLocalRuntime(t.Context(), tm, WithSessionCompaction(false), WithModelStore(mockModelStore{}))
+	rt, err := NewLocalRuntime(t.Context(), tm, WithSessionCompaction(false),
+		WithModelStore(mockModelStoreWithCostAndLimit{limit: 100_000, cost: modelsdev.Cost{Input: 10, Output: 20}}))
 	require.NoError(t, err)
 
 	var forwarded []Event
@@ -4351,9 +4416,109 @@ func TestRunAgentForwardsTokenUsageOutOfBand(t *testing.T) {
 		assert.NotEqual(t, sess.ID, usage.SessionID, "usage carries the sub-session id, not the parent's")
 		assert.NotEmpty(t, usage.SessionID)
 	}
+
+	// Once attached, the child is live-attached and the parent's own events
+	// exclude its cost, so the last out-of-band snapshot must already carry
+	// the child's final accounting: cumulative tokens, cost (100×$10 +
+	// 50×$20 per 1M tokens), and the resolved context limit.
+	sub := lastAttachedSubSession(sess)
+	require.NotNil(t, sub)
 	last := forwarded[len(forwarded)-1].(*TokenUsageEvent)
 	require.NotNil(t, last.Usage)
+	assert.Equal(t, sub.ID, last.SessionID)
 	assert.Equal(t, int64(150), last.Usage.ContextLength, "final snapshot carries the worker's cumulative usage")
+	assert.InDelta(t, 0.002, last.Usage.Cost, 1e-9, "final snapshot carries the worker's final cost")
+	assert.InDelta(t, sub.OwnCost()+sub.EmbeddedSubSessionCost(), last.Usage.Cost, 1e-9,
+		"the snapshot's cost is exactly what the attached child reports for itself")
+	assert.Equal(t, int64(100_000), last.Usage.ContextLimit, "final snapshot resolves the worker's context limit")
+}
+
+// TestRunAgentEmitsFinalUsageOnCancellation is the regression test for the
+// background cancellation accounting gap: when the task's context is
+// cancelled, runCollecting's forwarding loop breaks and blindly drains the
+// remaining events — including the TokenUsageEvent carrying the child's
+// recorded usage. Because the child is then attached live to the parent
+// (excluded from the parent's own snapshots), nothing would ever surface its
+// cost. runCollecting must emit one final authoritative snapshot before
+// attaching the child.
+func TestRunAgentEmitsFinalUsageOnCancellation(t *testing.T) {
+	t.Parallel()
+
+	// The worker streams content, then calls a tool that cancels the task
+	// context — strictly after the turn's usage was recorded and its
+	// TokenUsageEvent buffered. onContent (below) blocks until the
+	// cancellation is visible, so the forwarding loop deterministically
+	// breaks before reaching that TokenUsageEvent.
+	ctx, cancel := context.WithCancel(t.Context())
+	contentSeen := make(chan struct{})
+	cancelled := make(chan struct{})
+
+	workerTools := []tools.Tool{{
+		Name:       "cancel_task",
+		Parameters: map[string]any{},
+		Handler: func(context.Context, tools.ToolCall, tools.Runtime) (*tools.ToolCallResult, error) {
+			<-contentSeen
+			cancel()
+			close(cancelled)
+			return tools.ResultSuccess("cancelling"), nil
+		},
+	}}
+	workerStream := newStreamBuilder().
+		AddContent("partial").
+		AddToolCallName("call-1", "cancel_task").
+		AddToolCallArguments("call-1", "{}").
+		AddToolCallStopWithUsage(100, 50).
+		Build()
+
+	worker := agent.New("worker", "Worker agent",
+		agent.WithModel(&mockProvider{id: "test/mock-model", stream: workerStream}),
+		agent.WithToolSets(newStubToolSet(nil, workerTools, nil)),
+	)
+	root := agent.New("root", "Root agent", agent.WithModel(&mockProvider{id: "test/mock-model", stream: &mockStream{}}))
+	agent.WithSubAgents(worker)(root)
+
+	rt, err := NewLocalRuntime(t.Context(), team.New(team.WithAgents(root, worker)),
+		WithSessionCompaction(false),
+		WithModelStore(mockModelStoreWithCostAndLimit{limit: 100_000, cost: modelsdev.Cost{Input: 10, Output: 20}}))
+	require.NoError(t, err)
+
+	var forwarded []*TokenUsageEvent
+	rt.OnBackgroundEvent(func(event Event) {
+		if usage, ok := event.(*TokenUsageEvent); ok {
+			forwarded = append(forwarded, usage)
+		}
+	})
+
+	sess := session.New(session.WithUserMessage("Test"), session.WithToolsApproved(true))
+	var once sync.Once
+	rt.RunAgent(ctx, agenttool.RunParams{
+		AgentName:     "worker",
+		Task:          "do something",
+		ParentSession: sess,
+		OnContent: func(string) {
+			once.Do(func() {
+				close(contentSeen)
+				<-cancelled
+			})
+		},
+	})
+
+	// The cancelled child still attached with the turn it completed.
+	sub := lastAttachedSubSession(sess)
+	require.NotNil(t, sub, "the cancelled child must still be attached to the parent")
+	require.Equal(t, int64(150), sub.InputTokens+sub.OutputTokens, "the child recorded the turn before cancellation")
+
+	require.NotEmpty(t, forwarded,
+		"a final authoritative snapshot must be emitted even though the loop broke on cancellation")
+	last := forwarded[len(forwarded)-1]
+	require.NotNil(t, last.Usage)
+	assert.Equal(t, sub.ID, last.SessionID)
+	assert.Equal(t, "worker", last.AgentName)
+	assert.Equal(t, int64(150), last.Usage.ContextLength, "final snapshot carries the usage recorded before cancellation")
+	assert.InDelta(t, sub.OwnCost()+sub.EmbeddedSubSessionCost(), last.Usage.Cost, 1e-9,
+		"the snapshot's cost is exactly what the attached child reports for itself")
+	assert.Positive(t, last.Usage.Cost, "cost is mandatory on the final snapshot")
+	assert.Equal(t, int64(100_000), last.Usage.ContextLimit, "context limit resolves even after cancellation")
 }
 
 // TestReasoningOnlyTurnEmitsWarning is a regression test for

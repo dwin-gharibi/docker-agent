@@ -687,9 +687,9 @@ func (c *Client) UpdateMessage(ctx context.Context, sessionID, msgID string, msg
 }
 
 // AddSummary adds a summary to a session.
-func (c *Client) AddSummary(ctx context.Context, sessionID, summary string, tokens int) error {
+func (c *Client) AddSummary(ctx context.Context, sessionID, summary string, tokens int, cost float64) error {
 	endpoint := fmt.Sprintf("/api/sessions/%s/summaries", sessionID)
-	req := api.AddSummaryRequest{Summary: summary, Tokens: tokens}
+	req := api.AddSummaryRequest{Summary: summary, Tokens: tokens, Cost: cost}
 	return c.doRequest(ctx, http.MethodPost, endpoint, req, nil)
 }
 

@@ -314,7 +314,7 @@ func (r *LocalRuntime) runForwarding(ctx context.Context, parent *session.Sessio
 	// transcript is the most valuable artifact for debugging. The persistence
 	// pipeline relies on SubSessionCompleted to write the sub-session's
 	// messages to the store; without this emission they are silently dropped.
-	parent.AddSubSession(s)
+	parent.AddLiveSubSession(s)
 	evts.Emit(SubSessionCompleted(parent.ID, s, callerAgent.Name()))
 
 	if subSessionErr != nil {
@@ -391,10 +391,31 @@ func (r *LocalRuntime) runCollecting(ctx context.Context, parent *session.Sessio
 	for range events {
 	}
 
+	// The loop above stops forwarding on ctx cancellation / first ErrorEvent,
+	// so the drain can discard TokenUsageEvents carrying the child's latest
+	// recorded usage. Emit one authoritative final snapshot before the child
+	// is attached: AddLiveSubSession marks it live-attached, so the parent's
+	// own events will never fold this cost back in. UI snapshots replace by
+	// session ID, which makes the duplicate on the clean path harmless.
+	// A child that failed before recording any usage or cost gets no
+	// snapshot at all: a zero-usage event would only add an empty
+	// sub-session row to the UI and clobber per-agent context accounting.
+	// Check that before resolving the context limit — the model lookup is
+	// pure overhead for a snapshot that is never emitted.
+	finalUsage := SessionUsage(s, 0, child.CompactionThreshold())
+	usageCtx := context.WithoutCancel(ctx)
+	if finalUsage.ContextLength > 0 || finalUsage.Cost > 0 {
+		// usageCtx: the context-limit lookup must still resolve for a
+		// cancelled task.
+		finalUsage.ContextLimit = r.contextLimitForAgentModel(usageCtx, child, r.getEffectiveModelID(usageCtx, child))
+		r.emitBackgroundEvent(NewTokenUsageEvent(s.ID, cfg.AgentName, finalUsage))
+	}
+
 	// Persist the sub-session unconditionally — the partial transcript is
 	// the most valuable artifact for debugging a failed background agent.
-	// AddSubSession records it in-memory on both the success and error paths.
-	parent.AddSubSession(s)
+	// AddLiveSubSession records it in-memory on both the success and error
+	// paths.
+	parent.AddLiveSubSession(s)
 
 	// Mirror runForwarding's persistence, but write to the store directly
 	// instead of emitting SubSessionCompleted: runCollecting runs on a
@@ -402,9 +423,10 @@ func (r *LocalRuntime) runCollecting(ctx context.Context, parent *session.Sessio
 	// chain would race the parent's live RunStream (the PersistenceObserver
 	// keeps unsynchronised streaming state). Without this the background
 	// sub-session never reaches the store — its tokens and cost are recorded
-	// as $0 and escape any spend accounting that reads the store. Use
-	// WithoutCancel so a cancelled/stopped task still persists its transcript.
-	r.persistBackgroundSubSession(context.WithoutCancel(ctx), parent.ID, s)
+	// as $0 and escape any spend accounting that reads the store. usageCtx is
+	// already detached, so a cancelled/stopped task still persists its
+	// transcript.
+	r.persistBackgroundSubSession(usageCtx, parent.ID, s)
 
 	if errMsg != "" {
 		return &agenttool.RunResult{ErrMsg: errMsg}

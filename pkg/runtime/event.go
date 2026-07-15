@@ -400,9 +400,15 @@ func NewTokenUsageEvent(sessionID, agentName string, usage *Usage) Event {
 func (e *TokenUsageEvent) GetSessionID() string { return e.SessionID }
 
 // SessionUsage builds a Usage from the session's current token counts, the
-// model's context limit, and the session's own cost. The optional
-// compactionThreshold is the agent's configured auto-compaction trigger
-// fraction (0 or omitted when unknown), passed along verbatim for UI gauges.
+// model's context limit, and the session's cost. The reported cost is the
+// session's own cost plus the cost of sub-sessions embedded at load time
+// (restored or branched history), which never emit events of their own.
+// Sub-sessions attached during a live run are excluded: they report their
+// own cost through separate per-session events, and folding them in here
+// would double count in UIs that aggregate per-session entries. The
+// optional compactionThreshold is the agent's configured auto-compaction
+// trigger fraction (0 or omitted when unknown), passed along verbatim for
+// UI gauges.
 func SessionUsage(sess *session.Session, contextLimit int64, compactionThreshold ...float64) *Usage {
 	// Usage() snapshots both counters under sess.mu so a concurrent
 	// SetUsage/ApplyCompaction cannot tear the pair.
@@ -412,7 +418,7 @@ func SessionUsage(sess *session.Session, contextLimit int64, compactionThreshold
 		OutputTokens:  output,
 		ContextLength: input + output,
 		ContextLimit:  contextLimit,
-		Cost:          sess.OwnCost(),
+		Cost:          sess.OwnCost() + sess.EmbeddedSubSessionCost(),
 	}
 	if len(compactionThreshold) > 0 {
 		u.CompactionThreshold = compactionThreshold[0]
@@ -464,18 +470,23 @@ func (e *SessionPlanUpdatedEvent) GetSessionID() string { return e.SessionID }
 type SessionSummaryEvent struct {
 	AgentContext
 
-	Type           string `json:"type"`
-	SessionID      string `json:"session_id"`
-	Summary        string `json:"summary"`
-	FirstKeptEntry int    `json:"first_kept_entry,omitempty"`
+	Type           string  `json:"type"`
+	SessionID      string  `json:"session_id"`
+	Summary        string  `json:"summary"`
+	FirstKeptEntry int     `json:"first_kept_entry,omitempty"`
+	Cost           float64 `json:"cost,omitempty"`
 }
 
-func SessionSummary(sessionID, summary, agentName string, firstKeptEntry int) Event {
+// SessionSummary builds the event announcing an applied compaction summary.
+// cost is the dollar cost of producing the summary; 0 when nothing was
+// billed (hook-supplied summaries, status-only remote notifications).
+func SessionSummary(sessionID, summary, agentName string, firstKeptEntry int, cost float64) Event {
 	return &SessionSummaryEvent{
 		Type:           "session_summary",
 		SessionID:      sessionID,
 		Summary:        summary,
 		FirstKeptEntry: firstKeptEntry,
+		Cost:           cost,
 		AgentContext:   newAgentContext(agentName),
 	}
 }

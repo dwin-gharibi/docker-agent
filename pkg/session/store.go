@@ -115,7 +115,8 @@ type Store interface {
 
 	// AddSummary adds a summary item to a session at the next position.
 	// firstKeptEntry is the index of the first message kept verbatim during compaction.
-	AddSummary(ctx context.Context, sessionID, summary string, firstKeptEntry int) error
+	// cost is the dollar cost of producing the summary (0 when nothing was billed).
+	AddSummary(ctx context.Context, sessionID, summary string, firstKeptEntry int, cost float64) error
 
 	// AddError appends a recorded error item to a session at the next position.
 	// Persisting failures lets them survive a reload and travel with a JSON export.
@@ -332,7 +333,7 @@ func (s *InMemorySessionStore) AddSubSession(_ context.Context, parentSessionID 
 }
 
 // AddSummary adds a summary item to a session at the next position.
-func (s *InMemorySessionStore) AddSummary(_ context.Context, sessionID, summary string, firstKeptEntry int) error {
+func (s *InMemorySessionStore) AddSummary(_ context.Context, sessionID, summary string, firstKeptEntry int, cost float64) error {
 	if sessionID == "" {
 		return ErrEmptyID
 	}
@@ -342,7 +343,7 @@ func (s *InMemorySessionStore) AddSummary(_ context.Context, sessionID, summary 
 	}
 	session.mu.Lock()
 	defer session.mu.Unlock()
-	session.Messages = append(session.Messages, Item{Summary: summary, FirstKeptEntry: firstKeptEntry})
+	session.Messages = append(session.Messages, Item{Summary: summary, FirstKeptEntry: firstKeptEntry, Cost: cost})
 	return nil
 }
 
@@ -745,6 +746,7 @@ type sessionItemRow struct {
 	subsessionID   sql.NullString
 	summaryText    sql.NullString
 	firstKeptEntry int
+	cost           float64
 }
 
 // loadSessionItems loads all items for a session from session_items.
@@ -752,7 +754,7 @@ type sessionItemRow struct {
 // loadSession when resolving sub-sessions inside a transaction.
 func (s *SQLiteSessionStore) loadSessionItems(ctx context.Context, q querier, sessionID string) ([]Item, error) {
 	rows, err := q.QueryContext(ctx,
-		`SELECT position, item_type, agent_name, message_json, implicit, subsession_id, summary_text, COALESCE(first_kept_entry, 0)
+		`SELECT position, item_type, agent_name, message_json, implicit, subsession_id, summary_text, COALESCE(first_kept_entry, 0), cost
 		 FROM session_items WHERE session_id = ? ORDER BY position`, sessionID)
 	if err != nil {
 		return nil, err
@@ -764,7 +766,7 @@ func (s *SQLiteSessionStore) loadSessionItems(ctx context.Context, q querier, se
 	var rawRows []sessionItemRow
 	for rows.Next() {
 		var row sessionItemRow
-		if err := rows.Scan(&row.position, &row.itemType, &row.agentName, &row.messageJSON, &row.implicit, &row.subsessionID, &row.summaryText, &row.firstKeptEntry); err != nil {
+		if err := rows.Scan(&row.position, &row.itemType, &row.agentName, &row.messageJSON, &row.implicit, &row.subsessionID, &row.summaryText, &row.firstKeptEntry, &row.cost); err != nil {
 			return nil, err
 		}
 		rawRows = append(rawRows, row)
@@ -814,7 +816,7 @@ func (s *SQLiteSessionStore) loadSessionItems(ctx context.Context, q querier, se
 			items = append(items, Item{SubSession: subSession})
 
 		case "summary":
-			items = append(items, Item{Summary: row.summaryText.String, FirstKeptEntry: row.firstKeptEntry})
+			items = append(items, Item{Summary: row.summaryText.String, FirstKeptEntry: row.firstKeptEntry, Cost: row.cost})
 
 		case "error":
 			var e Error
@@ -1213,9 +1215,9 @@ func (s *SQLiteSessionStore) addItemTx(ctx context.Context, tx *sql.Tx, sessionI
 
 	case item.Summary != "":
 		_, err := tx.ExecContext(ctx,
-			`INSERT INTO session_items (session_id, position, item_type, summary_text, first_kept_entry)
-			 VALUES (?, ?, 'summary', ?, ?)`,
-			sessionID, position, item.Summary, item.FirstKeptEntry)
+			`INSERT INTO session_items (session_id, position, item_type, summary_text, first_kept_entry, cost)
+			 VALUES (?, ?, 'summary', ?, ?, ?)`,
+			sessionID, position, item.Summary, item.FirstKeptEntry, item.Cost)
 		return err
 
 	case item.Error != nil:
@@ -1235,15 +1237,15 @@ func (s *SQLiteSessionStore) addItemTx(ctx context.Context, tx *sql.Tx, sessionI
 }
 
 // AddSummary adds a summary item to a session at the next position.
-func (s *SQLiteSessionStore) AddSummary(ctx context.Context, sessionID, summary string, firstKeptEntry int) error {
+func (s *SQLiteSessionStore) AddSummary(ctx context.Context, sessionID, summary string, firstKeptEntry int, cost float64) error {
 	if sessionID == "" {
 		return ErrEmptyID
 	}
 
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO session_items (session_id, position, item_type, summary_text, first_kept_entry)
-		 VALUES (?, (SELECT COALESCE(MAX(position), -1) + 1 FROM session_items WHERE session_id = ?), 'summary', ?, ?)`,
-		sessionID, sessionID, summary, firstKeptEntry)
+		`INSERT INTO session_items (session_id, position, item_type, summary_text, first_kept_entry, cost)
+		 VALUES (?, (SELECT COALESCE(MAX(position), -1) + 1 FROM session_items WHERE session_id = ?), 'summary', ?, ?, ?)`,
+		sessionID, sessionID, summary, firstKeptEntry, cost)
 	if err != nil {
 		return err
 	}

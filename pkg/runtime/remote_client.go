@@ -100,7 +100,7 @@ type RemoteClient interface {
 	UpdateMessage(ctx context.Context, sessionID, msgID string, msg *session.Message) error
 
 	// AddSummary adds a summary to a session
-	AddSummary(ctx context.Context, sessionID, summary string, tokens int) error
+	AddSummary(ctx context.Context, sessionID, summary string, tokens int, cost float64) error
 
 	// UpdateSessionTokens updates token counts for a session
 	UpdateSessionTokens(ctx context.Context, sessionID string, inputTokens, outputTokens int64, cost float64) error

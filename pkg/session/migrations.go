@@ -407,6 +407,12 @@ func getAllMigrations() []Migration {
 			Description: "Persist cache-stable instruction snapshots and chronological updates",
 			UpSQL:       `ALTER TABLE sessions ADD COLUMN instruction_context TEXT DEFAULT ''`,
 		},
+		{
+			ID:          23,
+			Name:        "023_add_cost_to_session_items",
+			Description: "Add cost column to session_items so compaction summary costs survive reload",
+			UpSQL:       `ALTER TABLE session_items ADD COLUMN cost REAL NOT NULL DEFAULT 0`,
+		},
 	}
 }
 

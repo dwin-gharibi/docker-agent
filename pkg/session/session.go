@@ -85,6 +85,13 @@ type Item struct {
 	// Cost tracks the cost of operations associated with this item that
 	// don't produce a regular message (e.g., compaction/summarization).
 	Cost float64 `json:"cost,omitempty"`
+
+	// liveAttached marks a sub-session item appended by AddLiveSubSession
+	// in this process, i.e. a sub-session that ran live and reported its
+	// own cost through its own TokenUsageEvents. Deliberately unexported
+	// and not persisted: after a reload the sub-session no longer emits
+	// events, so it must count as embedded (see EmbeddedSubSessionCost).
+	liveAttached bool
 }
 
 // IsMessage returns true if this item contains a message
@@ -890,11 +897,26 @@ func cloneInstructionContext(state *InstructionContextState) *InstructionContext
 	}
 }
 
-// AddSubSession adds a sub-session to the session
+// AddSubSession adds a sub-session to the session as embedded history,
+// e.g. when a store hydrates a parent with its children. Its cost counts
+// as embedded (see EmbeddedSubSessionCost); use AddLiveSubSession for a
+// sub-session that ran live in this process.
 func (s *Session) AddSubSession(subSession *Session) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.Messages = append(s.Messages, NewSubSessionItem(subSession))
+}
+
+// AddLiveSubSession adds a sub-session that ran live in this process: it
+// has its own TokenUsageEvent entry, having reported its own cost through
+// its own events, so EmbeddedSubSessionCost skips it to avoid double
+// counting in per-session aggregations.
+func (s *Session) AddLiveSubSession(subSession *Session) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	item := NewSubSessionItem(subSession)
+	item.liveAttached = true
+	s.Messages = append(s.Messages, item)
 }
 
 // AddError appends a recorded error to the session so it survives reload and
@@ -1362,6 +1384,25 @@ func (s *Session) OwnCost() float64 {
 			cost += item.Message.Message.Cost
 		}
 		cost += item.Cost
+	}
+	return cost
+}
+
+// EmbeddedSubSessionCost returns the total cost of sub-sessions that were
+// already embedded when this session was loaded (restored or branched
+// history), excluding sub-sessions attached live via AddLiveSubSession.
+// Embedded sub-sessions never emit their own TokenUsageEvents, so live
+// cost reporting must fold their cost into this session's own cost;
+// live sub-sessions report theirs through separate per-session events.
+func (s *Session) EmbeddedSubSessionCost() float64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var cost float64
+	for _, item := range s.Messages {
+		if item.IsSubSession() && !item.liveAttached {
+			cost += item.SubSession.TotalCost()
+		}
 	}
 	return cost
 }
