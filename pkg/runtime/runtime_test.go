@@ -3355,10 +3355,20 @@ func TestReprobe_NewToolsAvailableAfterToolCall(t *testing.T) {
 	call1Names := toolNames(prov.recordedCalls[0])
 	assert.Contains(t, call1Names, "install_mcp", "turn 1 must include install_mcp")
 	assert.NotContains(t, call1Names, "mcp_hello", "turn 1 must NOT include mcp_hello before install")
+	for _, tool := range prov.recordedCalls[0] {
+		assert.False(t, tool.Deferred)
+	}
 
-	// Second model call: mcp_hello must be visible.
+	// Second model call: mcp_hello must be visible and deferred so it preserves
+	// the provider's cached tool prefix.
 	call2Names := toolNames(prov.recordedCalls[1])
 	assert.Contains(t, call2Names, "mcp_hello", "turn 2 must include mcp_hello after reprobe")
+	for _, tool := range prov.recordedCalls[1] {
+		assert.Equal(t, tool.Name == "mcp_hello", tool.Deferred)
+		if tool.Name == "mcp_hello" {
+			assert.Equal(t, "call_1", tool.DeferredAtToolCallID)
+		}
+	}
 
 	// A ToolsetInfo event with the new count must have been emitted during reprobe.
 	var toolsetInfoCounts []int

@@ -215,6 +215,7 @@ type ModelStore interface {
 type LocalRuntime struct {
 	ctx                       func() context.Context
 	toolMap                   map[string]ToolHandlerFunc
+	toolDeferrals             tools.DeferralTracker
 	team                      *team.Team
 	agents                    *agentRouter
 	resumeChan                chan ResumeRequest

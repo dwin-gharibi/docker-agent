@@ -64,6 +64,53 @@ func TestSupportsResponsesAPI(t *testing.T) {
 	}
 }
 
+func TestSupportsDeferredTools(t *testing.T) {
+	t.Parallel()
+
+	openAI := []struct {
+		provider string
+		model    string
+		want     bool
+	}{
+		{"openai", "gpt-5.4", true},
+		{"openai", "gpt-5.4-mini", true},
+		{"openai", "gpt-5.4-pro", true},
+		{"openai", "gpt-5.4-nano", false},
+		{"openai", "gpt-5.5", true},
+		{"openai", "gpt-5.5-pro", false},
+		{"openai", "gpt-5.6-luna", true},
+		{"openai", "gpt-5.6-sol", true},
+		{"openai", "gpt-5.6-terra", true},
+		{"chatgpt", "gpt-5.4", true},
+		{"chatgpt", "gpt-5.4-pro", false},
+		{"openai", "gpt-5.3-codex-spark", false},
+		{"openai", "gpt-5.2", false},
+		{"custom", "gpt-5.4", false},
+	}
+	for _, tc := range openAI {
+		assert.Equal(t, tc.want, SupportsDeferredTools(tc.provider, tc.model), "%s/%s", tc.provider, tc.model)
+	}
+
+	anthropic := []struct {
+		provider string
+		model    string
+		want     bool
+	}{
+		{"anthropic", "claude-opus-4-5", true},
+		{"anthropic", "claude-opus-4-5-20251101", true},
+		{"anthropic", "claude-sonnet-4-5", true},
+		{"anthropic", "claude-opus-4-1", false},
+		{"anthropic", "claude-sonnet-4-0", false},
+		{"anthropic", "claude-haiku-4-5", false},
+		{"anthropic", "claude-fable-5", true},
+		{"anthropic", "claude-sonnet-5", true},
+		{"anthropic-proxy", "claude-opus-4-6", false},
+	}
+	for _, tc := range anthropic {
+		assert.Equal(t, tc.want, SupportsDeferredTools(tc.provider, tc.model), "%s/%s", tc.provider, tc.model)
+	}
+}
+
 func TestUsesReasoningEffort(t *testing.T) {
 	t.Parallel()
 
