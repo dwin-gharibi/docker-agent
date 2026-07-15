@@ -114,7 +114,7 @@ URLs are validated before being handed to the OS opener: a parseable URL with a 
 > [!NOTE]
 > **Full TUI only**
 >
-> URL commands only open a browser in the full TUI. They have no effect on the CLI (`docker agent run agent.yaml /docs` does nothing outside the TUI — there's no browser to open a link in) and no effect in the lean TUI either, which doesn't check the `url` field at all.
+> URL commands only open a browser in the full TUI. The CLI and lean TUI don't check the `url` field at all, so `docker agent run agent.yaml /docs` never opens a browser there — but the command is still dispatched: its resolved text (usually empty, for a URL-only command) is sent as a prompt and can trigger a model turn.
 
 See [`examples/url_commands.yaml`](https://github.com/docker/docker-agent/blob/main/examples/url_commands.yaml) for a complete example.
 
