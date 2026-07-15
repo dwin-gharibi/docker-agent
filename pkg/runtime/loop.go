@@ -755,6 +755,7 @@ func (r *LocalRuntime) runTurn(
 	messages = r.applyBeforeLLMCallTransforms(ctx, sess, a, modelID.String(), messages)
 
 	// Try primary model with fallback chain if configured
+	agentTools = r.toolDeferrals.MarkAt(sess.ID, lastToolCallID(messages), agentTools)
 	res, usedModel, err := r.fallback.execute(streamCtx, a, model, messages, agentTools, sess, m, events)
 	if err != nil {
 		outcome := r.handleStreamError(ctx, sess, a, err, contextLimit, &ls.overflowCompactions, streamSpan, events)
@@ -1244,6 +1245,15 @@ func formatToolWarning(a *agent.Agent, warnings []string) string {
 		fmt.Fprintf(&builder, "- %s\n", warning)
 	}
 	return strings.TrimSuffix(builder.String(), "\n")
+}
+
+func lastToolCallID(messages []chat.Message) string {
+	for _, message := range slices.Backward(messages) {
+		if message.Role == chat.MessageRoleTool {
+			return message.ToolCallID
+		}
+	}
+	return ""
 }
 
 // filterExcludedTools removes tools whose names appear in the excluded list.
