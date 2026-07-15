@@ -238,7 +238,7 @@ func runAgentLoop(ctx context.Context, rt runtime.Runtime, sess *session.Session
 		case *runtime.ElicitationRequestEvent:
 			// Required: the runtime blocks until we respond, regardless
 			// of NonInteractive. Decline so the tool call fails fast.
-			_ = rt.ResumeElicitation(ctx, tools.ElicitationActionDecline, nil)
+			_ = rt.ResumeElicitation(ctx, tools.ElicitationActionDecline, nil, e.ElicitationID)
 		case *runtime.MaxIterationsReachedEvent:
 			// Defensive: in non-interactive mode the runtime already
 			// stops on its own and this Resume is dropped.

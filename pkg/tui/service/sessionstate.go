@@ -98,6 +98,10 @@ func (s *SessionState) ToggleSplitDiffView() {
 	s.splitDiffView = !s.splitDiffView
 }
 
+func (s *SessionState) SetSplitDiffView(enabled bool) {
+	s.splitDiffView = enabled
+}
+
 func (s *SessionState) YoloMode() bool {
 	return s.yoloMode
 }

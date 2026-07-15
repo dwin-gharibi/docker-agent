@@ -121,7 +121,7 @@ func (f *fakeRuntime) Resume(_ context.Context, req dagentruntime.ResumeRequest)
 	f.resumes = append(f.resumes, req)
 }
 
-func (f *fakeRuntime) ResumeElicitation(_ context.Context, action tools.ElicitationAction, _ map[string]any) error {
+func (f *fakeRuntime) ResumeElicitation(_ context.Context, action tools.ElicitationAction, _ map[string]any, _ ...string) error {
 	f.elicitations = append(f.elicitations, action)
 	return nil
 }
@@ -225,7 +225,7 @@ func TestSessionSendDeclinesElicitationAndRejectsMaxIterations(t *testing.T) {
 
 	out, err := s.Send(t.Context(), "hi")
 	require.NoError(t, err)
-	rt.events <- dagentruntime.ElicitationRequest("authorize", "url", nil, "https://example.com", "id", nil, "agent")
+	rt.events <- dagentruntime.ElicitationRequest("authorize", "url", nil, "https://example.com", "id", "", "sess", nil, "agent")
 	rt.events <- dagentruntime.MaxIterationsReached(3)
 	close(rt.events)
 

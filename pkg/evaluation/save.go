@@ -211,15 +211,20 @@ func SessionFromEvents(events []map[string]any, title string, questions []string
 		case "token_usage":
 			// Update session token usage
 			if usage, ok := event["usage"].(map[string]any); ok {
+				// Route the write through the locked setter, keeping the
+				// previous value for any field absent from the event. sess is
+				// local to this import, so the pre-read cannot race.
+				sessInput, sessOutput, sessCost := sess.TokensAndCost()
 				if inputTokens, ok := usage["input_tokens"].(float64); ok {
-					sess.InputTokens = int64(inputTokens)
+					sessInput = int64(inputTokens)
 				}
 				if outputTokens, ok := usage["output_tokens"].(float64); ok {
-					sess.OutputTokens = int64(outputTokens)
+					sessOutput = int64(outputTokens)
 				}
 				if cost, ok := usage["cost"].(float64); ok {
-					sess.Cost = cost
+					sessCost = cost
 				}
+				sess.SetTokensAndCost(sessInput, sessOutput, sessCost)
 				// Extract per-message usage if available
 				if lastMsg, ok := usage["last_message"].(map[string]any); ok {
 					currentUsage = parseMessageUsage(lastMsg)
@@ -251,7 +256,7 @@ func SessionFromEvents(events []map[string]any, title string, questions []string
 		case "session_title":
 			// Update session title if provided (may override the one from eval config)
 			if eventTitle, ok := event["title"].(string); ok && eventTitle != "" {
-				sess.Title = eventTitle
+				sess.SetTitle(eventTitle)
 			}
 
 		case "stream_stopped":

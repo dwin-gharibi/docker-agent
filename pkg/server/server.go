@@ -229,13 +229,17 @@ func (s *Server) getSessions(c echo.Context) error {
 
 	responses := make([]api.SessionsResponse, len(sessions))
 	for i, sess := range sessions {
+		// The in-memory store hands back live session pointers, so read the
+		// mutable scalars through one locked snapshot each.
+		title := sess.TitleSnapshot()
+		inputTokens, outputTokens := sess.Usage()
 		responses[i] = api.SessionsResponse{
 			ID:           sess.ID,
-			Title:        sess.Title,
+			Title:        title,
 			CreatedAt:    sess.CreatedAt.Format(time.RFC3339),
 			NumMessages:  len(sess.GetAllMessages()),
-			InputTokens:  sess.InputTokens,
-			OutputTokens: sess.OutputTokens,
+			InputTokens:  inputTokens,
+			OutputTokens: outputTokens,
 			WorkingDir:   sess.WorkingDir,
 		}
 	}
@@ -295,14 +299,16 @@ func (s *Server) getSession(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, fmt.Sprintf("session not found: %v", err))
 	}
 
+	title := sess.TitleSnapshot()
+	inputTokens, outputTokens := sess.Usage()
 	return c.JSON(http.StatusOK, api.SessionResponse{
 		ID:            sess.ID,
-		Title:         sess.Title,
+		Title:         title,
 		CreatedAt:     sess.CreatedAt,
 		Messages:      sess.GetAllMessages(),
 		ToolsApproved: sess.ToolsApproved,
-		InputTokens:   sess.InputTokens,
-		OutputTokens:  sess.OutputTokens,
+		InputTokens:   inputTokens,
+		OutputTokens:  outputTokens,
 		WorkingDir:    sess.WorkingDir,
 		Permissions:   sess.Permissions,
 	})
@@ -494,7 +500,7 @@ func (s *Server) elicitation(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("invalid request body: %v", err))
 	}
 
-	if err := s.sm.ResumeElicitation(c.Request().Context(), sessionID, req.Action, req.Content); err != nil {
+	if err := s.sm.ResumeElicitation(c.Request().Context(), sessionID, req.Action, req.Content, req.ElicitationID); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("failed to resume elicitation: %v", err))
 	}
 

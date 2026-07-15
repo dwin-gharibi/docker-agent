@@ -1,6 +1,7 @@
 package dialog
 
 import (
+	"fmt"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -14,136 +15,105 @@ import (
 )
 
 const (
-	settingsWidthPercent = 50
+	settingsWidthPercent = 60
 	settingsMinWidth     = 52
-	settingsMaxWidth     = 60
-
-	// previewMaxWidth is the widest the layout preview schematic can get.
-	previewMaxWidth = 44
-	// previewMinWidth keeps the schematic legible on tiny terminals.
-	previewMinWidth = 24
+	settingsMaxWidth     = 72
+	previewMaxWidth      = 44
+	previewMinWidth      = 24
 )
 
-// settingsTabs enumerates the tabs of the settings dialog.
 const (
-	tabVisuals = iota
+	tabAppearance = iota
 	tabBehavior
+	tabNotifications
 	tabCount
 )
 
-// settingsTabLabels maps tabs to their display labels.
-var settingsTabLabels = [tabCount]string{"Visuals", "Behavior"}
+var settingsTabLabels = [tabCount]string{"Appearance", "Behavior", "Notifications"}
 
-// visualsRows enumerates the selectable rows of the Visuals tab.
 const (
-	rowPosition = iota
+	rowTheme = iota
+	rowPosition
 	rowSpacing
 	rowSessionPath
 	rowUsage
 	rowAgents
 	rowTools
 	rowTodos
-	visualsRowCount
+	rowSplitDiff
+	rowExpandThinking
+	rowHideToolResults
+	appearanceRowCount
 )
 
-// behaviorRows enumerates the selectable rows of the Behavior tab.
 const (
 	rowSendMode = iota
+	rowYOLO
+	rowRestoreTabs
+	rowSnapshot
+	rowLean
+	rowTabTitleLength
 	behaviorRowCount
 )
 
-// sidebarPositions is the ←/→ cycle order of the position selector.
+const (
+	rowSound = iota
+	rowSoundThreshold
+	notificationsRowCount
+)
+
 var sidebarPositions = []messages.SidebarPosition{
-	messages.SidebarRight,
-	messages.SidebarLeft,
-	messages.SidebarTop,
-	messages.SidebarBottom,
+	messages.SidebarRight, messages.SidebarLeft, messages.SidebarTop, messages.SidebarBottom,
 }
 
-// positionLabels maps positions to their display labels.
 var positionLabels = map[messages.SidebarPosition]string{
-	messages.SidebarRight:  "Right",
-	messages.SidebarLeft:   "Left",
-	messages.SidebarTop:    "Top",
-	messages.SidebarBottom: "Bottom",
+	messages.SidebarRight: "Right", messages.SidebarLeft: "Left",
+	messages.SidebarTop: "Top", messages.SidebarBottom: "Bottom",
 }
 
-// sectionSpacings is the ←/→ cycle order of the section-spacing selector.
 var sectionSpacings = []messages.SectionSpacing{
-	messages.SpacingCompact,
-	messages.SpacingNormal,
-	messages.SpacingRelaxed,
+	messages.SpacingCompact, messages.SpacingNormal, messages.SpacingRelaxed,
 }
 
-// spacingLabels maps spacings to their display labels.
 var spacingLabels = map[messages.SectionSpacing]string{
-	messages.SpacingCompact: "Compact",
-	messages.SpacingNormal:  "Normal",
-	messages.SpacingRelaxed: "Relaxed",
+	messages.SpacingCompact: "Compact", messages.SpacingNormal: "Normal", messages.SpacingRelaxed: "Relaxed",
 }
 
-// sendModes is the ←/→ cycle order of the send-mode switch.
-var sendModes = []messages.SendMode{
-	messages.SendModeSteer,
-	messages.SendModeQueue,
-}
+var sendModes = []messages.SendMode{messages.SendModeSteer, messages.SendModeQueue}
 
-// sendModeOption describes one radio line of the send-mode switch.
 type sendModeOption struct {
 	mode  messages.SendMode
 	label string
 	desc  string
 }
 
-// sendModeOptions lists the send-mode choices with the short description
-// rendered next to each label.
 var sendModeOptions = []sendModeOption{
 	{messages.SendModeSteer, "Steer", "send to the working agent mid-turn"},
 	{messages.SendModeQueue, "Queue", "hold until the current turn ends"},
 }
 
-// settingsDialog lets the user tune the TUI from two tabs: Visuals (sidebar
-// position, section spacing, visible sections — previewed live both in the
-// schematic and in the UI behind the dialog) and Behavior (what happens to
-// messages sent while the agent is working). Enter persists everything, Esc
-// restores the original layout.
 type settingsDialog struct {
 	BaseDialog
 
-	original messages.LayoutSettings
-	current  messages.LayoutSettings
-
-	originalMode messages.SendMode
-	currentMode  messages.SendMode
-
-	// showVisuals gates the Visuals tab; it is false when the sidebar is
-	// disabled (lean mode or --sidebar=false) and there is no layout to tune.
+	original    messages.Preferences
+	current     messages.Preferences
 	showVisuals bool
-
-	tab int
-	// selected tracks the highlighted row per tab so switching tabs
-	// preserves each tab's position.
-	selected [tabCount]int
+	tab         int
+	selected    [tabCount]int
+	confirmYOLO bool
 }
 
-// NewSettingsDialog creates the settings dialog seeded with the currently
-// active values. showVisuals hides the Visuals tab when there is no sidebar
-// to customize.
-func NewSettingsDialog(current messages.LayoutSettings, mode messages.SendMode, showVisuals bool) Dialog {
-	current.SidebarPosition = messages.ParseSidebarPosition(string(current.SidebarPosition))
-	current.SectionSpacing = messages.ParseSectionSpacing(string(current.SectionSpacing))
-	mode = messages.ParseSendMode(string(mode))
-	d := &settingsDialog{
-		original:     current,
-		current:      current,
-		originalMode: mode,
-		currentMode:  mode,
-		showVisuals:  showVisuals,
+func NewSettingsDialog(preferences messages.Preferences, showVisuals bool) Dialog {
+	preferences.Layout.SidebarPosition = messages.ParseSidebarPosition(string(preferences.Layout.SidebarPosition))
+	preferences.Layout.SectionSpacing = messages.ParseSectionSpacing(string(preferences.Layout.SectionSpacing))
+	preferences.SendMode = messages.ParseSendMode(string(preferences.SendMode))
+	if preferences.TabTitleMaxLength <= 0 {
+		preferences.TabTitleMaxLength = 20
 	}
-	if !showVisuals {
-		d.tab = tabBehavior
+	if preferences.SoundThreshold <= 0 {
+		preferences.SoundThreshold = 10
 	}
-	return d
+	return &settingsDialog{original: preferences, current: preferences, showVisuals: showVisuals}
 }
 
 func (d *settingsDialog) Init() tea.Cmd { return nil }
@@ -153,7 +123,6 @@ func (d *settingsDialog) Update(msg tea.Msg) (layout.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		cmd := d.SetSize(msg.Width, msg.Height)
 		return d, cmd
-
 	case tea.KeyPressMsg:
 		if cmd := HandleQuit(msg); cmd != nil {
 			return d, cmd
@@ -164,12 +133,34 @@ func (d *settingsDialog) Update(msg tea.Msg) (layout.Model, tea.Cmd) {
 	return d, nil
 }
 
-// rowCount returns the number of selectable rows on the active tab.
 func (d *settingsDialog) rowCount() int {
-	if d.tab == tabBehavior {
+	switch d.tab {
+	case tabBehavior:
 		return behaviorRowCount
+	case tabNotifications:
+		return notificationsRowCount
+	default:
+		return appearanceRowCount
 	}
-	return visualsRowCount
+}
+
+func (d *settingsDialog) selectable(tab, row int) bool {
+	if tab == tabAppearance && !d.showVisuals && row >= rowPosition && row <= rowTodos {
+		return false
+	}
+	if tab == tabNotifications && row == rowSoundThreshold && !d.current.Sound {
+		return false
+	}
+	return true
+}
+
+func (d *settingsDialog) moveSelection(delta int) {
+	for next := d.selected[d.tab] + delta; next >= 0 && next < d.rowCount(); next += delta {
+		if d.selectable(d.tab, next) {
+			d.selected[d.tab] = next
+			return
+		}
+	}
 }
 
 func (d *settingsDialog) handleKey(msg tea.KeyPressMsg) tea.Cmd {
@@ -177,71 +168,112 @@ func (d *settingsDialog) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	case "esc", "q":
 		return d.cancel()
 	case "tab":
-		d.switchTab(+1)
+		d.confirmYOLO = false
+		d.tab = (d.tab + 1) % tabCount
 	case "shift+tab":
-		d.switchTab(-1)
+		d.confirmYOLO = false
+		d.tab = (d.tab + tabCount - 1) % tabCount
 	case "up", "k", "ctrl+k":
-		if d.selected[d.tab] > 0 {
-			d.selected[d.tab]--
-		}
+		d.confirmYOLO = false
+		d.moveSelection(-1)
 	case "down", "j", "ctrl+j":
-		if d.selected[d.tab] < d.rowCount()-1 {
-			d.selected[d.tab]++
-		}
+		d.confirmYOLO = false
+		d.moveSelection(1)
 	case "home", "g":
 		d.selected[d.tab] = 0
 	case "end", "G":
 		d.selected[d.tab] = d.rowCount() - 1
+		if !d.selectable(d.tab, d.selected[d.tab]) {
+			d.moveSelection(-1)
+		}
 	case "left", "h":
 		return d.changeValue(-1)
 	case "right", "l", "space":
-		return d.changeValue(+1)
+		return d.changeValue(1)
 	case "enter":
+		if d.tab == tabAppearance && d.selected[d.tab] == rowTheme {
+			return core.CmdHandler(messages.OpenThemePickerMsg{})
+		}
+		if d.tab == tabBehavior && d.selected[d.tab] == rowYOLO && !d.current.YOLO {
+			return d.changeValue(1)
+		}
 		return d.apply()
 	}
 	return nil
 }
 
-// switchTab cycles the active tab by delta; a no-op without the Visuals tab.
-func (d *settingsDialog) switchTab(delta int) {
-	if !d.showVisuals {
-		return
-	}
-	d.tab = (d.tab + delta + tabCount) % tabCount
-}
-
-// changeValue cycles the selected row's value by delta. Visuals changes emit
-// a live preview; the send mode only takes effect when applied.
 func (d *settingsDialog) changeValue(delta int) tea.Cmd {
-	if d.tab == tabBehavior {
-		if d.selected[tabBehavior] == rowSendMode {
-			d.currentMode = cycleValue(sendModes, d.currentMode, delta)
+	switch d.tab {
+	case tabAppearance:
+		switch d.selected[d.tab] {
+		case rowTheme:
+			if delta > 0 {
+				return core.CmdHandler(messages.OpenThemePickerMsg{})
+			}
+		case rowPosition:
+			d.current.Layout.SidebarPosition = cycleValue(sidebarPositions, d.current.Layout.SidebarPosition, delta)
+		case rowSpacing:
+			d.current.Layout.SectionSpacing = cycleValue(sectionSpacings, d.current.Layout.SectionSpacing, delta)
+		case rowSessionPath:
+			d.current.Layout.HideSessionPath = !d.current.Layout.HideSessionPath
+		case rowUsage:
+			d.current.Layout.HideUsage = !d.current.Layout.HideUsage
+		case rowAgents:
+			d.current.Layout.HideAgents = !d.current.Layout.HideAgents
+		case rowTools:
+			d.current.Layout.HideTools = !d.current.Layout.HideTools
+		case rowTodos:
+			d.current.Layout.HideTodos = !d.current.Layout.HideTodos
+		case rowSplitDiff:
+			d.current.SplitDiffView = !d.current.SplitDiffView
+		case rowExpandThinking:
+			d.current.ExpandThinking = !d.current.ExpandThinking
+		case rowHideToolResults:
+			d.current.HideToolResults = !d.current.HideToolResults
 		}
-		return nil
+		if d.selected[d.tab] >= rowPosition && d.selected[d.tab] <= rowTodos {
+			return core.CmdHandler(messages.PreviewLayoutMsg{Layout: d.current.Layout})
+		}
+	case tabBehavior:
+		switch d.selected[d.tab] {
+		case rowSendMode:
+			d.current.SendMode = cycleValue(sendModes, d.current.SendMode, delta)
+		case rowYOLO:
+			switch {
+			case d.current.YOLO:
+				d.current.YOLO = false
+				d.confirmYOLO = false
+			case d.confirmYOLO:
+				d.current.YOLO = true
+				d.confirmYOLO = false
+			default:
+				d.confirmYOLO = true
+			}
+		case rowRestoreTabs:
+			d.current.RestoreTabs = !d.current.RestoreTabs
+		case rowSnapshot:
+			d.current.Snapshot = !d.current.Snapshot
+		case rowLean:
+			d.current.Lean = !d.current.Lean
+		case rowTabTitleLength:
+			d.current.TabTitleMaxLength = stepValue(d.current.TabTitleMaxLength, delta, 1, 5, 100)
+		}
+	case tabNotifications:
+		switch d.selected[d.tab] {
+		case rowSound:
+			d.current.Sound = !d.current.Sound
+			if !d.current.Sound && d.selected[d.tab] == rowSoundThreshold {
+				d.selected[d.tab] = rowSound
+			}
+		case rowSoundThreshold:
+			if d.current.Sound {
+				d.current.SoundThreshold = stepValue(d.current.SoundThreshold, delta, 1, 1, 300)
+			}
+		}
 	}
-
-	switch d.selected[tabVisuals] {
-	case rowPosition:
-		d.current.SidebarPosition = cycleValue(sidebarPositions, d.current.SidebarPosition, delta)
-	case rowSpacing:
-		d.current.SectionSpacing = cycleValue(sectionSpacings, d.current.SectionSpacing, delta)
-	case rowSessionPath:
-		d.current.HideSessionPath = !d.current.HideSessionPath
-	case rowUsage:
-		d.current.HideUsage = !d.current.HideUsage
-	case rowAgents:
-		d.current.HideAgents = !d.current.HideAgents
-	case rowTools:
-		d.current.HideTools = !d.current.HideTools
-	case rowTodos:
-		d.current.HideTodos = !d.current.HideTodos
-	default:
-		return nil
-	}
-	return core.CmdHandler(messages.PreviewLayoutMsg{Layout: d.current})
+	return nil
 }
 
-// cycleValue returns the value delta steps away from current in the cycle order.
 func cycleValue[T comparable](values []T, current T, delta int) T {
 	idx := 0
 	for i, v := range values {
@@ -254,62 +286,42 @@ func cycleValue[T comparable](values []T, current T, delta int) T {
 	return values[idx]
 }
 
-// apply closes the dialog and commits the current settings.
-func (d *settingsDialog) apply() tea.Cmd {
-	if d.current == d.original && d.currentMode == d.originalMode {
-		return closeDialogCmd()
-	}
-	return tea.Sequence(
-		closeDialogCmd(),
-		core.CmdHandler(messages.ApplySettingsMsg{Layout: d.current, SendMode: d.currentMode}),
-	)
+func stepValue(current, delta, step, minimum, maximum int) int {
+	return max(minimum, min(maximum, current+delta*step))
 }
 
-// cancel closes the dialog and restores the original layout. The send mode
-// never previews, so only layout changes need to be rolled back.
-func (d *settingsDialog) cancel() tea.Cmd {
+func (d *settingsDialog) apply() tea.Cmd {
 	if d.current == d.original {
 		return closeDialogCmd()
 	}
-	return tea.Sequence(
-		closeDialogCmd(),
-		core.CmdHandler(messages.CancelLayoutPreviewMsg{Original: d.original}),
-	)
+	return tea.Sequence(closeDialogCmd(), core.CmdHandler(messages.ApplySettingsMsg{Preferences: d.current}))
 }
 
-func (d *settingsDialog) Position() (row, col int) {
-	return d.CenterDialog(d.View())
+func (d *settingsDialog) cancel() tea.Cmd {
+	if d.current.Layout == d.original.Layout {
+		return closeDialogCmd()
+	}
+	return tea.Sequence(closeDialogCmd(), core.CmdHandler(messages.CancelLayoutPreviewMsg{Original: d.original.Layout}))
 }
+
+func (d *settingsDialog) Position() (row, col int) { return d.CenterDialog(d.View()) }
 
 func (d *settingsDialog) View() string {
 	width := d.ComputeDialogWidth(settingsWidthPercent, settingsMinWidth, settingsMaxWidth)
 	inner := d.ContentWidth(width, 2)
-
-	content := NewContent(inner).
-		AddTitle("Settings").
-		AddSeparator()
-
-	helpKeys := []string{"↑/↓", "navigate", "←/→", "change"}
-	if d.showVisuals {
-		content.AddSpace().AddContent(d.renderTabBar(inner))
-		helpKeys = append(helpKeys, "tab", "switch tab")
-	}
-
-	if d.tab == tabBehavior {
+	content := NewContent(inner).AddTitle("Settings").AddSeparator().AddSpace().AddContent(d.renderTabBar(inner))
+	switch d.tab {
+	case tabBehavior:
 		d.renderBehaviorTab(content, inner)
-	} else {
-		d.renderVisualsTab(content, inner)
+	case tabNotifications:
+		d.renderNotificationsTab(content, inner)
+	default:
+		d.renderAppearanceTab(content, inner)
 	}
-
-	content.
-		AddSpace().
-		AddHelpKeys(append(helpKeys, "enter", "apply", "esc", "cancel")...)
-
+	content.AddSpace().AddHelpKeys("↑/↓", "navigate", "←/→", "change", "tab", "switch tab", "enter", "apply", "esc", "cancel")
 	return styles.DialogStyle.Width(width).Render(content.Build())
 }
 
-// renderTabBar renders the Visuals/Behavior tab labels, highlighting the
-// active one.
 func (d *settingsDialog) renderTabBar(width int) string {
 	tabs := make([]string, 0, tabCount)
 	for i, label := range settingsTabLabels {
@@ -322,93 +334,94 @@ func (d *settingsDialog) renderTabBar(width int) string {
 	return lipgloss.PlaceHorizontal(width, lipgloss.Center, strings.Join(tabs, "    "))
 }
 
-// renderVisualsTab renders the layout preview, the position/spacing
-// selectors, and the section visibility toggles.
-func (d *settingsDialog) renderVisualsTab(content *Content, inner int) {
-	preview := lipgloss.NewStyle().
-		Width(inner).
-		Align(lipgloss.Center).
-		Render(renderLayoutPreview(d.current, inner))
-
-	content.
-		AddSpace().
-		AddContent(preview).
-		AddSpace().
-		AddContent(d.renderSelectorRow(rowPosition, "Sidebar position", positionLabels[d.current.SidebarPosition], inner)).
-		AddContent(d.renderSelectorRow(rowSpacing, "Section spacing", spacingLabels[d.current.SectionSpacing], inner)).
-		AddSpace().
-		AddContent(styles.MutedStyle.Render("Sidebar sections")).
-		AddContent(d.renderToggleRow(rowSessionPath, "Session path", d.current.HideSessionPath)).
-		AddContent(d.renderToggleRow(rowUsage, "Token usage", d.current.HideUsage)).
-		AddContent(d.renderToggleRow(rowAgents, "Agents", d.current.HideAgents)).
-		AddContent(d.renderToggleRow(rowTools, "Tools", d.current.HideTools)).
-		AddContent(d.renderToggleRow(rowTodos, "Todos", d.current.HideTodos))
+func (d *settingsDialog) renderAppearanceTab(content *Content, inner int) {
+	theme := styles.GetPersistedThemeRef()
+	if theme == "" {
+		theme = styles.DefaultThemeRef
+	}
+	content.AddSpace().AddContent(d.renderSelectorRow(rowTheme, "Theme", theme, inner))
+	if d.showVisuals {
+		preview := lipgloss.NewStyle().Width(inner).Align(lipgloss.Center).Render(renderLayoutPreview(d.current.Layout, inner))
+		content.AddSpace().AddContent(preview).AddSpace().
+			AddContent(d.renderSelectorRow(rowPosition, "Sidebar position", positionLabels[d.current.Layout.SidebarPosition], inner)).
+			AddContent(d.renderSelectorRow(rowSpacing, "Section spacing", spacingLabels[d.current.Layout.SectionSpacing], inner)).
+			AddContent(styles.MutedStyle.Render("Sidebar sections")).
+			AddContent(d.renderToggleRow(rowSessionPath, "Session path", !d.current.Layout.HideSessionPath)).
+			AddContent(d.renderToggleRow(rowUsage, "Token usage", !d.current.Layout.HideUsage)).
+			AddContent(d.renderToggleRow(rowAgents, "Agents", !d.current.Layout.HideAgents)).
+			AddContent(d.renderToggleRow(rowTools, "Tools", !d.current.Layout.HideTools)).
+			AddContent(d.renderToggleRow(rowTodos, "Todos", !d.current.Layout.HideTodos))
+	}
+	content.AddSpace().
+		AddContent(d.renderToggleRow(rowSplitDiff, "Split diff view", d.current.SplitDiffView)).
+		AddContent(d.renderToggleRow(rowExpandThinking, "Expand thinking by default", d.current.ExpandThinking)).
+		AddContent(d.renderToggleRow(rowHideToolResults, "Hide tool results by default", d.current.HideToolResults))
 }
 
-// renderBehaviorTab renders the send-mode switch as a radio group: both
-// choices stay visible, ←/→ or space moves the mark between them.
-func (d *settingsDialog) renderBehaviorTab(content *Content, _ int) {
-	content.
-		AddSpace().
-		AddContent(styles.MutedStyle.Render("While agent is working")).
-		AddSpace()
+func (d *settingsDialog) renderBehaviorTab(content *Content, inner int) {
+	content.AddSpace().AddContent(styles.MutedStyle.Render("While agent is working")).AddSpace()
 	for _, opt := range sendModeOptions {
 		content.AddContent(d.renderSendModeOption(opt))
 	}
+	content.AddSpace().
+		AddContent(d.renderToggleRow(rowYOLO, "Auto-approve tools by default", d.current.YOLO)).
+		AddContent(d.renderToggleRow(rowRestoreTabs, "Restore tabs on launch", d.current.RestoreTabs)).
+		AddContent(d.renderToggleRow(rowSnapshot, "Automatic snapshots", d.current.Snapshot)).
+		AddContent(d.renderToggleRow(rowLean, "Lean UI by default", d.current.Lean)).
+		AddContent(d.renderStepperRow(rowTabTitleLength, "Tab title max length", d.current.TabTitleMaxLength, "chars", inner, false))
+	if d.confirmYOLO {
+		content.AddSpace().AddContent(styles.MutedStyle.Render("Auto-approve can run tools without confirmation. Press again to enable."))
+	}
+	content.AddContent(styles.MutedStyle.Render("Restore tabs and lean UI apply on next launch."))
 }
 
-// renderSendModeOption renders one radio line of the send-mode switch.
+func (d *settingsDialog) renderNotificationsTab(content *Content, inner int) {
+	content.AddSpace().
+		AddContent(d.renderToggleRow(rowSound, "Sound on task completion", d.current.Sound)).
+		AddContent(d.renderStepperRow(rowSoundThreshold, "Sound threshold", d.current.SoundThreshold, "seconds", inner, !d.current.Sound))
+}
+
 func (d *settingsDialog) renderSendModeOption(opt sendModeOption) string {
-	glyph := "○"
-	labelStyle := styles.PaletteUnselectedActionStyle
-	glyphStyle := styles.SecondaryStyle
-	prefix := "  "
-	if d.currentMode == opt.mode {
-		glyph = "●"
+	glyph, prefix := "○", "  "
+	labelStyle, glyphStyle := styles.PaletteUnselectedActionStyle, styles.SecondaryStyle
+	if d.current.SendMode == opt.mode {
+		glyph, prefix = "●", styles.HighlightWhiteStyle.Render("› ")
 		labelStyle = styles.PaletteSelectedActionStyle
 		glyphStyle = styles.SecondaryStyle.Foreground(styles.Success)
-		prefix = styles.HighlightWhiteStyle.Render("› ")
 	}
 	return prefix + glyphStyle.Render(glyph) + " " + labelStyle.Render(opt.label) + "   " + styles.MutedStyle.Render(opt.desc)
 }
 
-// renderSelectorRow renders a row with a ‹ value › selector aligned to the right.
 func (d *settingsDialog) renderSelectorRow(row int, label, valueLabel string, width int) string {
 	value := "‹ " + valueLabel + " ›"
-
-	labelStyle := styles.PaletteUnselectedActionStyle
-	valueStyle := styles.SecondaryStyle
-	prefix := "  "
+	labelStyle, valueStyle, prefix := styles.PaletteUnselectedActionStyle, styles.SecondaryStyle, "  "
 	if d.selected[d.tab] == row {
-		labelStyle = styles.PaletteSelectedActionStyle
-		valueStyle = styles.HighlightWhiteStyle
-		prefix = styles.HighlightWhiteStyle.Render("› ")
+		labelStyle, valueStyle, prefix = styles.PaletteSelectedActionStyle, styles.HighlightWhiteStyle, styles.HighlightWhiteStyle.Render("› ")
 	}
-
 	left := prefix + labelStyle.Render(label)
-	gap := max(1, width-lipgloss.Width(left)-lipgloss.Width(value))
-	return left + strings.Repeat(" ", gap) + valueStyle.Render(value)
+	return left + strings.Repeat(" ", max(1, width-lipgloss.Width(left)-lipgloss.Width(value))) + valueStyle.Render(value)
 }
 
-// renderToggleRow renders a checkbox row for one sidebar section.
-func (d *settingsDialog) renderToggleRow(row int, label string, hidden bool) string {
-	check := "[x]"
-	if hidden {
-		check = "[ ]"
+func (d *settingsDialog) renderStepperRow(row int, label string, value int, unit string, width int, disabled bool) string {
+	if disabled {
+		left, right := "  "+styles.MutedStyle.Render(label), styles.MutedStyle.Render(fmt.Sprintf("‹ %d %s ›", value, unit))
+		return left + strings.Repeat(" ", max(1, width-lipgloss.Width(left)-lipgloss.Width(right))) + right
 	}
+	return d.renderSelectorRow(row, label, fmt.Sprintf("%d %s", value, unit), width)
+}
 
-	labelStyle := styles.PaletteUnselectedActionStyle
-	checkStyle := styles.SecondaryStyle
-	prefix := "  "
-	if d.selected[d.tab] == row {
-		labelStyle = styles.PaletteSelectedActionStyle
-		checkStyle = styles.HighlightWhiteStyle
-		prefix = styles.HighlightWhiteStyle.Render("› ")
+func (d *settingsDialog) renderToggleRow(row int, label string, enabled bool) string {
+	check := "[ ]"
+	if enabled {
+		check = "[x]"
 	}
-	if !hidden {
+	labelStyle, checkStyle, prefix := styles.PaletteUnselectedActionStyle, styles.SecondaryStyle, "  "
+	if d.selected[d.tab] == row {
+		labelStyle, checkStyle, prefix = styles.PaletteSelectedActionStyle, styles.HighlightWhiteStyle, styles.HighlightWhiteStyle.Render("› ")
+	}
+	if enabled {
 		checkStyle = checkStyle.Foreground(styles.Success)
 	}
-
 	return prefix + checkStyle.Render(check) + " " + labelStyle.Render(label)
 }
 

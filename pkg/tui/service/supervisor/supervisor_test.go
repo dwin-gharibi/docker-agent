@@ -191,7 +191,7 @@ func TestStreamStarted_SubSessionDoesNotDropPendingEvent(t *testing.T) {
 	t.Parallel()
 	s := newTestSupervisor([]string{"sess-A", "sess-B"}, "sess-B") // sess-A is background
 
-	elicitation := runtime.ElicitationRequest("confirm?", "form", nil, "", "eid-1", nil, "agent")
+	elicitation := runtime.ElicitationRequest("confirm?", "form", nil, "", "eid-1", "", "", nil, "agent")
 	s.runners["sess-A"].PendingEvents = []tea.Msg{elicitation}
 	s.runners["sess-A"].NeedsAttn = true
 	s.runners["sess-A"].IsRunning = true // already running a top-level turn
@@ -217,7 +217,7 @@ func TestStreamStopped_SubSessionDoesNotDropPendingEvent(t *testing.T) {
 	t.Parallel()
 	s := newTestSupervisor([]string{"sess-A", "sess-B"}, "sess-B")
 
-	elicitation := runtime.ElicitationRequest("confirm?", "form", nil, "", "eid-2", nil, "agent")
+	elicitation := runtime.ElicitationRequest("confirm?", "form", nil, "", "eid-2", "", "", nil, "agent")
 	s.runners["sess-A"].PendingEvents = []tea.Msg{elicitation}
 	s.runners["sess-A"].NeedsAttn = true
 	s.runners["sess-A"].IsRunning = true
@@ -244,7 +244,7 @@ func TestStreamStarted_TopLevelSupersedesStalePending(t *testing.T) {
 	s := newTestSupervisor([]string{"sess-A"}, "sess-A")
 
 	s.runners["sess-A"].PendingEvents = []tea.Msg{runtime.ElicitationRequest(
-		"old?", "form", nil, "", "eid-stale", nil, "agent",
+		"old?", "form", nil, "", "eid-stale", "", "", nil, "agent",
 	)}
 	s.runners["sess-A"].IsRunning = false
 
@@ -270,7 +270,7 @@ func TestStreamStopped_TopLevelClearsPendingAndNeedsAttn(t *testing.T) {
 	}{
 		{
 			name:    "elicitation pending",
-			pending: runtime.ElicitationRequest("q?", "form", nil, "", "eid-3", nil, "agent"),
+			pending: runtime.ElicitationRequest("q?", "form", nil, "", "eid-3", "", "", nil, "agent"),
 		},
 		{
 			name:    "tool confirmation pending",
@@ -311,7 +311,7 @@ func TestStreamStarted_EmptySessionID_TreatedAsTopLevel(t *testing.T) {
 	s := newTestSupervisor([]string{"sess-A"}, "sess-A")
 
 	s.runners["sess-A"].PendingEvents = []tea.Msg{runtime.ElicitationRequest(
-		"old?", "form", nil, "", "eid-old", nil, "agent",
+		"old?", "form", nil, "", "eid-old", "", "", nil, "agent",
 	)}
 
 	// Emitter omits SessionID (empty string).

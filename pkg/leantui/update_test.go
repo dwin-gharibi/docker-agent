@@ -56,7 +56,7 @@ func (r *cycleThinkingRuntime) Run(context.Context, *session.Session) ([]session
 	return nil, nil
 }
 func (r *cycleThinkingRuntime) Resume(context.Context, runtime.ResumeRequest) {}
-func (r *cycleThinkingRuntime) ResumeElicitation(context.Context, tools.ElicitationAction, map[string]any) error {
+func (r *cycleThinkingRuntime) ResumeElicitation(context.Context, tools.ElicitationAction, map[string]any, ...string) error {
 	return nil
 }
 func (r *cycleThinkingRuntime) SessionStore() session.Store { return nil }
@@ -120,6 +120,7 @@ func (r *cycleThinkingRuntime) AvailableModels(context.Context) []runtime.ModelC
 func (r *cycleThinkingRuntime) SupportsModelSwitching() bool                          { return r.supports }
 func (r *cycleThinkingRuntime) OnToolsChanged(func(runtime.Event))                    {}
 func (r *cycleThinkingRuntime) OnBackgroundEvent(func(runtime.Event))                 {}
+func (r *cycleThinkingRuntime) OnElicitationRequest(func(runtime.Event))              {}
 
 var _ runtime.Runtime = (*cycleThinkingRuntime)(nil)
 

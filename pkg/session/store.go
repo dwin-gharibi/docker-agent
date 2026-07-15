@@ -181,7 +181,7 @@ func (s *InMemorySessionStore) GetSessionSummaries(_ context.Context) ([]Summary
 		}
 		summaries = append(summaries, Summary{
 			ID:          value.ID,
-			Title:       value.Title,
+			Title:       value.TitleSnapshot(),
 			CreatedAt:   value.CreatedAt,
 			Starred:     value.Starred,
 			NumMessages: value.MessageCount(),
@@ -234,7 +234,7 @@ func (s *InMemorySessionStore) UpdateSession(_ context.Context, session *Session
 		InputTokens:         session.InputTokens,
 		OutputTokens:        session.OutputTokens,
 		Cost:                session.Cost,
-		Permissions:         clonePermissionsConfig(session.Permissions),
+		Permissions:         session.Permissions.Clone(),
 		AgentModelOverrides: cloneStringMap(session.AgentModelOverrides),
 		CustomModelsUsed:    cloneStringSlice(session.CustomModelsUsed),
 		AttachedFiles:       slices.Clone(session.AttachedFiles),
@@ -437,9 +437,7 @@ func (s *InMemorySessionStore) UpdateSessionTokens(_ context.Context, sessionID 
 	if !exists {
 		return ErrNotFound
 	}
-	session.InputTokens = inputTokens
-	session.OutputTokens = outputTokens
-	session.Cost = cost
+	session.SetTokensAndCost(inputTokens, outputTokens, cost)
 	return nil
 }
 
@@ -452,7 +450,7 @@ func (s *InMemorySessionStore) UpdateSessionTitle(_ context.Context, sessionID, 
 	if !exists {
 		return ErrNotFound
 	}
-	session.Title = title
+	session.SetTitle(title)
 	return nil
 }
 
@@ -957,7 +955,7 @@ func (s *SQLiteSessionStore) UpdateSession(ctx context.Context, session *Session
 		InputTokens:         session.InputTokens,
 		OutputTokens:        session.OutputTokens,
 		Cost:                session.Cost,
-		Permissions:         clonePermissionsConfig(session.Permissions),
+		Permissions:         session.Permissions.Clone(),
 		AgentModelOverrides: cloneStringMap(session.AgentModelOverrides),
 		CustomModelsUsed:    cloneStringSlice(session.CustomModelsUsed),
 		ParentID:            session.ParentID,

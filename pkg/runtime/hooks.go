@@ -502,10 +502,11 @@ func (r *LocalRuntime) executeBeforeCompactionHooks(
 	contextLimit int64,
 	events EventSink,
 ) *hooks.Result {
+	inputTokens, outputTokens := sess.Usage()
 	return r.dispatchHook(ctx, a, hooks.EventBeforeCompaction, &hooks.Input{
 		SessionID:        sess.ID,
-		InputTokens:      sess.InputTokens,
-		OutputTokens:     sess.OutputTokens,
+		InputTokens:      inputTokens,
+		OutputTokens:     outputTokens,
 		ContextLimit:     contextLimit,
 		CompactionReason: reason,
 	}, events)

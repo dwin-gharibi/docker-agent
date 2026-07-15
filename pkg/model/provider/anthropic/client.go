@@ -202,13 +202,14 @@ func (c *Client) CreateChatCompletionStream(
 		return c.createBetaStream(ctx, client, messages, requestTools, maxTokens)
 	}
 
+	requestTools = c.toolsWithSupportedDeferral(requestTools)
 	allTools, err := convertTools(requestTools)
 	if err != nil {
 		slog.ErrorContext(ctx, "Failed to convert tools for Anthropic request", "error", err)
 		return nil, err
 	}
 
-	converted, err := c.convertMessages(ctx, messages)
+	converted, err := c.convertMessagesWithDeferred(ctx, messages, requestTools)
 	if err != nil {
 		slog.ErrorContext(ctx, "Failed to convert messages for Anthropic request", "error", err)
 		return nil, err
@@ -309,6 +310,11 @@ func (c *Client) convertDoc(ctx context.Context, doc chat.Document) ([]anthropic
 }
 
 func (c *Client) convertMessages(ctx context.Context, messages []chat.Message) ([]anthropic.MessageParam, error) {
+	return c.convertMessagesWithDeferred(ctx, messages, nil)
+}
+
+func (c *Client) convertMessagesWithDeferred(ctx context.Context, messages []chat.Message, requestTools []tools.Tool) ([]anthropic.MessageParam, error) {
+	deferredByCallID := deferredToolNamesByCallID(requestTools)
 	var anthropicMessages []anthropic.MessageParam
 	// Track whether the last appended assistant message included tool_use blocks
 	// so we can ensure the immediate next message is the grouped tool_result user message.
@@ -396,6 +402,21 @@ func (c *Client) convertMessages(ctx context.Context, messages []chat.Message) (
 			var blocks []anthropic.ContentBlockParamUnion
 			j := i
 			for j < len(messages) && messages[j].Role == chat.MessageRoleTool {
+				if names := deferredByCallID[messages[j].ToolCallID]; len(names) > 0 {
+					content := make([]anthropic.ToolResultBlockParamContentUnion, 0, len(names))
+					for _, name := range names {
+						content = append(content, anthropic.ToolResultBlockParamContentUnion{
+							OfToolReference: &anthropic.ToolReferenceBlockParam{ToolName: name},
+						})
+					}
+					blocks = append(blocks, anthropic.ContentBlockParamUnion{OfToolResult: &anthropic.ToolResultBlockParam{
+						ToolUseID: messages[j].ToolCallID,
+						IsError:   param.NewOpt(messages[j].IsError),
+						Content:   content,
+					}})
+					j++
+					continue
+				}
 				tr, err := c.convertToolResultBlock(ctx, &messages[j])
 				if err != nil {
 					return nil, err
@@ -422,6 +443,16 @@ func (c *Client) convertMessages(ctx context.Context, messages []chat.Message) (
 	applyMessageCacheControl(anthropicMessages)
 
 	return anthropicMessages, nil
+}
+
+func deferredToolNamesByCallID(requestTools []tools.Tool) map[string][]string {
+	result := make(map[string][]string)
+	for _, tool := range requestTools {
+		if tool.Deferred && tool.DeferredAtToolCallID != "" {
+			result[tool.DeferredAtToolCallID] = append(result[tool.DeferredAtToolCallID], tool.Name)
+		}
+	}
+	return result
 }
 
 // convertToolResultBlock converts a tool message to an Anthropic tool_result block.
@@ -652,7 +683,29 @@ func extractSystemBlocks(messages []chat.Message) []anthropic.TextBlockParam {
 	return systemBlocks
 }
 
+func (c *Client) supportsDeferredTools() bool {
+	if enabled, ok := providerutil.GetProviderOptBool(c.ModelConfig.ProviderOpts, "supports_deferred_tools"); ok {
+		return enabled
+	}
+	return modelinfo.SupportsDeferredTools(c.ModelConfig.Provider, c.ModelConfig.Model)
+}
+
+func (c *Client) toolsWithSupportedDeferral(requestTools []tools.Tool) []tools.Tool {
+	if c.supportsDeferredTools() {
+		return requestTools
+	}
+	result := make([]tools.Tool, len(requestTools))
+	copy(result, requestTools)
+	for i := range result {
+		result[i].Deferred = false
+		result[i].DeferredAtToolCallID = ""
+	}
+	return result
+}
+
 func convertTools(tooles []tools.Tool) ([]anthropic.ToolUnionParam, error) {
+	hasDeferredTools := containsDeferredTool(tooles)
+	tooles, immediateCount := orderToolsForDeferredLoading(tooles)
 	toolParams := make([]anthropic.ToolParam, len(tooles))
 
 	for i, tool := range tooles {
@@ -666,6 +719,12 @@ func convertTools(tooles []tools.Tool) ([]anthropic.ToolUnionParam, error) {
 			Description: anthropic.String(tool.Description),
 			InputSchema: inputSchema,
 		}
+		if tool.Deferred {
+			toolParams[i].DeferLoading = param.NewOpt(true)
+		}
+		if hasDeferredTools && i == immediateCount-1 {
+			toolParams[i].CacheControl = anthropic.NewCacheControlEphemeralParam()
+		}
 	}
 	anthropicTools := make([]anthropic.ToolUnionParam, len(toolParams))
 	for i := range toolParams {
@@ -673,6 +732,38 @@ func convertTools(tooles []tools.Tool) ([]anthropic.ToolUnionParam, error) {
 	}
 
 	return anthropicTools, nil
+}
+
+func containsDeferredTool(requestTools []tools.Tool) bool {
+	for _, tool := range requestTools {
+		if tool.Deferred {
+			return true
+		}
+	}
+	return false
+}
+
+func orderToolsForDeferredLoading(requestTools []tools.Tool) ([]tools.Tool, int) {
+	ordered := make([]tools.Tool, 0, len(requestTools))
+	for _, tool := range requestTools {
+		if !tool.Deferred {
+			ordered = append(ordered, tool)
+		}
+	}
+	immediateCount := len(ordered)
+	if immediateCount == 0 {
+		ordered = append(ordered, requestTools...)
+		for i := range ordered {
+			ordered[i].Deferred = false
+		}
+		return ordered, len(ordered)
+	}
+	for _, tool := range requestTools {
+		if tool.Deferred {
+			ordered = append(ordered, tool)
+		}
+	}
+	return ordered, immediateCount
 }
 
 // ConvertParametersToSchema converts parameters to Anthropic Schema format

@@ -248,9 +248,9 @@ func (r *LocalRuntime) swapCurrentAgent(ctx context.Context, sessionID string, f
 	}
 }
 
-// runForwarding runs a child session synchronously, forwarding all of its
-// events to evts and propagating tool-approval state back to the parent
-// on completion. This is the "interactive" path used by transfer_task and
+// runForwarding manages the lifecycle of a blocking sub-session, forwarding
+// events to evts. The child's approval state stays scoped to the sub-session
+// and never flows back to the parent. This is the "interactive" path used by transfer_task and
 // run_skill: the parent loop is blocked while the child executes, and
 // the user sees the child's events live.
 //
@@ -323,12 +323,6 @@ func (r *LocalRuntime) runForwarding(ctx context.Context, parent *session.Sessio
 		return nil, subSessionErr
 	}
 
-	// Only propagate ToolsApproved and Permissions on success. A failed sub-session
-	// must not silently escalate the parent's tool-approval gate: the user approved
-	// tools within a sub-session scope that ended in error, and that approval
-	// should not carry over to the parent's remaining turns.
-	parent.SetToolsApproved(s.IsToolsApproved())
-	parent.SetPermissions(s.ClonePermissions())
 	span.SetStatus(codes.Ok, "sub-session completed")
 	return tools.ResultSuccess(s.GetLastAssistantMessageContent()), nil
 }
@@ -378,6 +372,15 @@ func (r *LocalRuntime) runCollecting(ctx context.Context, parent *session.Sessio
 		if usage, ok := event.(*TokenUsageEvent); ok {
 			r.emitBackgroundEvent(usage)
 		}
+		// Elicitation requests are NOT re-forwarded here: elicitationHandler
+		// already delivered this event to the OnElicitationRequest sink
+		// directly, synchronously, and exactly once (#3584). Forwarding it
+		// again here — as the bridge's best-effort copy happens to flow
+		// through this same channel when this background sub-session
+		// currently owns the bridge slot — used to cause a second sink
+		// delivery for the same request, which only a stateful App-side
+		// dedupe (since removed) papered over. This branch is intentionally
+		// absent; ElicitationRequestEvents seen here are simply ignored.
 		if errEvt, ok := event.(*ErrorEvent); ok {
 			errMsg = errEvt.Error
 			break
@@ -438,13 +441,29 @@ func (r *LocalRuntime) runCollecting(ctx context.Context, parent *session.Sessio
 	// no explanation. Prepend an actionable note so the model (and, through it,
 	// the user) learns the server must be authorized interactively first.
 	if note := backgroundAuthRequiredNote(child); note != "" {
-		if result != "" {
-			result = note + "\n\n" + result
-		} else {
-			result = note
-		}
+		result = prependNote(result, note)
+	}
+	// Mid-call elicitations that were auto-declined because this background
+	// session had no UI to answer them (see elicitationHandler) are recorded
+	// against this sub-session's ID; surface them the same way (#3584).
+	for _, note := range r.elicitationDeclines.drain(s.ID) {
+		result = prependNote(result, note)
 	}
 	return &agenttool.RunResult{Result: result}
+}
+
+// prependNote prepends note to result, separated by a blank line, handling
+// the case where either side is empty. Used to surface model-readable
+// context (OAuth-required, elicitation auto-declined) ahead of a background
+// sub-session's actual response.
+func prependNote(result, note string) string {
+	if note == "" {
+		return result
+	}
+	if result == "" {
+		return note
+	}
+	return note + "\n\n" + result
 }
 
 // backgroundAuthRequiredNote returns a model-readable note naming the child

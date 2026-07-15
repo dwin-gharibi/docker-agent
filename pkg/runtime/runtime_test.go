@@ -2517,10 +2517,11 @@ func TestTransferTaskPersistsSubSessionOnError(t *testing.T) {
 		"SubSessionCompletedEvent must fire on the error path so observers persist the sub-session")
 }
 
-func TestYoloMode_OverridesPermissionsDeny(t *testing.T) {
+// TestDenyOverridesYoloMode verifies that Deny permissions take precedence over the yolo flag.
+func TestDenyOverridesYoloMode(t *testing.T) {
 	t.Parallel()
 
-	// Test that --yolo flag takes precedence over deny permissions
+	// Test that deny permissions take precedence over the --yolo flag
 	permChecker := permissions.NewChecker(&latest.PermissionsConfig{
 		Deny: []string{"dangerous_tool"},
 	})
@@ -2561,10 +2562,11 @@ func TestYoloMode_OverridesPermissionsDeny(t *testing.T) {
 	rt.processToolCalls(t.Context(), sess, calls, agentTools, NewChannelSink(events))
 	close(events)
 
-	// With --yolo, the tool should execute despite deny permission
-	require.True(t, executed, "expected tool to be executed in --yolo mode despite deny permission")
+	// With --yolo and Deny/ForceAsk precedence, the tool should NOT execute.
+	require.False(t, executed, "expected tool to NOT be executed in --yolo mode because Deny wins")
 }
 
+// TestYoloMode_OverridesForceAsk verifies that the yolo flag takes precedence over ForceAsk permissions.
 func TestYoloMode_OverridesForceAsk(t *testing.T) {
 	t.Parallel()
 
@@ -2597,6 +2599,7 @@ func TestYoloMode_OverridesForceAsk(t *testing.T) {
 	require.NoError(t, err)
 
 	sess := session.New(session.WithUserMessage("Test"), session.WithToolsApproved(true))
+	sess.NonInteractive = true // fail fast instead of hanging on askUser if this regresses
 	require.True(t, sess.ToolsApproved)
 
 	calls := []tools.ToolCall{{
@@ -2609,14 +2612,16 @@ func TestYoloMode_OverridesForceAsk(t *testing.T) {
 	rt.processToolCalls(t.Context(), sess, calls, agentTools, NewChannelSink(events))
 	close(events)
 
-	// With --yolo, the tool should execute without asking
-	require.True(t, executed, "expected tool to be executed in --yolo mode despite ForceAsk permission")
+	// YOLO overrides ForceAsk: the checker's ForceAsk verdict is bypassed
+	// and the tool executes automatically.
+	require.True(t, executed, "expected tool to be executed in --yolo mode because YOLO wins over ForceAsk")
 }
 
-func TestYoloMode_OverridesSessionDeny(t *testing.T) {
+// TestSessionDenyOverridesYoloMode verifies that session-level Deny permissions take precedence over the yolo flag.
+func TestSessionDenyOverridesYoloMode(t *testing.T) {
 	t.Parallel()
 
-	// Test that --yolo flag takes precedence over session-level deny
+	// Test that session-level deny takes precedence over the --yolo flag
 	var executed bool
 	agentTools := []tools.Tool{{
 		Name:       "blocked_tool",
@@ -2656,8 +2661,8 @@ func TestYoloMode_OverridesSessionDeny(t *testing.T) {
 	rt.processToolCalls(t.Context(), sess, calls, agentTools, NewChannelSink(events))
 	close(events)
 
-	// With --yolo, the tool should execute despite session deny
-	require.True(t, executed, "expected tool to be executed in --yolo mode despite session deny permission")
+	// With --yolo and Deny/ForceAsk precedence, the tool should NOT execute.
+	require.False(t, executed, "expected tool to NOT be executed in --yolo mode because session Deny wins")
 }
 
 func TestStripImageContent(t *testing.T) {
@@ -3350,10 +3355,20 @@ func TestReprobe_NewToolsAvailableAfterToolCall(t *testing.T) {
 	call1Names := toolNames(prov.recordedCalls[0])
 	assert.Contains(t, call1Names, "install_mcp", "turn 1 must include install_mcp")
 	assert.NotContains(t, call1Names, "mcp_hello", "turn 1 must NOT include mcp_hello before install")
+	for _, tool := range prov.recordedCalls[0] {
+		assert.False(t, tool.Deferred)
+	}
 
-	// Second model call: mcp_hello must be visible.
+	// Second model call: mcp_hello must be visible and deferred so it preserves
+	// the provider's cached tool prefix.
 	call2Names := toolNames(prov.recordedCalls[1])
 	assert.Contains(t, call2Names, "mcp_hello", "turn 2 must include mcp_hello after reprobe")
+	for _, tool := range prov.recordedCalls[1] {
+		assert.Equal(t, tool.Name == "mcp_hello", tool.Deferred)
+		if tool.Name == "mcp_hello" {
+			assert.Equal(t, "call_1", tool.DeferredAtToolCallID)
+		}
+	}
 
 	// A ToolsetInfo event with the new count must have been emitted during reprobe.
 	var toolsetInfoCounts []int
@@ -4145,6 +4160,12 @@ func TestElicitationHandler_NonInteractive(t *testing.T) {
 	assert.Equal(t, tools.ElicitationActionDecline, result.Action, "non-interactive runtime should decline elicitation")
 }
 
+// TestElicitationHandler_Interactive_NoChannel verifies that an interactive
+// elicitationHandler call succeeds even when the elicitation bridge has no
+// channel configured (no RunStream is active). This used to be a hard
+// failure because delivery depended entirely on the bridge; with per-request
+// waiters (#3584) the bridge send is best-effort only, and ResumeElicitation
+// still routes the response correctly via the waiter registry.
 func TestElicitationHandler_Interactive_NoChannel(t *testing.T) {
 	t.Parallel()
 
@@ -4152,7 +4173,7 @@ func TestElicitationHandler_Interactive_NoChannel(t *testing.T) {
 	root := agent.New("root", "test", agent.WithModel(prov))
 	tm := team.New(team.WithAgents(root))
 
-	// Default runtime (interactive mode) with no events channel set
+	// Default runtime (interactive mode) with no events channel set on the bridge.
 	rt, err := NewLocalRuntime(t.Context(), tm)
 	require.NoError(t, err)
 
@@ -4160,10 +4181,29 @@ func TestElicitationHandler_Interactive_NoChannel(t *testing.T) {
 		Message: "Authorize OAuth?",
 	}
 
-	_, err = rt.elicitationHandler(t.Context(), params)
+	type handlerResult struct {
+		result tools.ElicitationResult
+		err    error
+	}
+	done := make(chan handlerResult, 1)
+	go func() {
+		result, err := rt.elicitationHandler(t.Context(), params)
+		done <- handlerResult{result: result, err: err}
+	}()
 
-	require.Error(t, err, "interactive runtime with no events channel should error")
-	assert.ErrorIs(t, err, errNoElicitationChannel)
+	require.Eventually(t, func() bool { return rt.elicitationWaiters.count() == 1 }, time.Second, time.Millisecond,
+		"elicitationHandler must register a waiter even though the bridge has no channel")
+
+	require.NoError(t, rt.ResumeElicitation(t.Context(), tools.ElicitationActionAccept, map[string]any{"ok": true}, ""))
+
+	select {
+	case got := <-done:
+		require.NoError(t, got.err)
+		assert.Equal(t, tools.ElicitationActionAccept, got.result.Action)
+		assert.Equal(t, map[string]any{"ok": true}, got.result.Content)
+	case <-time.After(2 * time.Second):
+		t.Fatal("elicitationHandler did not return after ResumeElicitation")
+	}
 }
 
 // TestRunAgentPersistsSubSessionToStore is the regression test for the

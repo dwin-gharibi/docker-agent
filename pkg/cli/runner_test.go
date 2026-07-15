@@ -69,7 +69,7 @@ func (m *mockRuntime) Run(context.Context, *session.Session) ([]session.Message,
 	return nil, nil
 }
 
-func (m *mockRuntime) ResumeElicitation(_ context.Context, action tools.ElicitationAction, _ map[string]any) error {
+func (m *mockRuntime) ResumeElicitation(_ context.Context, action tools.ElicitationAction, _ map[string]any, _ ...string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.elicitationDeclines++
@@ -110,6 +110,7 @@ func (m *mockRuntime) AvailableModels(context.Context) []runtime.ModelChoice    
 func (m *mockRuntime) SupportsModelSwitching() bool                                          { return false }
 func (m *mockRuntime) OnToolsChanged(func(runtime.Event))                                    {}
 func (m *mockRuntime) OnBackgroundEvent(func(runtime.Event))                                 {}
+func (m *mockRuntime) OnElicitationRequest(func(runtime.Event))                              {}
 func (m *mockRuntime) RegenerateTitle(context.Context, *session.Session, chan runtime.Event) {}
 
 func (m *mockRuntime) Resume(_ context.Context, req runtime.ResumeRequest) {

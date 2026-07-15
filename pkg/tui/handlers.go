@@ -874,22 +874,46 @@ func (m *appModel) handleThemeFileChanged(themeRef string) (tea.Model, tea.Cmd) 
 // omitted when there is no sidebar to customize (--sidebar=false); lean mode
 // never gets here (it has no overlay support, the message is dropped).
 func (m *appModel) handleOpenSettingsDialog() (tea.Model, tea.Cmd) {
+	settings := userconfig.Get()
+	preferences := messages.Preferences{
+		Layout:            m.layoutSettings,
+		SendMode:          m.sendMode,
+		SplitDiffView:     settings.GetSplitDiffView(),
+		ExpandThinking:    settings.GetExpandThinking(),
+		HideToolResults:   settings.HideToolResults,
+		YOLO:              settings.YOLO,
+		RestoreTabs:       settings.GetRestoreTabs(),
+		Snapshot:          settings.SnapshotsEnabled(),
+		Lean:              settings.Lean,
+		TabTitleMaxLength: settings.GetTabTitleMaxLength(),
+		Sound:             settings.GetSound(),
+		SoundThreshold:    settings.GetSoundThreshold(),
+	}
 	return m, core.CmdHandler(dialog.OpenDialogMsg{
-		Model: dialog.NewSettingsDialog(m.layoutSettings, m.sendMode, !m.hideSidebar),
+		Model: dialog.NewSettingsDialog(preferences, !m.hideSidebar),
 	})
 }
 
 // handleApplySettings applies the settings chosen in the /settings dialog
 // and persists them to the user config.
 func (m *appModel) handleApplySettings(msg messages.ApplySettingsMsg) (tea.Model, tea.Cmd) {
-	model, cmd := m.applyLayoutSettings(msg.Layout)
+	preferences := msg.Preferences
+	model, cmd := m.applyLayoutSettings(preferences.Layout)
 
-	m.sendMode = messages.ParseSendMode(string(msg.SendMode))
+	m.sendMode = messages.ParseSendMode(string(preferences.SendMode))
 	for _, page := range m.chatPages {
 		page.SetSendMode(m.sendMode)
 	}
+	if m.sessionState.SplitDiffView() != preferences.SplitDiffView {
+		m.sessionState.SetSplitDiffView(preferences.SplitDiffView)
+		cmd = tea.Batch(cmd, m.updateChatCmd(editfile.ToggleDiffViewMsg{}))
+	}
+	m.sessionState.SetExpandThinking(preferences.ExpandThinking)
+	m.sessionState.SetHideToolResults(preferences.HideToolResults)
+	m.tabBar.SetMaxTitleLength(preferences.TabTitleMaxLength)
+	cmd = tea.Batch(cmd, m.updateChatCmd(messages.SessionToggleChangedMsg{}), m.resizeAll())
 
-	if err := saveSettingsToUserConfig(m.layoutSettings, m.sendMode); err != nil {
+	if err := savePreferences(preferences); err != nil {
 		slog.Warn("Failed to save settings to user config", "error", err)
 		return model, tea.Batch(cmd, notification.WarningCmd("Settings applied but could not be saved"))
 	}
@@ -927,43 +951,77 @@ func layoutSettingsFromConfig(l userconfig.LayoutSettings) messages.LayoutSettin
 	}
 }
 
-// saveSettingsToUserConfig persists the dialog settings to the user config
-// file. Default values clear their entries to keep the config file minimal.
-func saveSettingsToUserConfig(s messages.LayoutSettings, mode messages.SendMode) error {
+// savePreferences persists every value managed by the settings dialog.
+// Values matching their defaults are omitted to keep the config minimal.
+func savePreferences(p messages.Preferences) error {
 	return userconfig.Update(func(cfg *userconfig.Config) error {
 		if cfg.Settings == nil {
 			cfg.Settings = &userconfig.Settings{}
 		}
-
-		if mode == messages.SendModeQueue {
-			cfg.Settings.BusySendMode = string(messages.SendModeQueue)
+		s := cfg.Settings
+		if p.SendMode == messages.SendModeQueue {
+			s.BusySendMode = string(messages.SendModeQueue)
 		} else {
-			cfg.Settings.BusySendMode = ""
+			s.BusySendMode = ""
+		}
+		s.SplitDiffView = boolPreference(p.SplitDiffView, true)
+		s.ExpandThinking = boolPreference(p.ExpandThinking, false)
+		s.RestoreTabs = boolPreference(p.RestoreTabs, false)
+		s.Snapshot = boolPreference(p.Snapshot, false)
+		s.HideToolResults = p.HideToolResults
+		s.YOLO = p.YOLO
+		s.Lean = p.Lean
+		s.Sound = p.Sound
+		if p.SoundThreshold == userconfig.DefaultSoundThreshold {
+			s.SoundThreshold = 0
+		} else {
+			s.SoundThreshold = p.SoundThreshold
+		}
+		if p.TabTitleMaxLength == userconfig.DefaultTabTitleMaxLength {
+			s.TabTitleMaxLength = 0
+		} else {
+			s.TabTitleMaxLength = p.TabTitleMaxLength
 		}
 
-		if s == (messages.LayoutSettings{SidebarPosition: messages.SidebarRight, SectionSpacing: messages.SpacingNormal}) {
-			cfg.Settings.Layout = nil
+		layout := p.Layout
+		if layout == (messages.LayoutSettings{SidebarPosition: messages.SidebarRight, SectionSpacing: messages.SpacingNormal}) {
+			s.Layout = nil
 			return nil
 		}
-
-		position := string(s.SidebarPosition)
-		if s.SidebarPosition == messages.SidebarRight {
+		position := string(layout.SidebarPosition)
+		if layout.SidebarPosition == messages.SidebarRight {
 			position = ""
 		}
-		spacing := string(s.SectionSpacing)
-		if s.SectionSpacing == messages.SpacingNormal {
+		spacing := string(layout.SectionSpacing)
+		if layout.SectionSpacing == messages.SpacingNormal {
 			spacing = ""
 		}
-		cfg.Settings.Layout = &userconfig.LayoutSettings{
-			SidebarPosition: position,
-			SectionSpacing:  spacing,
-			HideSessionPath: s.HideSessionPath,
-			HideUsage:       s.HideUsage,
-			HideAgents:      s.HideAgents,
-			HideTools:       s.HideTools,
-			HideTodos:       s.HideTodos,
+		s.Layout = &userconfig.LayoutSettings{
+			SidebarPosition: position, SectionSpacing: spacing,
+			HideSessionPath: layout.HideSessionPath, HideUsage: layout.HideUsage,
+			HideAgents: layout.HideAgents, HideTools: layout.HideTools, HideTodos: layout.HideTodos,
 		}
 		return nil
+	})
+}
+
+func boolPreference(value, defaultValue bool) *bool {
+	if value == defaultValue {
+		return nil
+	}
+	return &value
+}
+
+// saveSettingsToUserConfig remains as a narrow compatibility helper for callers
+// that only update layout and send mode.
+func saveSettingsToUserConfig(layout messages.LayoutSettings, mode messages.SendMode) error {
+	settings := userconfig.Get()
+	return savePreferences(messages.Preferences{
+		Layout: layout, SendMode: mode, SplitDiffView: settings.GetSplitDiffView(),
+		ExpandThinking: settings.GetExpandThinking(), HideToolResults: settings.HideToolResults,
+		YOLO: settings.YOLO, RestoreTabs: settings.GetRestoreTabs(), Snapshot: settings.SnapshotsEnabled(),
+		Lean: settings.Lean, TabTitleMaxLength: settings.GetTabTitleMaxLength(),
+		Sound: settings.GetSound(), SoundThreshold: settings.GetSoundThreshold(),
 	})
 }
 

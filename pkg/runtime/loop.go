@@ -525,7 +525,8 @@ func (r *LocalRuntime) runStreamLoop(ctx context.Context, sess *session.Session,
 		// trigger and the UI context gauge (issue #3241); it equals the primary
 		// window unless a smaller compaction model is configured.
 		contextLimit := r.effectiveContextLimit(ctx, a, r.resolveContextLimit(ctx, model, modelID))
-		if contextLimit > 0 && r.sessionCompactionEnabled(a) && compaction.ShouldCompact(sess.InputTokens, sess.OutputTokens, 0, contextLimit, a.CompactionThreshold()) {
+		inputTokens, outputTokens := sess.Usage()
+		if contextLimit > 0 && r.sessionCompactionEnabled(a) && compaction.ShouldCompact(inputTokens, outputTokens, 0, contextLimit, a.CompactionThreshold()) {
 			r.compactWithReason(ctx, sess, "", compactionReasonThreshold, sink)
 		}
 
@@ -755,6 +756,7 @@ func (r *LocalRuntime) runTurn(
 	messages = r.applyBeforeLLMCallTransforms(ctx, sess, a, modelID.String(), messages)
 
 	// Try primary model with fallback chain if configured
+	agentTools = r.toolDeferrals.MarkAt(sess.ID, lastToolCallID(messages), agentTools)
 	res, usedModel, err := r.fallback.execute(streamCtx, a, model, messages, agentTools, sess, m, events)
 	if err != nil {
 		outcome := r.handleStreamError(ctx, sess, a, err, contextLimit, &ls.overflowCompactions, streamSpan, events)
@@ -1160,17 +1162,18 @@ func (r *LocalRuntime) compactIfNeeded(
 		addedTokens += estimator.EstimateMessageTokens(&newMessages[i].Message)
 	}
 
-	if !compaction.ShouldCompact(sess.InputTokens, sess.OutputTokens, addedTokens, contextLimit, a.CompactionThreshold()) {
+	inputTokens, outputTokens := sess.Usage()
+	if !compaction.ShouldCompact(inputTokens, outputTokens, addedTokens, contextLimit, a.CompactionThreshold()) {
 		return
 	}
 
 	slog.InfoContext(ctx, "Proactive compaction: tool results pushed estimated context past the compaction threshold",
 		"agent", a.Name(),
-		"input_tokens", sess.InputTokens,
-		"output_tokens", sess.OutputTokens,
+		"input_tokens", inputTokens,
+		"output_tokens", outputTokens,
 		"added_estimated_tokens", addedTokens,
 		"estimator_scale", estimator.Scale(),
-		"estimated_total", sess.InputTokens+sess.OutputTokens+addedTokens,
+		"estimated_total", inputTokens+outputTokens+addedTokens,
 		"context_limit", contextLimit,
 	)
 	r.compactWithReason(ctx, sess, "", compactionReasonThreshold, events)
@@ -1244,6 +1247,15 @@ func formatToolWarning(a *agent.Agent, warnings []string) string {
 		fmt.Fprintf(&builder, "- %s\n", warning)
 	}
 	return strings.TrimSuffix(builder.String(), "\n")
+}
+
+func lastToolCallID(messages []chat.Message) string {
+	for _, message := range slices.Backward(messages) {
+		if message.Role == chat.MessageRoleTool {
+			return message.ToolCallID
+		}
+	}
+	return ""
 }
 
 // filterExcludedTools removes tools whose names appear in the excluded list.
