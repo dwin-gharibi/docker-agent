@@ -218,6 +218,81 @@ func TestCreateDirectProvider_BypassModelsGateway(t *testing.T) {
 	}
 }
 
+// TestCreateDirectProvider_CustomBaseURLImpliesGatewayBypass verifies that a
+// custom base_url — set directly on the model or inherited from a custom
+// provider definition — implies bypass_models_gateway: the gateway option is
+// cleared before the leaf factory runs. Built-in alias default base URLs and
+// custom providers without a base_url keep the gateway.
+func TestCreateDirectProvider_CustomBaseURLImpliesGatewayBypass(t *testing.T) {
+	t.Parallel()
+
+	const gateway = "https://gateway.example.com"
+
+	customProviders := map[string]latest.ProviderConfig{
+		"my_endpoint": {
+			APIType:  "openai",
+			BaseURL:  "https://llm.internal.example.com/v1",
+			TokenKey: "MY_TOKEN",
+		},
+		"my_anthropic": {
+			Provider: "anthropic",
+			TokenKey: "MY_ANTHROPIC_KEY",
+		},
+	}
+
+	tests := []struct {
+		name        string
+		cfg         *latest.ModelConfig
+		wantGateway string
+	}{
+		{
+			name:        "model base_url bypasses gateway",
+			cfg:         &latest.ModelConfig{Provider: "openai", Model: "gpt-4o", BaseURL: "http://localhost:8000/v1"},
+			wantGateway: "",
+		},
+		{
+			name:        "custom provider base_url bypasses gateway",
+			cfg:         &latest.ModelConfig{Provider: "my_endpoint", Model: "llama-3"},
+			wantGateway: "",
+		},
+		{
+			name:        "custom provider without base_url keeps gateway",
+			cfg:         &latest.ModelConfig{Provider: "my_anthropic", Model: "claude-sonnet-4-5"},
+			wantGateway: gateway,
+		},
+		{
+			name:        "alias default base_url keeps gateway",
+			cfg:         &latest.ModelConfig{Provider: "mistral", Model: "mistral-large-latest"},
+			wantGateway: gateway,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var gotOpts options.ModelOptions
+			leaf := func(_ context.Context, _ *latest.ModelConfig, _ environment.Provider, opts ...options.Opt) (Provider, error) {
+				for _, opt := range opts {
+					opt(&gotOpts)
+				}
+				return &fakeProvider{id: modelsdev.NewID("test", "captured")}, nil
+			}
+			r := NewRegistry(map[string]providerFactory{
+				"openai":    leaf,
+				"anthropic": leaf,
+			})
+
+			_, err := r.createDirectProvider(
+				t.Context(), tt.cfg, environment.NewNoEnvProvider(),
+				options.WithGateway(gateway),
+				options.WithProviders(customProviders),
+			)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantGateway, gotOpts.Gateway())
+		})
+	}
+}
+
 // TestNewWithModels_BypassModelsGatewayRouting verifies that a routing model
 // with bypass_models_gateway propagates the bypass to its fallback and routed
 // targets (the router itself makes no HTTP calls).

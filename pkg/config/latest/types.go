@@ -966,11 +966,15 @@ type ModelConfig struct {
 	// the provider's own credentials (e.g. OPENAI_API_KEY, ANTHROPIC_API_KEY, or
 	// token_key) instead of routing through the gateway.
 	//
+	// A custom base_url (set on the model or inherited from a custom provider
+	// definition) implies the bypass even when this flag is false: user-chosen
+	// endpoints are never routed through the models gateway.
+	//
 	// Security note: a model that bypasses the gateway sends the provider's
-	// ambient credentials directly to its endpoint. Combined with a custom
-	// base_url this lets a config exfiltrate those credentials to an arbitrary
-	// host, so only enable it on configs you trust. For a router model the
-	// bypass propagates to its fallback and every routed target.
+	// ambient credentials directly to its endpoint. A malicious base_url thus
+	// lets a config exfiltrate those credentials to an arbitrary host, so only
+	// run configs you trust. For a router model the bypass propagates to its
+	// fallback and every routed target.
 	BypassModelsGateway bool `json:"bypass_models_gateway,omitempty"`
 	// ProviderOpts allows provider-specific options.
 	ProviderOpts map[string]any `json:"provider_opts,omitempty"`

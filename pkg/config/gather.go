@@ -109,9 +109,18 @@ func gatherEnvVarsForModel(ctx context.Context, cfg *latest.Config, modelName st
 	rootBypassed := model.BypassModelsGateway
 
 	// The model's own provider/model is a leaf: either the model itself or, for
-	// a router, its fallback model. It bypasses iff the model bypasses.
-	if !bypassOnly || rootBypassed {
-		addEnvVarsForModelConfig(ctx, &model, cfg.Providers, requiredEnv, env)
+	// a router, its fallback. The runtime rebuilds a router's fallback from its
+	// "provider/model" spec (see rulebased.NewClient), resolving it as a named
+	// model when one exists and keeping only provider/model otherwise; mirror
+	// that here so router-level base_url/token_key are not misattributed to the
+	// fallback. A custom base_url implies the bypass: such endpoints are never
+	// routed through the models gateway (see createDirectProvider).
+	leaf := model
+	if len(model.Routing) > 0 {
+		leaf = routerFallbackLeaf(cfg, model)
+	}
+	if !bypassOnly || rootBypassed || leaf.BypassModelsGateway || hasCustomBaseURL(&leaf, cfg.Providers) {
+		addEnvVarsForModelConfig(ctx, &leaf, cfg.Providers, requiredEnv, env)
 	}
 
 	// If the model has routing rules, also check all referenced models.
@@ -119,20 +128,33 @@ func gatherEnvVarsForModel(ctx context.Context, cfg *latest.Config, modelName st
 		ruleModelName := rule.Model
 		if ruleModel, exists := cfg.Models[ruleModelName]; exists {
 			// Named model reference. A routed target bypasses when the router
-			// does (propagation) or when it sets its own flag.
-			if !bypassOnly || rootBypassed || ruleModel.BypassModelsGateway {
+			// does (propagation), when it sets its own flag, or when it dials a
+			// custom base_url (implied bypass).
+			if !bypassOnly || rootBypassed || ruleModel.BypassModelsGateway || hasCustomBaseURL(&ruleModel, cfg.Providers) {
 				addEnvVarsForModelConfig(ctx, &ruleModel, cfg.Providers, requiredEnv, env)
 			}
 		} else if providerName, _, ok := strings.Cut(ruleModelName, "/"); ok {
 			// Inline spec (e.g., "openai/gpt-4o") - infer env vars from provider.
-			// Inline specs carry no flag of their own; they bypass only via the
-			// router's propagated bypass.
-			if !bypassOnly || rootBypassed {
-				inlineModel := latest.ModelConfig{Provider: providerName}
+			// Inline specs carry no flag of their own; they bypass via the
+			// router's propagated bypass or a custom provider's base_url.
+			inlineModel := latest.ModelConfig{Provider: providerName}
+			if !bypassOnly || rootBypassed || hasCustomBaseURL(&inlineModel, cfg.Providers) {
 				addEnvVarsForModelConfig(ctx, &inlineModel, cfg.Providers, requiredEnv, env)
 			}
 		}
 	}
+}
+
+// routerFallbackLeaf mirrors how the runtime resolves a router's fallback
+// (see rulebased.NewClient): the "provider/model" spec is looked up as a
+// named model first, otherwise reparsed inline, which keeps only the
+// provider and model fields.
+func routerFallbackLeaf(cfg *latest.Config, router latest.ModelConfig) latest.ModelConfig {
+	spec := router.Provider + "/" + router.Model
+	if fallback, exists := cfg.Models[spec]; exists {
+		return fallback
+	}
+	return latest.ModelConfig{Provider: router.Provider, Model: router.Model}
 }
 
 // addEnvVarsForModelConfig adds required environment variables for a model config.
@@ -145,6 +167,16 @@ func addEnvVarsForModelConfig(ctx context.Context, model *latest.ModelConfig, cu
 	for _, field := range []string{model.Model, model.BaseURL} {
 		for _, name := range environment.Refs(field) {
 			requiredEnv[name] = true
+		}
+	}
+	// A provider-level base_url is merged into the model at runtime when the
+	// model does not override it (see mergeFromProviderConfig), so its ${env.X}
+	// references must be resolvable too.
+	if model.BaseURL == "" {
+		if provCfg, exists := customProviders[model.Provider]; exists {
+			for _, name := range environment.Refs(provCfg.BaseURL) {
+				requiredEnv[name] = true
+			}
 		}
 	}
 

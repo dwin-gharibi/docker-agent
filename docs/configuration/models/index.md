@@ -47,7 +47,7 @@ models:
     title_model: string # Optional: model used for session-title generation
     compaction_model: string # Optional: model used for session-compaction (summary generation)
     compaction_threshold: float # Optional: context-window fraction that triggers auto-compaction (0–1, default: 0.9)
-    bypass_models_gateway: boolean # Optional: skip the models gateway for this model
+    bypass_models_gateway: boolean # Optional: skip the models gateway for this model (implied by a custom base_url)
 ```
 
 ## Properties Reference
@@ -75,7 +75,7 @@ models:
 | `title_model`         | string     | ✗        | Model used for session-title generation. Can be a named model from the `models:` section or an inline `provider/model` string. When omitted, the agent's primary model generates titles. Cannot be combined with `first_available`. |
 | `compaction_model`    | string     | ✗        | Model used for session compaction (summary generation). Can be a named model or an inline `provider/model` string. When omitted, the primary model compacts. Cannot be combined with `first_available`. See [Delegating Session Compaction](#delegating-session-compaction). |
 | `compaction_threshold` | float     | ✗        | Fraction of the context window at which proactive auto-compaction triggers for agents running this model. Must be greater than `0` and at most `1`. Takes precedence over the agent-level `compaction_threshold`. Cannot be combined with `first_available`. Default: `0.9`. |
-| `bypass_models_gateway` | boolean  | ✗        | When `true`, this model connects directly to its provider even when a models gateway (`--models-gateway` / `CAGENT_MODELS_GATEWAY`) is configured. See [Gateway Bypass](#gateway-bypass). |
+| `bypass_models_gateway` | boolean  | ✗        | When `true`, this model connects directly to its provider even when a models gateway (`--models-gateway` / `CAGENT_MODELS_GATEWAY`) is configured. Implied by a custom `base_url`. See [Gateway Bypass](#gateway-bypass). |
 
 ## Attachment Capability Overrides
 
@@ -238,8 +238,9 @@ for complete examples.
 ## Gateway Bypass
 
 When a models gateway (`--models-gateway` / `CAGENT_MODELS_GATEWAY`) is configured,
-all models route through it by default. Set `bypass_models_gateway: true` on a
-specific model to make it connect directly to its provider instead:
+models without a custom `base_url` route through it by default. Set
+`bypass_models_gateway: true` on a specific model to make it connect directly
+to its provider instead:
 
 ```yaml
 models:
