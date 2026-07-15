@@ -38,6 +38,21 @@ import (
 // ToggleHideToolResultsMsg triggers hiding/showing tool results
 type ToggleHideToolResultsMsg struct{}
 
+// SessionState is the session-state surface the message list depends on:
+// read access for rendering, plus the two mutations the component performs.
+// *service.SessionState satisfies it; embedders outside the full TUI can
+// provide their own implementation.
+type SessionState interface {
+	service.SessionStateReader
+	SetPreviousMessage(msg *types.Message)
+	ToggleHideToolResults()
+}
+
+var (
+	_ SessionState = (*service.SessionState)(nil)
+	_ SessionState = (*service.EmbeddedSessionState)(nil)
+)
+
 // scrollToBottomMsg requests the message list scroll to the bottom. It is
 // returned by commands (e.g. after appending a message) instead of mutating
 // scroll state directly from the command goroutine: bubbletea runs command
@@ -144,7 +159,7 @@ type model struct {
 
 	selection selectionState
 
-	sessionState *service.SessionState
+	sessionState SessionState
 	scrollview   *scrollview.Model
 
 	xPos, yPos int
@@ -175,17 +190,17 @@ type model struct {
 }
 
 // New creates a new message list component
-func New(sessionState *service.SessionState) Model {
+func New(sessionState SessionState) Model {
 	return newModel(120, 24, sessionState)
 }
 
 // NewScrollableView creates a simple scrollable view for displaying messages in dialogs
 // This is a lightweight version that doesn't require app or session state management
-func NewScrollableView(width, height int, sessionState *service.SessionState) Model {
+func NewScrollableView(width, height int, sessionState SessionState) Model {
 	return newModel(width, height, sessionState)
 }
 
-func newModel(width, height int, sessionState *service.SessionState) *model {
+func newModel(width, height int, sessionState SessionState) *model {
 	sv := scrollview.New(
 		scrollview.WithReserveScrollbarSpace(true),
 	)
