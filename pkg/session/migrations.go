@@ -401,6 +401,12 @@ func getAllMigrations() []Migration {
 			Description: "Add first_kept_entry column to session_items for compaction-preserved messages",
 			UpSQL:       `ALTER TABLE session_items ADD COLUMN first_kept_entry INTEGER DEFAULT 0`,
 		},
+		{
+			ID:          22,
+			Name:        "022_add_instruction_context_column",
+			Description: "Persist cache-stable instruction snapshots and chronological updates",
+			UpSQL:       `ALTER TABLE sessions ADD COLUMN instruction_context TEXT DEFAULT ''`,
+		},
 	}
 }
 

@@ -34,7 +34,8 @@ func TestAddRecentCommitsListsHistory(t *testing.T) {
 	assert.Equal(t, hooks.EventSessionStart, out.HookSpecificOutput.HookEventName,
 		"add_recent_commits must target session_start, not turn_start")
 
-	ctx := out.HookSpecificOutput.AdditionalContext
+	require.Len(t, out.HookSpecificOutput.InstructionContext, 1)
+	ctx := out.HookSpecificOutput.InstructionContext[0].Content
 	for _, subject := range []string{"first commit", "second commit", "third commit"} {
 		assert.Contains(t, ctx, subject)
 	}
@@ -62,7 +63,8 @@ func TestAddRecentCommitsHonorsLimitArg(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, out)
 
-	ctx := out.HookSpecificOutput.AdditionalContext
+	require.Len(t, out.HookSpecificOutput.InstructionContext, 1)
+	ctx := out.HookSpecificOutput.InstructionContext[0].Content
 	assert.Contains(t, ctx, "gamma", "newest commit must be present")
 	assert.NotContains(t, ctx, "beta", "limit=1 must drop the older commits")
 	assert.NotContains(t, ctx, "alpha", "limit=1 must drop the older commits")
@@ -86,7 +88,8 @@ func TestAddRecentCommitsInvalidLimitFallsBack(t *testing.T) {
 		out, err := fn(t.Context(), &hooks.Input{SessionID: "s", Cwd: dir}, []string{arg})
 		require.NoError(t, err)
 		require.NotNilf(t, out, "invalid arg %q must fall back to default rather than no-op", arg)
-		assert.Contains(t, out.HookSpecificOutput.AdditionalContext, "only commit",
+		require.Len(t, out.HookSpecificOutput.InstructionContext, 1)
+		assert.Contains(t, out.HookSpecificOutput.InstructionContext[0].Content, "only commit",
 			"fallback must still emit the existing history")
 	}
 }
@@ -104,7 +107,8 @@ func TestAddRecentCommitsEmptyRepoIsNoop(t *testing.T) {
 
 	out, err := fn(t.Context(), &hooks.Input{SessionID: "s", Cwd: dir}, nil)
 	require.NoError(t, err)
-	assert.Nil(t, out)
+	require.Len(t, out.HookSpecificOutput.InstructionContext, 1)
+	assert.True(t, out.HookSpecificOutput.InstructionContext[0].Removed)
 }
 
 // TestAddRecentCommitsNoCwdOrNotARepoIsNoop documents the safety /
@@ -125,5 +129,6 @@ func TestAddRecentCommitsNoCwdOrNotARepoIsNoop(t *testing.T) {
 
 	out, err = fn(t.Context(), &hooks.Input{SessionID: "s", Cwd: t.TempDir()}, nil)
 	require.NoError(t, err)
-	assert.Nil(t, out)
+	require.Len(t, out.HookSpecificOutput.InstructionContext, 1)
+	assert.True(t, out.HookSpecificOutput.InstructionContext[0].Removed)
 }

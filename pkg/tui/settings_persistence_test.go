@@ -116,17 +116,18 @@ func TestSavePreferences_RoundTripAndPreservesExtra(t *testing.T) {
 			SectionSpacing:  messages.SpacingCompact,
 			HideAgents:      true,
 		},
-		SendMode:          messages.SendModeQueue,
-		SplitDiffView:     false,
-		ExpandThinking:    true,
-		HideToolResults:   true,
-		YOLO:              true,
-		RestoreTabs:       true,
-		Snapshot:          true,
-		Lean:              true,
-		TabTitleMaxLength: 42,
-		Sound:             true,
-		SoundThreshold:    17,
+		SendMode:           messages.SendModeQueue,
+		SplitDiffView:      false,
+		ExpandThinking:     true,
+		HideToolResults:    true,
+		YOLO:               true,
+		RestoreTabs:        true,
+		Snapshot:           true,
+		CacheStablePrompts: true,
+		Lean:               true,
+		TabTitleMaxLength:  42,
+		Sound:              true,
+		SoundThreshold:     17,
 	}
 	require.NoError(t, savePreferences(preferences))
 
@@ -139,6 +140,7 @@ func TestSavePreferences_RoundTripAndPreservesExtra(t *testing.T) {
 	assert.Equal(t, preferences.YOLO, settings.YOLO)
 	assert.Equal(t, preferences.RestoreTabs, settings.GetRestoreTabs())
 	assert.Equal(t, preferences.Snapshot, settings.SnapshotsEnabled())
+	assert.Equal(t, preferences.CacheStablePrompts, settings.CacheStablePromptsEnabled())
 	assert.Equal(t, preferences.Lean, settings.Lean)
 	assert.Equal(t, preferences.TabTitleMaxLength, settings.GetTabTitleMaxLength())
 	assert.Equal(t, preferences.Sound, settings.GetSound())
@@ -150,14 +152,15 @@ func TestSavePreferences_DefaultsClearEntries(t *testing.T) {
 	setupSettingsConfigTest(t)
 
 	require.NoError(t, savePreferences(messages.Preferences{
-		Layout:            messages.LayoutSettings{SidebarPosition: messages.SidebarLeft},
-		SendMode:          messages.SendModeQueue,
-		SplitDiffView:     false,
-		ExpandThinking:    true,
-		RestoreTabs:       true,
-		Snapshot:          true,
-		TabTitleMaxLength: 40,
-		SoundThreshold:    40,
+		Layout:             messages.LayoutSettings{SidebarPosition: messages.SidebarLeft},
+		SendMode:           messages.SendModeQueue,
+		SplitDiffView:      false,
+		ExpandThinking:     true,
+		RestoreTabs:        true,
+		Snapshot:           true,
+		CacheStablePrompts: true,
+		TabTitleMaxLength:  40,
+		SoundThreshold:     40,
 	}))
 	require.NoError(t, savePreferences(messages.Preferences{
 		Layout:            messages.LayoutSettings{SidebarPosition: messages.SidebarRight, SectionSpacing: messages.SpacingNormal},
@@ -177,6 +180,7 @@ func TestSavePreferences_DefaultsClearEntries(t *testing.T) {
 	assert.Nil(t, settings.ExpandThinking)
 	assert.Nil(t, settings.RestoreTabs)
 	assert.Nil(t, settings.Snapshot)
+	assert.Nil(t, settings.CacheStablePrompts)
 	assert.Zero(t, settings.TabTitleMaxLength)
 	assert.Zero(t, settings.SoundThreshold)
 }

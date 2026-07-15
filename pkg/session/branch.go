@@ -106,6 +106,7 @@ func (s *Session) Clone() *Session {
 		ExtraToolSets:           slices.Clone(s.ExtraToolSets),
 		AgentName:               s.AgentName,
 		ParentID:                s.ParentID,
+		InstructionContext:      cloneInstructionContext(s.InstructionContext),
 		MessageUsageHistory:     slices.Clone(s.MessageUsageHistory),
 	}
 

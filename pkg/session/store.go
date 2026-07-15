@@ -236,6 +236,7 @@ func (s *InMemorySessionStore) UpdateSession(_ context.Context, session *Session
 		Permissions:         session.Permissions.Clone(),
 		AgentModelOverrides: cloneStringMap(session.AgentModelOverrides),
 		CustomModelsUsed:    cloneStringSlice(session.CustomModelsUsed),
+		InstructionContext:  cloneInstructionContext(session.InstructionContext),
 		AttachedFiles:       slices.Clone(session.AttachedFiles),
 		ParentID:            session.ParentID,
 	}
@@ -374,7 +375,7 @@ type SQLiteSessionStore struct {
 // sessionSelectColumns is the canonical SELECT list for the sessions table.
 // The column order matches what scanSession expects; all read paths use this
 // constant so that adding a column requires updating exactly one place.
-const sessionSelectColumns = `id, tools_approved, input_tokens, output_tokens, title, cost, send_user_message, max_iterations, working_dir, created_at, starred, permissions, agent_model_overrides, custom_models_used, thinking, parent_id`
+const sessionSelectColumns = `id, tools_approved, input_tokens, output_tokens, title, cost, send_user_message, max_iterations, working_dir, created_at, starred, permissions, agent_model_overrides, custom_models_used, thinking, parent_id, instruction_context`
 
 // sessionPersistedFields holds the encoded form of a Session's JSON-bearing
 // columns plus the SQL representation of parent_id (nil for the empty
@@ -383,6 +384,7 @@ type sessionPersistedFields struct {
 	PermissionsJSON         string
 	AgentModelOverridesJSON string
 	CustomModelsUsedJSON    string
+	InstructionContextJSON  string
 	ParentID                any // string or nil
 }
 
@@ -417,6 +419,14 @@ func sessionPersistedFieldsOf(session *Session) (sessionPersistedFields, error) 
 			return f, err
 		}
 		f.CustomModelsUsedJSON = string(customBytes)
+	}
+
+	if session.InstructionContext != nil {
+		contextBytes, err := json.Marshal(session.InstructionContext)
+		if err != nil {
+			return f, err
+		}
+		f.InstructionContextJSON = string(contextBytes)
 	}
 
 	// Use NULL for empty parent_id to avoid foreign key constraint issues.
@@ -636,12 +646,12 @@ func (s *SQLiteSessionStore) AddSession(ctx context.Context, session *Session) e
 		`INSERT INTO sessions (
 			id, tools_approved, input_tokens, output_tokens, title, cost, send_user_message,
 			max_iterations, working_dir, created_at, permissions, agent_model_overrides,
-			custom_models_used, thinking, parent_id
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			custom_models_used, thinking, parent_id, instruction_context
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		session.ID, session.ToolsApproved, session.InputTokens, session.OutputTokens, session.Title,
 		session.Cost, session.SendUserMessage, session.MaxIterations, session.WorkingDir,
 		session.CreatedAt.Format(time.RFC3339), fields.PermissionsJSON, fields.AgentModelOverridesJSON,
-		fields.CustomModelsUsedJSON, false, fields.ParentID)
+		fields.CustomModelsUsedJSON, false, fields.ParentID, fields.InstructionContextJSON)
 	if err != nil {
 		return err
 	}
@@ -671,6 +681,7 @@ func scanSession(scanner interface {
 		parentID                sql.NullString
 		agentModelOverridesJSON string
 		customModelsUsedJSON    string
+		instructionContextJSON  sql.NullString
 		createdAtStr            string
 		thinking                bool // discarded
 	)
@@ -679,7 +690,7 @@ func scanSession(scanner interface {
 		&sess.ID, &sess.ToolsApproved, &sess.InputTokens, &sess.OutputTokens,
 		&sess.Title, &sess.Cost, &sess.SendUserMessage, &sess.MaxIterations,
 		&workingDir, &createdAtStr, &sess.Starred, &permissionsJSON,
-		&agentModelOverridesJSON, &customModelsUsedJSON, &thinking, &parentID,
+		&agentModelOverridesJSON, &customModelsUsedJSON, &thinking, &parentID, &instructionContextJSON,
 	)
 	if err != nil {
 		return nil, err
@@ -704,6 +715,13 @@ func scanSession(scanner interface {
 
 	if customModelsUsedJSON != "" && customModelsUsedJSON != "[]" {
 		if err := json.Unmarshal([]byte(customModelsUsedJSON), &sess.CustomModelsUsed); err != nil {
+			return nil, err
+		}
+	}
+
+	if instructionContextJSON.Valid && instructionContextJSON.String != "" {
+		sess.InstructionContext = &InstructionContextState{}
+		if err := json.Unmarshal([]byte(instructionContextJSON.String), sess.InstructionContext); err != nil {
 			return nil, err
 		}
 	}
@@ -958,6 +976,7 @@ func (s *SQLiteSessionStore) UpdateSession(ctx context.Context, session *Session
 		Permissions:         session.Permissions.Clone(),
 		AgentModelOverrides: cloneStringMap(session.AgentModelOverrides),
 		CustomModelsUsed:    cloneStringSlice(session.CustomModelsUsed),
+		InstructionContext:  cloneInstructionContext(session.InstructionContext),
 		ParentID:            session.ParentID,
 	}
 	session.mu.RUnlock()
@@ -979,9 +998,9 @@ func (s *SQLiteSessionStore) UpdateSession(ctx context.Context, session *Session
 		`INSERT INTO sessions (
 			id, tools_approved, input_tokens, output_tokens, title, cost, send_user_message,
 			max_iterations, working_dir, created_at, starred, permissions, agent_model_overrides,
-			custom_models_used, thinking, parent_id
+			custom_models_used, thinking, parent_id, instruction_context
 		)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(id) DO UPDATE SET
 		   title = excluded.title,
 		   tools_approved = excluded.tools_approved,
@@ -996,11 +1015,12 @@ func (s *SQLiteSessionStore) UpdateSession(ctx context.Context, session *Session
 		   agent_model_overrides = excluded.agent_model_overrides,
 		   custom_models_used = excluded.custom_models_used,
 		   thinking = excluded.thinking,
-		   parent_id = excluded.parent_id`,
+		   parent_id = excluded.parent_id,
+		   instruction_context = excluded.instruction_context`,
 		snapshot.ID, snapshot.ToolsApproved, snapshot.InputTokens, snapshot.OutputTokens,
 		snapshot.Title, snapshot.Cost, snapshot.SendUserMessage, snapshot.MaxIterations, snapshot.WorkingDir,
 		snapshot.CreatedAt.Format(time.RFC3339), snapshot.Starred, fields.PermissionsJSON, fields.AgentModelOverridesJSON,
-		fields.CustomModelsUsedJSON, false, fields.ParentID)
+		fields.CustomModelsUsedJSON, false, fields.ParentID, fields.InstructionContextJSON)
 	if err != nil {
 		return err
 	}
@@ -1147,14 +1167,14 @@ func (s *SQLiteSessionStore) addSessionTx(ctx context.Context, tx *sql.Tx, sessi
 		`INSERT INTO sessions (
 			id, tools_approved, input_tokens, output_tokens, title, cost, send_user_message,
 			max_iterations, working_dir, created_at, starred, permissions, agent_model_overrides,
-			custom_models_used, thinking, parent_id
+			custom_models_used, thinking, parent_id, instruction_context
 		)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		session.ID, session.ToolsApproved, session.InputTokens, session.OutputTokens,
 		session.Title, session.Cost, session.SendUserMessage, session.MaxIterations,
 		session.WorkingDir, session.CreatedAt.Format(time.RFC3339), session.Starred,
 		fields.PermissionsJSON, fields.AgentModelOverridesJSON, fields.CustomModelsUsedJSON, false,
-		fields.ParentID)
+		fields.ParentID, fields.InstructionContextJSON)
 	return err
 }
 

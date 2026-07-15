@@ -51,6 +51,7 @@ const (
 	rowYOLO
 	rowRestoreTabs
 	rowSnapshot
+	rowCacheStablePrompts
 	rowLean
 	rowTabTitleLength
 	behaviorRowCount
@@ -253,6 +254,8 @@ func (d *settingsDialog) changeValue(delta int) tea.Cmd {
 			d.current.RestoreTabs = !d.current.RestoreTabs
 		case rowSnapshot:
 			d.current.Snapshot = !d.current.Snapshot
+		case rowCacheStablePrompts:
+			d.current.CacheStablePrompts = !d.current.CacheStablePrompts
 		case rowLean:
 			d.current.Lean = !d.current.Lean
 		case rowTabTitleLength:
@@ -367,6 +370,7 @@ func (d *settingsDialog) renderBehaviorTab(content *Content, inner int) {
 		AddContent(d.renderToggleRow(rowYOLO, "Auto-approve tools by default", d.current.YOLO)).
 		AddContent(d.renderToggleRow(rowRestoreTabs, "Restore tabs on launch", d.current.RestoreTabs)).
 		AddContent(d.renderToggleRow(rowSnapshot, "Automatic snapshots", d.current.Snapshot)).
+		AddContent(d.renderToggleRow(rowCacheStablePrompts, "Cache-stable dynamic prompts", d.current.CacheStablePrompts)).
 		AddContent(d.renderToggleRow(rowLean, "Lean UI by default", d.current.Lean)).
 		AddContent(d.renderStepperRow(rowTabTitleLength, "Tab title max length", d.current.TabTitleMaxLength, "chars", inner, false))
 	if d.confirmYOLO {

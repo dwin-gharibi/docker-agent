@@ -189,6 +189,19 @@ func TestSettingsDialogTogglesSendModeWithoutPreview(t *testing.T) {
 	assert.Equal(t, messages.SendModeSteer, d.current.SendMode, "cycling wraps around")
 }
 
+func TestSettingsDialogTogglesCacheStablePrompts(t *testing.T) {
+	t.Parallel()
+
+	d := newTestSettingsDialog(t, messages.LayoutSettings{})
+	d.tab = tabBehavior
+	d.selected[tabBehavior] = rowCacheStablePrompts
+
+	_, cmd := d.Update(tea.KeyPressMsg{Code: tea.KeySpace})
+	assert.Nil(t, cmd)
+	assert.True(t, d.current.CacheStablePrompts)
+	assert.Contains(t, ansi.Strip(d.View()), "Cache-stable dynamic prompts")
+}
+
 func TestSettingsDialogApplyEmitsApplySettings(t *testing.T) {
 	t.Parallel()
 

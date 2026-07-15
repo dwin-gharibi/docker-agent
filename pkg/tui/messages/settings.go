@@ -103,18 +103,19 @@ func ParseSendMode(raw string) SendMode {
 
 // Preferences contains the persistent values managed by the settings dialog.
 type Preferences struct {
-	Layout            LayoutSettings
-	SendMode          SendMode
-	SplitDiffView     bool
-	ExpandThinking    bool
-	HideToolResults   bool
-	YOLO              bool
-	RestoreTabs       bool
-	Snapshot          bool
-	Lean              bool
-	TabTitleMaxLength int
-	Sound             bool
-	SoundThreshold    int
+	Layout             LayoutSettings
+	SendMode           SendMode
+	SplitDiffView      bool
+	ExpandThinking     bool
+	HideToolResults    bool
+	YOLO               bool
+	RestoreTabs        bool
+	Snapshot           bool
+	CacheStablePrompts bool
+	Lean               bool
+	TabTitleMaxLength  int
+	Sound              bool
+	SoundThreshold     int
 }
 
 // Settings dialog messages.

@@ -36,7 +36,9 @@ func TestAddDirectoryListingIncludesFilesAndDirs(t *testing.T) {
 	assert.Equal(t, hooks.EventSessionStart, out.HookSpecificOutput.HookEventName,
 		"add_directory_listing must target session_start, not turn_start")
 
-	ctx := out.HookSpecificOutput.AdditionalContext
+	require.Len(t, out.HookSpecificOutput.InstructionContext, 1)
+	ctx := out.HookSpecificOutput.InstructionContext[0].Content
+	assert.Equal(t, "core/directory-listing", out.HookSpecificOutput.InstructionContext[0].Key)
 	assert.Contains(t, ctx, "README.md")
 	assert.Contains(t, ctx, "main.go")
 	assert.Contains(t, ctx, "subdir/", "directories must be marked with a trailing slash")
@@ -61,7 +63,8 @@ func TestAddDirectoryListingTruncatesLongList(t *testing.T) {
 	out, err := fn(t.Context(), &hooks.Input{SessionID: "s", Cwd: dir}, nil)
 	require.NoError(t, err)
 	require.NotNil(t, out)
-	assert.Contains(t, out.HookSpecificOutput.AdditionalContext, "and 50 more",
+	require.Len(t, out.HookSpecificOutput.InstructionContext, 1)
+	assert.Contains(t, out.HookSpecificOutput.InstructionContext[0].Content, "and 50 more",
 		"truncation summary must report the dropped count")
 }
 
@@ -86,7 +89,8 @@ func TestAddDirectoryListingEmptyOrNoCwdIsNoop(t *testing.T) {
 	writeFile(t, hiddenOnly, ".hidden", "")
 	out, err = fn(t.Context(), &hooks.Input{SessionID: "s", Cwd: hiddenOnly}, nil)
 	require.NoError(t, err)
-	assert.Nil(t, out, "directory with only hidden entries must yield no output")
+	require.Len(t, out.HookSpecificOutput.InstructionContext, 1)
+	assert.True(t, out.HookSpecificOutput.InstructionContext[0].Removed)
 }
 
 // TestAddDirectoryListingUnreadableDirIsNoop documents the graceful
@@ -103,5 +107,6 @@ func TestAddDirectoryListingUnreadableDirIsNoop(t *testing.T) {
 		Cwd:       filepath.Join(t.TempDir(), "does-not-exist"),
 	}, nil)
 	require.NoError(t, err)
-	assert.Nil(t, out)
+	require.Len(t, out.HookSpecificOutput.InstructionContext, 1)
+	assert.True(t, out.HookSpecificOutput.InstructionContext[0].Unavailable)
 }

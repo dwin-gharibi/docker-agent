@@ -876,18 +876,19 @@ func (m *appModel) handleThemeFileChanged(themeRef string) (tea.Model, tea.Cmd) 
 func (m *appModel) handleOpenSettingsDialog() (tea.Model, tea.Cmd) {
 	settings := userconfig.Get()
 	preferences := messages.Preferences{
-		Layout:            m.layoutSettings,
-		SendMode:          m.sendMode,
-		SplitDiffView:     settings.GetSplitDiffView(),
-		ExpandThinking:    settings.GetExpandThinking(),
-		HideToolResults:   settings.HideToolResults,
-		YOLO:              settings.YOLO,
-		RestoreTabs:       settings.GetRestoreTabs(),
-		Snapshot:          settings.SnapshotsEnabled(),
-		Lean:              settings.Lean,
-		TabTitleMaxLength: settings.GetTabTitleMaxLength(),
-		Sound:             settings.GetSound(),
-		SoundThreshold:    settings.GetSoundThreshold(),
+		Layout:             m.layoutSettings,
+		SendMode:           m.sendMode,
+		SplitDiffView:      settings.GetSplitDiffView(),
+		ExpandThinking:     settings.GetExpandThinking(),
+		HideToolResults:    settings.HideToolResults,
+		YOLO:               settings.YOLO,
+		RestoreTabs:        settings.GetRestoreTabs(),
+		Snapshot:           settings.SnapshotsEnabled(),
+		CacheStablePrompts: settings.CacheStablePromptsEnabled(),
+		Lean:               settings.Lean,
+		TabTitleMaxLength:  settings.GetTabTitleMaxLength(),
+		Sound:              settings.GetSound(),
+		SoundThreshold:     settings.GetSoundThreshold(),
 	}
 	return m, core.CmdHandler(dialog.OpenDialogMsg{
 		Model: dialog.NewSettingsDialog(preferences, !m.hideSidebar),
@@ -968,6 +969,7 @@ func savePreferences(p messages.Preferences) error {
 		s.ExpandThinking = boolPreference(p.ExpandThinking, false)
 		s.RestoreTabs = boolPreference(p.RestoreTabs, false)
 		s.Snapshot = boolPreference(p.Snapshot, false)
+		s.CacheStablePrompts = boolPreference(p.CacheStablePrompts, false)
 		s.HideToolResults = p.HideToolResults
 		s.YOLO = p.YOLO
 		s.Lean = p.Lean
@@ -1020,7 +1022,8 @@ func saveSettingsToUserConfig(layout messages.LayoutSettings, mode messages.Send
 		Layout: layout, SendMode: mode, SplitDiffView: settings.GetSplitDiffView(),
 		ExpandThinking: settings.GetExpandThinking(), HideToolResults: settings.HideToolResults,
 		YOLO: settings.YOLO, RestoreTabs: settings.GetRestoreTabs(), Snapshot: settings.SnapshotsEnabled(),
-		Lean: settings.Lean, TabTitleMaxLength: settings.GetTabTitleMaxLength(),
+		CacheStablePrompts: settings.CacheStablePromptsEnabled(),
+		Lean:               settings.Lean, TabTitleMaxLength: settings.GetTabTitleMaxLength(),
 		Sound: settings.GetSound(), SoundThreshold: settings.GetSoundThreshold(),
 	})
 }

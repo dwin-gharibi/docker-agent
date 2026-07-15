@@ -3,6 +3,8 @@ package runtime
 import (
 	"context"
 	"log/slog"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/docker/docker-agent/pkg/agent"
@@ -12,6 +14,7 @@ import (
 	"github.com/docker/docker-agent/pkg/runtime/toolexec"
 	"github.com/docker/docker-agent/pkg/session"
 	"github.com/docker/docker-agent/pkg/tools"
+	"github.com/docker/docker-agent/pkg/userconfig"
 )
 
 // buildHooksExecutors builds a [hooks.Executor] for every agent in the
@@ -128,36 +131,21 @@ func (r *LocalRuntime) dispatchHook(
 	return result
 }
 
-// executeSessionStartHooks fires session_start once at the top of
-// RunStream and returns its AdditionalContext as transient system
-// messages. The result is NOT persisted to the session: persisting
-// would pollute the visible transcript and (because session_start
-// fires after the user message has been added) shift the message the
-// runtime relays as the [UserMessageEvent]. Callers thread the
-// returned slice through [session.Session.GetMessages] on every
-// iteration so cwd / OS / arch context reaches the model without ever
-// being stored.
-//
-// Compaction does NOT re-fire session_start. The transient nature of
-// sessionStartMsgs means env / cwd / OS context is automatically
-// included in every model call after a compaction, without any extra
-// dispatch — there's nothing to "re-inject" because nothing was
-// persisted in the first place.
-func (r *LocalRuntime) executeSessionStartHooks(ctx context.Context, sess *session.Session, a *agent.Agent, events EventSink) []chat.Message {
-	return contextMessages(r.dispatchHook(ctx, a, hooks.EventSessionStart, &hooks.Input{
+// executeSessionStartHooks fires session_start once at the top of RunStream.
+// Its context is fed into the cache-stable instruction snapshot rather than
+// appended to the visible transcript.
+func (r *LocalRuntime) executeSessionStartHooks(ctx context.Context, sess *session.Session, a *agent.Agent, events EventSink) instructionObservation {
+	return observeInstructions(r.dispatchHook(ctx, a, hooks.EventSessionStart, &hooks.Input{
 		SessionID: sess.ID,
 		Source:    "startup",
 	}, events))
 }
 
-// executeTurnStartHooks fires turn_start before each model call and
-// returns its AdditionalContext as transient system messages. Like
-// session_start the result is never persisted, but turn_start runs
-// every iteration so its content is recomputed each turn — the right
-// semantics for fast-changing context like the current date or the
-// contents of a prompt file the user might be editing mid-session.
-func (r *LocalRuntime) executeTurnStartHooks(ctx context.Context, sess *session.Session, a *agent.Agent, events EventSink) []chat.Message {
-	return contextMessages(r.dispatchHook(ctx, a, hooks.EventTurnStart, &hooks.Input{
+// executeTurnStartHooks fires turn_start before each model call. Recomputing
+// its context each turn lets the instruction layer detect date and prompt-file
+// changes without mutating the initial system prefix.
+func (r *LocalRuntime) executeTurnStartHooks(ctx context.Context, sess *session.Session, a *agent.Agent, events EventSink) instructionObservation {
+	return observeInstructions(r.dispatchHook(ctx, a, hooks.EventTurnStart, &hooks.Input{
 		SessionID: sess.ID,
 	}, events))
 }
@@ -220,6 +208,94 @@ func contextMessages(result *hooks.Result) []chat.Message {
 		Role:    chat.MessageRoleSystem,
 		Content: result.AdditionalContext,
 	}}
+}
+
+type instructionObservation struct {
+	messages []chat.Message
+	sources  []session.InstructionSource
+}
+
+func (o instructionObservation) legacyMessages() []chat.Message {
+	messages := slices.Clone(o.messages)
+	for _, source := range o.sources {
+		if !source.Available || source.Removed || source.SetMarker || strings.TrimSpace(source.Content) == "" {
+			continue
+		}
+		messages = append(messages, chat.Message{Role: chat.MessageRoleSystem, Content: source.Content})
+	}
+	return messages
+}
+
+func observeInstructions(result *hooks.Result) instructionObservation {
+	observation := instructionObservation{messages: contextMessages(result)}
+	if result == nil {
+		return observation
+	}
+	for _, source := range result.InstructionContext {
+		observation.sources = append(observation.sources, session.InstructionSource{
+			Key:            source.Key,
+			Group:          source.Group,
+			Label:          source.Label,
+			Content:        source.Content,
+			ChangedContent: source.ChangedContent,
+			RemovedContent: source.RemovedContent,
+			Removed:        source.Removed,
+			Available:      !source.Unavailable,
+			CompleteGroup:  source.CompleteGroup,
+			SetMarker:      source.SetMarker,
+		})
+	}
+	return observation
+}
+
+func instructionSources(sessionStart, userPrompt []chat.Message, turnStart instructionObservation, additional ...session.InstructionSource) []session.InstructionSource {
+	sources := []session.InstructionSource{
+		instructionSource("hooks/session-start", "environment context", sessionStart),
+		instructionSource("hooks/user-prompt", "user-request context", userPrompt),
+		instructionSource("hooks/turn-start", "dynamic context", turnStart.messages),
+	}
+	sources = append(sources, additional...)
+	return append(sources, turnStart.sources...)
+}
+
+func (r *LocalRuntime) messagesWithDynamicContext(
+	ctx context.Context,
+	sess *session.Session,
+	a *agent.Agent,
+	sources []session.InstructionSource,
+	legacyExtras []chat.Message,
+) []chat.Message {
+	if !userconfig.Get().CacheStablePromptsEnabled() {
+		if sess.ClearInstructionContext() {
+			if err := r.sessionStore.UpdateSession(ctx, sess); err != nil {
+				slog.WarnContext(ctx, "Failed to clear instruction context", "session_id", sess.ID, "error", err)
+			}
+		}
+		return sess.GetMessagesWithoutInstructionContext(a, legacyExtras...)
+	}
+	if sess.PrepareInstructionContext(sources) {
+		if err := r.sessionStore.UpdateSession(ctx, sess); err != nil {
+			slog.WarnContext(ctx, "Failed to persist instruction context", "session_id", sess.ID, "error", err)
+		}
+	}
+	return sess.GetMessages(a)
+}
+
+func instructionSource(key, label string, messages []chat.Message) session.InstructionSource {
+	contents := make([]string, 0, len(messages))
+	for _, message := range messages {
+		if strings.TrimSpace(message.Content) != "" {
+			contents = append(contents, message.Content)
+		}
+	}
+	content := strings.Join(contents, "\n")
+	return session.InstructionSource{
+		Key:       key,
+		Label:     label,
+		Content:   content,
+		Removed:   content == "",
+		Available: true,
+	}
 }
 
 // executeSessionEndHooks fires session_end when the run loop exits.

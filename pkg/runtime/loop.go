@@ -336,9 +336,12 @@ func (r *LocalRuntime) runStreamLoop(ctx context.Context, sess *session.Session,
 	// extras and threaded into every model call below — never persisted,
 	// to keep the visible transcript clean and the user message tail
 	// stable.
+	sessionStart := r.executeSessionStartHooks(ctx, sess, a, sink)
 	ls := &loopState{
-		maxIterations:    sess.MaxIterations,
-		sessionStartMsgs: r.executeSessionStartHooks(ctx, sess, a, sink),
+		maxIterations:          sess.MaxIterations,
+		sessionStartMsgs:       sessionStart.messages,
+		sessionStartLegacyMsgs: sessionStart.legacyMessages(),
+		sessionStartSources:    sessionStart.sources,
 	}
 
 	// Emit team information
@@ -363,7 +366,7 @@ func (r *LocalRuntime) runStreamLoop(ctx context.Context, sess *session.Session,
 
 	sink.Emit(ToolsetInfo(len(agentTools), false, a.Name()))
 
-	messages := sess.GetMessages(a)
+	messages := sess.GetMessagesWithoutInstructionContext(a)
 
 	// Sub-sessions (transferred tasks, background agents, skill
 	// sub-sessions) carry a synthesised "Please proceed." message that
@@ -391,7 +394,9 @@ func (r *LocalRuntime) runStreamLoop(ctx context.Context, sess *session.Session,
 	sink.Emit(StreamStarted(sess.ID, a.Name()))
 
 	if a.HasHarness() {
-		streamReason = r.runHarnessAgent(ctx, sess, a, slices.Concat(ls.sessionStartMsgs, ls.userPromptMsgs), sink)
+		streamReason = r.runHarnessAgent(ctx, sess, a,
+			slices.Concat(ls.sessionStartMsgs, ls.userPromptMsgs),
+			slices.Concat(ls.sessionStartLegacyMsgs, ls.userPromptMsgs), ls.sessionStartSources, sink)
 		return
 	}
 
@@ -585,15 +590,17 @@ const (
 // new per-stream tracking (cost ceiling, token budget, turn timing)
 // without touching any signature.
 type loopState struct {
-	iteration           int
-	maxIterations       int
-	overflowCompactions int
-	toolModelOverride   string
-	prevAgentName       string
-	loopDetector        *toolexec.LoopDetector
-	sessionStartMsgs    []chat.Message
-	userPromptMsgs      []chat.Message
-	exitReason          string
+	iteration              int
+	maxIterations          int
+	overflowCompactions    int
+	toolModelOverride      string
+	prevAgentName          string
+	loopDetector           *toolexec.LoopDetector
+	sessionStartMsgs       []chat.Message
+	sessionStartLegacyMsgs []chat.Message
+	sessionStartSources    []session.InstructionSource
+	userPromptMsgs         []chat.Message
+	exitReason             string
 	// prevTurnMadeToolCalls reports whether the immediately preceding
 	// turn emitted tool calls. Used to classify an empty trailing turn:
 	// a clean stop right after tool work is benign (the model already
@@ -710,15 +717,13 @@ func (r *LocalRuntime) runTurn(
 		ls.exitReason = endReason
 	}()
 
-	// Run turn_start hooks BEFORE building messages so their
-	// AdditionalContext, alongside the session_start extras captured
-	// once at the top of RunStream, can be spliced after the invariant
-	// cache checkpoint and before the conversation history. Neither
-	// hook's output is persisted, so per-turn signals (date, prompt
-	// files) refresh every turn while session-level context (cwd, OS,
-	// arch) stays stable — all without bloating the stored history.
+	// Run turn_start hooks before assembly so dynamic context can be diffed
+	// against what the model already knows. Changes extend the conversation;
+	// they never rewrite the frozen instruction prefix.
 	turnStartMsgs := r.executeTurnStartHooks(ctx, sess, a, events)
-	messages := sess.GetMessages(a, slices.Concat(ls.sessionStartMsgs, ls.userPromptMsgs, turnStartMsgs)...)
+	legacyExtras := slices.Concat(ls.sessionStartLegacyMsgs, ls.userPromptMsgs, turnStartMsgs.legacyMessages())
+	messages := r.messagesWithDynamicContext(ctx, sess, a,
+		instructionSources(ls.sessionStartMsgs, ls.userPromptMsgs, turnStartMsgs, ls.sessionStartSources...), legacyExtras)
 	slog.DebugContext(ctx, "Retrieved messages for processing", "agent", a.Name(), "message_count", len(messages))
 
 	// before_llm_call hooks fire just before the model is invoked.

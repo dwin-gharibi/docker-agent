@@ -2,8 +2,11 @@ package session
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"log/slog"
+	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -261,10 +264,52 @@ type Session struct {
 	// within the parent session's Messages array.
 	ParentID string `json:"-"`
 
+	// InstructionContext keeps the cache-stable snapshot and chronological
+	// updates for dynamic system context.
+	InstructionContext *InstructionContextState `json:"instruction_context,omitempty"`
+
 	// MessageUsageHistory stores per-message usage data for remote mode.
 	// In remote mode, messages are managed server-side, so we track usage separately.
 	// This is not persisted (json:"-") as it's only needed for the current session display.
 	MessageUsageHistory []MessageUsageRecord `json:"-"`
+}
+
+// InstructionSource is one independently changing piece of trusted context.
+type InstructionSource struct {
+	Key            string
+	Group          string
+	Label          string
+	Content        string
+	ChangedContent string
+	RemovedContent string
+	Removed        bool
+	Available      bool
+	CompleteGroup  bool
+	SetMarker      bool
+}
+
+// InstructionValue is a content-addressed instruction value.
+type InstructionValue struct {
+	Hash           string `json:"hash"`
+	Group          string `json:"group,omitempty"`
+	Label          string `json:"label,omitempty"`
+	Content        string `json:"content"`
+	RemovedContent string `json:"removed_content,omitempty"`
+}
+
+// InstructionUpdate records an append-only context change at a session item boundary.
+type InstructionUpdate struct {
+	Position int    `json:"position"`
+	Content  string `json:"content"`
+}
+
+// InstructionContextState separates the frozen epoch snapshot from current values.
+type InstructionContextState struct {
+	EpochStart int                         `json:"epoch_start"`
+	Order      []string                    `json:"order,omitempty"`
+	Initial    map[string]InstructionValue `json:"initial,omitempty"`
+	Current    map[string]InstructionValue `json:"current,omitempty"`
+	Updates    []InstructionUpdate         `json:"updates,omitempty"`
 }
 
 // MessageUsageRecord stores usage data for a single assistant message.
@@ -636,6 +681,164 @@ func (s *Session) ApplyCompaction(inputTokens, outputTokens int64, item Item) {
 	s.InputTokens = inputTokens
 	s.OutputTokens = outputTokens
 	s.Messages = append(s.Messages, item)
+}
+
+// PrepareInstructionContext observes dynamic context before a model call. The
+// initial snapshot remains frozen until compaction; later changes become
+// append-only wrapped-user updates at the current history position.
+func (s *Session) PrepareInstructionContext(sources []InstructionSource) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.InstructionContext == nil {
+		for _, source := range sources {
+			if !source.Available {
+				return false
+			}
+		}
+		state := &InstructionContextState{
+			EpochStart: -1,
+			Initial:    make(map[string]InstructionValue),
+			Current:    make(map[string]InstructionValue),
+		}
+		for _, source := range sources {
+			if !source.Available || source.SetMarker || source.Removed || strings.TrimSpace(source.Content) == "" {
+				continue
+			}
+			value := instructionValue(source)
+			state.Order = append(state.Order, source.Key)
+			state.Initial[source.Key] = value
+			state.Current[source.Key] = value
+		}
+		s.InstructionContext = state
+		return true
+	}
+
+	state := s.InstructionContext
+	latestSummary := -1
+	for i := range slices.Backward(s.Messages) {
+		if s.Messages[i].Summary != "" {
+			latestSummary = i
+			break
+		}
+	}
+	changed := false
+	if latestSummary > state.EpochStart {
+		state.EpochStart = latestSummary
+		state.Initial = cloneInstructionValues(state.Current)
+		state.Updates = nil
+		changed = true
+	}
+
+	completeGroups := make(map[string]bool)
+	observedKeys := make(map[string]bool)
+	for _, source := range sources {
+		if source.Available && source.CompleteGroup && source.Group != "" {
+			completeGroups[source.Group] = true
+		}
+		if source.Available && !source.SetMarker && source.Key != "" {
+			observedKeys[source.Key] = true
+		}
+	}
+
+	var rendered []string
+	for _, source := range sources {
+		if !source.Available || source.SetMarker || source.Key == "" {
+			continue
+		}
+		previous, existed := state.Current[source.Key]
+		if source.Removed || strings.TrimSpace(source.Content) == "" {
+			if !existed {
+				continue
+			}
+			delete(state.Current, source.Key)
+			if source.RemovedContent != "" {
+				rendered = append(rendered, source.RemovedContent)
+			} else {
+				rendered = append(rendered, "The context under \""+sourceLabel(source)+"\" no longer applies. Disregard it.")
+			}
+			continue
+		}
+
+		current := instructionValue(source)
+		if existed && previous.Hash == current.Hash {
+			continue
+		}
+		switch {
+		case !existed:
+			state.Order = appendMissing(state.Order, source.Key)
+			rendered = append(rendered, "Additional context is now available under \""+sourceLabel(source)+"\":\n\n"+source.Content)
+		case source.ChangedContent != "":
+			rendered = append(rendered, source.ChangedContent)
+		default:
+			rendered = append(rendered, "The context under \""+sourceLabel(source)+"\" changed and supersedes the previous value:\n\n"+source.Content)
+		}
+		state.Current[source.Key] = current
+	}
+	for _, key := range state.Order {
+		previous, exists := state.Current[key]
+		if !exists || previous.Group == "" || !completeGroups[previous.Group] || observedKeys[key] {
+			continue
+		}
+		delete(state.Current, key)
+		if previous.RemovedContent != "" {
+			rendered = append(rendered, previous.RemovedContent)
+		} else {
+			rendered = append(rendered, "The context under \""+previous.Label+"\" no longer applies. Disregard it.")
+		}
+	}
+	if len(rendered) == 0 {
+		return changed
+	}
+
+	state.Updates = append(state.Updates, InstructionUpdate{
+		Position: len(s.Messages),
+		Content:  "<system-update>\n" + strings.Join(rendered, "\n\n") + "\n</system-update>",
+	})
+	return true
+}
+
+func instructionValue(source InstructionSource) InstructionValue {
+	encoded, _ := json.Marshal(source.Content)
+	sum := sha256.Sum256(encoded)
+	return InstructionValue{
+		Hash:           hex.EncodeToString(sum[:]),
+		Group:          source.Group,
+		Label:          sourceLabel(source),
+		Content:        source.Content,
+		RemovedContent: source.RemovedContent,
+	}
+}
+
+func sourceLabel(source InstructionSource) string {
+	if source.Label != "" {
+		return source.Label
+	}
+	return source.Key
+}
+
+func cloneInstructionValues(values map[string]InstructionValue) map[string]InstructionValue {
+	return maps.Clone(values)
+}
+
+func appendMissing(values []string, value string) []string {
+	if !slices.Contains(values, value) {
+		return append(values, value)
+	}
+	return values
+}
+
+func cloneInstructionContext(state *InstructionContextState) *InstructionContextState {
+	if state == nil {
+		return nil
+	}
+	return &InstructionContextState{
+		EpochStart: state.EpochStart,
+		Order:      slices.Clone(state.Order),
+		Initial:    cloneInstructionValues(state.Initial),
+		Current:    cloneInstructionValues(state.Current),
+		Updates:    slices.Clone(state.Updates),
+	}
 }
 
 // AddSubSession adds a sub-session to the session
@@ -1434,7 +1637,47 @@ func (s *Session) CompactionInput() ([]chat.Message, []int, int) {
 	return messages, sessIndices, len(items)
 }
 
+// ClearInstructionContext removes a previously prepared cache-stable snapshot.
+// It returns whether persisted session metadata changed.
+func (s *Session) ClearInstructionContext() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.InstructionContext == nil {
+		return false
+	}
+	s.InstructionContext = nil
+	return true
+}
+
+func (s *Session) instructionMessages() ([]chat.Message, []InstructionUpdate) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.InstructionContext == nil {
+		return nil, nil
+	}
+
+	initial := make([]chat.Message, 0, len(s.InstructionContext.Initial))
+	for _, key := range s.InstructionContext.Order {
+		value, ok := s.InstructionContext.Initial[key]
+		if !ok || strings.TrimSpace(value.Content) == "" {
+			continue
+		}
+		initial = append(initial, chat.Message{Role: chat.MessageRoleSystem, Content: value.Content})
+	}
+	return initial, slices.Clone(s.InstructionContext.Updates)
+}
+
 func (s *Session) GetMessages(a *agent.Agent, extraSystemMessages ...chat.Message) []chat.Message {
+	return s.getMessages(a, true, extraSystemMessages...)
+}
+
+// GetMessagesWithoutInstructionContext assembles the legacy prompt where
+// dynamic context is supplied directly as extra system messages.
+func (s *Session) GetMessagesWithoutInstructionContext(a *agent.Agent, extraSystemMessages ...chat.Message) []chat.Message {
+	return s.getMessages(a, false, extraSystemMessages...)
+}
+
+func (s *Session) getMessages(a *agent.Agent, includeInstructionContext bool, extraSystemMessages ...chat.Message) []chat.Message {
 	slog.Debug("Getting messages for agent", "agent", a.Name(), "session_id", s.ID)
 
 	// Build invariant system messages (cacheable across sessions/users/projects)
@@ -1444,12 +1687,19 @@ func (s *Session) GetMessages(a *agent.Agent, extraSystemMessages ...chat.Messag
 	// Take a snapshot of Messages under the lock, copying Message structs
 	// to avoid racing with UpdateMessage which may modify the pointed-to objects.
 	items := s.snapshotItems()
+	var instructionInitial []chat.Message
+	var instructionUpdates []InstructionUpdate
+	if includeInstructionContext {
+		instructionInitial, instructionUpdates = s.instructionMessages()
+	}
 
 	// Build session summary messages (vary per session)
 	summaryMessages, startIndex := s.buildSessionSummaryMessages(items)
 
 	var messages []chat.Message
 	messages = append(messages, invariantMessages...)
+	messages = append(messages, instructionInitial...)
+	markLastMessageAsCacheControl(messages)
 	// extraSystemMessages are caller-supplied transient system messages
 	// (e.g. turn_start hook output) inserted after the invariant cache
 	// checkpoint and before the conversation. The last extra carries a
@@ -1465,11 +1715,22 @@ func (s *Session) GetMessages(a *agent.Agent, extraSystemMessages ...chat.Messag
 	}
 	messages = append(messages, summaryMessages...)
 
-	// Begin adding conversation messages
-	for i := startIndex; i < len(items); i++ {
-		item := items[i]
-		if item.IsMessage() {
-			messages = append(messages, item.Message.Message)
+	// Begin adding conversation messages, interleaving instruction changes at
+	// the history position where they were observed.
+	updateIndex := 0
+	for updateIndex < len(instructionUpdates) && instructionUpdates[updateIndex].Position < startIndex {
+		updateIndex++
+	}
+	for i := startIndex; i <= len(items); i++ {
+		for updateIndex < len(instructionUpdates) && instructionUpdates[updateIndex].Position == i {
+			messages = append(messages, chat.Message{
+				Role:    chat.MessageRoleUser,
+				Content: instructionUpdates[updateIndex].Content,
+			})
+			updateIndex++
+		}
+		if i < len(items) && items[i].IsMessage() {
+			messages = append(messages, items[i].Message.Message)
 		}
 	}
 

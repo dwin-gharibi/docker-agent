@@ -34,8 +34,11 @@ func TestAddGitDiffStatModeShowsTouchedFile(t *testing.T) {
 	require.NotNil(t, out.HookSpecificOutput)
 	assert.Equal(t, hooks.EventTurnStart, out.HookSpecificOutput.HookEventName,
 		"add_git_diff must target turn_start, not session_start")
-	assert.Contains(t, out.HookSpecificOutput.AdditionalContext, "README.md")
-	assert.Contains(t, out.HookSpecificOutput.AdditionalContext, "stat",
+	require.Len(t, out.HookSpecificOutput.InstructionContext, 1)
+	ctx := out.HookSpecificOutput.InstructionContext[0].Content
+	assert.Equal(t, "core/git-diff", out.HookSpecificOutput.InstructionContext[0].Key)
+	assert.Contains(t, ctx, "README.md")
+	assert.Contains(t, ctx, "stat",
 		"default mode must announce itself as the stat view")
 }
 
@@ -57,7 +60,8 @@ func TestAddGitDiffFullModeShowsHunks(t *testing.T) {
 	out, err := fn(t.Context(), &hooks.Input{SessionID: "s", Cwd: dir}, []string{"full"})
 	require.NoError(t, err)
 	require.NotNil(t, out)
-	assert.Contains(t, out.HookSpecificOutput.AdditionalContext, "+second",
+	require.Len(t, out.HookSpecificOutput.InstructionContext, 1)
+	assert.Contains(t, out.HookSpecificOutput.InstructionContext[0].Content, "+second",
 		"full mode must include the unified-diff hunk lines")
 }
 
@@ -76,7 +80,8 @@ func TestAddGitDiffCleanTreeIsNoop(t *testing.T) {
 
 	out, err := fn(t.Context(), &hooks.Input{SessionID: "s", Cwd: dir}, nil)
 	require.NoError(t, err)
-	assert.Nil(t, out, "clean tree must yield no additional context")
+	require.Len(t, out.HookSpecificOutput.InstructionContext, 1)
+	assert.True(t, out.HookSpecificOutput.InstructionContext[0].Removed)
 }
 
 // TestAddGitDiffNoCwdOrNotARepoIsNoop documents the safety / graceful
@@ -97,5 +102,6 @@ func TestAddGitDiffNoCwdOrNotARepoIsNoop(t *testing.T) {
 
 	out, err = fn(t.Context(), &hooks.Input{SessionID: "s", Cwd: t.TempDir()}, nil)
 	require.NoError(t, err)
-	assert.Nil(t, out)
+	require.Len(t, out.HookSpecificOutput.InstructionContext, 1)
+	assert.True(t, out.HookSpecificOutput.InstructionContext[0].Removed)
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -20,7 +21,7 @@ import (
 	"github.com/docker/docker-agent/pkg/tools"
 )
 
-func (r *LocalRuntime) runHarnessAgent(ctx context.Context, sess *session.Session, a *agent.Agent, baseExtra []chat.Message, events EventSink) string {
+func (r *LocalRuntime) runHarnessAgent(ctx context.Context, sess *session.Session, a *agent.Agent, baseExtra, baseLegacy []chat.Message, baseSources []session.InstructionSource, events EventSink) string {
 	ctx, span := r.startSpan(ctx, "runtime.harness", trace.WithAttributes(traceAttributesForHarness(sess, a)...))
 	defer span.End()
 
@@ -46,7 +47,9 @@ func (r *LocalRuntime) runHarnessAgent(ctx context.Context, sess *session.Sessio
 	}()
 
 	turnStartMsgs := r.executeTurnStartHooks(ctx, sess, a, events)
-	messages := sess.GetMessages(a, append(baseExtra, turnStartMsgs...)...)
+	legacyExtras := append(slices.Clone(baseLegacy), turnStartMsgs.legacyMessages()...)
+	messages := r.messagesWithDynamicContext(ctx, sess, a,
+		instructionSources(baseExtra, nil, turnStartMsgs, baseSources...), legacyExtras)
 	stop, msg, rewritten := r.executeBeforeLLMCallHooks(ctx, sess, a, modelID, 1, messages)
 	if stop {
 		slog.WarnContext(ctx, "before_llm_call hook signalled run termination",
