@@ -40,12 +40,25 @@ type ToolConfirmationResponse struct {
 	Response string // "approve", "reject", or "approve-session"
 }
 
+// ConfirmationSessionState is the session-state surface the confirmation
+// dialog needs: the message list's surface for rendering the tool call, plus
+// the session-wide approval flip for the "all tools" decision.
+type ConfirmationSessionState interface {
+	messages.SessionState
+	SetYoloMode(yoloMode bool)
+}
+
+var (
+	_ ConfirmationSessionState = (*service.SessionState)(nil)
+	_ ConfirmationSessionState = (*service.EmbeddedSessionState)(nil)
+)
+
 type toolConfirmationDialog struct {
 	BaseDialog
 
 	msg               *runtime.ToolCallConfirmationEvent
 	keyMap            toolconfirm.KeyMap
-	sessionState      *service.SessionState
+	sessionState      ConfirmationSessionState
 	scrollView        messages.Model
 	permissionPattern string // cached permission pattern for this tool call
 }
@@ -215,7 +228,7 @@ func (d *toolConfirmationDialog) renderMetadata(contentWidth int) string {
 }
 
 // NewToolConfirmationDialog creates a new tool confirmation dialog
-func NewToolConfirmationDialog(msg *runtime.ToolCallConfirmationEvent, sessionState *service.SessionState) Dialog {
+func NewToolConfirmationDialog(msg *runtime.ToolCallConfirmationEvent, sessionState ConfirmationSessionState) Dialog {
 	// Create scrollable view with minimal initial size (will be updated in SetSize)
 	scrollView := messages.NewScrollableView(1, 1, sessionState)
 
