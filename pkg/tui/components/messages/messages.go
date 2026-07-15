@@ -1683,6 +1683,8 @@ func (m *model) AddToolResult(msg *runtime.ToolCallResponseEvent, status types.T
 			toolMessage.ToolResult = msg.Result.WithoutPayload()
 			m.invalidateItem(i)
 
+			// The replaced view may still hold a running-spinner subscription.
+			animation.StopView(m.views[i])
 			view := m.createToolCallView(toolMessage)
 			m.views[i] = view
 			return view.Init()
@@ -2314,6 +2316,7 @@ type InlineEditCommittedMsg struct {
 }
 
 func (m *model) StopAnimations() {
+	m.slackAnimationSub.Stop()
 	for _, v := range m.views {
 		animation.StopView(v)
 	}
