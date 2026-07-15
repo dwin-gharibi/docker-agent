@@ -34,6 +34,7 @@ import (
 	"github.com/docker/docker-agent/pkg/tools/builtin/skills"
 	"github.com/docker/docker-agent/pkg/tools/builtin/transfertask"
 	mcptools "github.com/docker/docker-agent/pkg/tools/mcp"
+	"github.com/docker/docker-agent/pkg/userconfig"
 )
 
 // registerDefaultTools wires up the built-in tool handlers (delegation,
@@ -842,6 +843,9 @@ func (r *LocalRuntime) runTurn(
 	usage := SessionUsage(sess, contextLimit, a.CompactionThreshold())
 	usage.LastMessage = msgUsage
 	events.Emit(NewTokenUsageEvent(sess.ID, a.Name(), usage))
+	if shouldWarnOnCacheMiss(sess, msgUsage) {
+		events.Emit(Warning("This agent turn did not use the prompt cache.", a.Name()))
+	}
 
 	// Record the message count before tool calls so we can
 	// measure how much content was added by tool results.
@@ -1052,6 +1056,27 @@ func computeMessageCost(usage *chat.Usage, m *modelsdev.Model) *float64 {
 		float64(usage.CachedInputTokens)*m.Cost.CacheRead +
 		float64(usage.CacheWriteTokens)*m.Cost.CacheWrite) / 1e6
 	return &cost
+}
+
+func shouldWarnOnCacheMiss(sess *session.Session, usage *MessageUsage) bool {
+	if !userconfig.Get().CacheMissWarningsEnabled() || usage == nil || usage.CachedInputTokens > 0 {
+		return false
+	}
+	if usage.InputTokens == 0 && usage.CacheWriteTokens == 0 {
+		return false
+	}
+
+	assistantMessages := 0
+	for _, message := range sess.OwnMessages() {
+		if message.Message.Role != chat.MessageRoleAssistant {
+			continue
+		}
+		assistantMessages++
+		if assistantMessages > 1 {
+			return true
+		}
+	}
+	return false
 }
 
 // recordAssistantMessage adds the model's response to the session and returns

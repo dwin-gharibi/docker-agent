@@ -885,6 +885,7 @@ func (m *appModel) handleOpenSettingsDialog() (tea.Model, tea.Cmd) {
 		RestoreTabs:        settings.GetRestoreTabs(),
 		Snapshot:           settings.SnapshotsEnabled(),
 		CacheStablePrompts: settings.CacheStablePromptsEnabled(),
+		WarnOnCacheMiss:    settings.CacheMissWarningsEnabled(),
 		Lean:               settings.Lean,
 		TabTitleMaxLength:  settings.GetTabTitleMaxLength(),
 		Sound:              settings.GetSound(),
@@ -970,6 +971,7 @@ func savePreferences(p messages.Preferences) error {
 		s.RestoreTabs = boolPreference(p.RestoreTabs, false)
 		s.Snapshot = boolPreference(p.Snapshot, false)
 		s.CacheStablePrompts = boolPreference(p.CacheStablePrompts, false)
+		s.WarnOnCacheMiss = boolPreference(p.WarnOnCacheMiss, false)
 		s.HideToolResults = p.HideToolResults
 		s.YOLO = p.YOLO
 		s.Lean = p.Lean
@@ -1023,6 +1025,7 @@ func saveSettingsToUserConfig(layout messages.LayoutSettings, mode messages.Send
 		ExpandThinking: settings.GetExpandThinking(), HideToolResults: settings.HideToolResults,
 		YOLO: settings.YOLO, RestoreTabs: settings.GetRestoreTabs(), Snapshot: settings.SnapshotsEnabled(),
 		CacheStablePrompts: settings.CacheStablePromptsEnabled(),
+		WarnOnCacheMiss:    settings.CacheMissWarningsEnabled(),
 		Lean:               settings.Lean, TabTitleMaxLength: settings.GetTabTitleMaxLength(),
 		Sound: settings.GetSound(), SoundThreshold: settings.GetSoundThreshold(),
 	})

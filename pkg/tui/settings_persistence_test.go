@@ -124,6 +124,7 @@ func TestSavePreferences_RoundTripAndPreservesExtra(t *testing.T) {
 		RestoreTabs:        true,
 		Snapshot:           true,
 		CacheStablePrompts: true,
+		WarnOnCacheMiss:    true,
 		Lean:               true,
 		TabTitleMaxLength:  42,
 		Sound:              true,
@@ -141,6 +142,7 @@ func TestSavePreferences_RoundTripAndPreservesExtra(t *testing.T) {
 	assert.Equal(t, preferences.RestoreTabs, settings.GetRestoreTabs())
 	assert.Equal(t, preferences.Snapshot, settings.SnapshotsEnabled())
 	assert.Equal(t, preferences.CacheStablePrompts, settings.CacheStablePromptsEnabled())
+	assert.Equal(t, preferences.WarnOnCacheMiss, settings.CacheMissWarningsEnabled())
 	assert.Equal(t, preferences.Lean, settings.Lean)
 	assert.Equal(t, preferences.TabTitleMaxLength, settings.GetTabTitleMaxLength())
 	assert.Equal(t, preferences.Sound, settings.GetSound())
@@ -159,6 +161,7 @@ func TestSavePreferences_DefaultsClearEntries(t *testing.T) {
 		RestoreTabs:        true,
 		Snapshot:           true,
 		CacheStablePrompts: true,
+		WarnOnCacheMiss:    true,
 		TabTitleMaxLength:  40,
 		SoundThreshold:     40,
 	}))
@@ -181,6 +184,7 @@ func TestSavePreferences_DefaultsClearEntries(t *testing.T) {
 	assert.Nil(t, settings.RestoreTabs)
 	assert.Nil(t, settings.Snapshot)
 	assert.Nil(t, settings.CacheStablePrompts)
+	assert.Nil(t, settings.WarnOnCacheMiss)
 	assert.Zero(t, settings.TabTitleMaxLength)
 	assert.Zero(t, settings.SoundThreshold)
 }

@@ -371,10 +371,23 @@ func TestSettingsDialogSoundThresholdDisabledWhenSoundOff(t *testing.T) {
 	d := newTestSettingsDialog(t, messages.LayoutSettings{})
 	d.tab = tabNotifications
 	d.moveSelection(1)
-	assert.Equal(t, rowSound, d.selected[tabNotifications], "disabled threshold is skipped")
+	assert.Equal(t, rowWarnOnCacheMiss, d.selected[tabNotifications], "disabled threshold is skipped")
+	d.selected[tabNotifications] = rowSound
 	d.Update(tea.KeyPressMsg{Code: tea.KeySpace})
 	d.moveSelection(1)
 	assert.Equal(t, rowSoundThreshold, d.selected[tabNotifications])
+}
+
+func TestSettingsDialogTogglesCacheMissWarning(t *testing.T) {
+	t.Parallel()
+
+	d := newTestSettingsDialog(t, messages.LayoutSettings{})
+	d.tab = tabNotifications
+	d.selected[tabNotifications] = rowWarnOnCacheMiss
+	d.Update(tea.KeyPressMsg{Code: tea.KeySpace})
+
+	assert.True(t, d.current.WarnOnCacheMiss)
+	assert.Contains(t, ansi.Strip(d.View()), "Warn when a turn misses the cache")
 }
 
 func TestRenderLayoutPreviewReflectsSections(t *testing.T) {

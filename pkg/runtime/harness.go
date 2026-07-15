@@ -375,6 +375,9 @@ func (r *LocalRuntime) recordHarnessAssistantMessage(sess *session.Session, a *a
 	usageEvent := SessionUsage(sess, 0, a.CompactionThreshold())
 	usageEvent.LastMessage = msgUsage
 	events.Emit(NewTokenUsageEvent(sess.ID, a.Name(), usageEvent))
+	if shouldWarnOnCacheMiss(sess, msgUsage) {
+		events.Emit(Warning("This agent turn did not use the prompt cache.", a.Name()))
+	}
 }
 
 func harnessPromptFromMessages(messages []chat.Message) string {
