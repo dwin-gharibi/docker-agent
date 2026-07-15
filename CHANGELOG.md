@@ -3,6 +3,49 @@
 All notable changes to this project will be documented in this file.
 
 
+## [v1.109.0] - 2026-07-15
+
+This release fixes permission scoping bugs in sub-sessions, adds deferred tool loading, and includes several improvements to session reliability and the settings window.
+
+## What's New
+
+- Adds cache-safe deferred tool loading, tracking deferred tool load points in the shared runtime and translating them into native OpenAI tool-search and Anthropic tool-reference messages
+- Adds embedder seams for code-built teams in `embeddedchat`, allowing callers to assemble agents in code without requiring a YAML `AgentSource` or pulling the full toolset and provider registries at link time
+- Adds more settings in the settings window
+
+## Improvements
+
+- Refactors the TUI confirmation dialog to accept a narrow `ConfirmationSessionState` interface, allowing embedders to supply session state without depending on a concrete `*service.SessionState`
+
+## Bug Fixes
+
+- Fixes permission scoping between parent and child sessions, preventing sub-sessions from back-propagating `ToolsApproved` and `Permissions` to the parent (scope escalation bug)
+- Fixes tool-approval chain precedence in the permission override and dispatch pipeline
+- Fixes `teamloader` to propagate the session working directory to toolsets, resolving a silent drop of `WithWorkingDir` for tools such as `shell` and `filesystem`
+- Fixes `teamloader` to restore `runConfig.WorkingDir` after `Load`
+- Fixes a race condition by locking access to session title, token, and cost fields through `Session.mu`
+- Fixes the `runForwarding` invariant
+
+## Technical Changes
+
+- Fixes formatting for `gofumpt` and `gci`
+- Updates stale YOLO tests and restores branch cloning
+- Adds eval test coverage for container interruption on cancellation
+- Fixes `TestForceAskOverridesYoloMode` hanging on CI
+### Pull Requests
+
+- [#3542](https://github.com/docker/docker-agent/pull/3542) - fix: correct Decide precedence and remove sub-session scope escalation
+- [#3649](https://github.com/docker/docker-agent/pull/3649) - test(eval): cover container interruption on cancellation
+- [#3652](https://github.com/docker/docker-agent/pull/3652) - docs: update CHANGELOG.md for v1.107.0
+- [#3653](https://github.com/docker/docker-agent/pull/3653) - docs: update CHANGELOG.md for v1.108.0
+- [#3654](https://github.com/docker/docker-agent/pull/3654) - refactor(tui): let embedders supply the confirmation dialog's session state
+- [#3655](https://github.com/docker/docker-agent/pull/3655) - feat(embeddedchat): add embedder seams for code-built teams
+- [#3656](https://github.com/docker/docker-agent/pull/3656) - Add more settings in the settings window
+- [#3657](https://github.com/docker/docker-agent/pull/3657) - fix(teamloader): propagate session working dir to toolsets
+- [#3658](https://github.com/docker/docker-agent/pull/3658) - Add cache-safe deferred tool loading
+- [#3659](https://github.com/docker/docker-agent/pull/3659) - fix(session): lock title and usage scalar access
+
+
 ## [v1.108.0] - 2026-07-15
 
 Maintenance release with dependency updates.
@@ -4672,3 +4715,5 @@ This release improves the terminal user interface with better error handling and
 [v1.107.0]: https://github.com/docker/docker-agent/releases/tag/v1.107.0
 
 [v1.108.0]: https://github.com/docker/docker-agent/releases/tag/v1.108.0
+
+[v1.109.0]: https://github.com/docker/docker-agent/releases/tag/v1.109.0
