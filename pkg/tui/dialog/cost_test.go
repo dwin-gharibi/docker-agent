@@ -1,17 +1,20 @@
 package dialog
 
 import (
+	"image/color"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"charm.land/lipgloss/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/docker/docker-agent/pkg/chat"
 	"github.com/docker/docker-agent/pkg/session"
 	"github.com/docker/docker-agent/pkg/tools"
+	"github.com/docker/docker-agent/pkg/tui/styles"
 )
 
 func TestNewCostDialog(t *testing.T) {
@@ -208,7 +211,11 @@ func TestCostDialogCachedCountAlignedAfterPercentage(t *testing.T) {
 	singleDigit := dialog.renderUsageLine(rows[0], 1, labelWidth, false)
 	doubleDigit := dialog.renderUsageLine(rows[1], 1, labelWidth, false)
 
-	assert.Equal(t, strings.Index(singleDigit, "cached:"), strings.Index(doubleDigit, "cached:"))
+	singleDigitPrefix, _, singleDigitFound := strings.Cut(singleDigit, "cached:")
+	doubleDigitPrefix, _, doubleDigitFound := strings.Cut(doubleDigit, "cached:")
+	require.True(t, singleDigitFound)
+	require.True(t, doubleDigitFound)
+	assert.Equal(t, lipgloss.Width(singleDigitPrefix), lipgloss.Width(doubleDigitPrefix))
 }
 
 func TestCostDialogTotalStatsAligned(t *testing.T) {
@@ -232,7 +239,30 @@ func TestCostDialogMessageCacheMiss(t *testing.T) {
 		cost:  0.01,
 	}, 0.01, 2, true)
 
-	assert.Contains(t, line, "cache miss")
+	assert.Contains(t, line, styles.WarningStyle.Render("cache miss"))
+}
+
+func TestCostPercentageStyle(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		percentage float64
+		want       color.Color
+	}{
+		{name: "neutral", percentage: 0, want: styles.TextSecondary},
+		{name: "warning", percentage: 35, want: styles.Warning},
+		{name: "error", percentage: 100, want: styles.Error},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotR, gotG, gotB := styles.ColorToRGB(costPercentageStyle(tt.percentage).GetForeground())
+			wantR, wantG, wantB := styles.ColorToRGB(tt.want)
+			assert.InDelta(t, wantR, gotR, 0.01)
+			assert.InDelta(t, wantG, gotG, 0.01)
+			assert.InDelta(t, wantB, gotB, 0.01)
+		})
+	}
 }
 
 func TestCostDialogCacheHitRate(t *testing.T) {

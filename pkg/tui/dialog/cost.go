@@ -311,9 +311,8 @@ func (d *costDialog) renderContent(contentWidth, maxHeight int) string {
 		header,
 		RenderSeparator(contentWidth),
 		"",
-		sectionStyle().Render("Total"),
+		sectionStyle().Render("Total") + "  " + accentStyle().Render(formatCost(data.total.cost)),
 		"",
-		accentStyle().Render(formatCost(data.total.cost)),
 	}
 	totalStats := append([]stat{
 		{label: "tokens:", value: formatTokenCount(data.total.totalTokens())},
@@ -403,28 +402,34 @@ func usageLabelWidth(usages []totalUsage) int {
 	return width
 }
 
-func (d *costDialog) renderUsageLine(u totalUsage, totalCost float64, labelWidth int, showCacheMiss bool) string {
+func (d *costDialog) renderUsageLine(u totalUsage, totalCost float64, labelWidth int, byMessage bool) string {
 	percentage := ""
+	percentageValue := 0.0
 	if totalCost > 0 && u.cost > 0 {
 		if pct := u.cost / totalCost * 100; pct >= 0.1 {
 			percentage = fmt.Sprintf("%.0f%%", pct)
+			percentageValue = pct
 		}
 	}
 
-	showCacheStatus := u.CachedInputTokens > 0 || (showCacheMiss && u.model != "")
+	showCacheStatus := u.CachedInputTokens > 0 || (byMessage && u.model != "")
 	var extras []string
 	if percentage != "" || (totalCost > 0 && showCacheStatus) {
-		extras = append(extras, fmt.Sprintf("%-4s", percentage))
+		percentageStyle := valueStyle()
+		if byMessage && percentage != "" {
+			percentageStyle = costPercentageStyle(percentageValue)
+		}
+		extras = append(extras, percentageStyle.Render(fmt.Sprintf("%-4s", percentage)))
 	}
 	if u.CachedInputTokens > 0 {
-		extras = append(extras, "cached: "+formatTokenCount(u.CachedInputTokens))
+		extras = append(extras, valueStyle().Render("cached: "+formatTokenCount(u.CachedInputTokens)))
 	} else if showCacheStatus {
-		extras = append(extras, "cache miss")
+		extras = append(extras, styles.WarningStyle.Render("cache miss"))
 	}
 
 	suffix := ""
 	if len(extras) > 0 {
-		suffix = "  " + valueStyle().Render(strings.Join(extras, "  "))
+		suffix = "  " + strings.Join(extras, "  ")
 	}
 	return fmt.Sprintf("%s  %s %s  %s %s  %s%s",
 		accentStyle().Render(padRight(formatCostPadded(u.cost))),
@@ -473,7 +478,7 @@ func (d *costDialog) renderPlainText() string {
 			formatTokenCount(data.total.CacheWriteTokens))
 	}
 
-	lines = append(lines, "Session Cost Details", "", "Total", formatCost(data.total.cost),
+	lines = append(lines, "Session Cost Details", "", "Total  "+formatCost(data.total.cost), "",
 		"tokens: "+formatTokenCount(data.total.totalTokens()),
 		inputLine, "out: "+formatTokenCount(data.total.OutputTokens))
 
@@ -526,6 +531,27 @@ func labelStyle() lipgloss.Style { return lipgloss.NewStyle().Bold(true) }
 
 func valueStyle() lipgloss.Style {
 	return lipgloss.NewStyle().Foreground(styles.TextSecondary)
+}
+
+func costPercentageStyle(percentage float64) lipgloss.Style {
+	const warningAt = 0.35
+
+	ratio := min(max(percentage/100, 0), 1)
+	from, to := styles.TextSecondary, styles.Warning
+	if ratio >= warningAt {
+		from, to = styles.Warning, styles.Error
+		ratio = (ratio - warningAt) / (1 - warningAt)
+	} else {
+		ratio /= warningAt
+	}
+
+	fromR, fromG, fromB := styles.ColorToRGB(from)
+	toR, toG, toB := styles.ColorToRGB(to)
+	return lipgloss.NewStyle().Foreground(styles.RGBToColor(
+		fromR+(toR-fromR)*ratio,
+		fromG+(toG-fromG)*ratio,
+		fromB+(toB-fromB)*ratio,
+	))
 }
 
 func accentStyle() lipgloss.Style {
