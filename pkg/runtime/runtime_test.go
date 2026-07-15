@@ -2517,10 +2517,11 @@ func TestTransferTaskPersistsSubSessionOnError(t *testing.T) {
 		"SubSessionCompletedEvent must fire on the error path so observers persist the sub-session")
 }
 
-func TestYoloMode_OverridesPermissionsDeny(t *testing.T) {
+// TestDenyOverridesYoloMode verifies that Deny permissions take precedence over the yolo flag.
+func TestDenyOverridesYoloMode(t *testing.T) {
 	t.Parallel()
 
-	// Test that --yolo flag takes precedence over deny permissions
+	// Test that deny permissions take precedence over the --yolo flag
 	permChecker := permissions.NewChecker(&latest.PermissionsConfig{
 		Deny: []string{"dangerous_tool"},
 	})
@@ -2561,10 +2562,11 @@ func TestYoloMode_OverridesPermissionsDeny(t *testing.T) {
 	rt.processToolCalls(t.Context(), sess, calls, agentTools, NewChannelSink(events))
 	close(events)
 
-	// With --yolo, the tool should execute despite deny permission
-	require.True(t, executed, "expected tool to be executed in --yolo mode despite deny permission")
+	// With --yolo and Deny/ForceAsk precedence, the tool should NOT execute.
+	require.False(t, executed, "expected tool to NOT be executed in --yolo mode because Deny wins")
 }
 
+// TestYoloMode_OverridesForceAsk verifies that the yolo flag takes precedence over ForceAsk permissions.
 func TestYoloMode_OverridesForceAsk(t *testing.T) {
 	t.Parallel()
 
@@ -2597,6 +2599,7 @@ func TestYoloMode_OverridesForceAsk(t *testing.T) {
 	require.NoError(t, err)
 
 	sess := session.New(session.WithUserMessage("Test"), session.WithToolsApproved(true))
+	sess.NonInteractive = true // fail fast instead of hanging on askUser if this regresses
 	require.True(t, sess.ToolsApproved)
 
 	calls := []tools.ToolCall{{
@@ -2609,14 +2612,16 @@ func TestYoloMode_OverridesForceAsk(t *testing.T) {
 	rt.processToolCalls(t.Context(), sess, calls, agentTools, NewChannelSink(events))
 	close(events)
 
-	// With --yolo, the tool should execute without asking
-	require.True(t, executed, "expected tool to be executed in --yolo mode despite ForceAsk permission")
+	// YOLO overrides ForceAsk: the checker's ForceAsk verdict is bypassed
+	// and the tool executes automatically.
+	require.True(t, executed, "expected tool to be executed in --yolo mode because YOLO wins over ForceAsk")
 }
 
-func TestYoloMode_OverridesSessionDeny(t *testing.T) {
+// TestSessionDenyOverridesYoloMode verifies that session-level Deny permissions take precedence over the yolo flag.
+func TestSessionDenyOverridesYoloMode(t *testing.T) {
 	t.Parallel()
 
-	// Test that --yolo flag takes precedence over session-level deny
+	// Test that session-level deny takes precedence over the --yolo flag
 	var executed bool
 	agentTools := []tools.Tool{{
 		Name:       "blocked_tool",
@@ -2656,8 +2661,8 @@ func TestYoloMode_OverridesSessionDeny(t *testing.T) {
 	rt.processToolCalls(t.Context(), sess, calls, agentTools, NewChannelSink(events))
 	close(events)
 
-	// With --yolo, the tool should execute despite session deny
-	require.True(t, executed, "expected tool to be executed in --yolo mode despite session deny permission")
+	// With --yolo and Deny/ForceAsk precedence, the tool should NOT execute.
+	require.False(t, executed, "expected tool to NOT be executed in --yolo mode because session Deny wins")
 }
 
 func TestStripImageContent(t *testing.T) {

@@ -248,9 +248,9 @@ func (r *LocalRuntime) swapCurrentAgent(ctx context.Context, sessionID string, f
 	}
 }
 
-// runForwarding runs a child session synchronously, forwarding all of its
-// events to evts and propagating tool-approval state back to the parent
-// on completion. This is the "interactive" path used by transfer_task and
+// runForwarding manages the lifecycle of a blocking sub-session, forwarding
+// events to evts. The child's approval state stays scoped to the sub-session
+// and never flows back to the parent. This is the "interactive" path used by transfer_task and
 // run_skill: the parent loop is blocked while the child executes, and
 // the user sees the child's events live.
 //
@@ -323,12 +323,6 @@ func (r *LocalRuntime) runForwarding(ctx context.Context, parent *session.Sessio
 		return nil, subSessionErr
 	}
 
-	// Only propagate ToolsApproved and Permissions on success. A failed sub-session
-	// must not silently escalate the parent's tool-approval gate: the user approved
-	// tools within a sub-session scope that ended in error, and that approval
-	// should not carry over to the parent's remaining turns.
-	parent.SetToolsApproved(s.IsToolsApproved())
-	parent.SetPermissions(s.ClonePermissions())
 	span.SetStatus(codes.Ok, "sub-session completed")
 	return tools.ResultSuccess(s.GetLastAssistantMessageContent()), nil
 }
