@@ -929,8 +929,9 @@ func (sm *SessionManager) recallSession(ctx context.Context, sessionID string, m
 	return nil
 }
 
-// ResumeElicitation resumes an elicitation request.
-func (sm *SessionManager) ResumeElicitation(ctx context.Context, sessionID, action string, content map[string]any) error {
+// ResumeElicitation resumes an elicitation request. elicitationID is
+// additive: pass "" to fall back to resolving the sole pending request.
+func (sm *SessionManager) ResumeElicitation(ctx context.Context, sessionID, action string, content map[string]any, elicitationID string) error {
 	sm.mux.Lock()
 	defer sm.mux.Unlock()
 	rt, exists := sm.runtimeSessions.Load(sessionID)
@@ -938,7 +939,7 @@ func (sm *SessionManager) ResumeElicitation(ctx context.Context, sessionID, acti
 		return errors.New("session not found")
 	}
 
-	return rt.runtime.ResumeElicitation(ctx, tools.ElicitationAction(action), content)
+	return rt.runtime.ResumeElicitation(ctx, tools.ElicitationAction(action), content, elicitationID)
 }
 
 // ToggleToolApproval toggles the tool approval mode for a session.

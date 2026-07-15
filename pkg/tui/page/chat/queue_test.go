@@ -69,7 +69,7 @@ func (queueTestRuntime) Run(context.Context, *session.Session) ([]session.Messag
 	return nil, nil
 }
 func (queueTestRuntime) Resume(context.Context, runtime.ResumeRequest) {}
-func (queueTestRuntime) ResumeElicitation(context.Context, tools.ElicitationAction, map[string]any) error {
+func (queueTestRuntime) ResumeElicitation(context.Context, tools.ElicitationAction, map[string]any, ...string) error {
 	return nil
 }
 func (queueTestRuntime) SessionStore() session.Store { return nil }
@@ -110,6 +110,7 @@ func (queueTestRuntime) AvailableModels(context.Context) []runtime.ModelChoice {
 func (queueTestRuntime) SupportsModelSwitching() bool                          { return false }
 func (queueTestRuntime) OnToolsChanged(func(runtime.Event))                    {}
 func (queueTestRuntime) OnBackgroundEvent(func(runtime.Event))                 {}
+func (queueTestRuntime) OnElicitationRequest(func(runtime.Event))              {}
 func (queueTestRuntime) QueueStatus() runtime.QueueStatus                      { return runtime.QueueStatus{} }
 func (queueTestRuntime) TogglePause(context.Context) (bool, error)             { return false, nil }
 func (queueTestRuntime) Close() error                                          { return nil }

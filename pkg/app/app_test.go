@@ -59,7 +59,7 @@ func (m *mockRuntime) Run(ctx context.Context, sess *session.Session) ([]session
 	return nil, nil
 }
 func (m *mockRuntime) Resume(ctx context.Context, req runtime.ResumeRequest) {}
-func (m *mockRuntime) ResumeElicitation(ctx context.Context, action tools.ElicitationAction, content map[string]any) error {
+func (m *mockRuntime) ResumeElicitation(ctx context.Context, action tools.ElicitationAction, content map[string]any, elicitationID ...string) error {
 	return nil
 }
 func (m *mockRuntime) SessionStore() session.Store { return m.store }
@@ -108,6 +108,7 @@ func (m *mockRuntime) AvailableModels(context.Context) []runtime.ModelChoice { r
 func (m *mockRuntime) SupportsModelSwitching() bool                          { return false }
 func (m *mockRuntime) OnToolsChanged(func(runtime.Event))                    {}
 func (m *mockRuntime) OnBackgroundEvent(func(runtime.Event))                 {}
+func (m *mockRuntime) OnElicitationRequest(func(runtime.Event))              {}
 
 // Verify mockRuntime implements runtime.Runtime
 var _ runtime.Runtime = (*mockRuntime)(nil)

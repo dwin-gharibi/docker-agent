@@ -41,7 +41,7 @@ func (s *stubRemoteClient) ResumeSession(context.Context, string, string, string
 	return nil
 }
 
-func (s *stubRemoteClient) ResumeElicitation(context.Context, string, tools.ElicitationAction, map[string]any) error {
+func (s *stubRemoteClient) ResumeElicitation(context.Context, string, tools.ElicitationAction, map[string]any, ...string) error {
 	return nil
 }
 

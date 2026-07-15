@@ -22,8 +22,11 @@ type RemoteClient interface {
 	// ResumeSession resumes a paused session with optional rejection reason or tool name
 	ResumeSession(ctx context.Context, id, confirmation, reason, toolName string) error
 
-	// ResumeElicitation sends an elicitation response
-	ResumeElicitation(ctx context.Context, sessionID string, action tools.ElicitationAction, content map[string]any) error
+	// ResumeElicitation sends an elicitation response. elicitationID is
+	// additive: pass "" to fall back to the sole-pending-request behavior.
+	// Variadic for the same Go-API-compatibility reason as
+	// [Runtime.ResumeElicitation]: at most one value is meaningful.
+	ResumeElicitation(ctx context.Context, sessionID string, action tools.ElicitationAction, content map[string]any, elicitationID ...string) error
 
 	// RunAgent executes an agent and returns a channel of streaming events.
 	// model, when non-empty, is applied as a persistent override on the

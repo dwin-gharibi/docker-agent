@@ -394,15 +394,16 @@ func (r *RemoteRuntime) convertSessionMessages(sess *session.Session) []api.Mess
 }
 
 // ResumeElicitation sends an elicitation response back to a waiting elicitation request
-func (r *RemoteRuntime) ResumeElicitation(ctx context.Context, action tools.ElicitationAction, content map[string]any) error {
-	slog.DebugContext(ctx, "Resuming remote runtime with elicitation response", "agent", r.currentAgent, "action", action, "session_id", r.sessionID)
+func (r *RemoteRuntime) ResumeElicitation(ctx context.Context, action tools.ElicitationAction, content map[string]any, elicitationID ...string) error {
+	id := firstElicitationID(elicitationID)
+	slog.DebugContext(ctx, "Resuming remote runtime with elicitation response", "agent", r.currentAgent, "action", action, "session_id", r.sessionID, "elicitation_id", id)
 
 	err := r.handleOAuthElicitation(ctx, r.pendingOAuthElicitation)
 	if err != nil {
 		return err
 	}
 
-	if err := r.client.ResumeElicitation(ctx, r.sessionID, action, content); err != nil {
+	if err := r.client.ResumeElicitation(ctx, r.sessionID, action, content, id); err != nil {
 		return err
 	}
 
@@ -420,7 +421,7 @@ func (r *RemoteRuntime) handleOAuthElicitation(ctx context.Context, req *Elicita
 	if !ok {
 		err := errors.New("server_url missing from elicitation metadata")
 		slog.ErrorContext(ctx, "Failed to extract server_url", "error", err)
-		_ = r.client.ResumeElicitation(ctx, r.sessionID, "decline", nil)
+		_ = r.client.ResumeElicitation(ctx, r.sessionID, "decline", nil, req.ElicitationID)
 		return err
 	}
 
@@ -428,7 +429,7 @@ func (r *RemoteRuntime) handleOAuthElicitation(ctx context.Context, req *Elicita
 	if !ok {
 		err := errors.New("auth_server_metadata missing from elicitation metadata")
 		slog.ErrorContext(ctx, "Failed to extract auth_server_metadata", "error", err)
-		_ = r.client.ResumeElicitation(ctx, r.sessionID, "decline", nil)
+		_ = r.client.ResumeElicitation(ctx, r.sessionID, "decline", nil, req.ElicitationID)
 		return err
 	}
 
@@ -436,12 +437,12 @@ func (r *RemoteRuntime) handleOAuthElicitation(ctx context.Context, req *Elicita
 	metadataBytes, err := json.Marshal(authServerMetadata)
 	if err != nil {
 		slog.ErrorContext(ctx, "Failed to marshal auth_server_metadata", "error", err)
-		_ = r.client.ResumeElicitation(ctx, r.sessionID, "decline", nil)
+		_ = r.client.ResumeElicitation(ctx, r.sessionID, "decline", nil, req.ElicitationID)
 		return fmt.Errorf("failed to marshal auth_server_metadata: %w", err)
 	}
 	if err := json.Unmarshal(metadataBytes, &authMetadata); err != nil {
 		slog.ErrorContext(ctx, "Failed to unmarshal auth_server_metadata", "error", err)
-		_ = r.client.ResumeElicitation(ctx, r.sessionID, "decline", nil)
+		_ = r.client.ResumeElicitation(ctx, r.sessionID, "decline", nil, req.ElicitationID)
 		return fmt.Errorf("failed to unmarshal auth_server_metadata: %w", err)
 	}
 
@@ -461,7 +462,7 @@ func (r *RemoteRuntime) handleOAuthElicitation(ctx context.Context, req *Elicita
 	callbackServer, err := mcp.NewCallbackServer(ctx)
 	if err != nil {
 		slog.ErrorContext(ctx, "Failed to create callback server", "error", err)
-		_ = r.client.ResumeElicitation(ctx, r.sessionID, "decline", nil)
+		_ = r.client.ResumeElicitation(ctx, r.sessionID, "decline", nil, req.ElicitationID)
 		return fmt.Errorf("failed to create callback server: %w", err)
 	}
 	defer func() {
@@ -476,7 +477,7 @@ func (r *RemoteRuntime) handleOAuthElicitation(ctx context.Context, req *Elicita
 
 	if err := callbackServer.Start(); err != nil {
 		slog.ErrorContext(ctx, "Failed to start callback server", "error", err)
-		_ = r.client.ResumeElicitation(ctx, r.sessionID, "decline", nil)
+		_ = r.client.ResumeElicitation(ctx, r.sessionID, "decline", nil, req.ElicitationID)
 		return fmt.Errorf("failed to start callback server: %w", err)
 	}
 
@@ -489,21 +490,21 @@ func (r *RemoteRuntime) handleOAuthElicitation(ctx context.Context, req *Elicita
 		clientID, clientSecret, err = mcp.RegisterClient(oauthCtx, &authMetadata, redirectURI, nil)
 		if err != nil {
 			slog.ErrorContext(ctx, "Dynamic client registration failed", "error", err)
-			_ = r.client.ResumeElicitation(ctx, r.sessionID, "decline", nil)
+			_ = r.client.ResumeElicitation(ctx, r.sessionID, "decline", nil, req.ElicitationID)
 			return fmt.Errorf("failed to register client: %w", err)
 		}
 		slog.DebugContext(ctx, "Client registered successfully", "client_id", clientID)
 	} else {
 		err := errors.New("authorization server does not support dynamic client registration")
 		slog.ErrorContext(ctx, "Client registration not supported", "error", err)
-		_ = r.client.ResumeElicitation(ctx, r.sessionID, "decline", nil)
+		_ = r.client.ResumeElicitation(ctx, r.sessionID, "decline", nil, req.ElicitationID)
 		return err
 	}
 
 	state, err := mcp.GenerateState()
 	if err != nil {
 		slog.ErrorContext(ctx, "Failed to generate state", "error", err)
-		_ = r.client.ResumeElicitation(ctx, r.sessionID, "decline", nil)
+		_ = r.client.ResumeElicitation(ctx, r.sessionID, "decline", nil, req.ElicitationID)
 		return fmt.Errorf("failed to generate state: %w", err)
 	}
 
@@ -526,14 +527,14 @@ func (r *RemoteRuntime) handleOAuthElicitation(ctx context.Context, req *Elicita
 	code, receivedState, err := mcp.RequestAuthorizationCode(oauthCtx, authURL, callbackServer, state)
 	if err != nil {
 		slog.ErrorContext(ctx, "Failed to get authorization code", "error", err)
-		_ = r.client.ResumeElicitation(ctx, r.sessionID, "decline", nil)
+		_ = r.client.ResumeElicitation(ctx, r.sessionID, "decline", nil, req.ElicitationID)
 		return fmt.Errorf("failed to get authorization code: %w", err)
 	}
 
 	if receivedState != state {
 		err := fmt.Errorf("state mismatch: expected %s, got %s", state, receivedState)
 		slog.ErrorContext(ctx, "State mismatch in authorization response", "error", err)
-		_ = r.client.ResumeElicitation(ctx, r.sessionID, "decline", nil)
+		_ = r.client.ResumeElicitation(ctx, r.sessionID, "decline", nil, req.ElicitationID)
 		return err
 	}
 
@@ -551,7 +552,7 @@ func (r *RemoteRuntime) handleOAuthElicitation(ctx context.Context, req *Elicita
 	)
 	if err != nil {
 		slog.ErrorContext(ctx, "Failed to exchange code for token", "error", err)
-		_ = r.client.ResumeElicitation(ctx, r.sessionID, "decline", nil)
+		_ = r.client.ResumeElicitation(ctx, r.sessionID, "decline", nil, req.ElicitationID)
 		return fmt.Errorf("failed to exchange code for token: %w", err)
 	}
 
@@ -569,7 +570,7 @@ func (r *RemoteRuntime) handleOAuthElicitation(ctx context.Context, req *Elicita
 	}
 
 	slog.DebugContext(ctx, "Sending token to server")
-	if err := r.client.ResumeElicitation(ctx, r.sessionID, tools.ElicitationActionAccept, tokenData); err != nil {
+	if err := r.client.ResumeElicitation(ctx, r.sessionID, tools.ElicitationActionAccept, tokenData, req.ElicitationID); err != nil {
 		slog.ErrorContext(ctx, "Failed to send token to server", "error", err)
 		return fmt.Errorf("failed to send token to server: %w", err)
 	}
@@ -705,6 +706,12 @@ func (r *RemoteRuntime) OnToolsChanged(func(Event)) {}
 // OnBackgroundEvent is a no-op for remote runtimes; background agent tasks
 // run server-side and their events are not forwarded out-of-band.
 func (r *RemoteRuntime) OnBackgroundEvent(func(Event)) {}
+
+// OnElicitationRequest is a no-op for remote runtimes; elicitation requests
+// (including from server-side background jobs) arrive as ElicitationRequestEvent
+// values on the RunStream channel itself (see the RunStream forwarding loop
+// above), so there is no separate out-of-band sink to register.
+func (r *RemoteRuntime) OnElicitationRequest(func(Event)) {}
 
 // Close is a no-op for remote runtimes.
 func (r *RemoteRuntime) Close() error {

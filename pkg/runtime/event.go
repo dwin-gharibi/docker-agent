@@ -586,27 +586,51 @@ func (e *PausedEvent) GetSessionID() string { return e.SessionID }
 type ElicitationRequestEvent struct {
 	AgentContext
 
-	Type          string         `json:"type"`
-	Message       string         `json:"message"`
-	Mode          string         `json:"mode,omitempty"` // "form" or "url"
-	Schema        any            `json:"schema,omitempty"`
-	URL           string         `json:"url,omitempty"`
-	ElicitationID string         `json:"elicitation_id,omitempty"`
-	Meta          map[string]any `json:"meta,omitempty"`
+	Type    string `json:"type"`
+	Message string `json:"message"`
+	Mode    string `json:"mode,omitempty"` // "form" or "url"
+	Schema  any    `json:"schema,omitempty"`
+	URL     string `json:"url,omitempty"`
+	// ElicitationID is the internally-generated correlation ID used to route
+	// a ResumeElicitation response back to this specific request (see
+	// elicitationHandler). It is always set and always unique, regardless of
+	// whether the originating MCP server supplied its own wire ID: two
+	// independent servers can coincidentally reuse the same wire ID, so that
+	// value is never used for routing (#3584).
+	ElicitationID string `json:"elicitation_id,omitempty"`
+	// ServerElicitationID is the MCP wire-protocol elicitationId as supplied
+	// by the originating server, if any (URL-mode elicitations only; form
+	// elicitations leave it empty). It is informational only — useful for
+	// correlating with server-side logs — and must never be used as a
+	// routing key.
+	ServerElicitationID string `json:"server_elicitation_id,omitempty"`
+	// SessionID is the session (or sub-session) on whose behalf this
+	// elicitation was raised. A detached background job's sub-session ID
+	// differs from its parent/foreground session, which lets consumers (see
+	// the TUI supervisor) tell apart a foreground stream's own elicitation
+	// from a still-live background job's when the foreground stream stops
+	// (#3584 review item 4).
+	SessionID string         `json:"session_id,omitempty"`
+	Meta      map[string]any `json:"meta,omitempty"`
 }
 
-func ElicitationRequest(message, mode string, schema any, url, elicitationID string, meta map[string]any, agentName string) Event {
+func ElicitationRequest(message, mode string, schema any, url, elicitationID, serverElicitationID, sessionID string, meta map[string]any, agentName string) Event {
 	return &ElicitationRequestEvent{
-		Type:          "elicitation_request",
-		Message:       message,
-		Mode:          mode,
-		Schema:        schema,
-		URL:           url,
-		ElicitationID: elicitationID,
-		Meta:          meta,
-		AgentContext:  newAgentContext(agentName),
+		Type:                "elicitation_request",
+		Message:             message,
+		Mode:                mode,
+		Schema:              schema,
+		URL:                 url,
+		ElicitationID:       elicitationID,
+		ServerElicitationID: serverElicitationID,
+		SessionID:           sessionID,
+		Meta:                meta,
+		AgentContext:        newAgentContext(agentName),
 	}
 }
+
+// GetSessionID makes ElicitationRequestEvent satisfy [SessionScoped].
+func (e *ElicitationRequestEvent) GetSessionID() string { return e.SessionID }
 
 type AuthorizationEvent struct {
 	AgentContext

@@ -174,6 +174,13 @@ type DesktopTokenResponse struct {
 type ResumeElicitationRequest struct {
 	Action  string         `json:"action"`  // "accept", "decline", or "cancel"
 	Content map[string]any `json:"content"` // The submitted form data (only present when action is "accept")
+	// ElicitationID correlates this response with a specific concurrent
+	// elicitation request (see the elicitation_id field on the
+	// ElicitationRequestEvent stream event). Optional and additive: when
+	// empty, the server falls back to resolving the sole pending request,
+	// for backward compatibility with clients that predate per-request
+	// correlation (#3584).
+	ElicitationID string `json:"elicitation_id,omitempty"`
 }
 
 // SteerSessionRequest represents a request to inject user messages into a

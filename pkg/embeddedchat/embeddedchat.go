@@ -108,7 +108,7 @@ type ToolActivity struct {
 type runtimeRunner interface {
 	RunStream(ctx context.Context, sess *session.Session) <-chan dagentruntime.Event
 	Resume(ctx context.Context, req dagentruntime.ResumeRequest)
-	ResumeElicitation(ctx context.Context, action tools.ElicitationAction, content map[string]any) error
+	ResumeElicitation(ctx context.Context, action tools.ElicitationAction, content map[string]any, elicitationID ...string) error
 	Close() error
 }
 
@@ -343,7 +343,7 @@ func (s *Session) forwardEvents(ctx context.Context, events <-chan dagentruntime
 			// This headless wrapper has no built-in elicitation UI. Decline so the
 			// run cannot hang forever; embedders that need elicitation can consume
 			// RuntimeEvent directly by driving the runtime themselves.
-			_ = s.rt.ResumeElicitation(ctx, tools.ElicitationActionDecline, nil)
+			_ = s.rt.ResumeElicitation(ctx, tools.ElicitationActionDecline, nil, e.ElicitationID)
 		case *dagentruntime.MaxIterationsReachedEvent:
 			s.rt.Resume(ctx, dagentruntime.ResumeReject(""))
 		case *dagentruntime.ErrorEvent:

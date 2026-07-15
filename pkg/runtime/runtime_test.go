@@ -4160,6 +4160,12 @@ func TestElicitationHandler_NonInteractive(t *testing.T) {
 	assert.Equal(t, tools.ElicitationActionDecline, result.Action, "non-interactive runtime should decline elicitation")
 }
 
+// TestElicitationHandler_Interactive_NoChannel verifies that an interactive
+// elicitationHandler call succeeds even when the elicitation bridge has no
+// channel configured (no RunStream is active). This used to be a hard
+// failure because delivery depended entirely on the bridge; with per-request
+// waiters (#3584) the bridge send is best-effort only, and ResumeElicitation
+// still routes the response correctly via the waiter registry.
 func TestElicitationHandler_Interactive_NoChannel(t *testing.T) {
 	t.Parallel()
 
@@ -4167,7 +4173,7 @@ func TestElicitationHandler_Interactive_NoChannel(t *testing.T) {
 	root := agent.New("root", "test", agent.WithModel(prov))
 	tm := team.New(team.WithAgents(root))
 
-	// Default runtime (interactive mode) with no events channel set
+	// Default runtime (interactive mode) with no events channel set on the bridge.
 	rt, err := NewLocalRuntime(t.Context(), tm)
 	require.NoError(t, err)
 
@@ -4175,10 +4181,29 @@ func TestElicitationHandler_Interactive_NoChannel(t *testing.T) {
 		Message: "Authorize OAuth?",
 	}
 
-	_, err = rt.elicitationHandler(t.Context(), params)
+	type handlerResult struct {
+		result tools.ElicitationResult
+		err    error
+	}
+	done := make(chan handlerResult, 1)
+	go func() {
+		result, err := rt.elicitationHandler(t.Context(), params)
+		done <- handlerResult{result: result, err: err}
+	}()
 
-	require.Error(t, err, "interactive runtime with no events channel should error")
-	assert.ErrorIs(t, err, errNoElicitationChannel)
+	require.Eventually(t, func() bool { return rt.elicitationWaiters.count() == 1 }, time.Second, time.Millisecond,
+		"elicitationHandler must register a waiter even though the bridge has no channel")
+
+	require.NoError(t, rt.ResumeElicitation(t.Context(), tools.ElicitationActionAccept, map[string]any{"ok": true}, ""))
+
+	select {
+	case got := <-done:
+		require.NoError(t, got.err)
+		assert.Equal(t, tools.ElicitationActionAccept, got.result.Action)
+		assert.Equal(t, map[string]any{"ok": true}, got.result.Content)
+	case <-time.After(2 * time.Second):
+		t.Fatal("elicitationHandler did not return after ResumeElicitation")
+	}
 }
 
 // TestRunAgentPersistsSubSessionToStore is the regression test for the

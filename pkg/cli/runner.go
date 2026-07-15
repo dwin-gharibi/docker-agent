@@ -124,7 +124,7 @@ func Run(ctx context.Context, out *Printer, cfg Config, rt runtime.Runtime, sess
 					// still Reject (the hook said Ask, not Approve).
 					rt.Resume(ctx, runtime.ResumeReject(""))
 				case *runtime.ElicitationRequestEvent:
-					_ = rt.ResumeElicitation(ctx, "decline", nil)
+					_ = rt.ResumeElicitation(ctx, "decline", nil, e.ElicitationID)
 				case *runtime.MaxIterationsReachedEvent:
 					switch handleMaxIterationsAutoApprove(cfg.AutoApprove, &autoExtensions, e.MaxIterations) {
 					case maxIterContinue:
@@ -242,7 +242,7 @@ func Run(ctx context.Context, out *Printer, cfg Config, rt runtime.Runtime, sess
 				serverURL, ok := e.Meta["docker-agent/server_url"].(string)
 				if !ok || serverURL == "" {
 					slog.WarnContext(ctx, "Skipping elicitation: missing or invalid server_url (non-interactive session?)")
-					_ = rt.ResumeElicitation(ctx, "decline", nil)
+					_ = rt.ResumeElicitation(ctx, "decline", nil, e.ElicitationID)
 					return nil
 				}
 
@@ -254,9 +254,9 @@ func Run(ctx context.Context, out *Printer, cfg Config, rt runtime.Runtime, sess
 
 				switch result {
 				case ConfirmationApprove:
-					_ = rt.ResumeElicitation(ctx, "accept", nil)
+					_ = rt.ResumeElicitation(ctx, "accept", nil, e.ElicitationID)
 				case ConfirmationReject:
-					_ = rt.ResumeElicitation(ctx, "decline", nil)
+					_ = rt.ResumeElicitation(ctx, "decline", nil, e.ElicitationID)
 					return errors.New("OAuth authorization rejected by user")
 				}
 			}

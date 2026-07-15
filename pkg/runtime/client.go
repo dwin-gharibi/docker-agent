@@ -456,8 +456,8 @@ func (c *Client) DeleteRemoteSession(ctx context.Context, sessionID string) erro
 	return c.doRequest(ctx, http.MethodDelete, "/api/sessions/"+sessionID, nil, nil)
 }
 
-func (c *Client) ResumeElicitation(ctx context.Context, sessionID string, action tools.ElicitationAction, content map[string]any) error {
-	req := api.ResumeElicitationRequest{Action: string(action), Content: content}
+func (c *Client) ResumeElicitation(ctx context.Context, sessionID string, action tools.ElicitationAction, content map[string]any, elicitationID ...string) error {
+	req := api.ResumeElicitationRequest{Action: string(action), Content: content, ElicitationID: firstElicitationID(elicitationID)}
 	return c.doRequest(ctx, http.MethodPost, "/api/sessions/"+sessionID+"/elicitation", req, nil)
 }
 

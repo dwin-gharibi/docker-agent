@@ -82,8 +82,16 @@ type Runtime interface {
 	// Resume allows resuming execution after user confirmation.
 	// The ResumeRequest carries the decision type and an optional reason (for rejections).
 	Resume(ctx context.Context, req ResumeRequest)
-	// ResumeElicitation sends an elicitation response back to a waiting elicitation request
-	ResumeElicitation(_ context.Context, action tools.ElicitationAction, content map[string]any) error
+	// ResumeElicitation sends an elicitation response back to a waiting
+	// elicitation request. elicitationID correlates the response with a
+	// specific concurrent request (see ElicitationRequestEvent.ElicitationID);
+	// omit it (or pass "") to fall back to resolving the sole pending
+	// request, for backward compatibility with older clients. The parameter
+	// is variadic — rather than a required 4th positional argument — purely
+	// so pre-#3584 callers of this interface method keep compiling unchanged;
+	// implementations should treat more than one value as a caller error and
+	// use only the first.
+	ResumeElicitation(_ context.Context, action tools.ElicitationAction, content map[string]any, elicitationID ...string) error
 	// SessionStore returns the session store for browsing/loading past sessions.
 	// Returns nil if no persistent session store is configured.
 	SessionStore() session.Store
@@ -176,6 +184,14 @@ type Runtime interface {
 	// background work can implement this as a no-op.
 	OnBackgroundEvent(handler func(Event))
 
+	// OnElicitationRequest registers a handler invoked whenever an MCP
+	// toolset raises an elicitation request, regardless of which stream
+	// (foreground or a detached background job) is currently "active" for
+	// the runtime's internal elicitation bridge. This is the reliable
+	// delivery route for background-job elicitations (#3584); runtimes
+	// that don't run local background work can implement this as a no-op.
+	OnElicitationRequest(handler func(Event))
+
 	// QueueStatus returns the current depth and capacity of message queues
 	QueueStatus() QueueStatus
 
@@ -225,16 +241,23 @@ type LocalRuntime struct {
 	managedOAuth              bool
 	unmanagedOAuthRedirectURI string
 	nonInteractive            bool
-	startupInfoEmitted        atomic.Bool            // Track if startup info has been emitted to avoid unnecessary duplication
-	elicitationRequestCh      chan ElicitationResult // Channel for receiving elicitation responses
-	elicitation               elicitationBridge      // Owns the per-stream events channel for outbound elicitation requests
-	sessionStore              session.Store
-	workingDir                string   // Working directory for hooks execution
-	env                       []string // Environment variables for hooks execution
-	modelSwitcherCfg          *ModelSwitcherConfig
-	providerRegistry          *provider.Registry
-	gatewayModels             gatewayModelsCache
-	dmrModels                 dmrModelsCache
+	startupInfoEmitted        atomic.Bool        // Track if startup info has been emitted to avoid unnecessary duplication
+	elicitation               elicitationBridge  // Owns the per-stream events channel for outbound elicitation requests
+	elicitationWaiters        elicitationWaiters // Routes elicitation responses to the request awaiting them, keyed by ID (#3584)
+	elicitationDeclines       elicitationDeclineNotes
+
+	// elicitationSinkMu guards onElicitationRequest; elicitation requests can
+	// arrive from background-job goroutines (runCollecting) concurrently with
+	// the sink being (re)registered.
+	elicitationSinkMu    sync.RWMutex
+	onElicitationRequest func(Event)
+	sessionStore         session.Store
+	workingDir           string   // Working directory for hooks execution
+	env                  []string // Environment variables for hooks execution
+	modelSwitcherCfg     *ModelSwitcherConfig
+	providerRegistry     *provider.Registry
+	gatewayModels        gatewayModelsCache
+	dmrModels            dmrModelsCache
 
 	// hooksRegistry is the runtime-private hooks.Registry used to build
 	// every Executor. It carries the runtime-owned builtin hooks
@@ -615,7 +638,6 @@ func NewLocalRuntime(ctx context.Context, agents *team.Team, opts ...Opt) (*Loca
 		team:                   agents,
 		agents:                 newAgentRouter(agents, defaultAgent.Name()),
 		resumeChan:             make(chan ResumeRequest),
-		elicitationRequestCh:   make(chan ElicitationResult),
 		steerQueue:             NewInMemoryMessageQueue(defaultSteerQueueCapacity),
 		followUpQueue:          NewInMemoryMessageQueue(defaultFollowUpQueueCapacity),
 		sessionCompaction:      true,
