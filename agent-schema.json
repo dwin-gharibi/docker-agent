@@ -2021,7 +2021,8 @@
             "background_agents",
             "scheduler",
             "rag",
-            "git"
+            "git",
+            "webhook"
           ]
         },
         "instruction": {
@@ -2358,7 +2359,8 @@
                 "model_picker",
                 "background_agents",
                 "scheduler",
-                "git"
+                "git",
+                "webhook"
               ]
             }
           }
