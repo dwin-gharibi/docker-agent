@@ -1,7 +1,6 @@
 package webhook
 
 import (
-	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -112,7 +111,7 @@ func TestSendSuccess(t *testing.T) {
 	fd := &fakeDoer{status: 200}
 	ts := newTestToolSet(fd)
 
-	res, err := ts.send(context.Background(), SendArgs{
+	res, err := ts.send(t.Context(), SendArgs{
 		URL: "https://hooks.slack.com/services/xxx", Message: "deploy done", Provider: "slack",
 	})
 	require.NoError(t, err)
@@ -127,7 +126,7 @@ func TestSendNon2xx(t *testing.T) {
 	t.Parallel()
 
 	ts := newTestToolSet(&fakeDoer{status: 404})
-	res, err := ts.send(context.Background(), SendArgs{URL: "https://example.com/hook", Message: "hi"})
+	res, err := ts.send(t.Context(), SendArgs{URL: "https://example.com/hook", Message: "hi"})
 	require.NoError(t, err)
 	require.True(t, res.IsError)
 	require.Contains(t, res.Output, "404")
@@ -137,7 +136,7 @@ func TestSendNetworkError(t *testing.T) {
 	t.Parallel()
 
 	ts := newTestToolSet(&fakeDoer{err: io.ErrUnexpectedEOF})
-	res, err := ts.send(context.Background(), SendArgs{URL: "https://example.com/hook", Message: "hi"})
+	res, err := ts.send(t.Context(), SendArgs{URL: "https://example.com/hook", Message: "hi"})
 	require.NoError(t, err)
 	require.True(t, res.IsError)
 }
@@ -147,16 +146,16 @@ func TestSendValidation(t *testing.T) {
 
 	ts := newTestToolSet(&fakeDoer{})
 
-	r1, _ := ts.send(context.Background(), SendArgs{Message: "hi"})
+	r1, _ := ts.send(t.Context(), SendArgs{Message: "hi"})
 	require.True(t, r1.IsError)
 
-	r2, _ := ts.send(context.Background(), SendArgs{URL: "https://x/y"})
+	r2, _ := ts.send(t.Context(), SendArgs{URL: "https://x/y"})
 	require.True(t, r2.IsError)
 
-	r3, _ := ts.send(context.Background(), SendArgs{URL: "ftp://x/y", Message: "hi"})
+	r3, _ := ts.send(t.Context(), SendArgs{URL: "ftp://x/y", Message: "hi"})
 	require.True(t, r3.IsError)
 
-	r4, _ := ts.send(context.Background(), SendArgs{URL: "https://x/y", Message: "hi", Provider: "webex"})
+	r4, _ := ts.send(t.Context(), SendArgs{URL: "https://x/y", Message: "hi", Provider: "webex"})
 	require.True(t, r4.IsError)
 }
 
@@ -165,7 +164,7 @@ func TestToolSetInterfaces(t *testing.T) {
 
 	ts := New()
 	require.NotEmpty(t, ts.Instructions())
-	toolz, err := ts.Tools(context.Background())
+	toolz, err := ts.Tools(t.Context())
 	require.NoError(t, err)
 	require.Len(t, toolz, 1)
 	require.Equal(t, ToolNameSendWebhook, toolz[0].Name)
