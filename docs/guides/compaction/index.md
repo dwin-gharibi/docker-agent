@@ -99,14 +99,14 @@ Compaction deals with the whole conversation at once. For sessions dominated by 
 | --- | --- | --- |
 | `max_tool_result_tokens` | Each tool result, as it's added to the session | Oversized results are truncated **middle-out**: the head and tail are kept (usually the most informative parts) and the removed middle is replaced with a truncation marker. |
 | `max_old_tool_call_tokens` | The total budget for **old** tool call arguments and results | Once older tool calls exceed the budget, their content is replaced wholesale with a placeholder — freeing context space without touching recent, still-relevant calls. |
-| `num_history_items` | The number of conversation history messages sent to the model | Caps how far back the model sees, regardless of token size. |
+| `num_history_items` | The number of non-system conversation messages kept in history | A message-**count** limit, not a token budget. The oldest non-protected messages are dropped first once the count is exceeded; **system and user messages are always protected** and are never counted against or removed by this limit, so the assembled history can exceed `num_history_items` and every user message survives even a long single-turn agentic loop. |
 
-All three are disabled by default (`0`) and are approximated as `len/4` tokens. Set a positive value to enable them:
+`max_tool_result_tokens` and `max_old_tool_call_tokens` are approximated as `len/4` tokens (the industry rule-of-thumb of ~4 characters per token); `num_history_items` counts messages, not tokens. All three are disabled by default (`0`). Set a positive value to enable them:
 
 ```yaml
 agents:
   root:
-    model: openai/gpt-5-mini
+    model: anthropic/claude-sonnet-4-5
     description: An assistant whose tool results are capped at ~2000 tokens each.
     instruction: |
       You are a helpful assistant with shell access. Very large command
