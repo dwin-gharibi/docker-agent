@@ -177,19 +177,6 @@ func applyAliasFallbacks(dst *latest.ModelConfig, alias Alias) {
 	}
 }
 
-// hasCustomBaseURL reports whether cfg targets a user-supplied endpoint: a
-// base_url set directly on the model or inherited from a custom provider
-// definition. Must be called on the pre-defaults config — after
-// applyProviderDefaults a built-in alias default base URL is indistinguishable
-// from a custom one.
-func hasCustomBaseURL(cfg *latest.ModelConfig, customProviders map[string]latest.ProviderConfig) bool {
-	if cfg.BaseURL != "" {
-		return true
-	}
-	providerCfg, exists := customProviders[cfg.Provider]
-	return exists && providerCfg.BaseURL != ""
-}
-
 // setIfNil assigns src to *dst when *dst is nil. It centralises the repetitive
 // "only fill in if unset" pattern used when merging provider-level defaults.
 func setIfNil[T any](dst **T, src *T) {

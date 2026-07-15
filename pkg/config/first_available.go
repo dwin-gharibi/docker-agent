@@ -234,9 +234,11 @@ func validateCandidateProvider(cfg *latest.Config, ref, provider string) error {
 // not configured in the environment. Models that require no env vars (e.g.
 // local dmr/ollama providers) have no missing credentials and are considered
 // available. When a gateway is configured, credentials are supplied by the
-// gateway.
+// gateway — except for candidates that bypass it (explicit
+// bypass_models_gateway or a custom base_url, which implies the bypass) and
+// therefore still need their own credentials.
 func modelMissingCredentials(ctx context.Context, cfg *latest.Config, model *latest.ModelConfig, modelsGateway string, env environment.Provider) ([]string, error) {
-	if modelsGateway != "" {
+	if modelsGateway != "" && !model.BypassModelsGateway && !latest.HasCustomBaseURL(*model, cfg.Providers) {
 		return nil, nil
 	}
 

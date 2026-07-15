@@ -185,8 +185,9 @@ for complete examples.
 ## Gateway Bypass
 
 When a models gateway (`--models-gateway` / `CAGENT_MODELS_GATEWAY`) is configured,
-all models route through it by default. Set `bypass_models_gateway: true` on a
-specific model to make it connect directly to its provider instead:
+models without a custom `base_url` route through it by default. Set
+`bypass_models_gateway: true` on a specific model to make it connect directly
+to its provider instead:
 
 ```yaml
 models:

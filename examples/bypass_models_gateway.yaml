@@ -38,3 +38,9 @@ agents:
     model: direct-model
     description: Assistant whose model bypasses the models gateway
     instruction: You are a helpful assistant.
+    sub_agents: [proxied]
+
+  proxied:
+    model: proxied-model
+    description: Assistant whose custom endpoint implies the gateway bypass
+    instruction: You are a helpful assistant.

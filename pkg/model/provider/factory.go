@@ -96,7 +96,7 @@ func (r *Registry) createDirectProvider(ctx context.Context, cfg *latest.ModelCo
 	// definition) implies the bypass: the endpoint was explicitly chosen by the
 	// user and is not one the gateway serves. Checked on the pre-defaults cfg so
 	// built-in alias default base URLs don't count.
-	bypass := enhancedCfg.BypassModelsGateway || hasCustomBaseURL(cfg, globalOptions.Providers())
+	bypass := enhancedCfg.BypassModelsGateway || latest.HasCustomBaseURL(*cfg, globalOptions.Providers())
 	if bypass && globalOptions.Gateway() != "" {
 		slog.DebugContext(ctx, "Bypassing models gateway for model", "provider", enhancedCfg.Provider, "model", enhancedCfg.Model)
 		opts = append(opts, options.WithGateway(""))
