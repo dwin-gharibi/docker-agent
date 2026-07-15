@@ -12,6 +12,7 @@ func TestSafetyPolicy_IsValid(t *testing.T) {
 		"":                    true,
 		SafetyPolicyUnsafe:    true,
 		SafetyPolicySafer:     true,
+		SafetyPolicySafeAuto:  true,
 		SafetyPolicyStrict:    true,
 		SafetyPolicy("yolo"):  false,
 		SafetyPolicy("Safer"): false, // case-sensitive on purpose
@@ -59,4 +60,27 @@ func TestWithSafetyPolicy_ExplicitWinsOverToolsApproved(t *testing.T) {
 	)
 	assert.True(t, s.ToolsApproved)
 	assert.Equal(t, SafetyPolicySafer, s.SafetyPolicy)
+}
+
+// SetSafetyPolicy mid-session mirrors WithSafetyPolicy: setting
+// unsafe backfills ToolsApproved; other modes leave it alone.
+// Used by the dispatcher's approve-safe resume handler to opt an
+// existing session into safe-auto without recreating it.
+func TestSetSafetyPolicy_MidSession(t *testing.T) {
+	t.Parallel()
+	s := New()
+	assert.Equal(t, SafetyPolicy(""), s.SafetyPolicy)
+	assert.False(t, s.ToolsApproved)
+
+	s.SetSafetyPolicy(SafetyPolicySafeAuto)
+	assert.Equal(t, SafetyPolicySafeAuto, s.SafetyPolicy)
+	assert.False(t, s.ToolsApproved, "safe-auto must not backfill ToolsApproved")
+
+	s.SetSafetyPolicy(SafetyPolicyUnsafe)
+	assert.Equal(t, SafetyPolicyUnsafe, s.SafetyPolicy)
+	assert.True(t, s.ToolsApproved, "unsafe must backfill ToolsApproved for legacy branches")
+
+	s.SetSafetyPolicy(SafetyPolicyStrict)
+	assert.Equal(t, SafetyPolicyStrict, s.SafetyPolicy)
+	assert.True(t, s.ToolsApproved, "SetSafetyPolicy does not un-flip ToolsApproved")
 }

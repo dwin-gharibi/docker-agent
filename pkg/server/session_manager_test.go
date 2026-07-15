@@ -69,7 +69,7 @@ func (f *fakeRuntime) Steer(_ context.Context, _ runtime.QueuedMessage) error { 
 
 func (f *fakeRuntime) FollowUp(_ context.Context, _ runtime.QueuedMessage) error { return nil }
 
-func (f *fakeRuntime) ResumeElicitation(_ context.Context, _ tools.ElicitationAction, _ map[string]any) error {
+func (f *fakeRuntime) ResumeElicitation(_ context.Context, _ tools.ElicitationAction, _ map[string]any, _ ...string) error {
 	return nil
 }
 

@@ -45,12 +45,21 @@ func addRecentCommits(ctx context.Context, in *hooks.Input, args []string) (*hoo
 	}
 
 	out, err := gitOutput(ctx, in.Cwd, "log", "--oneline", "-n", strconv.Itoa(limit))
-	if err != nil {
-		slog.DebugContext(ctx, "add_recent_commits: git log failed; skipping", "cwd", in.Cwd, "error", err)
-		return nil, nil
+	if err != nil || out == "" {
+		if err != nil {
+			slog.DebugContext(ctx, "add_recent_commits: git log failed; skipping", "cwd", in.Cwd, "error", err)
+		}
+		return hooks.NewInstructionContextOutput(hooks.EventSessionStart, hooks.InstructionContext{
+			Key: "core/recent-commits", Removed: true,
+			RemovedContent: "Previously reported recent commits no longer apply.",
+		}), nil
 	}
-	if out == "" {
-		return nil, nil
-	}
-	return hooks.NewAdditionalContextOutput(hooks.EventSessionStart, "Recent commits:\n\n"+out), nil
+	content := "Recent commits:\n\n" + out
+	return hooks.NewInstructionContextOutput(hooks.EventSessionStart, hooks.InstructionContext{
+		Key:            "core/recent-commits",
+		Label:          "recent commits",
+		Content:        content,
+		ChangedContent: "The recent commits are now:\n\n" + out,
+		RemovedContent: "Previously reported recent commits no longer apply.",
+	}), nil
 }

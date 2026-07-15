@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -362,8 +363,12 @@ func TestEncryptedStore_FilePermissions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stat: %v", err)
 	}
-	if perm := info.Mode().Perm(); perm != 0o600 {
-		t.Errorf("token file permissions = %o, want 0600", perm)
+	expectedPerm := os.FileMode(0o600)
+	if runtime.GOOS == "windows" {
+		expectedPerm = 0o666
+	}
+	if perm := info.Mode().Perm(); perm != expectedPerm {
+		t.Errorf("token file permissions = %o, want %o", perm, expectedPerm)
 	}
 }
 
@@ -766,8 +771,12 @@ func TestFileKeyringPassphrase_RandomAndPersistent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stat passphrase file: %v", err)
 	}
-	if perm := info.Mode().Perm(); perm != 0o600 {
-		t.Errorf("passphrase file permissions = %o, want 0600", perm)
+	expectedPerm := os.FileMode(0o600)
+	if runtime.GOOS == "windows" {
+		expectedPerm = 0o666
+	}
+	if perm := info.Mode().Perm(); perm != expectedPerm {
+		t.Errorf("passphrase file permissions = %o, want %o", perm, expectedPerm)
 	}
 
 	// A different install dir must get a different passphrase.

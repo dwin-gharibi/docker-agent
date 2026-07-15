@@ -235,6 +235,11 @@ func LoadWithConfig(ctx context.Context, agentSource config.Source, runConfig *c
 
 	// Load agents
 	workingDir := cmp.Or(loadOpts.workingDir, runConfig.WorkingDir)
+	// Toolsets read runConfig.WorkingDir; propagate for this call and
+	// restore on return to avoid leaking across sessions that share rc.
+	originalWorkingDir := runConfig.WorkingDir
+	runConfig.WorkingDir = workingDir
+	defer func() { runConfig.WorkingDir = originalWorkingDir }()
 	parentDir := cmp.Or(agentSource.ParentDir(), workingDir)
 	configName := configNameFromSource(agentSource.Name())
 	var agents []*agent.Agent

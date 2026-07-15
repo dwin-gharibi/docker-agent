@@ -459,3 +459,45 @@ func TestForkSession(t *testing.T) {
 		assert.Equal(t, 4000, forked.MaxToolResultTokens)
 	})
 }
+
+// TestBranchSession_LiveSubSessionBecomesEmbedded pins sub-session cost
+// provenance across a branch/fork. On the parent, a child attached live via
+// AddLiveSubSession is excluded from EmbeddedSubSessionCost because it
+// reported its own cost through its own TokenUsageEvents. A branched/forked
+// session is newly minted: its sub-session items are embedded history that
+// will never emit events, so the same child's cost must fold into the new
+// session's own usage reporting (own + embedded, the accounting SessionUsage
+// emits).
+func TestBranchSession_LiveSubSessionBecomesEmbedded(t *testing.T) {
+	t.Parallel()
+
+	parent := New()
+	parent.AddMessage(UserMessage("hi"))
+	child := New(WithParentID(parent.ID))
+	child.AddMessage(&Message{Message: chat.Message{Role: chat.MessageRoleAssistant, Content: "done", Cost: 0.05}})
+	parent.AddLiveSubSession(child)
+	require.Zero(t, parent.EmbeddedSubSessionCost(), "the live-attached child is excluded on the parent")
+
+	tests := []struct {
+		name string
+		mint func(*Session, int) (*Session, error)
+	}{
+		{name: "branch", mint: BranchSession},
+		{name: "fork", mint: ForkSession},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			minted, err := tt.mint(parent, 2)
+			require.NoError(t, err)
+			require.Len(t, minted.Messages, 2)
+			require.True(t, minted.Messages[1].IsSubSession())
+
+			assert.InDelta(t, 0.05, minted.EmbeddedSubSessionCost(), 1e-9,
+				"the minted session embeds the child, so its cost is included")
+			assert.InDelta(t, 0.05, minted.OwnCost()+minted.EmbeddedSubSessionCost(), 1e-9,
+				"own + embedded — what SessionUsage emits — must carry the child's cost")
+		})
+	}
+}

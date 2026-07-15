@@ -1,6 +1,7 @@
 package dialog
 
 import (
+	"sync"
 	"testing"
 	"time"
 
@@ -456,6 +457,89 @@ func TestCostDialogSubSessionRendersInView(t *testing.T) {
 	assert.Contains(t, view, "sub-session start")
 	assert.Contains(t, view, "sub-session end")
 	assert.Contains(t, view, "sub-agent")
+}
+
+// TestGatherCostDataConcurrent pins the data-race fix for the cost dialog
+// (#3591): gatherCostData used to walk the live sess.Messages slice
+// (recursively for sub-sessions) and range MessageUsageHistory directly
+// while runtime goroutines mutate them. It must iterate MessagesSnapshot()
+// and MessageUsageHistorySnapshot() instead. Run with -race; restoring the
+// direct reads makes the detector flag the concurrent AddMessage /
+// AddMessageUsageRecord appends.
+//
+// The appended messages carry no usage, so every gatherCostData pass also
+// takes the remote-mode fallback and reads the usage history concurrently
+// with its writers. The post-Wait assertions only count the final records,
+// so they are independent of goroutine scheduling.
+func TestGatherCostDataConcurrent(t *testing.T) {
+	t.Parallel()
+
+	sub := session.New()
+	sess := session.New()
+	sess.AddSubSession(sub)
+	d := &costDialog{session: sess}
+
+	var wg sync.WaitGroup
+	for i := range 50 {
+		n := int64(i + 1)
+		wg.Go(func() {
+			sess.AddMessage(session.UserMessage("root"))
+		})
+		wg.Go(func() {
+			sub.AddMessage(session.UserMessage("sub"))
+		})
+		wg.Go(func() {
+			sess.AddMessageUsageRecord("agent", "model", 0.1, &chat.Usage{InputTokens: 10, OutputTokens: 5})
+		})
+		wg.Go(func() {
+			sess.SetUsage(n, 2*n)
+		})
+		wg.Go(func() {
+			sess.SetTokensAndCost(n, 2*n, float64(n))
+		})
+		wg.Go(func() {
+			_ = d.gatherCostData()
+		})
+	}
+	wg.Wait()
+
+	data := d.gatherCostData()
+	assert.Equal(t, 50, data.actualMessageCount())
+	assert.InDelta(t, 5.0, data.total.cost, 0.0001)
+	assert.Equal(t, int64(500), data.total.InputTokens)
+	assert.Equal(t, int64(250), data.total.OutputTokens)
+}
+
+// TestGatherCostDataConcurrentSessionUsageFallback pins the session-level
+// fallback of the same fix: with no per-message data at all, gatherCostData
+// used to read d.session.InputTokens/OutputTokens directly, racing the
+// runtime's SetUsage/SetTokensAndCost. It must take one Usage() snapshot,
+// which also keeps the reported pair internally consistent: every writer
+// stores an (n, 2n) pair, so any atomic snapshot satisfies the invariant
+// regardless of scheduling. Run with -race.
+func TestGatherCostDataConcurrentSessionUsageFallback(t *testing.T) {
+	t.Parallel()
+
+	sess := session.New()
+	d := &costDialog{session: sess}
+
+	var wg sync.WaitGroup
+	for i := range 100 {
+		n := int64(i + 1)
+		wg.Go(func() {
+			sess.SetUsage(n, 2*n)
+		})
+		wg.Go(func() {
+			sess.SetTokensAndCost(n, 2*n, float64(n))
+		})
+		wg.Go(func() {
+			data := d.gatherCostData()
+			if data.total.OutputTokens != 2*data.total.InputTokens {
+				t.Errorf("torn usage pair: input=%d output=%d", data.total.InputTokens, data.total.OutputTokens)
+			}
+		})
+	}
+	wg.Wait()
 }
 
 func TestFormatCost(t *testing.T) {

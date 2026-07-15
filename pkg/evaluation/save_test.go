@@ -468,6 +468,71 @@ func TestSessionFromEventsTokenUsage(t *testing.T) {
 	assert.InDelta(t, 0.005, sess.Cost, 0.0001)
 }
 
+// TestSessionFromEventsPartialTokenUsage pins the merge semantics of
+// consecutive token_usage events: a later event that omits some usage
+// fields must preserve the previously recorded values for the omitted
+// fields instead of resetting them to zero.
+func TestSessionFromEventsPartialTokenUsage(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		second     map[string]any
+		wantInput  int64
+		wantOutput int64
+		wantCost   float64
+	}{
+		{
+			name:       "second event omits input_tokens and cost",
+			second:     map[string]any{"output_tokens": float64(80)},
+			wantInput:  100,
+			wantOutput: 80,
+			wantCost:   0.005,
+		},
+		{
+			name:       "second event omits output_tokens",
+			second:     map[string]any{"input_tokens": float64(200), "cost": 0.01},
+			wantInput:  200,
+			wantOutput: 50,
+			wantCost:   0.01,
+		},
+		{
+			name:       "second event omits every field",
+			second:     map[string]any{},
+			wantInput:  100,
+			wantOutput: 50,
+			wantCost:   0.005,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			events := []map[string]any{
+				{"type": "agent_choice", "content": "Answer"},
+				{
+					"type": "token_usage",
+					"usage": map[string]any{
+						"input_tokens":  float64(100),
+						"output_tokens": float64(50),
+						"cost":          0.005,
+					},
+				},
+				{"type": "token_usage", "usage": tt.second},
+				{"type": "stream_stopped"},
+			}
+
+			sess := SessionFromEvents(events, "test", []string{"question"})
+
+			gotInput, gotOutput, gotCost := sess.TokensAndCost()
+			assert.Equal(t, tt.wantInput, gotInput)
+			assert.Equal(t, tt.wantOutput, gotOutput)
+			assert.InDelta(t, tt.wantCost, gotCost, 0.0001)
+		})
+	}
+}
+
 func TestParseToolCall(t *testing.T) {
 	t.Parallel()
 

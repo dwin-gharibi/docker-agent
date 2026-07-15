@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -8,6 +9,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/docker/docker-agent/pkg/agent"
+	"github.com/docker/docker-agent/pkg/config/latest"
+	"github.com/docker/docker-agent/pkg/permissions"
+	"github.com/docker/docker-agent/pkg/runtime/toolexec"
 	"github.com/docker/docker-agent/pkg/session"
 	"github.com/docker/docker-agent/pkg/team"
 	"github.com/docker/docker-agent/pkg/tools"
@@ -270,6 +274,47 @@ func TestSubSessionWithoutAttachedFilesOmitsBlock(t *testing.T) {
 	}
 }
 
+func TestSubSessionInheritsPermissions(t *testing.T) {
+	t.Parallel()
+
+	perms := &session.PermissionsConfig{
+		Allow: []string{"read_*"},
+		Deny:  []string{"write_*"},
+		Ask:   []string{"edit_*"},
+	}
+	parent := session.New(session.WithPermissions(perms))
+
+	childAgent := agent.New("worker", "")
+	cfg := SubSessionConfig{
+		Task:        "refactor",
+		AgentName:   "worker",
+		Title:       "Refactor",
+		Permissions: parent.ClonePermissions(),
+	}
+
+	s := newSubSession(parent, cfg, childAgent)
+
+	require.NotNil(t, s.Permissions)
+	assert.Equal(t, perms.Allow, s.Permissions.Allow)
+	assert.Equal(t, perms.Deny, s.Permissions.Deny)
+	assert.Equal(t, perms.Ask, s.Permissions.Ask)
+
+	// Even with ToolsApproved set (yolo), an inherited Deny must win during dispatch.
+	s.ToolsApproved = true
+
+	checker := permissions.NewChecker(&latest.PermissionsConfig{
+		Allow: s.Permissions.Allow,
+		Ask:   s.Permissions.Ask,
+		Deny:  s.Permissions.Deny,
+	})
+	namedCheckers := []toolexec.NamedChecker{
+		{Checker: checker, Source: "session permissions"},
+	}
+
+	decision := toolexec.Decide(s.ToolsApproved, namedCheckers, "write_file", map[string]any{"path": "foo"}, false)
+	assert.Equal(t, toolexec.OutcomeDeny, decision.Outcome, "Inherited Deny should override ToolsApproved: true (yolo)")
+}
+
 func TestNewSubSession_PermissionsIsolation(t *testing.T) {
 	t.Parallel()
 
@@ -407,6 +452,125 @@ func TestRunAgent_InheritsParentPermissions(t *testing.T) {
 	parentClone := parentSession.ClonePermissions()
 	assert.Equal(t, []string{"read_file", "list_dir"}, parentClone.Allow,
 		"parent permissions must be isolated from child mutations")
+}
+
+// TestRunForwarding_DoesNotBackPropagateApprovals locks the "permissions only
+// flow downwards" invariant: approvals granted within a sub-session scope must
+// not escalate the parent's ToolsApproved gate or permission rules.
+func TestRunForwarding_DoesNotBackPropagateApprovals(t *testing.T) {
+	t.Parallel()
+
+	childStream := newStreamBuilder().AddContent("done").AddStopWithUsage(10, 5).Build()
+	prov := &mockProvider{id: "test/mock-model", stream: childStream}
+
+	librarian := agent.New("librarian", "Library agent", agent.WithModel(prov))
+	root := agent.New("root", "Root agent", agent.WithModel(prov))
+	agent.WithSubAgents(librarian)(root)
+
+	tm := team.New(team.WithAgents(root, librarian))
+	rt, err := NewLocalRuntime(t.Context(), tm,
+		WithSessionCompaction(false),
+		WithModelStore(mockModelStore{}),
+	)
+	require.NoError(t, err)
+
+	parent := session.New(
+		session.WithUserMessage("Test"),
+		session.WithPermissions(&session.PermissionsConfig{Deny: []string{"dangerous_tool"}}),
+	)
+	require.False(t, parent.IsToolsApproved())
+
+	evts := make(chan Event, 128)
+	// Child scope broader than the parent's, as if the user had clicked
+	// "approve all" / "always allow" inside the sub-session.
+	_, err = rt.runForwarding(t.Context(), parent, NewChannelSink(evts), delegationRequest{
+		SubSessionConfig: SubSessionConfig{
+			Task:          "find a book",
+			AgentName:     "librarian",
+			Title:         "Transferred task",
+			ToolsApproved: true,
+			Permissions: &session.PermissionsConfig{
+				Allow: []string{"exploit_tool"},
+				Deny:  []string{"dangerous_tool"},
+			},
+		},
+		SwitchCurrentAgent: true,
+	})
+	require.NoError(t, err)
+
+	assert.False(t, parent.IsToolsApproved(),
+		"a sub-session must not escalate the parent's ToolsApproved gate")
+	parentPerms := parent.ClonePermissions()
+	require.NotNil(t, parentPerms)
+	assert.Empty(t, parentPerms.Allow,
+		"child-scope approvals must not leak into the parent's Allow list")
+	assert.Equal(t, []string{"dangerous_tool"}, parentPerms.Deny)
+}
+
+func TestRunAgent_EndToEndPermissions(t *testing.T) {
+	t.Parallel()
+
+	var executed bool
+	agentTools := []tools.Tool{{
+		Name:       "dangerous_tool",
+		Parameters: map[string]any{},
+		Handler: func(_ context.Context, _ tools.ToolCall, _ tools.Runtime) (*tools.ToolCallResult, error) {
+			executed = true
+			return tools.ResultSuccess("executed"), nil
+		},
+	}}
+
+	workerStream := newStreamBuilder().
+		AddToolCallName("call_1", "dangerous_tool").
+		AddToolCallArguments("call_1", "{}").
+		Build()
+	parentProv := &mockProvider{id: "test/mock-model", stream: &mockStream{}}
+	workerProv := &mockProvider{id: "test/mock-model", stream: workerStream}
+
+	worker := agent.New("worker", "Worker agent",
+		agent.WithModel(workerProv),
+		agent.WithToolSets(newStubToolSet(nil, agentTools, nil)),
+	)
+	root := agent.New("root", "Root agent", agent.WithModel(parentProv))
+	agent.WithSubAgents(worker)(root)
+
+	tm := team.New(team.WithAgents(root, worker))
+	rt, err := NewLocalRuntime(
+		t.Context(), tm,
+		WithSessionCompaction(false),
+		WithModelStore(mockModelStore{}),
+	)
+	require.NoError(t, err)
+
+	parentPerms := &session.PermissionsConfig{
+		Allow: []string{"safe_tool"},
+		Deny:  []string{"dangerous_tool"},
+	}
+	parentSession := session.New(
+		session.WithUserMessage("Test"),
+		session.WithToolsApproved(true),
+		session.WithPermissions(parentPerms),
+	)
+
+	result := rt.RunAgent(t.Context(), agenttool.RunParams{
+		AgentName:     "worker",
+		Task:          "do something",
+		ParentSession: parentSession,
+	})
+	require.Empty(t, result.ErrMsg, "RunAgent should succeed")
+
+	var childSession *session.Session
+	for _, item := range parentSession.Messages {
+		if item.SubSession != nil {
+			childSession = item.SubSession
+			break
+		}
+	}
+	require.NotNil(t, childSession, "parent must have a sub-session")
+	require.NotNil(t, childSession.Permissions)
+	assert.Equal(t, []string{"dangerous_tool"}, childSession.Permissions.Deny,
+		"child must inherit the parent's Deny rules")
+	require.False(t, executed, "expected dangerous_tool to NOT be executed because it is denied by inherited permissions")
 }
 
 func TestTransferTask_PropagatesPermissions(t *testing.T) {

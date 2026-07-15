@@ -49,7 +49,7 @@ func (m *mockRuntime) Run(context.Context, *session.Session) ([]session.Message,
 	return nil, nil
 }
 func (m *mockRuntime) Resume(context.Context, ResumeRequest) {}
-func (m *mockRuntime) ResumeElicitation(context.Context, tools.ElicitationAction, map[string]any) error {
+func (m *mockRuntime) ResumeElicitation(context.Context, tools.ElicitationAction, map[string]any, ...string) error {
 	return nil
 }
 func (m *mockRuntime) SessionStore() session.Store { return nil }
@@ -93,6 +93,7 @@ func (m *mockRuntime) AvailableModels(context.Context) []ModelChoice { return ni
 func (m *mockRuntime) SupportsModelSwitching() bool                  { return false }
 func (m *mockRuntime) OnToolsChanged(func(Event))                    {}
 func (m *mockRuntime) OnBackgroundEvent(func(Event))                 {}
+func (m *mockRuntime) OnElicitationRequest(func(Event))              {}
 
 func (m *mockRuntime) RegenerateTitle(context.Context, *session.Session, chan Event) {
 }

@@ -299,13 +299,15 @@ func (sm *SessionManager) GetSessionStatus(ctx context.Context, id string) (*api
 		rs.streaming.Unlock()
 	}
 
+	title := sess.TitleSnapshot()
+	inputTokens, outputTokens := sess.Usage()
 	return &api.SessionStatusResponse{
 		ID:           sess.ID,
-		Title:        sess.Title,
+		Title:        title,
 		Streaming:    streaming,
 		Agent:        rs.runtime.CurrentAgentName(ctx),
-		InputTokens:  sess.InputTokens,
-		OutputTokens: sess.OutputTokens,
+		InputTokens:  inputTokens,
+		OutputTokens: outputTokens,
 		NumMessages:  len(sess.GetAllMessages()),
 	}, nil
 }
@@ -343,16 +345,19 @@ func (sm *SessionManager) GetSessionSnapshot(ctx context.Context, id string) (*a
 
 	lastSeq, _ := sm.LastEventSeq(id)
 
+	title := sess.TitleSnapshot()
+	inputTokens, outputTokens := sess.Usage()
 	return &api.SessionSnapshotResponse{
 		ID:            sess.ID,
-		Title:         sess.Title,
+		Title:         title,
 		CreatedAt:     sess.CreatedAt,
 		WorkingDir:    sess.WorkingDir,
 		Messages:      sess.GetAllMessages(),
 		ToolsApproved: sess.ToolsApproved,
+		SafetyPolicy:  sess.SafetyPolicy,
 		Permissions:   sess.Permissions,
-		InputTokens:   sess.InputTokens,
-		OutputTokens:  sess.OutputTokens,
+		InputTokens:   inputTokens,
+		OutputTokens:  outputTokens,
 		Streaming:     streaming,
 		Agent:         agent,
 		LastEventSeq:  lastSeq,
@@ -370,6 +375,9 @@ func (sm *SessionManager) CreateSession(ctx context.Context, sessionTemplate *se
 		session.WithMaxToolResultTokens(sessionTemplate.MaxToolResultTokens),
 		session.WithToolsApproved(sessionTemplate.ToolsApproved),
 	)
+	if sessionTemplate.SafetyPolicy != "" {
+		opts = append(opts, session.WithSafetyPolicy(sessionTemplate.SafetyPolicy))
+	}
 
 	// Carry a caller-supplied title (from the POST /api/sessions request body)
 	// into the new session. When set, RunSession's needsTitle check skips the
@@ -458,9 +466,9 @@ func (sm *SessionManager) ForkSession(ctx context.Context, sessionID string, use
 	}
 	siblingTitles := make([]string, 0, len(siblings))
 	for _, s := range siblings {
-		siblingTitles = append(siblingTitles, s.Title)
+		siblingTitles = append(siblingTitles, s.TitleSnapshot())
 	}
-	forked.Title = session.NextForkTitle(parent.Title, siblingTitles)
+	forked.SetTitle(session.NextForkTitle(parent.TitleSnapshot(), siblingTitles))
 
 	if err := sm.sessionStore.AddSession(ctx, forked); err != nil {
 		return nil, err
@@ -705,10 +713,10 @@ func (sm *SessionManager) RunSession(ctx context.Context, sessionID, agentFilena
 
 	streamChan := make(chan runtime.Event)
 
-	// Snapshot the title under sm.mux before launching the goroutine to
-	// avoid a data race with UpdateSessionTitle, which takes sm.mux and
-	// writes to sess.Title concurrently with the goroutine's read.
-	titleToEmit := sess.Title
+	// Snapshot the title under sess.mu before launching the goroutine: both
+	// UpdateSessionTitle and a previous run's still-in-flight generateTitle
+	// write sess.Title via SetTitle, concurrently with this read.
+	titleToEmit := sess.TitleSnapshot()
 	needsTitle := titleToEmit == "" && len(userMessages) > 0 && titleGen != nil
 
 	go func() {
@@ -925,8 +933,9 @@ func (sm *SessionManager) recallSession(ctx context.Context, sessionID string, m
 	return nil
 }
 
-// ResumeElicitation resumes an elicitation request.
-func (sm *SessionManager) ResumeElicitation(ctx context.Context, sessionID, action string, content map[string]any) error {
+// ResumeElicitation resumes an elicitation request. elicitationID is
+// additive: pass "" to fall back to resolving the sole pending request.
+func (sm *SessionManager) ResumeElicitation(ctx context.Context, sessionID, action string, content map[string]any, elicitationID string) error {
 	sm.mux.Lock()
 	defer sm.mux.Unlock()
 	rt, exists := sm.runtimeSessions.Load(sessionID)
@@ -934,7 +943,7 @@ func (sm *SessionManager) ResumeElicitation(ctx context.Context, sessionID, acti
 		return errors.New("session not found")
 	}
 
-	return rt.runtime.ResumeElicitation(ctx, tools.ElicitationAction(action), content)
+	return rt.runtime.ResumeElicitation(ctx, tools.ElicitationAction(action), content, elicitationID)
 }
 
 // ToggleToolApproval toggles the tool approval mode for a session.
@@ -948,6 +957,21 @@ func (sm *SessionManager) ToggleToolApproval(ctx context.Context, sessionID stri
 
 	sess.ToolsApproved = !sess.ToolsApproved
 
+	return sm.sessionStore.UpdateSession(ctx, sess)
+}
+
+// SetSessionSafetyPolicy updates the SafetyPolicy for a session.
+func (sm *SessionManager) SetSessionSafetyPolicy(ctx context.Context, sessionID string, policy session.SafetyPolicy) error {
+	if !policy.IsValid() {
+		return fmt.Errorf("invalid safety_policy: %q", policy)
+	}
+	sm.mux.Lock()
+	defer sm.mux.Unlock()
+	sess, err := sm.sessionStore.GetSession(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	sess.SetSafetyPolicy(policy)
 	return sm.sessionStore.UpdateSession(ctx, sess)
 }
 
@@ -975,7 +999,7 @@ func (sm *SessionManager) UpdateSessionTitle(ctx context.Context, sessionID, tit
 	// If session is actively running, update the in-memory session object directly.
 	// This ensures the runtime's saveSession won't overwrite our manual edit.
 	if rt, ok := sm.runtimeSessions.Load(sessionID); ok && rt.session != nil {
-		rt.session.Title = title
+		rt.session.SetTitle(title)
 		slog.DebugContext(ctx, "Updated title for active session", "session_id", sessionID, "title", title)
 		return sm.sessionStore.UpdateSession(ctx, rt.session)
 	}
@@ -986,7 +1010,7 @@ func (sm *SessionManager) UpdateSessionTitle(ctx context.Context, sessionID, tit
 		return err
 	}
 
-	sess.Title = title
+	sess.SetTitle(title)
 	return sm.sessionStore.UpdateSession(ctx, sess)
 }
 
@@ -1009,7 +1033,7 @@ func (sm *SessionManager) generateTitle(ctx context.Context, sess *session.Sessi
 	}
 
 	// Update the in-memory session
-	sess.Title = title
+	sess.SetTitle(title)
 
 	// Persist the title
 	if err := sm.sessionStore.UpdateSession(ctx, sess); err != nil {
@@ -1345,11 +1369,11 @@ func (sm *SessionManager) UpdateMessage(ctx context.Context, sessionID, msgID st
 }
 
 // AddSummary adds a summary to a session.
-func (sm *SessionManager) AddSummary(ctx context.Context, sessionID, summary string, tokens int) error {
+func (sm *SessionManager) AddSummary(ctx context.Context, sessionID, summary string, tokens int, cost float64) error {
 	sm.mux.Lock()
 	defer sm.mux.Unlock()
 
-	return sm.sessionStore.AddSummary(ctx, sessionID, summary, tokens)
+	return sm.sessionStore.AddSummary(ctx, sessionID, summary, tokens, cost)
 }
 
 // UpdateSessionTokens updates the token counts for a session.
@@ -1482,9 +1506,13 @@ func (sm *SessionManager) SetSessionAgentModel(ctx context.Context, sessionID, m
 	// Clone the session for the store write. We'll apply mutations to the
 	// clone, persist it, and only then update the live session. This ensures
 	// concurrent readers never observe a not-yet-persisted state.
+	// Title and the token/cost triple are taken through the locked accessors
+	// because the runtime stream goroutine writes them concurrently.
+	title := sess.TitleSnapshot()
+	inputTokens, outputTokens, cost := sess.TokensAndCost()
 	updatedSess := &session.Session{
 		ID:                      sess.ID,
-		Title:                   sess.Title,
+		Title:                   title,
 		CreatedAt:               sess.CreatedAt,
 		WorkingDir:              sess.WorkingDir,
 		ToolsApproved:           sess.ToolsApproved,
@@ -1493,9 +1521,9 @@ func (sm *SessionManager) SetSessionAgentModel(ctx context.Context, sessionID, m
 		MaxConsecutiveToolCalls: sess.MaxConsecutiveToolCalls,
 		MaxOldToolCallTokens:    sess.MaxOldToolCallTokens,
 		MaxToolResultTokens:     sess.MaxToolResultTokens,
-		InputTokens:             sess.InputTokens,
-		OutputTokens:            sess.OutputTokens,
-		Cost:                    sess.Cost,
+		InputTokens:             inputTokens,
+		OutputTokens:            outputTokens,
+		Cost:                    cost,
 		Starred:                 sess.Starred,
 	}
 
@@ -1606,13 +1634,14 @@ func (sm *SessionManager) BatchExportSessions(ctx context.Context, sessionIDs []
 			continue // Skip sessions that can't be retrieved
 		}
 
+		inputTokens, outputTokens := sess.Usage()
 		sessData := map[string]any{
 			"id":             sess.ID,
-			"title":          sess.Title,
+			"title":          sess.TitleSnapshot(),
 			"created_at":     sess.CreatedAt,
 			"messages":       sess.GetAllMessages(),
-			"input_tokens":   sess.InputTokens,
-			"output_tokens":  sess.OutputTokens,
+			"input_tokens":   inputTokens,
+			"output_tokens":  outputTokens,
 			"working_dir":    sess.WorkingDir,
 			"tools_approved": sess.ToolsApproved,
 		}
@@ -1635,13 +1664,14 @@ func (sm *SessionManager) ExportSessionForRecovery(ctx context.Context, sessionI
 		return nil, err
 	}
 
+	inputTokens, outputTokens := sess.Usage()
 	return map[string]any{
 		"id":             sess.ID,
-		"title":          sess.Title,
+		"title":          sess.TitleSnapshot(),
 		"created_at":     sess.CreatedAt,
 		"messages":       sess.GetAllMessages(),
-		"input_tokens":   sess.InputTokens,
-		"output_tokens":  sess.OutputTokens,
+		"input_tokens":   inputTokens,
+		"output_tokens":  outputTokens,
 		"working_dir":    sess.WorkingDir,
 		"tools_approved": sess.ToolsApproved,
 		"permissions":    sess.Permissions,

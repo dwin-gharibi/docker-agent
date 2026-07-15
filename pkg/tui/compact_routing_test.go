@@ -47,7 +47,7 @@ func (stubRuntime) Run(context.Context, *session.Session) ([]session.Message, er
 	return nil, nil
 }
 func (stubRuntime) Resume(context.Context, runtime.ResumeRequest) {}
-func (stubRuntime) ResumeElicitation(context.Context, tools.ElicitationAction, map[string]any) error {
+func (stubRuntime) ResumeElicitation(context.Context, tools.ElicitationAction, map[string]any, ...string) error {
 	return nil
 }
 func (stubRuntime) SessionStore() session.Store { return nil }
@@ -84,6 +84,7 @@ func (stubRuntime) AvailableModels(context.Context) []runtime.ModelChoice { retu
 func (stubRuntime) SupportsModelSwitching() bool                          { return false }
 func (stubRuntime) OnToolsChanged(func(runtime.Event))                    {}
 func (stubRuntime) OnBackgroundEvent(func(runtime.Event))                 {}
+func (stubRuntime) OnElicitationRequest(func(runtime.Event))              {}
 func (stubRuntime) QueueStatus() runtime.QueueStatus                      { return runtime.QueueStatus{} }
 func (stubRuntime) TogglePause(context.Context) (bool, error)             { return false, nil }
 func (stubRuntime) Close() error                                          { return nil }

@@ -360,7 +360,7 @@ func (r *Runner) runSingleEval(ctx context.Context, evalSess *InputSession) (Res
 
 	// Re-apply the display title in case a session_title event overrode it.
 	// This ensures repeated evals retain their '#N' suffix in stored sessions.
-	result.Session.Title = title
+	result.Session.SetTitle(title)
 
 	if len(expectedToolCalls) > 0 || len(actualToolCalls) > 0 {
 		result.ToolCallsScore = toolCallF1Score(expectedToolCalls, actualToolCalls)

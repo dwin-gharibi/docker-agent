@@ -456,8 +456,8 @@ func (c *Client) DeleteRemoteSession(ctx context.Context, sessionID string) erro
 	return c.doRequest(ctx, http.MethodDelete, "/api/sessions/"+sessionID, nil, nil)
 }
 
-func (c *Client) ResumeElicitation(ctx context.Context, sessionID string, action tools.ElicitationAction, content map[string]any) error {
-	req := api.ResumeElicitationRequest{Action: string(action), Content: content}
+func (c *Client) ResumeElicitation(ctx context.Context, sessionID string, action tools.ElicitationAction, content map[string]any, elicitationID ...string) error {
+	req := api.ResumeElicitationRequest{Action: string(action), Content: content, ElicitationID: firstElicitationID(elicitationID)}
 	return c.doRequest(ctx, http.MethodPost, "/api/sessions/"+sessionID+"/elicitation", req, nil)
 }
 
@@ -687,9 +687,9 @@ func (c *Client) UpdateMessage(ctx context.Context, sessionID, msgID string, msg
 }
 
 // AddSummary adds a summary to a session.
-func (c *Client) AddSummary(ctx context.Context, sessionID, summary string, tokens int) error {
+func (c *Client) AddSummary(ctx context.Context, sessionID, summary string, tokens int, cost float64) error {
 	endpoint := fmt.Sprintf("/api/sessions/%s/summaries", sessionID)
-	req := api.AddSummaryRequest{Summary: summary, Tokens: tokens}
+	req := api.AddSummaryRequest{Summary: summary, Tokens: tokens, Cost: cost}
 	return c.doRequest(ctx, http.MethodPost, endpoint, req, nil)
 }
 

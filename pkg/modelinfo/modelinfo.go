@@ -60,6 +60,35 @@ func SupportsResponsesAPI(modelID string) bool {
 	return isOSeries(m)
 }
 
+// SupportsDeferredTools reports whether a first-party model supports loading
+// tool definitions at a point in the transcript without invalidating its cache.
+func SupportsDeferredTools(provider, modelID string) bool {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	switch provider {
+	case "openai", "chatgpt":
+		switch normalizeOpenAI(modelID) {
+		case "gpt-5.4", "gpt-5.4-mini", "gpt-5.5", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra":
+			return true
+		case "gpt-5.4-pro":
+			return provider == "openai"
+		default:
+			return false
+		}
+	case "anthropic":
+		m := normalize(modelID)
+		if strings.Contains(m, "haiku") {
+			return false
+		}
+		if strings.Contains(m, "fable") {
+			return true
+		}
+		major, minor, ok := claudeOpusSonnetVersion(m)
+		return ok && (major > 4 || major == 4 && minor >= 5)
+	default:
+		return false
+	}
+}
+
 // UsesReasoningEffort reports whether an OpenAI model accepts the
 // `reasoning.effort` API parameter.
 //

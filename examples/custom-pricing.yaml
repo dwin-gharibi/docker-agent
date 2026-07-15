@@ -1,0 +1,42 @@
+# Demonstrates the `cost` override that declares a model's token pricing
+# explicitly, in USD per one million tokens. It takes precedence over the
+# models.dev catalogue and — more importantly — prices models the catalogue
+# does not know at all: custom OpenAI-compatible providers, local models, and
+# private deployments otherwise bill $0 despite consuming tokens.
+#
+# A declared cost feeds per-turn cost computation, session cost tracking, the
+# /model picker, and the after_llm_call hook's `cost` field. Prices must not
+# be negative; an all-zero table means "priced, free" (distinct from unpriced).
+providers:
+  # A self-hosted OpenAI-compatible gateway with negotiated pricing.
+  # models.dev knows nothing about the models it serves.
+  internal-llm:
+    api_type: openai_chatcompletions
+    base_url: https://llm.internal.example.com/v1
+    token_key: INTERNAL_LLM_API_KEY
+
+models:
+  # Custom endpoint: without `cost` every call would be recorded at $0.
+  internal-gpt:
+    provider: internal-llm
+    model: gpt-4o
+    cost:
+      input: 1.25 # USD per 1M input tokens
+      output: 5.00 # USD per 1M output tokens
+      cache_read: 0.125 # USD per 1M cached input tokens
+      cache_write: 1.5625 # USD per 1M cache-write tokens
+
+  # Catalogued model with a discounted enterprise contract: the override
+  # replaces the models.dev list price so recorded spend matches the invoice.
+  discounted-sonnet:
+    provider: anthropic
+    model: claude-sonnet-4-5
+    cost:
+      input: 2.4
+      output: 12.0
+
+agents:
+  root:
+    model: internal-gpt
+    description: Assistant on a custom endpoint with accurate cost tracking
+    instruction: You are a helpful assistant.

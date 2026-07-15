@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -242,6 +243,65 @@ func TestServer_UpdateSessionTitle(t *testing.T) {
 	unmarshal(t, getResp, &sessionResp)
 
 	assert.Equal(t, newTitle, sessionResp.Title)
+}
+
+// TestServer_GetSessionsRace pins the data-race fix for the GET
+// /api/sessions and GET /api/sessions/:id handlers (#3591): the in-memory
+// store hands them live *session.Session pointers, so reading
+// Title/InputTokens/OutputTokens directly races the granular store updates
+// (UpdateSessionTitle/UpdateSessionTokens) a running stream issues on other
+// goroutines. Both handlers must go through one TitleSnapshot() and one
+// Usage() snapshot. Run with -race; the writer goroutine keeps updating for
+// the whole duration of the HTTP reads. Every update stores an (n, 2n)
+// token pair, so the single-snapshot invariant output == 2*input holds in
+// every response regardless of scheduling.
+//
+// The name is kept short: it feeds t.TempDir(), which becomes a unix socket
+// path bounded by sun_path (104 bytes on macOS).
+func TestServer_GetSessionsRace(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	store := session.NewInMemorySessionStore()
+	sess := session.New(session.WithTitle("initial"))
+	require.NoError(t, store.AddSession(ctx, sess))
+
+	lnPath := startServerWithStore(t, ctx, prepareAgentsDir(t), store)
+
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		for n := int64(1); ; n++ {
+			select {
+			case <-done:
+				return
+			default:
+			}
+			if err := store.UpdateSessionTitle(ctx, sess.ID, "concurrent title"); err != nil {
+				t.Errorf("UpdateSessionTitle: %v", err)
+				return
+			}
+			if err := store.UpdateSessionTokens(ctx, sess.ID, n, 2*n, float64(n)); err != nil {
+				t.Errorf("UpdateSessionTokens: %v", err)
+				return
+			}
+		}
+	})
+
+	for range 25 {
+		var sessions []api.SessionsResponse
+		unmarshal(t, httpGET(t, ctx, lnPath, "/api/sessions"), &sessions)
+		require.Len(t, sessions, 1)
+		assert.Equal(t, sess.ID, sessions[0].ID)
+		assert.Equal(t, 2*sessions[0].InputTokens, sessions[0].OutputTokens)
+
+		var single api.SessionResponse
+		unmarshal(t, httpGET(t, ctx, lnPath, "/api/sessions/"+sess.ID), &single)
+		assert.Equal(t, sess.ID, single.ID)
+		assert.Equal(t, 2*single.InputTokens, single.OutputTokens)
+	}
+	close(done)
+	wg.Wait()
 }
 
 // TestServer_ForkSession exercises the POST /api/sessions/:id/fork

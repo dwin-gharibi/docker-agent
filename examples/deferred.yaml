@@ -1,6 +1,6 @@
 agents:
   root:
-    model: openai/gpt-4o
+    model: openai/gpt-5.6-sol
     description: Simple agent with filesystem access
     instruction: Use the tools to help the user with filesystem operations.
     toolsets:
