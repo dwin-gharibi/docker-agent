@@ -12,10 +12,10 @@ _Send outbound notifications to Slack, Discord, Telegram, IFTTT, and more._
 ## Overview
 
 The webhook toolset lets an agent POST a message to a webhook, shaping the JSON
-payload for the target service. Delivery is one-way — the tool reports the HTTP
+payload for the target service. Delivery is one-way—the tool reports the HTTP
 status, not a response body. It uses the SSRF-safe HTTP client (requests to
-non-public addresses are refused), and pairs naturally with the
-[`scheduler`](../scheduler/index.md) tool for alerting.
+non-public addresses are refused) and pairs naturally with the `scheduler`
+tool for alerting.
 
 ## Configuration
 
@@ -58,5 +58,5 @@ agents:
 ```
 
 > [!TIP]
-> Combine with the `scheduler`: "every 15 minutes, check the build; if it
-> broke, `send_webhook` to Slack."
+> Combine with the `scheduler`: "Every 15 minutes, check the build. If it
+> broke, use `send_webhook` to notify Slack."
