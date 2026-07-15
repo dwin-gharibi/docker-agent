@@ -27,6 +27,9 @@ type cycleThinkingRuntime struct {
 	setLevel   effort.Level
 	steered    []runtime.QueuedMessage
 	steerErr   error
+	models     []runtime.ModelChoice
+	modelRef   string
+	modelErr   error
 }
 
 func (r *cycleThinkingRuntime) CurrentAgentInfo(context.Context) runtime.CurrentAgentInfo {
@@ -99,7 +102,12 @@ func (r *cycleThinkingRuntime) QueueStatus() runtime.QueueStatus                
 func (r *cycleThinkingRuntime) TogglePause(context.Context) (bool, error) {
 	return false, nil
 }
-func (r *cycleThinkingRuntime) SetAgentModel(context.Context, string, string) error { return nil }
+
+func (r *cycleThinkingRuntime) SetAgentModel(_ context.Context, _, modelRef string) error {
+	r.modelRef = modelRef
+	return r.modelErr
+}
+
 func (r *cycleThinkingRuntime) CycleAgentThinkingLevel(context.Context, string) (effort.Level, error) {
 	r.cycleCalls++
 	if r.err != nil {
@@ -116,11 +124,14 @@ func (r *cycleThinkingRuntime) SetAgentThinkingLevel(_ context.Context, _ string
 	r.setLevel = level
 	return level, nil
 }
-func (r *cycleThinkingRuntime) AvailableModels(context.Context) []runtime.ModelChoice { return nil }
-func (r *cycleThinkingRuntime) SupportsModelSwitching() bool                          { return r.supports }
-func (r *cycleThinkingRuntime) OnToolsChanged(func(runtime.Event))                    {}
-func (r *cycleThinkingRuntime) OnBackgroundEvent(func(runtime.Event))                 {}
-func (r *cycleThinkingRuntime) OnElicitationRequest(func(runtime.Event))              {}
+
+func (r *cycleThinkingRuntime) AvailableModels(context.Context) []runtime.ModelChoice {
+	return r.models
+}
+func (r *cycleThinkingRuntime) SupportsModelSwitching() bool             { return r.supports }
+func (r *cycleThinkingRuntime) OnToolsChanged(func(runtime.Event))       {}
+func (r *cycleThinkingRuntime) OnBackgroundEvent(func(runtime.Event))    {}
+func (r *cycleThinkingRuntime) OnElicitationRequest(func(runtime.Event)) {}
 
 var _ runtime.Runtime = (*cycleThinkingRuntime)(nil)
 
@@ -174,6 +185,48 @@ func TestEffortCommandRejectsUnknownLevel(t *testing.T) {
 	assert.Zero(t, rt.setCalls)
 	assert.Empty(t, m.status.Thinking)
 	assert.Equal(t, 1, m.screen.Transcript.BlockCount())
+}
+
+func TestModelCommandSwitchesModel(t *testing.T) {
+	t.Parallel()
+	rt := &cycleThinkingRuntime{supports: true}
+	m := bareModel(24)
+	m.app = app.New(t.Context(), rt, session.New())
+
+	assert.True(t, m.handleSlash(t.Context(), "/model openai/gpt-5", busySubmitSteer))
+
+	assert.Equal(t, "openai/gpt-5", rt.modelRef)
+	assert.Equal(t, 1, m.screen.Transcript.BlockCount())
+}
+
+func TestModelCommandOpensModelAutocomplete(t *testing.T) {
+	t.Parallel()
+	rt := &cycleThinkingRuntime{
+		supports: true,
+		models: []runtime.ModelChoice{
+			{Name: "GPT 5", Ref: "openai/gpt-5", Provider: "openai", Model: "gpt-5", IsCurrent: true, IsDefault: true},
+			{Name: "Sonnet", Ref: "anthropic/claude-sonnet-4-6", Provider: "anthropic", Model: "claude-sonnet-4-6"},
+		},
+	}
+	m := bareModel(24)
+	m.app = app.New(t.Context(), rt, session.New())
+
+	assert.True(t, m.handleSlash(t.Context(), "/model", busySubmitSteer))
+
+	assert.Equal(t, "/model ", m.screen.Editor.Text())
+	assert.True(t, m.screen.Autocomplete.Active)
+	cmd, ok := m.screen.Autocomplete.Current()
+	if assert.True(t, ok) {
+		assert.Equal(t, "openai/gpt-5", cmd.Name)
+		assert.Equal(t, "/model default", m.screen.Autocomplete.Completion(cmd))
+	}
+
+	assert.True(t, m.screen.Autocomplete.Sync("/model gpt 5"))
+	cmd, ok = m.screen.Autocomplete.Current()
+	if assert.True(t, ok) {
+		assert.Equal(t, "openai/gpt-5", cmd.Name)
+		assert.Equal(t, "/model default", m.screen.Autocomplete.Completion(cmd))
+	}
 }
 
 func TestEditorSubmitWhileBusySteersAndRendersAtStreamEnd(t *testing.T) {
