@@ -1,6 +1,7 @@
 package dialog
 
 import (
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -192,6 +193,46 @@ func TestCostDialogModelPercentage(t *testing.T) {
 	// gpt-4o should show 75%, gpt-4o-mini 25%
 	assert.Contains(t, view, "75%")
 	assert.Contains(t, view, "25%")
+}
+
+func TestCostDialogCachedCountAlignedAfterPercentage(t *testing.T) {
+	t.Parallel()
+
+	dialog := &costDialog{}
+	usage := chat.Usage{InputTokens: 100, CachedInputTokens: 100}
+	rows := []totalUsage{
+		{Usage: usage, label: "short", cost: 0.04},
+		{Usage: usage, label: "long-model-name", cost: 0.14},
+	}
+	labelWidth := usageLabelWidth(rows)
+	singleDigit := dialog.renderUsageLine(rows[0], 1, labelWidth, false)
+	doubleDigit := dialog.renderUsageLine(rows[1], 1, labelWidth, false)
+
+	assert.Equal(t, strings.Index(singleDigit, "cached:"), strings.Index(doubleDigit, "cached:"))
+}
+
+func TestCostDialogTotalStatsAligned(t *testing.T) {
+	t.Parallel()
+
+	stats := []stat{{label: "in:", value: "100"}, {label: "avg cost/message:", value: "$0.01"}}
+	labelWidth := statLabelWidth(stats)
+	shortLabel := styledStat(stats[0], labelWidth)
+	longLabel := styledStat(stats[1], labelWidth)
+
+	assert.Equal(t, strings.Index(shortLabel, "100"), strings.Index(longLabel, "$0.01"))
+}
+
+func TestCostDialogMessageCacheMiss(t *testing.T) {
+	t.Parallel()
+
+	line := (&costDialog{}).renderUsageLine(totalUsage{
+		Usage: chat.Usage{InputTokens: 100},
+		label: "#1",
+		model: "gpt-4o",
+		cost:  0.01,
+	}, 0.01, 2, true)
+
+	assert.Contains(t, line, "cache miss")
 }
 
 func TestCostDialogCacheHitRate(t *testing.T) {
