@@ -12,16 +12,22 @@ import (
 	dagentcfg "github.com/docker/docker-agent/pkg/config"
 	dagentruntime "github.com/docker/docker-agent/pkg/runtime"
 	"github.com/docker/docker-agent/pkg/session"
+	"github.com/docker/docker-agent/pkg/team"
 	"github.com/docker/docker-agent/pkg/teamloader"
-	loaderdefaults "github.com/docker/docker-agent/pkg/teamloader/defaults"
 	"github.com/docker/docker-agent/pkg/tools"
 )
 
 const defaultEventBuffer = 32
 
 var (
-	// ErrAgentSourceRequired is returned when New is called without an agent source.
-	ErrAgentSourceRequired = errors.New("embeddedchat: agent source is required")
+	// ErrAgentSourceRequired is returned when New is called without an agent
+	// source or a pre-built team.
+	ErrAgentSourceRequired = errors.New("embeddedchat: an agent source or a team is required")
+	// ErrRegistriesRequired is returned when an AgentSource is loaded without
+	// load options: the loader needs toolset and provider registries. Pass
+	// embeddedchat/defaults.Opts() for docker-agent's full registries, or
+	// your own via LoadOpts.
+	ErrRegistriesRequired = errors.New("embeddedchat: LoadOpts is required with AgentSource (e.g. embeddedchat/defaults.Opts())")
 	// ErrNotInitialized is returned when a Session has no runtime or conversation.
 	ErrNotInitialized = errors.New("embeddedchat: session is not initialized")
 	// ErrRunActive is returned when Send is called while a previous run is still active.
@@ -32,19 +38,33 @@ var (
 
 // Config describes an embedded agent session.
 type Config struct {
+	// Team is a pre-built team. Embedders that assemble their agents in code
+	// use it instead of AgentSource: no YAML loading happens, and — the point
+	// — docker-agent's full toolset and provider registries are never linked
+	// into their binary. Takes precedence over AgentSource.
+	Team *team.Team
 	// AgentSource is the agent/team definition to load. Bytes sources are a
 	// good fit for embedders that ship a pinned agent in their binary.
+	// Requires LoadOpts (see ErrRegistriesRequired).
 	AgentSource dagentcfg.Source
 	// RuntimeConfig is passed to the team loader. When nil, a zero runtime
 	// config is used.
 	RuntimeConfig *dagentcfg.RuntimeConfig
-	// ToolsetRegistry resolves toolsets declared by AgentSource. When nil,
-	// docker-agent's full YAML-loading registry is used.
+	// LoadOpts configures the team loader for the AgentSource path, most
+	// importantly the toolset and provider registries.
+	// embeddedchat/defaults.Opts() provides docker-agent's full registries.
+	LoadOpts []teamloader.Opt
+	// ToolsetRegistry resolves toolsets declared by AgentSource; appended to
+	// LoadOpts as a convenience.
 	ToolsetRegistry teamloader.ToolsetRegistry
 	// RuntimeOptions are appended when constructing the runtime.
 	RuntimeOptions []dagentruntime.Opt
 	// SessionOptions are appended when constructing each conversation session.
 	SessionOptions []session.Opt
+	// InitialSession, when set, is used as the first conversation instead of
+	// a fresh one — e.g. a conversation restored from a session store.
+	// Restart still replaces it with a fresh session.
+	InitialSession *session.Session
 	// EventBuffer controls the size of the channel returned by Send. When zero,
 	// a small default buffer is used.
 	EventBuffer int
@@ -68,10 +88,17 @@ type Event struct {
 
 // ToolActivity describes one tool call surfaced by the runtime.
 type ToolActivity struct {
-	Call     tools.ToolCall
-	Def      tools.Tool
+	Call tools.ToolCall
+	Def  tools.Tool
+	// Output is an incremental output line streamed by the running call
+	// (empty for lifecycle events).
+	Output   string
 	Finished bool
 	IsError  bool
+	// Response is the finished call's textual result.
+	Response string
+	// Result is the finished call's structured result (nil when unavailable).
+	Result *tools.ToolCallResult
 	// NeedsConfirmation is true when the runtime is blocked until Confirm is
 	// called with the user's decision.
 	NeedsConfirmation bool
@@ -99,9 +126,10 @@ type Session struct {
 	closed       bool
 }
 
-// New loads the configured agent and creates a fresh conversation session.
+// New builds the runtime for the configured team (or loads AgentSource) and
+// creates the first conversation session.
 func New(ctx context.Context, cfg Config) (*Session, error) {
-	if cfg.AgentSource == nil {
+	if cfg.Team == nil && cfg.AgentSource == nil {
 		return nil, ErrAgentSourceRequired
 	}
 	runConfig := cfg.RuntimeConfig
@@ -109,45 +137,57 @@ func New(ctx context.Context, cfg Config) (*Session, error) {
 		runConfig = &dagentcfg.RuntimeConfig{}
 	}
 
-	loadOpts := loaderdefaults.Opts()
-	if cfg.ToolsetRegistry != nil {
-		loadOpts = append(loadOpts, teamloader.WithToolsetRegistry(cfg.ToolsetRegistry))
-	}
-	loaded, err := teamloader.LoadWithConfig(ctx, cfg.AgentSource, runConfig, loadOpts...)
-	if err != nil {
-		return nil, fmt.Errorf("embeddedchat: load agent: %w", err)
+	tm := cfg.Team
+	var runtimeOpts []dagentruntime.Opt
+	if tm == nil {
+		loadOpts := append([]teamloader.Opt(nil), cfg.LoadOpts...)
+		if cfg.ToolsetRegistry != nil {
+			loadOpts = append(loadOpts, teamloader.WithToolsetRegistry(cfg.ToolsetRegistry))
+		}
+		if len(loadOpts) == 0 {
+			return nil, ErrRegistriesRequired
+		}
+		loaded, err := teamloader.LoadWithConfig(ctx, cfg.AgentSource, runConfig, loadOpts...)
+		if err != nil {
+			return nil, fmt.Errorf("embeddedchat: load agent: %w", err)
+		}
+		tm = loaded.Team
+
+		modelSwitcher := &dagentruntime.ModelSwitcherConfig{
+			Models:             loaded.Models,
+			Providers:          loaded.Providers,
+			ModelsGateway:      runConfig.ModelsGateway,
+			EnvProvider:        runConfig.EnvProvider(),
+			ProviderRegistry:   loaded.ProviderRegistry,
+			AgentDefaultModels: loaded.AgentDefaultModels,
+		}
+		// Reuse the models.dev store the team loader already warmed so model-
+		// metadata lookups don't re-pay the cold catalog parse.
+		if store, storeErr := runConfig.ModelsDevStore(); storeErr == nil {
+			modelSwitcher.ModelsStore = store
+		}
+		runtimeOpts = append(runtimeOpts, dagentruntime.WithModelSwitcherConfig(modelSwitcher))
 	}
 
-	modelSwitcher := &dagentruntime.ModelSwitcherConfig{
-		Models:             loaded.Models,
-		Providers:          loaded.Providers,
-		ModelsGateway:      runConfig.ModelsGateway,
-		EnvProvider:        runConfig.EnvProvider(),
-		ProviderRegistry:   loaded.ProviderRegistry,
-		AgentDefaultModels: loaded.AgentDefaultModels,
-	}
-	// Reuse the models.dev store the team loader already warmed so model-
-	// metadata lookups don't re-pay the cold catalog parse.
-	if store, storeErr := runConfig.ModelsDevStore(); storeErr == nil {
-		modelSwitcher.ModelsStore = store
-	}
-
-	runtimeOpts := []dagentruntime.Opt{
-		dagentruntime.WithModelSwitcherConfig(modelSwitcher),
+	runtimeOpts = append(runtimeOpts,
 		dagentruntime.WithWorkingDir(runConfig.WorkingDir),
 		dagentruntime.WithSessionStore(session.NewInMemorySessionStore()),
-	}
+	)
 	runtimeOpts = append(runtimeOpts, cfg.RuntimeOptions...)
-	rt, err := dagentruntime.New(ctx, loaded.Team, runtimeOpts...)
+	rt, err := dagentruntime.New(ctx, tm, runtimeOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("embeddedchat: create runtime: %w", err)
 	}
 
 	s := &Session{cfg: cfg, rt: rt}
-	if root, err := loaded.Team.DefaultAgent(); err == nil {
+	if root, err := tm.DefaultAgent(); err == nil {
 		s.welcome = root.WelcomeMessage()
 	}
-	s.resetConversationLocked()
+	if cfg.InitialSession != nil {
+		s.session = cfg.InitialSession
+	} else {
+		s.resetConversationLocked()
+	}
 	return s, nil
 }
 
@@ -348,12 +388,23 @@ func TranslateRuntimeEvent(event dagentruntime.Event) (Event, bool) {
 		return Event{RuntimeEvent: event, Text: e.Content}, true
 	case *dagentruntime.ToolCallEvent:
 		return Event{RuntimeEvent: event, Tool: &ToolActivity{Call: e.ToolCall, Def: e.ToolDefinition}}, true
+	case *dagentruntime.ToolCallOutputEvent:
+		if e.Output == "" {
+			return Event{}, false
+		}
+		return Event{RuntimeEvent: event, Tool: &ToolActivity{
+			Call:   tools.ToolCall{ID: e.ToolCallID},
+			Def:    e.ToolDefinition,
+			Output: e.Output,
+		}}, true
 	case *dagentruntime.ToolCallResponseEvent:
 		return Event{RuntimeEvent: event, Tool: &ToolActivity{
 			Call:     tools.ToolCall{ID: e.ToolCallID},
 			Def:      e.ToolDefinition,
 			Finished: true,
 			IsError:  e.Result != nil && e.Result.IsError,
+			Response: e.Response,
+			Result:   e.Result,
 		}}, true
 	}
 	return Event{}, false
