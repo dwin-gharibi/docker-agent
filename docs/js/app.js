@@ -20,7 +20,12 @@ function updateThemeToggleState() {
 }
 
 function initTheme() {
-  const saved = localStorage.getItem('docker-agent-docs-theme');
+  // ?theme=light|dark deterministically forces a theme, bypassing both
+  // localStorage and the OS preference — used by the pa11y-ci both-theme
+  // gate so CI doesn't depend on the headless browser's default color
+  // scheme (see docs/.pa11yci.json).
+  const forced = new URLSearchParams(location.search).get('theme');
+  const saved = forced === 'light' || forced === 'dark' ? forced : localStorage.getItem('docker-agent-docs-theme');
   if (saved === 'light') {
     document.documentElement.setAttribute('data-theme', 'light');
   } else if (!saved && window.matchMedia?.('(prefers-color-scheme: light)').matches) {

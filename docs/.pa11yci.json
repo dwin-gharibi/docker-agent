@@ -8,9 +8,13 @@
     }
   },
   "urls": [
-    "http://127.0.0.1:1313/docker-agent/",
-    "http://127.0.0.1:1313/docker-agent/configuration/sandbox/",
-    "http://127.0.0.1:1313/docker-agent/getting-started/quickstart/",
-    "http://127.0.0.1:1313/docker-agent/404.html"
+    "http://127.0.0.1:1313/docker-agent/?theme=light",
+    "http://127.0.0.1:1313/docker-agent/configuration/sandbox/?theme=light",
+    "http://127.0.0.1:1313/docker-agent/getting-started/quickstart/?theme=light",
+    "http://127.0.0.1:1313/docker-agent/404.html?theme=light",
+    "http://127.0.0.1:1313/docker-agent/?theme=dark",
+    "http://127.0.0.1:1313/docker-agent/configuration/sandbox/?theme=dark",
+    "http://127.0.0.1:1313/docker-agent/getting-started/quickstart/?theme=dark",
+    "http://127.0.0.1:1313/docker-agent/404.html?theme=dark"
   ]
 }
