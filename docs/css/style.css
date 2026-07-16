@@ -56,6 +56,7 @@
    * gray-200 for body text. No blue tint in the chrome — only the
    * hero, the primary button, and the info-callout get the brand navy. */
   --bg: var(--bg-dark);
+  --bg-content: var(--bg-dark);       /* content column surface; distinct from chrome only in light */
   --bg-sidebar: var(--gray-900);
   --bg-code: var(--gray-800);
   --bg-code-block: var(--gray-900);
@@ -108,6 +109,7 @@
  * and active-navbar surfaces). */
 [data-theme="light"] {
   --bg: var(--gray-100);
+  --bg-content: #FFFFFF;              /* white content column vs. gray-100 chrome, docs.docker.com-style */
   --bg-sidebar: var(--gray-100);
   --bg-code: #FFFFFF;
   --bg-code-block: #F6F8FA;
@@ -432,6 +434,7 @@ details.sidebar-section[open] > summary.sidebar-heading::after {
   flex: 1;
   min-width: 0;
   position: relative;
+  background: var(--bg-content);
 }
 
 .content {
