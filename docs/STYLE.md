@@ -183,6 +183,22 @@ tokens, templates, or JS, keep these conventions:
   terms): blue-300 in dark (blue-400 only reads 4.08:1 on the dark
   card), blue-500 in light (already 5.0:1 there). Use it instead of
   the bare `--accent` for any *new* text-on-card component.
+- **Links inside a callout need their own color, not the prose-link
+  one.** Callout panels (warning/info/tip) sit on their own
+  variant-colored background, not the page background, so
+  `--accent-hover` (the dark prose-link color) can fail there even
+  where it's fine everywhere else — it read only 3.95:1 on the dark
+  warning callout (`#643700`). `.content .callout a:not(.btn)` scopes
+  `--blue-200` to callout links in dark (6.46:1 warning / 11.50:1 info /
+  8.51:1 tip); light already passed with `--accent` (4.60–4.83:1) and
+  is restored explicitly rather than left to inherit the dark value.
+  Because that selector's specificity ties with `.content
+  a:not(.btn):hover`'s, the hover state needed its own explicit
+  `.content .callout a:not(.btn):hover` rule too — an unconditional,
+  equal-specificity selector coming later in the stylesheet otherwise
+  wins over a `:hover` one regardless of hover state, flattening the
+  hover color. Same lesson as the specificity bullets above: always
+  check what a new equal-or-higher-specificity rule shadows nearby.
 - **SVGs embedded via `<img>` can't inherit `currentColor` or CSS
   custom properties from the page**, so a single hardcoded palette has
   to clear AA against *both* a near-black dark card (`#1E2129`) and a
@@ -234,6 +250,7 @@ tokens, templates, or JS, keep these conventions:
 | `.pain-x` badge (white text) | `--error-strong` `#DC2626`, 4.83:1 | same |
 | `#search-input` (search trigger button) text | `--text-muted` (gray-600), 5.88:1 on `--bg-hover` white | gray-300, 6.07:1 on `--bg-hover` gray-800 (was `--text-muted` gray-400, 4.42:1 — fail) |
 | `.preview-banner a` | `--accent-on-card` (unchanged, blue-500 5.0:1) | `--accent-on-card` blue-300, 5.89:1 (was `--accent` blue-400, 4.08:1 — fail) |
+| `.content .callout a:not(.btn)` (links inside a callout) | `--accent`, 4.60–4.83:1 (unchanged) | `--blue-200`, 6.46:1 warning / 11.50:1 info / 8.51:1 tip (was `--accent-hover` blue-400, 3.95:1 on warning — fail) |
 | `.btn-primary`/`.btn-secondary` as `.content a` links (Quick Start, Back to Docs) | unchanged (blue-500-on-white 5.00:1 / white-on-translucent) | own `color` restored via `.content a:not(.btn)`, was 2.55:1 (`--accent-hover` leaking onto a white button bg) |
 | `how-it-works.svg` diagram text | gray-600 body 5.88:1 / blue-500 accent 5.00:1 (light-only file, on white) | gray-400 body 5.59:1 / blue-300 accent 5.89:1 (dark-only file, on `#1E2129`) |
 
@@ -324,23 +341,68 @@ that touches `js/app.js`, `layouts/`, or the demo media:
 ### Running the accessibility scan locally
 
 CI (`docs-a11y` workflow) runs [pa11y-ci](https://github.com/pa11y/pa11y-ci)
-against the URLs in `docs/.pa11yci.json` at the `WCAG2AA` standard.
-Each page is listed twice, once with `?theme=light` and once with
-`?theme=dark` — `js/app.js`'s `initTheme()` honors that query param
-ahead of `localStorage`/`prefers-color-scheme`, so the gate
-deterministically exercises both themes regardless of the scanning
-browser's default color scheme (observed to default to light
-headless, which is exactly why earlier local runs only ever caught
-light-mode regressions). To reproduce locally:
+at the `WCAG2AA` standard against a two-tier URL list:
+
+- **Tier 1 (always)** — a small static set of layout-archetype pages
+  in `docs/.pa11yci.json`: home (`/`), `configuration/sandbox/`
+  (wide tables + callouts), `getting-started/quickstart/` (tutorial
+  prose), `404.html` (standalone layout), `features/tui/` (the
+  densest page — images, inline HTML, many callouts/tables), and
+  `concepts/multi-agent/` (deep heading structure, tables). Each is
+  listed twice, once with `?theme=light` and once with `?theme=dark`
+  — 12 URLs in total. This tier guards against systemic regressions
+  (shared CSS/JS/templates/SVG) and runs on every push and PR.
+- **Tier 2 (pull requests only)** — the content pages the PR actually
+  modifies. `scripts/docs-a11y-urls.sh` maps changed Markdown to
+  rendered URLs (dropping `_index.md`/`STYLE.md`/non-content files,
+  de-duping against the Tier 1 list, live-probing to catch renames,
+  and emitting both themes), deterministically capped at
+  `${A11Y_MAX_PAGES:-10}` changed pages (lexicographic sort, so a
+  PR touching more than that always scans the same subset and logs
+  the rest as skipped). The CI workflow jq-merges these URLs into a
+  generated config on top of `docs/.pa11yci.json`; a push to `main`
+  or a PR that touches no content Markdown stays static-only (Tier 1).
+
+`js/app.js`'s `initTheme()` honors the `?theme=` query param ahead of
+`localStorage`/`prefers-color-scheme`, so the gate deterministically
+exercises both themes regardless of the scanning browser's default
+color scheme (observed to default to light headless, which is exactly
+why earlier local runs only ever caught light-mode regressions).
+
+To reproduce the full two-tier scan locally:
 
 ```bash
 # Serve the site the same way the Dockerfile does
 docker build -t docs docs/
 docker run --rm -p 1313:1313 -v $(pwd)/docs:/src docs
 
-# In another terminal, once it's serving at http://localhost:1313/docker-agent/
+# In another terminal, once it's serving at http://localhost:1313/docker-agent/:
+
+# Tier 1 only (the static archetype list):
 cd docs && npx --yes pa11y-ci@3.1.0 --config .pa11yci.json
+
+# Tier 1 + Tier 2 (mirrors what a PR's CI run scans), from the repo root:
+git diff --name-only main...HEAD | A11Y_BASE_URL=http://localhost:1313 ./scripts/docs-a11y-urls.sh > /tmp/changed-urls.txt
+jq -Rn '[inputs]' /tmp/changed-urls.txt > /tmp/changed-urls.json
+jq --slurpfile extra /tmp/changed-urls.json '.urls += $extra[0]' docs/.pa11yci.json > /tmp/pa11yci.generated.json
+npx --yes pa11y-ci@3.1.0 --config /tmp/pa11yci.generated.json
 ```
+
+`scripts/docs-a11y-urls.sh --self-test` exercises the mapping rules
+against fixtures (no server needed) and is safe to run any time.
+
+**Adding or retiring a Tier 1 archetype:** edit the `urls` array in
+`docs/.pa11yci.json` (both the light and dark entries — never add
+or remove just one theme). Before adding a page, run the full local
+scan above with it included and confirm 0 errors in both themes
+first (the "green-baseline" rule) — a latent shared-CSS bug that
+happens to be invisible on the current six pages must be fixed
+*before* the new archetype joins the always-on gate, or every future
+PR starts failing on a pre-existing issue unrelated to its own change.
+
+**Tuning the Tier-2 cap:** `A11Y_MAX_PAGES` (default 10) is the only
+knob; raise it in the workflow's `Compute changed-page URLs` step if
+PRs regularly touch more content pages than that.
 
 `pa11y-ci` only fails the build on HTML_CodeSniffer `error`-level
 results (warnings/notices are informational and don't fail CI), so a

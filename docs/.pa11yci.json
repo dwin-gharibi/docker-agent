@@ -12,9 +12,13 @@
     "http://127.0.0.1:1313/docker-agent/configuration/sandbox/?theme=light",
     "http://127.0.0.1:1313/docker-agent/getting-started/quickstart/?theme=light",
     "http://127.0.0.1:1313/docker-agent/404.html?theme=light",
+    "http://127.0.0.1:1313/docker-agent/features/tui/?theme=light",
+    "http://127.0.0.1:1313/docker-agent/concepts/multi-agent/?theme=light",
     "http://127.0.0.1:1313/docker-agent/?theme=dark",
     "http://127.0.0.1:1313/docker-agent/configuration/sandbox/?theme=dark",
     "http://127.0.0.1:1313/docker-agent/getting-started/quickstart/?theme=dark",
-    "http://127.0.0.1:1313/docker-agent/404.html?theme=dark"
+    "http://127.0.0.1:1313/docker-agent/404.html?theme=dark",
+    "http://127.0.0.1:1313/docker-agent/features/tui/?theme=dark",
+    "http://127.0.0.1:1313/docker-agent/concepts/multi-agent/?theme=dark"
   ]
 }
