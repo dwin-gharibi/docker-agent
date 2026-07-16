@@ -345,3 +345,17 @@ cd docs && npx --yes pa11y-ci@3.1.0 --config .pa11yci.json
 `pa11y-ci` only fails the build on HTML_CodeSniffer `error`-level
 results (warnings/notices are informational and don't fail CI), so a
 local failure here is a real regression worth fixing before pushing.
+
+pa11y-ci@3.1.0 bundles an old Puppeteer that doesn't download its own
+Chromium under `npx --yes` ("Could not find expected browser (chrome)
+locally"), including on the CI runner — that's why the `docs-a11y`
+workflow installs a pinned Chrome (`browser-actions/setup-chrome`) and
+points Puppeteer at it via `PUPPETEER_EXECUTABLE_PATH`, per [pa11y-ci's
+guidance for Ubuntu > 20.04](https://github.com/pa11y/pa11y-ci#pa11y-ci-fails-with-couldnotfindchromium-or-similar-error).
+Reproduce that locally by pointing the same env var at your own Chrome
+or Chromium install before running the command above, e.g.:
+
+```bash
+export PUPPETEER_EXECUTABLE_PATH="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" # macOS
+# or: export PUPPETEER_EXECUTABLE_PATH="$(command -v google-chrome || command -v chromium)" # Linux
+```

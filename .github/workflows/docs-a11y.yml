@@ -46,6 +46,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
+      # pa11y-ci@3.1.0 bundles an old Puppeteer whose postinstall Chromium
+      # download doesn't happen under `npx --yes` ("Could not find expected
+      # browser (chrome) locally"). Installing a pinned Chrome and pointing
+      # Puppeteer at it via PUPPETEER_EXECUTABLE_PATH (below) sidesteps that
+      # download entirely, per pa11y-ci's own guidance for Ubuntu > 20.04.
+      - name: Install Chrome
+        id: setup-chrome
+        uses: browser-actions/setup-chrome@2e1d749697dd1612b833dba4a722266286fbefcd # v2.1.2
+        with:
+          chrome-version: stable
+
       - name: Install Hugo
         run: |
           curl -fsSL "https://github.com/gohugoio/hugo/releases/download/v${HUGO_VERSION}/hugo_extended_${HUGO_VERSION}_linux-amd64.tar.gz" \
@@ -61,6 +72,8 @@ jobs:
 
       - name: Run pa11y-ci
         working-directory: docs
+        env:
+          PUPPETEER_EXECUTABLE_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
         run: npx --yes pa11y-ci@3.1.0 --config .pa11yci.json
 
       - name: Show Hugo server log on failure
