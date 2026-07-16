@@ -366,13 +366,22 @@ function restoreSidebarScroll() {
 // ---------- Demo video runtime fallback ----------
 // The nested <img> inside <video> is native fallback CONTENT: browsers
 // only render it when they don't recognize the <video> element at all,
-// never on a decode/network failure of a supported element. Catch that
-// case explicitly so a broken/blocked demo.mp4 still shows the GIF.
+// never on a decode/network failure of a supported element. That GIF
+// is exactly the auto-playing, unpausable, infinitely-looping motion
+// (WCAG 2.2.2) the video swap was meant to remove, so a decode/fetch
+// failure must NOT fall back to it. Show the static poster frame
+// instead — a still image carries no motion, so it needs no pause
+// control — and leave the genuine no-<video>-support case to the
+// browser's native fallback-content behavior above.
 function handleVideoFallback() {
   document.querySelectorAll('.demo-container video').forEach(video => {
     video.addEventListener('error', () => {
-      const fallback = video.querySelector('img');
-      if (fallback) video.replaceWith(fallback);
+      const poster = video.getAttribute('poster');
+      if (!poster) return;
+      const img = document.createElement('img');
+      img.src = poster;
+      img.alt = video.getAttribute('aria-label') || '';
+      video.replaceWith(img);
     });
   });
 }
