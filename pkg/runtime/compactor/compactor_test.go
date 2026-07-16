@@ -285,7 +285,7 @@ func TestGatherCompactionInput_NoPriorSummary(t *testing.T) {
 		session.NewMessageItem(&session.Message{Message: chat.Message{Role: chat.MessageRoleUser, Content: "u2"}}),
 	}))
 
-	messages, sessIndices, itemCount := gatherCompactionInput(sess)
+	messages, sessIndices, itemCount := sess.CompactionInput()
 	require.Len(t, messages, 3)
 	assert.Equal(t, []int{1, 2, 4}, sessIndices)
 
@@ -333,7 +333,7 @@ func TestGatherCompactionInput_WithPriorSummary(t *testing.T) {
 	}
 	sess := session.New(session.WithMessages(items))
 
-	messages, sessIndices, itemCount := gatherCompactionInput(sess)
+	messages, sessIndices, itemCount := sess.CompactionInput()
 
 	// Expected filtered list:
 	//   [0]: synthetic Session Summary user message (origin: prior summary at idx 10)
@@ -395,14 +395,14 @@ func TestFirstKeptSessionIndex_SplitZeroOnEmptyInputUsesSafeSentinel(t *testing.
 
 // TestGatherCompactionInputConcurrent extends session's own
 // TestCompactionInputConcurrent (pkg/session/session_race_test.go) to the
-// compactor's own boundary computation: gatherCompactionInput plus
+// compactor's own boundary computation: session.CompactionInput plus
 // firstKeptSessionIndex must stay race-free when called concurrently with
 // AddMessage on the same live session. firstKeptSessionIndex itself no
 // longer touches the session (it now takes the snapshot's own itemCount
 // instead of calling sess.ItemCount() — see
 // TestGatherCompactionInput_OutOfRangeSentinelMatchesSnapshotCount below for
 // why), so the only thing left to prove race-free here is
-// gatherCompactionInput's snapshot read itself.
+// CompactionInput's snapshot read itself.
 func TestGatherCompactionInputConcurrent(t *testing.T) {
 	t.Parallel()
 
@@ -413,7 +413,7 @@ func TestGatherCompactionInputConcurrent(t *testing.T) {
 			sess.AddMessage(session.UserMessage("u"))
 		})
 		wg.Go(func() {
-			_, sessIndices, itemCount := gatherCompactionInput(sess)
+			_, sessIndices, itemCount := sess.CompactionInput()
 			_ = firstKeptSessionIndex(sessIndices, itemCount, 0)
 		})
 	}
@@ -422,7 +422,7 @@ func TestGatherCompactionInputConcurrent(t *testing.T) {
 
 // TestGatherCompactionInput_OutOfRangeSentinelMatchesSnapshotCount pins the
 // other #3590 blocker: the out-of-range sentinel returned by
-// firstKeptSessionIndex must describe the SAME snapshot gatherCompactionInput
+// firstKeptSessionIndex must describe the SAME snapshot CompactionInput
 // produced sessIndices from, not whatever sess.ItemCount() returns when read
 // later. A reviewer probe demonstrated the bug directly: the sentinel
 // described a session length one longer (200001) than the snapshot it was
@@ -438,7 +438,7 @@ func TestGatherCompactionInput_OutOfRangeSentinelMatchesSnapshotCount(t *testing
 		session.NewMessageItem(&session.Message{Message: chat.Message{Role: chat.MessageRoleAssistant, Content: "a1"}}),
 	}))
 
-	_, sessIndices, itemCount := gatherCompactionInput(sess)
+	_, sessIndices, itemCount := sess.CompactionInput()
 	snapshotCount := len(sess.Messages)
 	require.Equal(t, snapshotCount, itemCount)
 
@@ -475,7 +475,7 @@ func TestGatherCompactionInput_PriorSummaryWithoutFirstKeptEntry(t *testing.T) {
 	}
 	sess := session.New(session.WithMessages(items))
 
-	messages, sessIndices, _ := gatherCompactionInput(sess)
+	messages, sessIndices, _ := sess.CompactionInput()
 
 	// Filtered list: synthetic-summary, items[3], items[4].
 	// items[0..1] are excluded because they were compacted into the

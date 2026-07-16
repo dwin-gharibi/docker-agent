@@ -251,40 +251,8 @@ func RunLLM(ctx context.Context, args LLMArgs) (result *Result, err error) {
 // a hook supplies its own summary so the kept-tail policy stays
 // consistent across the two strategies.
 func ComputeFirstKeptEntry(sess *session.Session, contextLimit int64) int {
-	messages, sessIndices, itemCount := gatherCompactionInput(sess)
+	messages, sessIndices, itemCount := sess.CompactionInput()
 	return firstKeptSessionIndex(sessIndices, itemCount, compaction.SplitIndexForKeep(messages, keepTokenBudget(contextLimit)))
-}
-
-// gatherCompactionInput is a thin wrapper around
-// [session.Session.CompactionInput] that clears compaction-specific
-// fields on the returned chat messages.
-//
-// Cost is per-message bookkeeping already accumulated into
-// sess.TotalCost(); leaving it set would double-count when the
-// summarization session reports its own TotalCost back through
-// [Result.Cost]. CacheControl pins a provider cache checkpoint
-// (Anthropic prompt caching, etc.); pinning it inside the
-// summarization sub-call would associate the cache point with the
-// throwaway compaction conversation rather than the parent session.
-//
-// The reconstruction work — surfacing a synthetic "Session Summary"
-// message when a prior summary exists, picking the right start index
-// past the prior summary, and tracking origin indices in sess.Messages
-// — lives on Session itself so it can run under sess.mu.RLock and stay
-// race-safe against concurrent AddMessage / ApplyCompaction calls.
-//
-// The returned itemCount is the SAME snapshot's total item count
-// (session.Session.CompactionInput's third return value); callers must use
-// it — not a fresh sess.ItemCount() call — for any out-of-range sentinel
-// derived from messages/sessIndices, or the boundary can describe a later
-// session length than the snapshot it is supposed to describe (#3590).
-func gatherCompactionInput(sess *session.Session) (messages []chat.Message, sessIndices []int, itemCount int) {
-	messages, sessIndices, itemCount = sess.CompactionInput()
-	for i := range messages {
-		messages[i].Cost = 0
-		messages[i].CacheControl = false
-	}
-	return messages, sessIndices, itemCount
 }
 
 // extractMessages returns the messages to send to the compaction
@@ -295,15 +263,15 @@ func gatherCompactionInput(sess *session.Session) (messages []chat.Message, sess
 //
 // The returned messages always begin with the canonical compaction
 // system prompt and end with the user prompt (optionally extended by
-// additionalPrompt). Cost / cache-control flags on the conversation
-// are cleared so the summarization request doesn't accidentally pin
-// a cache checkpoint or accrue duplicate cost.
+// additionalPrompt). [session.Session.CompactionInput] clears cost and
+// cache-control flags on the conversation so the summarization request
+// doesn't accidentally pin a cache checkpoint or accrue duplicate cost.
 //
 // If the conversation tail itself doesn't fit in
 // (contextLimit − summary budget − prompt-overhead), older messages
 // are dropped from the front of the to-compact list to make room.
 func extractMessages(sess *session.Session, _ *agent.Agent, contextLimit int64, additionalPrompt string) ([]chat.Message, int) {
-	messages, sessIndices, itemCount := gatherCompactionInput(sess)
+	messages, sessIndices, itemCount := sess.CompactionInput()
 
 	splitIdx := compaction.SplitIndexForKeep(messages, keepTokenBudget(contextLimit))
 	firstKeptEntry := firstKeptSessionIndex(sessIndices, itemCount, splitIdx)
@@ -341,7 +309,7 @@ func extractMessages(sess *session.Session, _ *agent.Agent, contextLimit int64, 
 }
 
 // firstKeptSessionIndex translates a split index produced against the
-// chat-message list returned by [gatherCompactionInput] back to an
+// chat-message list returned by [session.Session.CompactionInput] back to an
 // index in sess.Messages, suitable for the new summary's
 // FirstKeptEntry. Out-of-range splits map to itemCount, matching the
 // "compact everything; keep nothing of the tail" sentinel that
@@ -349,7 +317,7 @@ func extractMessages(sess *session.Session, _ *agent.Agent, contextLimit int64, 
 // conversation loop.
 //
 // itemCount MUST come from the same [session.Session.CompactionInput]
-// snapshot as sessIndices (i.e. via gatherCompactionInput), not a fresh
+// snapshot as sessIndices (i.e. via CompactionInput), not a fresh
 // sess.ItemCount() call: the live session can already hold an append
 // that landed after the snapshot was taken, which would describe a
 // boundary the snapshot never had (#3590).

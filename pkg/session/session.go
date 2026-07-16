@@ -1749,6 +1749,14 @@ func (s *Session) CompactionInput() ([]chat.Message, []int, int) {
 		if msg.Role == chat.MessageRoleSystem {
 			continue
 		}
+		// Clear per-request bookkeeping on the copy: Cost is already
+		// accumulated into TotalCost and would double-count through the
+		// summarization session's Result.Cost; CacheControl marks would
+		// pin a provider cache checkpoint on the throwaway summarization
+		// request instead of the parent session (marks can enter stored
+		// items via legacy persisted rows or API-supplied messages).
+		msg.Cost = 0
+		msg.CacheControl = false
 		messages = append(messages, msg)
 		sessIndices = append(sessIndices, i)
 	}
