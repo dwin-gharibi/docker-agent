@@ -274,7 +274,7 @@ Docker Agent follows a simple loop:
 The fastest way to try it — no config file needed:
 
 ```bash
-# Run the built-in default agent
+# Run the project config or built-in default agent
 $ docker agent run
 ```
 

@@ -121,7 +121,7 @@ func newRunCmd() *cobra.Command {
 		Long:  "Run an agent with the specified configuration and prompt",
 		Example: `  docker-agent run ./agent.yaml
   docker-agent run ./team.yaml --agent root
-  docker-agent run # built-in default agent
+  docker-agent run # project config or built-in default agent
   docker-agent run coder # built-in coding agent
   docker-agent run ./echo.yaml "INSTRUCTIONS"
   docker-agent run ./echo.yaml "First question" "Follow-up question"
@@ -277,6 +277,9 @@ func (f *runExecFlags) runRunCommand(cmd *cobra.Command, args []string) (command
 		args = prependAgentRef(chosen, args)
 	}
 
+	var discoveredProjectConfig bool
+	args, discoveredProjectConfig = f.discoverRunAgentArgs(args)
+
 	// Resolve alias / runtime-declared sandbox opt-in before dispatch.
 	// An explicit --sandbox=<bool> on the CLI always wins, so we only
 	// consult the lower-priority sources when the flag wasn't set.
@@ -287,6 +290,11 @@ func (f *runExecFlags) runRunCommand(cmd *cobra.Command, args []string) (command
 			agentRef = args[0]
 		}
 		f.sandbox, agentCfg = resolveSandboxDefault(ctx, agentRef, f.sandbox)
+	}
+
+	out := cli.NewPrinter(cmd.OutOrStdout())
+	if discoveredProjectConfig {
+		out.Println("Using project config: " + args[0])
 	}
 
 	if f.sandbox {
@@ -306,8 +314,6 @@ func (f *runExecFlags) runRunCommand(cmd *cobra.Command, args []string) (command
 	if f.worktreeBase != "" && !f.worktree {
 		return errors.New("--worktree-base requires --worktree")
 	}
-
-	out := cli.NewPrinter(cmd.OutOrStdout())
 
 	// When an interactive run cannot find any usable model, offer the setup
 	// wizard instead of leaving the user alone with the error.
@@ -533,13 +539,17 @@ func (f *runExecFlags) resolveRunAgentFileName(args []string) string {
 	if len(args) > 0 {
 		return args[0]
 	}
-	if f.remoteAddress != "" {
-		return ""
-	}
-	if agentFileName, ok := discoverProjectDefaultAgentFile(); ok {
-		return agentFileName
-	}
 	return ""
+}
+
+func (f *runExecFlags) discoverRunAgentArgs(args []string) ([]string, bool) {
+	if len(args) > 0 || f.remoteAddress != "" {
+		return args, false
+	}
+	if name, ok := discoverProjectDefaultAgentFile(); ok {
+		return prependAgentRef(name, args), true
+	}
+	return args, false
 }
 
 func discoverProjectDefaultAgentFile() (string, bool) {
@@ -549,6 +559,8 @@ func discoverProjectDefaultAgentFile() (string, bool) {
 			return name, true
 		}
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			// Surface unreadable or otherwise broken project configs instead of
+			// silently falling through to a later candidate or the built-in default.
 			return name, true
 		}
 	}

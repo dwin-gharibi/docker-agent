@@ -627,7 +627,7 @@ Commands that accept a config support multiple reference types:
 | OCI registry  | `docker.io/username/agent:latest`           |
 | Agent catalog | `agentcatalog/pirate`                       |
 | Alias         | `pirate` (after `docker agent alias add`)   |
-| Default       | (no argument) — uses built-in default agent |
+| Default       | (no argument) — uses project config or built-in default agent |
 
 > [!NOTE]
 > **Debugging**
