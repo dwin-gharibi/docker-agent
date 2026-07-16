@@ -11,6 +11,14 @@ const $searchModal   = document.getElementById('search-modal-input');
 const $searchResults = document.getElementById('search-results');
 
 // ---------- Theme ----------
+function updateThemeToggleState() {
+  const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+  const toggle = document.getElementById('theme-toggle');
+  if (!toggle) return;
+  toggle.setAttribute('aria-pressed', String(isLight));
+  toggle.setAttribute('aria-label', isLight ? 'Switch to dark theme' : 'Switch to light theme');
+}
+
 function initTheme() {
   const saved = localStorage.getItem('docker-agent-docs-theme');
   if (saved === 'light') {
@@ -19,6 +27,7 @@ function initTheme() {
     document.documentElement.setAttribute('data-theme', 'light');
   }
   // Dark is the default — no attribute needed (CSS :root is dark)
+  updateThemeToggleState();
 }
 
 function toggleTheme() {
@@ -30,6 +39,7 @@ function toggleTheme() {
     document.documentElement.setAttribute('data-theme', 'light');
     localStorage.setItem('docker-agent-docs-theme', 'light');
   }
+  updateThemeToggleState();
 }
 
 // ---------- Table of Contents ----------
@@ -92,7 +102,7 @@ function buildTOC() {
 
   // "Table of contents" + nav — only when there are enough headings.
   if (headings.length >= 2) {
-    const heading = document.createElement('div');
+    const heading = document.createElement('h2');
     heading.className = 'toc-heading';
     heading.textContent = 'Table of contents';
     inner.appendChild(heading);
@@ -309,7 +319,7 @@ function renderSearchResults(query) {
       html += `<div class="search-result-group">${r.section}</div>`;
       lastSection = r.section;
     }
-    html += `<a class="search-result" href="${r.url}" tabindex="0" role="option">
+    html += `<a class="search-result" href="${r.url}" tabindex="0">
       <div class="search-result-title">${r.title}</div>
     </a>`;
   }
@@ -355,8 +365,10 @@ function restoreSidebarScroll() {
 // ---------- Bind buttons (no inline handlers) ----------
 function bindButtons() {
   document.getElementById('theme-toggle')?.addEventListener('click', toggleTheme);
-  document.querySelector('.sidebar-toggle')?.addEventListener('click', () => {
-    document.getElementById('sidebar')?.classList.toggle('open');
+  document.querySelector('.sidebar-toggle')?.addEventListener('click', (e) => {
+    const sidebar = document.getElementById('sidebar');
+    const isOpen = sidebar?.classList.toggle('open');
+    e.currentTarget.setAttribute('aria-expanded', String(!!isOpen));
   });
 }
 
