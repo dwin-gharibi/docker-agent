@@ -759,9 +759,7 @@ func getToolsForAgent(ctx context.Context, a *latest.AgentConfig, parentDir stri
 		if !toolset.Defer.IsEmpty() {
 			deferredToolset.AddSource(wrapped, toolset.Defer.DeferAll, toolset.Defer.Tools)
 			if toolset.Defer.DeferAll {
-				// Don't add the wrapped toolset to toolSets - all its tools are deferred
-				// TODO: maybe we _do_ want to add this toolset since it has instructions?
-				continue
+				wrapped = WithNoToolsFilter(wrapped)
 			} else {
 				wrapped = WithToolsExcludeFilter(wrapped, toolset.Defer.Tools...)
 			}
