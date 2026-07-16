@@ -684,6 +684,13 @@ details.sidebar-section[open] > summary.sidebar-heading::after {
   line-height: 1.6;
 }
 
+/* Constrain in-article images to the content column so large assets
+ * (e.g. the 2000px demo GIF) never overflow the layout. */
+.content img {
+  max-width: 100%;
+  height: auto;
+}
+
 /* Inline code */
 .content code {
   font-family: var(--font-mono);
