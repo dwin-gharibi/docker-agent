@@ -15,6 +15,19 @@ title: Docker Agent
 # emitted at /404.html, which is where GitHub Pages looks for it.
 disableKinds: [section, taxonomy, term, rss, sitemap, "404"]
 
+# llms.txt (https://llmstxt.org/): a plain-text output format attached to
+# the home page only. Without the explicit `outputs.home` entry below the
+# format is defined but never rendered, since home currently emits HTML only.
+outputFormats:
+  llms:
+    mediaType: text/plain
+    baseName: llms
+    isPlainText: true
+    permalinkable: false
+
+outputs:
+  home: [html, llms]
+
 params:
   tagline: Run AI agents like containers.
   description: Run AI agents from a YAML file. Define them once, share them through any OCI registry, and run them anywhere — by Docker.

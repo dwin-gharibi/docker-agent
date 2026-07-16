@@ -93,6 +93,23 @@ scaffolding a new page from an existing one. The homepage, `404.md`
 and section `_index.md` files are not mirrored pages and don't set
 one.
 
+## llms.txt
+
+`/llms.txt` is generated at build time from `data/nav.yml` (see
+`layouts/home.llms.txt`): adding a page to the nav automatically adds
+it to llms.txt, and pages absent from `nav.yml` never appear there.
+Every nav entry must resolve to a real page with a non-empty
+`description:` in its front matter (whitespace-only counts as empty)
+— the build fails with an `errorf` naming the offending title/url
+otherwise, since the spec's `- [title](url): note` shape requires a
+note. CI (`docs-lint` / `scripts/docs-check-llms-txt.sh`) additionally
+rebuilds the site and asserts the generated `llms.txt` matches
+`nav.yml`'s sections, titles, order, count **and per-entry URL**
+(each rendered link must match the nav url at the same position, not
+just share the site's base URL), catching regressions (e.g. a broken
+`groups[].items` traversal, or every entry rendering the same link)
+that a successful build alone would not.
+
 ## Availability badges
 
 When a page documents a feature that is merged on `main` but not yet

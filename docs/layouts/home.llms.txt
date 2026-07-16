@@ -1,0 +1,24 @@
+# Docker Agent
+
+> {{ site.Params.description }}
+
+These docs track the `main` branch and may describe unreleased features. The stable documentation lives at https://docs.docker.com/ai/docker-agent/, which publishes its own https://docs.docker.com/llms.txt.
+{{ range hugo.Data.nav }}
+## {{ .section }}
+{{ $items := slice -}}
+{{ range .items }}{{ $items = $items | append . }}{{ end -}}
+{{ range .groups }}{{ range .items }}{{ $items = $items | append . }}{{ end }}{{ end }}
+{{- range $items }}
+{{- $page := site.GetPage (strings.TrimSuffix "/" (strings.TrimPrefix "/" .url)) -}}
+{{- $note := "" -}}
+{{- if not $page -}}
+  {{- errorf "home.llms.txt: nav entry %q (%s) does not resolve to a page via site.GetPage" .title .url -}}
+{{- else -}}
+  {{- $note = strings.TrimSpace $page.Description -}}
+  {{- if not $note -}}
+    {{- errorf "home.llms.txt: page %q (%s) is missing a front-matter description, required for its llms.txt note" .title .url -}}
+  {{- end -}}
+{{- end -}}
+- [{{ .title }}]({{ absURL (strings.TrimPrefix "/" .url) }}): {{ $note }}
+{{ end -}}
+{{ end }}
