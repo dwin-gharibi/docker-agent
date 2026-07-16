@@ -189,10 +189,11 @@ func TestClone_PreservesSubSessionAndSummary(t *testing.T) {
 	t.Parallel()
 	sub := New()
 	sub.AddMessage(UserMessage("sub message"))
+	sub.AddMessage(&Message{Message: chat.Message{Role: chat.MessageRoleAssistant, Content: "done", Cost: 0.05}})
 
 	orig := New()
 	orig.AddMessage(UserMessage("first"))
-	orig.AddSubSession(sub)
+	orig.AddLiveSubSession(sub)
 	orig.Messages = append(orig.Messages, Item{Summary: "a summary", Cost: 0.25})
 
 	clone := orig.Clone()
@@ -204,6 +205,15 @@ func TestClone_PreservesSubSessionAndSummary(t *testing.T) {
 	assert.Equal(t, "sub message", clone.Messages[1].SubSession.GetLastUserMessageContent())
 	assert.Equal(t, "a summary", clone.Messages[2].Summary)
 	assert.InEpsilon(t, 0.25, clone.Messages[2].Cost, 1e-9)
+
+	// Clone preserves identity, including the live-attached provenance of an
+	// AddLiveSubSession child: the child reported its own cost through its own
+	// TokenUsageEvents, so the clone must keep excluding it from the embedded
+	// roll-up — same ID, same live identity, same accounting.
+	assert.Equal(t, sub.ID, clone.Messages[1].SubSession.ID)
+	assert.Zero(t, clone.EmbeddedSubSessionCost(),
+		"a live-attached child must stay excluded from the clone's embedded cost")
+	assert.InDelta(t, 0.30, clone.TotalCost(), 1e-9, "the total still counts the live child")
 }
 
 // TestClone_PreservesItemValueFields guards against a clone that rebuilds

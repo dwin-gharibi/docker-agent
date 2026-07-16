@@ -557,6 +557,7 @@ func aggregate(results []hookResult, event EventType) *Result {
 			if hso.AdditionalContext != "" {
 				contexts = append(contexts, hso.AdditionalContext)
 			}
+			final.InstructionContext = append(final.InstructionContext, hso.InstructionContext...)
 		}
 	}
 

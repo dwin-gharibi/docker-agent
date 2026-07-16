@@ -1,24 +1,16 @@
 package builtins
 
-// safer_shell classifies shell tool calls and adapts its verdict to
-// the session's SafetyPolicy (read from hooks.Input.SafetyPolicy).
-// Registered on pre_tool_use with preempt_yolo:true so it runs before
-// Decide()/--yolo.
+// safer_shell classifies shell tool calls against a taxonomy and
+// adapts its verdict to hooks.Input.SafetyPolicy. Registered on
+// pre_tool_use with preempt_yolo:true so it runs before --yolo.
 //
-// Modes:
-//   unsafe — silent; returns nil (restores --yolo semantics).
-//   safer  — destructive matches ask; safe-list and unknown fall through.
-//   strict — destructive matches ask; safe-list returns nil; unknown
-//            asks with blast_radius=unknown. Empty SafetyPolicy is
-//            treated as strict.
+// Per-policy verdict:
+//   unsafe    — silent.
+//   safer     — destructive ask; safe/unknown silent.
+//   safe-auto — safe allow; destructive/unknown ask.
+//   strict    — safe/destructive/unknown all ask (with metadata).
 //
-// The legacy --yolo boolean is backfilled to SafetyPolicy=unsafe by
-// pkg/session.WithToolsApproved so existing callers stay silent.
-//
-// Compound shell (a && b, a; b, a | b) skips the safe-list and falls
-// through to the destructive scan. The matcher is regex-based on a
-// whitespace-normalised form of the command; `<placeholder>` matches
-// one non-whitespace token, `...` matches any tail.
+// Compound shell (a && b, a; b, a | b) skips the safe-list.
 
 import (
 	"context"
@@ -164,7 +156,7 @@ func saferShell(_ context.Context, in *hooks.Input, args []string) (*hooks.Outpu
 
 	patterns, err := loadSafetyPatterns()
 	if err != nil {
-		return askWithMetadata("unknown", "", "Safety pattern load failed: "+err.Error()), nil
+		return askWithMetadata(radiusUnknown, "", "Safety pattern load failed: "+err.Error()), nil
 	}
 
 	if command != "" {
@@ -172,24 +164,38 @@ func saferShell(_ context.Context, in *hooks.Input, args []string) (*hooks.Outpu
 			return askWithMetadata(match.BlastRadius, match.Category,
 				"Command matches destructive operation: "+match.Pattern), nil
 		}
-		if matchesSafe(command, patterns.safe) {
-			return nil, nil
+		if match := bestSafeMatch(command, patterns.safe); match != nil {
+			reason := "Command matches safe read-only pattern: " + match.Pattern
+			switch policy {
+			case policySafer:
+				return nil, nil
+			case policySafeAuto:
+				return allowWithMetadata(radiusSafe, match.Category, reason), nil
+			default:
+				return askWithMetadata(radiusSafe, match.Category, reason), nil
+			}
 		}
 	}
-	// Unknown command: safer defers, strict asks.
+	// Unknown command: safer defers, strict / safe-auto ask.
 	if policy == policySafer {
 		return nil, nil
 	}
-	return askWithMetadata("unknown", "",
+	return askWithMetadata(radiusUnknown, "",
 		"Shell command requires safer-mode confirmation."), nil
 }
 
 // Mirrors pkg/session.SafetyPolicy strings; the hooks package must
 // stay free of a session dependency.
 const (
-	policyUnsafe = "unsafe"
-	policySafer  = "safer"
-	policyStrict = "strict"
+	policyUnsafe   = "unsafe"
+	policySafer    = "safer"
+	policySafeAuto = "safe-auto"
+	policyStrict   = "strict"
+)
+
+const (
+	radiusSafe    = "safe"
+	radiusUnknown = "unknown"
 )
 
 // effectiveSafetyPolicy picks the policy for one invocation.
@@ -199,12 +205,12 @@ const (
 func effectiveSafetyPolicy(sessionPolicy string, args []string) string {
 	if len(args) > 0 {
 		switch args[0] {
-		case policyUnsafe, policySafer, policyStrict:
+		case policyUnsafe, policySafer, policySafeAuto, policyStrict:
 			return args[0]
 		}
 	}
 	switch sessionPolicy {
-	case policyUnsafe, policySafer, policyStrict:
+	case policyUnsafe, policySafer, policySafeAuto, policyStrict:
 		return sessionPolicy
 	default:
 		return policyStrict
@@ -239,20 +245,20 @@ func bestDestructiveMatch(command string, patterns []safetyPattern) *safetyPatte
 	return best
 }
 
-func matchesSafe(command string, patterns []safePattern) bool {
+// bestSafeMatch returns the first matching safe-list pattern, or nil.
+// Refuses to match compound shell (approximated via separator tokens)
+// so `ls && rm -rf ~` doesn't inherit `ls`'s safe verdict.
+func bestSafeMatch(command string, patterns []safePattern) *safePattern {
 	normalized := normalizeCommand(command)
-	// Compound shell falls through to ask — refuse to safe-match anything
-	// that smells like a pipeline or chain. The matcher does not parse
-	// shell syntax, so we approximate via separator tokens.
 	if containsShellSeparator(normalized) {
-		return false
+		return nil
 	}
 	for i := range patterns {
 		if patterns[i].regexp.MatchString(normalized) {
-			return true
+			return &patterns[i]
 		}
 	}
-	return false
+	return nil
 }
 
 // containsShellSeparator returns true when the normalised command
@@ -270,6 +276,14 @@ func containsShellSeparator(command string) bool {
 }
 
 func askWithMetadata(blastRadius, category, reason string) *hooks.Output {
+	return verdictWithMetadata(hooks.DecisionAsk, blastRadius, category, reason)
+}
+
+func allowWithMetadata(blastRadius, category, reason string) *hooks.Output {
+	return verdictWithMetadata(hooks.DecisionAllow, blastRadius, category, reason)
+}
+
+func verdictWithMetadata(decision hooks.Decision, blastRadius, category, reason string) *hooks.Output {
 	meta := map[string]string{
 		metaBlastRadius: blastRadius,
 		metaReason:      reason,
@@ -280,7 +294,7 @@ func askWithMetadata(blastRadius, category, reason string) *hooks.Output {
 	return &hooks.Output{
 		HookSpecificOutput: &hooks.HookSpecificOutput{
 			HookEventName:            hooks.EventPreToolUse,
-			PermissionDecision:       hooks.DecisionAsk,
+			PermissionDecision:       decision,
 			PermissionDecisionReason: reason,
 			Metadata:                 meta,
 		},

@@ -51,7 +51,7 @@
           {{ if eq $currentURL (relURL (strings.TrimPrefix "/" .url)) }}{{ $sectionActive = true }}{{ end }}
         {{ end }}
       {{ end }}
-    <details class="sidebar-section"{{ if $sectionActive }} open{{ end }} title="{{ .section }}">
+    <details class="sidebar-section"{{ if $sectionActive }} open{{ end }}>
       <summary class="sidebar-heading">{{ .section }}</summary>
       {{ range .items }}
         <a class="sidebar-link{{ if eq $currentURL (relURL (strings.TrimPrefix "/" .url)) }} active{{ end }}" href="{{ relURL (strings.TrimPrefix "/" .url) }}">{{ .title }}</a>
@@ -66,12 +66,12 @@
     {{ end }}
   </nav>
 
-  <button class="sidebar-toggle" aria-label="Toggle navigation menu">
+  <button class="sidebar-toggle" aria-label="Toggle navigation menu" aria-expanded="false" aria-controls="sidebar">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
   </button>
 
   <main class="main" id="main-content" role="main">
-    <div class="content" id="page-content">
+    <div class="content" id="page-content" tabindex="-1">
       <div class="preview-banner" role="note">
         These docs track the <code>main</code> branch and may describe unreleased features.
         The stable documentation lives at
@@ -86,7 +86,7 @@
   <div class="search-overlay" id="search-overlay" role="dialog" aria-label="Search documentation" aria-modal="true">
     <div class="search-modal">
       <input type="text" id="search-modal-input" placeholder="Search documentation…" aria-label="Search query">
-      <div class="search-results" id="search-results" role="listbox" aria-label="Search results"></div>
+      <div class="search-results" id="search-results" aria-label="Search results"></div>
     </div>
   </div>
 

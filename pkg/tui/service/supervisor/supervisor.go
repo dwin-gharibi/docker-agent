@@ -185,15 +185,28 @@ func (s *Supervisor) handleRuntimeEvent(sessionID string, msg tea.Msg) {
 	case *runtime.StreamStartedEvent:
 		if isTopLevelStream(runner.ID, ev.SessionID) {
 			runner.IsRunning = true
-			runner.PendingEvents = nil // New top-level stream supersedes any stale pending events
+			// A new top-level turn supersedes any stale attention events raised
+			// by ITS OWN previous turn, but must not discard a still-live,
+			// unanswered elicitation from a detached background job
+			// (run_background_agent outlives the turn boundary via
+			// context.WithoutCancel) — that job's waiter goroutine is still
+			// blocked and would be orphaned if its prompt vanished from the
+			// queue (#3584 review item 4).
+			runner.PendingEvents = retainDetachedElicitations(runner.ID, runner.PendingEvents)
+			runner.NeedsAttn = len(runner.PendingEvents) > 0
 			s.notifyTabsUpdated()
 		}
 
 	case *runtime.StreamStoppedEvent:
 		if isTopLevelStream(runner.ID, ev.SessionID) {
 			runner.IsRunning = false
-			runner.PendingEvents = nil // Clear any pending attention events since the top-level stream ended
-			runner.NeedsAttn = false
+			// Same rule as StreamStarted above: only this runner's own
+			// top-level attention events are moot now that its stream ended.
+			// A detached background job's live elicitation must survive the
+			// foreground stream's stop so its waiter isn't orphaned (#3584
+			// review item 4).
+			runner.PendingEvents = retainDetachedElicitations(runner.ID, runner.PendingEvents)
+			runner.NeedsAttn = len(runner.PendingEvents) > 0
 			s.notifyTabsUpdated()
 		}
 
@@ -213,6 +226,21 @@ func (s *Supervisor) handleRuntimeEvent(sessionID string, msg tea.Msg) {
 			}
 		}
 	}
+}
+
+// retainDetachedElicitations filters pending to keep only
+// ElicitationRequestEvents raised by a session other than runnerID — i.e. a
+// detached background job's sub-session, whose elicitation waiter is still
+// blocked awaiting a response regardless of what the runner's own top-level
+// stream is doing. Everything else (ToolCallConfirmation, MaxIterationsReached,
+// and elicitations belonging to runnerID's own top-level stream) is dropped:
+// those are inherently scoped to the stream that just started or stopped, so
+// they are genuinely moot once it does.
+func retainDetachedElicitations(runnerID string, pending []tea.Msg) []tea.Msg {
+	return slices.DeleteFunc(pending, func(msg tea.Msg) bool {
+		elic, ok := msg.(*runtime.ElicitationRequestEvent)
+		return !ok || isTopLevelStream(runnerID, elic.SessionID)
+	})
 }
 
 // notifyTabsUpdated sends a tabs updated message (must be called with lock held).

@@ -80,8 +80,8 @@ func TestModelPickerFiltering(t *testing.T) {
 		d.Update(tea.KeyPressMsg{Text: string(ch)})
 	}
 
-	// Should now only show openai model
-	require.Len(t, d.filtered, 1, "should have 1 model after filtering for 'openai'")
+	// The exact provider match should rank above looser fuzzy matches.
+	require.NotEmpty(t, d.filtered)
 	require.Equal(t, "openai_model", d.filtered[0].Name)
 
 	// Selection should be reset to 0
@@ -92,7 +92,7 @@ func TestModelPickerCustomModel(t *testing.T) {
 	t.Parallel()
 
 	models := []runtime.ModelChoice{
-		{Name: "default_model", Ref: "default_model", Provider: "openai", Model: "gpt-4o", IsDefault: true},
+		{Name: "default_model", Ref: "openai/gpt-4o", Provider: "openai", Model: "gpt-4o", IsDefault: true},
 	}
 
 	dialog := NewModelPickerDialog(models)
@@ -105,10 +105,11 @@ func TestModelPickerCustomModel(t *testing.T) {
 		d.Update(tea.KeyPressMsg{Text: string(ch)})
 	}
 
-	// Should show the custom model option since nothing matches
-	require.Len(t, d.filtered, 1, "should have 1 item (custom option)")
-	require.Equal(t, "Custom: openai/gpt-4", d.filtered[0].Name)
-	require.Equal(t, "openai/gpt-4", d.filtered[0].Ref)
+	// Keep fuzzy matches and append the explicit custom model option.
+	require.GreaterOrEqual(t, len(d.filtered), 2)
+	custom := d.filtered[len(d.filtered)-1]
+	require.Equal(t, "Custom: openai/gpt-4", custom.Name)
+	require.Equal(t, "openai/gpt-4", custom.Ref)
 }
 
 func TestModelPickerRefreshShortcut(t *testing.T) {

@@ -3,6 +3,7 @@ package openai
 import (
 	"cmp"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -520,6 +521,72 @@ func (c *Client) CreateChatCompletionStream(
 	return newStreamAdapter(stream, trackUsage), nil
 }
 
+func (c *Client) supportsDeferredTools() bool {
+	if enabled, ok := providerutil.GetProviderOptBool(c.ModelConfig.ProviderOpts, "supports_deferred_tools"); ok {
+		return enabled
+	}
+	return modelinfo.SupportsDeferredTools(c.ModelConfig.Provider, c.ModelConfig.Model)
+}
+
+func injectDeferredToolLoads(input []responses.ResponseInputItemUnionParam, requestTools []tools.Tool) ([]responses.ResponseInputItemUnionParam, error) {
+	byCallID := make(map[string][]tools.Tool)
+	for _, tool := range requestTools {
+		if tool.Deferred && tool.DeferredAtToolCallID != "" {
+			byCallID[tool.DeferredAtToolCallID] = append(byCallID[tool.DeferredAtToolCallID], tool)
+		}
+	}
+	if len(byCallID) == 0 {
+		return input, nil
+	}
+
+	result := make([]responses.ResponseInputItemUnionParam, 0, len(input)+2*len(byCallID))
+	for _, item := range input {
+		result = append(result, item)
+		if item.OfFunctionCallOutput == nil {
+			continue
+		}
+		deferred := byCallID[item.OfFunctionCallOutput.CallID]
+		if len(deferred) == 0 {
+			continue
+		}
+
+		loaded := make([]responses.ToolUnionParam, 0, len(deferred))
+		names := make([]string, 0, len(deferred))
+		for _, tool := range deferred {
+			parameters, strict, err := ConvertParametersToSchema(tool.Parameters)
+			if err != nil {
+				return nil, err
+			}
+			loaded = append(loaded, responses.ToolUnionParam{OfFunction: &responses.FunctionToolParam{
+				Name:         tool.Name,
+				Description:  param.NewOpt(tool.Description),
+				Parameters:   parameters,
+				Strict:       param.NewOpt(strict),
+				DeferLoading: param.NewOpt(true),
+			}})
+			names = append(names, tool.Name)
+		}
+
+		digest := fmt.Sprintf("%x", sha256.Sum256([]byte(item.OfFunctionCallOutput.CallID+":"+strings.Join(names, ","))))
+		callID := "cagent_tool_load_" + digest[:16]
+		result = append(result,
+			responses.ResponseInputItemUnionParam{OfToolSearchCall: &responses.ResponseInputItemToolSearchCallParam{
+				Arguments: map[string]any{"query": strings.Join(names, " "), "limit": len(names)},
+				CallID:    param.NewOpt(callID),
+				Execution: "client",
+				Status:    "completed",
+			}},
+			responses.ResponseInputItemUnionParam{OfToolSearchOutput: &responses.ResponseToolSearchOutputItemParam{
+				Tools:     loaded,
+				CallID:    param.NewOpt(callID),
+				Execution: responses.ResponseToolSearchOutputItemParamExecutionClient,
+				Status:    responses.ResponseToolSearchOutputItemParamStatusCompleted,
+			}},
+		)
+	}
+	return result, nil
+}
+
 func (c *Client) CreateResponseStream(
 	ctx context.Context,
 	messages []chat.Message,
@@ -533,6 +600,14 @@ func (c *Client) CreateResponseStream(
 	}
 
 	input := c.convertMessagesToResponseInput(ctx, messages)
+	deferredToolsEnabled := c.supportsDeferredTools()
+	if deferredToolsEnabled {
+		loadedInput, err := injectDeferredToolLoads(input, requestTools)
+		if err != nil {
+			return nil, err
+		}
+		input = loadedInput
+	}
 
 	params := responses.ResponseNewParams{
 		Model: c.ModelConfig.Model,
@@ -554,22 +629,24 @@ func (c *Client) CreateResponseStream(
 
 	if len(requestTools) > 0 {
 		slog.DebugContext(ctx, "Adding tools to OpenAI responses request", "tool_count", len(requestTools))
-		toolsParam := make([]responses.ToolUnionParam, len(requestTools))
-		for i, tool := range requestTools {
+		toolsParam := make([]responses.ToolUnionParam, 0, len(requestTools))
+		for _, tool := range requestTools {
+			if deferredToolsEnabled && tool.Deferred {
+				continue
+			}
 			parameters, strict, err := ConvertParametersToSchema(tool.Parameters)
 			if err != nil {
 				slog.DebugContext(ctx, "Failed to convert tool parameters to OpenAI schema", "tool_name", tool.Name, "error", err)
 				return nil, err
 			}
 
-			toolsParam[i] = responses.ToolUnionParam{
-				OfFunction: &responses.FunctionToolParam{
-					Name:        tool.Name,
-					Description: param.NewOpt(tool.Description),
-					Parameters:  parameters,
-					Strict:      param.NewOpt(strict),
-				},
+			functionTool := &responses.FunctionToolParam{
+				Name:        tool.Name,
+				Description: param.NewOpt(tool.Description),
+				Parameters:  parameters,
+				Strict:      param.NewOpt(strict),
 			}
+			toolsParam = append(toolsParam, responses.ToolUnionParam{OfFunction: functionTool})
 
 			if !strict {
 				slog.DebugContext(ctx, "Tool not compatible with OpenAI strict mode, falling back", "tool_name", tool.Name)
@@ -577,17 +654,19 @@ func (c *Client) CreateResponseStream(
 
 			slog.DebugContext(ctx, "Added tool to OpenAI responses request", "tool_name", tool.Name)
 		}
-		params.Tools = toolsParam
+		if len(toolsParam) > 0 {
+			params.Tools = toolsParam
 
-		// Explicitly send tool_choice="auto". See the matching comment in the
-		// Chat Completions path above for rationale (LiteLLM-style gateways
-		// reject requests where tool_choice is omitted).
-		params.ToolChoice = responses.ResponseNewParamsToolChoiceUnion{
-			OfToolChoiceMode: param.NewOpt(responses.ToolChoiceOptionsAuto),
-		}
+			// Explicitly send tool_choice="auto". See the matching comment in the
+			// Chat Completions path above for rationale (LiteLLM-style gateways
+			// reject requests where tool_choice is omitted).
+			params.ToolChoice = responses.ResponseNewParamsToolChoiceUnion{
+				OfToolChoiceMode: param.NewOpt(responses.ToolChoiceOptionsAuto),
+			}
 
-		if c.ModelConfig.ParallelToolCalls != nil {
-			params.ParallelToolCalls = param.NewOpt(*c.ModelConfig.ParallelToolCalls)
+			if c.ModelConfig.ParallelToolCalls != nil {
+				params.ParallelToolCalls = param.NewOpt(*c.ModelConfig.ParallelToolCalls)
+			}
 		}
 	}
 

@@ -248,9 +248,9 @@ func (r *LocalRuntime) swapCurrentAgent(ctx context.Context, sessionID string, f
 	}
 }
 
-// runForwarding runs a child session synchronously, forwarding all of its
-// events to evts and propagating tool-approval state back to the parent
-// on completion. This is the "interactive" path used by transfer_task and
+// runForwarding manages the lifecycle of a blocking sub-session, forwarding
+// events to evts. The child's approval state stays scoped to the sub-session
+// and never flows back to the parent. This is the "interactive" path used by transfer_task and
 // run_skill: the parent loop is blocked while the child executes, and
 // the user sees the child's events live.
 //
@@ -314,7 +314,7 @@ func (r *LocalRuntime) runForwarding(ctx context.Context, parent *session.Sessio
 	// transcript is the most valuable artifact for debugging. The persistence
 	// pipeline relies on SubSessionCompleted to write the sub-session's
 	// messages to the store; without this emission they are silently dropped.
-	parent.AddSubSession(s)
+	parent.AddLiveSubSession(s)
 	evts.Emit(SubSessionCompleted(parent.ID, s, callerAgent.Name()))
 
 	if subSessionErr != nil {
@@ -323,12 +323,6 @@ func (r *LocalRuntime) runForwarding(ctx context.Context, parent *session.Sessio
 		return nil, subSessionErr
 	}
 
-	// Only propagate ToolsApproved and Permissions on success. A failed sub-session
-	// must not silently escalate the parent's tool-approval gate: the user approved
-	// tools within a sub-session scope that ended in error, and that approval
-	// should not carry over to the parent's remaining turns.
-	parent.SetToolsApproved(s.IsToolsApproved())
-	parent.SetPermissions(s.ClonePermissions())
 	span.SetStatus(codes.Ok, "sub-session completed")
 	return tools.ResultSuccess(s.GetLastAssistantMessageContent()), nil
 }
@@ -378,6 +372,15 @@ func (r *LocalRuntime) runCollecting(ctx context.Context, parent *session.Sessio
 		if usage, ok := event.(*TokenUsageEvent); ok {
 			r.emitBackgroundEvent(usage)
 		}
+		// Elicitation requests are NOT re-forwarded here: elicitationHandler
+		// already delivered this event to the OnElicitationRequest sink
+		// directly, synchronously, and exactly once (#3584). Forwarding it
+		// again here — as the bridge's best-effort copy happens to flow
+		// through this same channel when this background sub-session
+		// currently owns the bridge slot — used to cause a second sink
+		// delivery for the same request, which only a stateful App-side
+		// dedupe (since removed) papered over. This branch is intentionally
+		// absent; ElicitationRequestEvents seen here are simply ignored.
 		if errEvt, ok := event.(*ErrorEvent); ok {
 			errMsg = errEvt.Error
 			break
@@ -388,10 +391,31 @@ func (r *LocalRuntime) runCollecting(ctx context.Context, parent *session.Sessio
 	for range events {
 	}
 
+	// The loop above stops forwarding on ctx cancellation / first ErrorEvent,
+	// so the drain can discard TokenUsageEvents carrying the child's latest
+	// recorded usage. Emit one authoritative final snapshot before the child
+	// is attached: AddLiveSubSession marks it live-attached, so the parent's
+	// own events will never fold this cost back in. UI snapshots replace by
+	// session ID, which makes the duplicate on the clean path harmless.
+	// A child that failed before recording any usage or cost gets no
+	// snapshot at all: a zero-usage event would only add an empty
+	// sub-session row to the UI and clobber per-agent context accounting.
+	// Check that before resolving the context limit — the model lookup is
+	// pure overhead for a snapshot that is never emitted.
+	finalUsage := SessionUsage(s, 0, child.CompactionThreshold())
+	usageCtx := context.WithoutCancel(ctx)
+	if finalUsage.ContextLength > 0 || finalUsage.Cost > 0 {
+		// usageCtx: the context-limit lookup must still resolve for a
+		// cancelled task.
+		finalUsage.ContextLimit = r.contextLimitForAgentModel(usageCtx, child, r.getEffectiveModelID(usageCtx, child))
+		r.emitBackgroundEvent(NewTokenUsageEvent(s.ID, cfg.AgentName, finalUsage))
+	}
+
 	// Persist the sub-session unconditionally — the partial transcript is
 	// the most valuable artifact for debugging a failed background agent.
-	// AddSubSession records it in-memory on both the success and error paths.
-	parent.AddSubSession(s)
+	// AddLiveSubSession records it in-memory on both the success and error
+	// paths.
+	parent.AddLiveSubSession(s)
 
 	// Mirror runForwarding's persistence, but write to the store directly
 	// instead of emitting SubSessionCompleted: runCollecting runs on a
@@ -399,9 +423,10 @@ func (r *LocalRuntime) runCollecting(ctx context.Context, parent *session.Sessio
 	// chain would race the parent's live RunStream (the PersistenceObserver
 	// keeps unsynchronised streaming state). Without this the background
 	// sub-session never reaches the store — its tokens and cost are recorded
-	// as $0 and escape any spend accounting that reads the store. Use
-	// WithoutCancel so a cancelled/stopped task still persists its transcript.
-	r.persistBackgroundSubSession(context.WithoutCancel(ctx), parent.ID, s)
+	// as $0 and escape any spend accounting that reads the store. usageCtx is
+	// already detached, so a cancelled/stopped task still persists its
+	// transcript.
+	r.persistBackgroundSubSession(usageCtx, parent.ID, s)
 
 	if errMsg != "" {
 		return &agenttool.RunResult{ErrMsg: errMsg}
@@ -416,13 +441,29 @@ func (r *LocalRuntime) runCollecting(ctx context.Context, parent *session.Sessio
 	// no explanation. Prepend an actionable note so the model (and, through it,
 	// the user) learns the server must be authorized interactively first.
 	if note := backgroundAuthRequiredNote(child); note != "" {
-		if result != "" {
-			result = note + "\n\n" + result
-		} else {
-			result = note
-		}
+		result = prependNote(result, note)
+	}
+	// Mid-call elicitations that were auto-declined because this background
+	// session had no UI to answer them (see elicitationHandler) are recorded
+	// against this sub-session's ID; surface them the same way (#3584).
+	for _, note := range r.elicitationDeclines.drain(s.ID) {
+		result = prependNote(result, note)
 	}
 	return &agenttool.RunResult{Result: result}
+}
+
+// prependNote prepends note to result, separated by a blank line, handling
+// the case where either side is empty. Used to surface model-readable
+// context (OAuth-required, elicitation auto-declined) ahead of a background
+// sub-session's actual response.
+func prependNote(result, note string) string {
+	if note == "" {
+		return result
+	}
+	if result == "" {
+		return note
+	}
+	return note + "\n\n" + result
 }
 
 // backgroundAuthRequiredNote returns a model-readable note naming the child

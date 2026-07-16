@@ -30,7 +30,9 @@ func TestAddGitStatusReportsUntrackedFiles(t *testing.T) {
 	require.NotNil(t, out.HookSpecificOutput)
 	assert.Equal(t, hooks.EventTurnStart, out.HookSpecificOutput.HookEventName,
 		"add_git_status must target turn_start, not session_start")
-	assert.Contains(t, out.HookSpecificOutput.AdditionalContext, "NEWFILE.txt",
+	require.Len(t, out.HookSpecificOutput.InstructionContext, 1)
+	assert.Equal(t, "core/git-status", out.HookSpecificOutput.InstructionContext[0].Key)
+	assert.Contains(t, out.HookSpecificOutput.InstructionContext[0].Content, "NEWFILE.txt",
 		"git status output must mention the untracked file")
 }
 
@@ -52,11 +54,7 @@ func TestAddGitStatusNoCwdIsNoop(t *testing.T) {
 	assert.Nil(t, out)
 }
 
-// TestAddGitStatusNotARepoIsNoop documents the graceful-failure path:
-// pointing the builtin at a directory that isn't a git repo must not
-// surface an error to the runtime — `git status` exits non-zero, the
-// hook logs at debug and returns nil. Without this contract, simply
-// running an agent outside a checkout would abort session start.
+// TestAddGitStatusNotARepoIsRemoved documents the graceful-failure path.
 func TestAddGitStatusNotARepoIsNoop(t *testing.T) {
 	t.Parallel()
 
@@ -64,5 +62,6 @@ func TestAddGitStatusNotARepoIsNoop(t *testing.T) {
 
 	out, err := fn(t.Context(), &hooks.Input{SessionID: "s", Cwd: t.TempDir()}, nil)
 	require.NoError(t, err)
-	assert.Nil(t, out)
+	require.Len(t, out.HookSpecificOutput.InstructionContext, 1)
+	assert.True(t, out.HookSpecificOutput.InstructionContext[0].Removed)
 }

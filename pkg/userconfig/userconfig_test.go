@@ -979,6 +979,15 @@ func TestSettings_GetSound(t *testing.T) {
 	}
 }
 
+func TestSettings_CacheStablePromptsEnabled(t *testing.T) {
+	t.Parallel()
+
+	assert.False(t, (*Settings)(nil).CacheStablePromptsEnabled())
+	assert.False(t, (&Settings{}).CacheStablePromptsEnabled())
+	assert.True(t, (&Settings{CacheStablePrompts: new(true)}).CacheStablePromptsEnabled())
+	assert.False(t, (&Settings{CacheStablePrompts: new(false)}).CacheStablePromptsEnabled())
+}
+
 func TestSettings_SnapshotsEnabled(t *testing.T) {
 	t.Parallel()
 

@@ -16,6 +16,7 @@ import (
 	"github.com/docker/docker-agent/pkg/agent"
 	"github.com/docker/docker-agent/pkg/chat"
 	"github.com/docker/docker-agent/pkg/compaction"
+	"github.com/docker/docker-agent/pkg/config/latest"
 	"github.com/docker/docker-agent/pkg/httpclient"
 	"github.com/docker/docker-agent/pkg/model/provider"
 	"github.com/docker/docker-agent/pkg/modelsdev"
@@ -33,6 +34,7 @@ import (
 	"github.com/docker/docker-agent/pkg/tools/builtin/skills"
 	"github.com/docker/docker-agent/pkg/tools/builtin/transfertask"
 	mcptools "github.com/docker/docker-agent/pkg/tools/mcp"
+	"github.com/docker/docker-agent/pkg/userconfig"
 )
 
 // registerDefaultTools wires up the built-in tool handlers (delegation,
@@ -336,9 +338,12 @@ func (r *LocalRuntime) runStreamLoop(ctx context.Context, sess *session.Session,
 	// extras and threaded into every model call below — never persisted,
 	// to keep the visible transcript clean and the user message tail
 	// stable.
+	sessionStart := r.executeSessionStartHooks(ctx, sess, a, sink)
 	ls := &loopState{
-		maxIterations:    sess.MaxIterations,
-		sessionStartMsgs: r.executeSessionStartHooks(ctx, sess, a, sink),
+		maxIterations:          sess.MaxIterations,
+		sessionStartMsgs:       sessionStart.messages,
+		sessionStartLegacyMsgs: sessionStart.legacyMessages(),
+		sessionStartSources:    sessionStart.sources,
 	}
 
 	// Emit team information
@@ -363,7 +368,7 @@ func (r *LocalRuntime) runStreamLoop(ctx context.Context, sess *session.Session,
 
 	sink.Emit(ToolsetInfo(len(agentTools), false, a.Name()))
 
-	messages := sess.GetMessages(a)
+	messages := sess.GetMessagesWithoutInstructionContext(a)
 
 	// Sub-sessions (transferred tasks, background agents, skill
 	// sub-sessions) carry a synthesised "Please proceed." message that
@@ -391,7 +396,9 @@ func (r *LocalRuntime) runStreamLoop(ctx context.Context, sess *session.Session,
 	sink.Emit(StreamStarted(sess.ID, a.Name()))
 
 	if a.HasHarness() {
-		streamReason = r.runHarnessAgent(ctx, sess, a, slices.Concat(ls.sessionStartMsgs, ls.userPromptMsgs), sink)
+		streamReason = r.runHarnessAgent(ctx, sess, a,
+			slices.Concat(ls.sessionStartMsgs, ls.userPromptMsgs),
+			slices.Concat(ls.sessionStartLegacyMsgs, ls.userPromptMsgs), ls.sessionStartSources, sink)
 		return
 	}
 
@@ -510,6 +517,9 @@ func (r *LocalRuntime) runStreamLoop(ctx context.Context, sess *session.Session,
 		if err != nil {
 			slog.DebugContext(ctx, "Failed to get model definition", "error", err)
 		}
+		// A config-declared price table takes precedence over the
+		// catalogue and prices models the catalogue doesn't know.
+		m = applyConfigCost(m, modelID, model.BaseConfig().ModelConfig.Cost)
 		// We can only compact if we know the context limit.
 		// resolveContextLimit prefers provider_opts.context_size when set
 		// (some providers — notably Docker Model Runner — use it to size
@@ -525,7 +535,8 @@ func (r *LocalRuntime) runStreamLoop(ctx context.Context, sess *session.Session,
 		// trigger and the UI context gauge (issue #3241); it equals the primary
 		// window unless a smaller compaction model is configured.
 		contextLimit := r.effectiveContextLimit(ctx, a, r.resolveContextLimit(ctx, model, modelID))
-		if contextLimit > 0 && r.sessionCompactionEnabled(a) && compaction.ShouldCompact(sess.InputTokens, sess.OutputTokens, 0, contextLimit, a.CompactionThreshold()) {
+		inputTokens, outputTokens := sess.Usage()
+		if contextLimit > 0 && r.sessionCompactionEnabled(a) && compaction.ShouldCompact(inputTokens, outputTokens, 0, contextLimit, a.CompactionThreshold()) {
 			r.compactWithReason(ctx, sess, "", compactionReasonThreshold, sink)
 		}
 
@@ -585,15 +596,17 @@ const (
 // new per-stream tracking (cost ceiling, token budget, turn timing)
 // without touching any signature.
 type loopState struct {
-	iteration           int
-	maxIterations       int
-	overflowCompactions int
-	toolModelOverride   string
-	prevAgentName       string
-	loopDetector        *toolexec.LoopDetector
-	sessionStartMsgs    []chat.Message
-	userPromptMsgs      []chat.Message
-	exitReason          string
+	iteration              int
+	maxIterations          int
+	overflowCompactions    int
+	toolModelOverride      string
+	prevAgentName          string
+	loopDetector           *toolexec.LoopDetector
+	sessionStartMsgs       []chat.Message
+	sessionStartLegacyMsgs []chat.Message
+	sessionStartSources    []session.InstructionSource
+	userPromptMsgs         []chat.Message
+	exitReason             string
 	// prevTurnMadeToolCalls reports whether the immediately preceding
 	// turn emitted tool calls. Used to classify an empty trailing turn:
 	// a clean stop right after tool work is benign (the model already
@@ -710,15 +723,13 @@ func (r *LocalRuntime) runTurn(
 		ls.exitReason = endReason
 	}()
 
-	// Run turn_start hooks BEFORE building messages so their
-	// AdditionalContext, alongside the session_start extras captured
-	// once at the top of RunStream, can be spliced after the invariant
-	// cache checkpoint and before the conversation history. Neither
-	// hook's output is persisted, so per-turn signals (date, prompt
-	// files) refresh every turn while session-level context (cwd, OS,
-	// arch) stays stable — all without bloating the stored history.
+	// Run turn_start hooks before assembly so dynamic context can be diffed
+	// against what the model already knows. Changes extend the conversation;
+	// they never rewrite the frozen instruction prefix.
 	turnStartMsgs := r.executeTurnStartHooks(ctx, sess, a, events)
-	messages := sess.GetMessages(a, slices.Concat(ls.sessionStartMsgs, ls.userPromptMsgs, turnStartMsgs)...)
+	legacyExtras := slices.Concat(ls.sessionStartLegacyMsgs, ls.userPromptMsgs, turnStartMsgs.legacyMessages())
+	messages := r.messagesWithDynamicContext(ctx, sess, a,
+		instructionSources(ls.sessionStartMsgs, ls.userPromptMsgs, turnStartMsgs, ls.sessionStartSources...), legacyExtras)
 	slog.DebugContext(ctx, "Retrieved messages for processing", "agent", a.Name(), "message_count", len(messages))
 
 	// before_llm_call hooks fire just before the model is invoked.
@@ -755,6 +766,7 @@ func (r *LocalRuntime) runTurn(
 	messages = r.applyBeforeLLMCallTransforms(ctx, sess, a, modelID.String(), messages)
 
 	// Try primary model with fallback chain if configured
+	agentTools = r.toolDeferrals.MarkAt(sess.ID, lastToolCallID(messages), agentTools)
 	res, usedModel, err := r.fallback.execute(streamCtx, a, model, messages, agentTools, sess, m, events)
 	if err != nil {
 		outcome := r.handleStreamError(ctx, sess, a, err, contextLimit, &ls.overflowCompactions, streamSpan, events)
@@ -831,6 +843,9 @@ func (r *LocalRuntime) runTurn(
 	usage := SessionUsage(sess, contextLimit, a.CompactionThreshold())
 	usage.LastMessage = msgUsage
 	events.Emit(NewTokenUsageEvent(sess.ID, a.Name(), usage))
+	if shouldWarnOnCacheMiss(sess, msgUsage) {
+		events.Emit(Warning("This agent turn did not use the prompt cache.", a.Name()))
+	}
 
 	// Record the message count before tool calls so we can
 	// measure how much content was added by tool results.
@@ -997,6 +1012,31 @@ func (r *LocalRuntime) Run(ctx context.Context, sess *session.Session) ([]sessio
 	return sess.GetAllMessages(), nil
 }
 
+// applyConfigCost overlays a config-declared price table (USD per 1M tokens)
+// onto the catalogue entry, returning m untouched when there is no override.
+// It never mutates m: the store caches entries shared across sessions. When
+// the model is uncatalogued (m == nil) a minimal entry is synthesized so the
+// call is still priced — this is the escape hatch for custom endpoints that
+// models.dev cannot describe.
+func applyConfigCost(m *modelsdev.Model, id modelsdev.ID, cost *latest.CostConfig) *modelsdev.Model {
+	if cost == nil {
+		return m
+	}
+	var out modelsdev.Model
+	if m != nil {
+		out = *m
+	} else {
+		out.Name = id.Model
+	}
+	out.Cost = &modelsdev.Cost{
+		Input:      cost.Input,
+		Output:     cost.Output,
+		CacheRead:  cost.CacheRead,
+		CacheWrite: cost.CacheWrite,
+	}
+	return &out
+}
+
 // computeMessageCost returns the USD cost of a single model response,
 // or nil when the response cannot be priced. It is nil when there is
 // no usage to price (usage == nil) or the model has no pricing table
@@ -1016,6 +1056,27 @@ func computeMessageCost(usage *chat.Usage, m *modelsdev.Model) *float64 {
 		float64(usage.CachedInputTokens)*m.Cost.CacheRead +
 		float64(usage.CacheWriteTokens)*m.Cost.CacheWrite) / 1e6
 	return &cost
+}
+
+func shouldWarnOnCacheMiss(sess *session.Session, usage *MessageUsage) bool {
+	if !userconfig.Get().CacheMissWarningsEnabled() || usage == nil || usage.CachedInputTokens > 0 {
+		return false
+	}
+	if usage.InputTokens == 0 && usage.CacheWriteTokens == 0 {
+		return false
+	}
+
+	assistantMessages := 0
+	for _, message := range sess.OwnMessages() {
+		if message.Message.Role != chat.MessageRoleAssistant {
+			continue
+		}
+		assistantMessages++
+		if assistantMessages > 1 {
+			return true
+		}
+	}
+	return false
 }
 
 // recordAssistantMessage adds the model's response to the session and returns
@@ -1160,17 +1221,18 @@ func (r *LocalRuntime) compactIfNeeded(
 		addedTokens += estimator.EstimateMessageTokens(&newMessages[i].Message)
 	}
 
-	if !compaction.ShouldCompact(sess.InputTokens, sess.OutputTokens, addedTokens, contextLimit, a.CompactionThreshold()) {
+	inputTokens, outputTokens := sess.Usage()
+	if !compaction.ShouldCompact(inputTokens, outputTokens, addedTokens, contextLimit, a.CompactionThreshold()) {
 		return
 	}
 
 	slog.InfoContext(ctx, "Proactive compaction: tool results pushed estimated context past the compaction threshold",
 		"agent", a.Name(),
-		"input_tokens", sess.InputTokens,
-		"output_tokens", sess.OutputTokens,
+		"input_tokens", inputTokens,
+		"output_tokens", outputTokens,
 		"added_estimated_tokens", addedTokens,
 		"estimator_scale", estimator.Scale(),
-		"estimated_total", sess.InputTokens+sess.OutputTokens+addedTokens,
+		"estimated_total", inputTokens+outputTokens+addedTokens,
 		"context_limit", contextLimit,
 	)
 	r.compactWithReason(ctx, sess, "", compactionReasonThreshold, events)
@@ -1244,6 +1306,15 @@ func formatToolWarning(a *agent.Agent, warnings []string) string {
 		fmt.Fprintf(&builder, "- %s\n", warning)
 	}
 	return strings.TrimSuffix(builder.String(), "\n")
+}
+
+func lastToolCallID(messages []chat.Message) string {
+	for _, message := range slices.Backward(messages) {
+		if message.Role == chat.MessageRoleTool {
+			return message.ToolCallID
+		}
+	}
+	return ""
 }
 
 // filterExcludedTools removes tools whose names appear in the excluded list.

@@ -951,3 +951,35 @@ func TestCompactionInput(t *testing.T) {
 		assert.Equal(t, "hello", sess.Messages[0].Message.Message.Content)
 	})
 }
+
+// TestEmbeddedSubSessionCost distinguishes sub-sessions embedded at load time
+// (hydrated items carry no live-attached marker) from sub-sessions attached
+// live via AddLiveSubSession: only the former count, because live
+// sub-sessions report their own cost through their own TokenUsageEvents.
+func TestEmbeddedSubSessionCost(t *testing.T) {
+	t.Parallel()
+
+	costItem := func(cost float64) Item {
+		return Item{Message: &Message{Message: chat.Message{Role: chat.MessageRoleAssistant, Cost: cost}}}
+	}
+
+	sess := New()
+	sess.Messages = append(sess.Messages, costItem(0.10))
+
+	// Restored shape: hydration appends sub-session items directly.
+	embedded := New(WithParentID(sess.ID))
+	embedded.Messages = append(embedded.Messages, costItem(0.05))
+	nested := New(WithParentID(embedded.ID))
+	nested.Messages = append(nested.Messages, costItem(0.01))
+	embedded.Messages = append(embedded.Messages, Item{SubSession: nested})
+	sess.Messages = append(sess.Messages, Item{SubSession: embedded})
+
+	// Live shape: the sub-session completed during this process.
+	live := New(WithParentID(sess.ID))
+	live.Messages = append(live.Messages, costItem(0.02))
+	sess.AddLiveSubSession(live)
+
+	assert.InDelta(t, 0.06, sess.EmbeddedSubSessionCost(), 1e-9, "embedded sub-sessions count recursively")
+	assert.InDelta(t, 0.10, sess.OwnCost(), 1e-9)
+	assert.InDelta(t, 0.18, sess.TotalCost(), 1e-9, "TotalCost counts embedded and live sub-sessions")
+}

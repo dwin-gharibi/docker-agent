@@ -6,6 +6,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 
+	"github.com/docker/docker-agent/pkg/chat"
 	"github.com/docker/docker-agent/pkg/runtime"
 	"github.com/docker/docker-agent/pkg/session"
 	"github.com/docker/docker-agent/pkg/tui/service"
@@ -226,4 +227,83 @@ func TestTokenUsageTab_ShowsTokenGlyph(t *testing.T) {
 	out := ansi.Strip(m.tokenUsage(40))
 	assert.Contains(t, out, styles.TokenGlyph)
 	assert.Contains(t, out, "8.0K")
+}
+
+// sidebarCostItem returns an assistant-message item carrying the given cost.
+func sidebarCostItem(agentName string, cost float64) session.Item {
+	return session.Item{Message: &session.Message{
+		AgentName: agentName,
+		Message:   chat.Message{Role: chat.MessageRoleAssistant, Content: "done", Cost: cost},
+	}}
+}
+
+// TestComputeUsageStats_RestoredCostDoesNotDecreaseAfterCompaction is a
+// regression test for the displayed total dropping after a session restore:
+// LoadFromSession seeds the root entry with the restored total (own +
+// embedded sub-session costs), and the next live TokenUsageEvent for the
+// root — compaction emits one right away — used to replace it with an
+// own-cost-only snapshot, shrinking the total.
+func TestComputeUsageStats_RestoredCostDoesNotDecreaseAfterCompaction(t *testing.T) {
+	t.Parallel()
+
+	// Restored session: $0.10 direct + $0.05 embedded sub-session.
+	sess := session.New()
+	sess.InputTokens = 800
+	sess.OutputTokens = 200
+	sess.Messages = append(sess.Messages, sidebarCostItem("root", 0.10))
+	sub := session.New(session.WithParentID(sess.ID))
+	sub.Messages = append(sub.Messages, sidebarCostItem("developer", 0.05))
+	sess.Messages = append(sess.Messages, session.Item{SubSession: sub})
+
+	m := newTestSidebar(t)
+	m.LoadFromSession(sess)
+	assert.InDelta(t, 0.15, m.computeUsageStats().totalCost, 1e-9)
+
+	// Compaction appends a $0.01 summary and immediately emits the session's
+	// usage (see compactWithReason).
+	sess.ApplyCompaction(100, 0, session.Item{Summary: "summary", Cost: 0.01})
+	m.SetTokenUsage(&runtime.TokenUsageEvent{
+		SessionID:    sess.ID,
+		AgentContext: runtime.AgentContext{AgentName: "root"},
+		Usage:        runtime.SessionUsage(sess, 100_000),
+	})
+	assert.InDelta(t, 0.16, m.computeUsageStats().totalCost, 1e-9,
+		"the total must keep the embedded sub-session cost and gain the summary cost")
+}
+
+// TestComputeUsageStats_LiveSubSessionNotDoubleCounted drives the live
+// delegation flow through the runtime's own usage snapshots: the child
+// reports its own cost while it runs, and once it completes and attaches to
+// the root the root's next event must not fold the child in again.
+func TestComputeUsageStats_LiveSubSessionNotDoubleCounted(t *testing.T) {
+	t.Parallel()
+
+	usageEvent := func(sessionID, agentName string, sess *session.Session) *runtime.TokenUsageEvent {
+		return &runtime.TokenUsageEvent{
+			SessionID:    sessionID,
+			AgentContext: runtime.AgentContext{AgentName: agentName},
+			Usage:        runtime.SessionUsage(sess, 100_000),
+		}
+	}
+
+	root := session.New()
+	root.Messages = append(root.Messages, sidebarCostItem("root", 0.10))
+
+	m := newTestSidebar(t)
+	m.startStream(root.ID, "root")
+	m.SetTokenUsage(usageEvent(root.ID, "root", root))
+
+	child := session.New(session.WithParentID(root.ID))
+	child.Messages = append(child.Messages, sidebarCostItem("developer", 0.05))
+	m.startStream(child.ID, "developer")
+	m.SetTokenUsage(usageEvent(child.ID, "developer", child))
+	assert.InDelta(t, 0.15, m.computeUsageStats().totalCost, 1e-9)
+
+	// Child completes: its stream stops and it is attached to the root.
+	m.stopStream()
+	root.AddLiveSubSession(child)
+
+	m.SetTokenUsage(usageEvent(root.ID, "root", root))
+	assert.InDelta(t, 0.15, m.computeUsageStats().totalCost, 1e-9,
+		"$root own + $child own, not double-counted")
 }

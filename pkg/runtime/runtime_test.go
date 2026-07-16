@@ -2517,10 +2517,11 @@ func TestTransferTaskPersistsSubSessionOnError(t *testing.T) {
 		"SubSessionCompletedEvent must fire on the error path so observers persist the sub-session")
 }
 
-func TestYoloMode_OverridesPermissionsDeny(t *testing.T) {
+// TestDenyOverridesYoloMode verifies that Deny permissions take precedence over the yolo flag.
+func TestDenyOverridesYoloMode(t *testing.T) {
 	t.Parallel()
 
-	// Test that --yolo flag takes precedence over deny permissions
+	// Test that deny permissions take precedence over the --yolo flag
 	permChecker := permissions.NewChecker(&latest.PermissionsConfig{
 		Deny: []string{"dangerous_tool"},
 	})
@@ -2561,10 +2562,11 @@ func TestYoloMode_OverridesPermissionsDeny(t *testing.T) {
 	rt.processToolCalls(t.Context(), sess, calls, agentTools, NewChannelSink(events))
 	close(events)
 
-	// With --yolo, the tool should execute despite deny permission
-	require.True(t, executed, "expected tool to be executed in --yolo mode despite deny permission")
+	// With --yolo and Deny/ForceAsk precedence, the tool should NOT execute.
+	require.False(t, executed, "expected tool to NOT be executed in --yolo mode because Deny wins")
 }
 
+// TestYoloMode_OverridesForceAsk verifies that the yolo flag takes precedence over ForceAsk permissions.
 func TestYoloMode_OverridesForceAsk(t *testing.T) {
 	t.Parallel()
 
@@ -2597,6 +2599,7 @@ func TestYoloMode_OverridesForceAsk(t *testing.T) {
 	require.NoError(t, err)
 
 	sess := session.New(session.WithUserMessage("Test"), session.WithToolsApproved(true))
+	sess.NonInteractive = true // fail fast instead of hanging on askUser if this regresses
 	require.True(t, sess.ToolsApproved)
 
 	calls := []tools.ToolCall{{
@@ -2609,14 +2612,16 @@ func TestYoloMode_OverridesForceAsk(t *testing.T) {
 	rt.processToolCalls(t.Context(), sess, calls, agentTools, NewChannelSink(events))
 	close(events)
 
-	// With --yolo, the tool should execute without asking
-	require.True(t, executed, "expected tool to be executed in --yolo mode despite ForceAsk permission")
+	// YOLO overrides ForceAsk: the checker's ForceAsk verdict is bypassed
+	// and the tool executes automatically.
+	require.True(t, executed, "expected tool to be executed in --yolo mode because YOLO wins over ForceAsk")
 }
 
-func TestYoloMode_OverridesSessionDeny(t *testing.T) {
+// TestSessionDenyOverridesYoloMode verifies that session-level Deny permissions take precedence over the yolo flag.
+func TestSessionDenyOverridesYoloMode(t *testing.T) {
 	t.Parallel()
 
-	// Test that --yolo flag takes precedence over session-level deny
+	// Test that session-level deny takes precedence over the --yolo flag
 	var executed bool
 	agentTools := []tools.Tool{{
 		Name:       "blocked_tool",
@@ -2656,8 +2661,8 @@ func TestYoloMode_OverridesSessionDeny(t *testing.T) {
 	rt.processToolCalls(t.Context(), sess, calls, agentTools, NewChannelSink(events))
 	close(events)
 
-	// With --yolo, the tool should execute despite session deny
-	require.True(t, executed, "expected tool to be executed in --yolo mode despite session deny permission")
+	// With --yolo and Deny/ForceAsk precedence, the tool should NOT execute.
+	require.False(t, executed, "expected tool to NOT be executed in --yolo mode because session Deny wins")
 }
 
 func TestStripImageContent(t *testing.T) {
@@ -3350,10 +3355,20 @@ func TestReprobe_NewToolsAvailableAfterToolCall(t *testing.T) {
 	call1Names := toolNames(prov.recordedCalls[0])
 	assert.Contains(t, call1Names, "install_mcp", "turn 1 must include install_mcp")
 	assert.NotContains(t, call1Names, "mcp_hello", "turn 1 must NOT include mcp_hello before install")
+	for _, tool := range prov.recordedCalls[0] {
+		assert.False(t, tool.Deferred)
+	}
 
-	// Second model call: mcp_hello must be visible.
+	// Second model call: mcp_hello must be visible and deferred so it preserves
+	// the provider's cached tool prefix.
 	call2Names := toolNames(prov.recordedCalls[1])
 	assert.Contains(t, call2Names, "mcp_hello", "turn 2 must include mcp_hello after reprobe")
+	for _, tool := range prov.recordedCalls[1] {
+		assert.Equal(t, tool.Name == "mcp_hello", tool.Deferred)
+		if tool.Name == "mcp_hello" {
+			assert.Equal(t, "call_1", tool.DeferredAtToolCallID)
+		}
+	}
 
 	// A ToolsetInfo event with the new count must have been emitted during reprobe.
 	var toolsetInfoCounts []int
@@ -4145,6 +4160,12 @@ func TestElicitationHandler_NonInteractive(t *testing.T) {
 	assert.Equal(t, tools.ElicitationActionDecline, result.Action, "non-interactive runtime should decline elicitation")
 }
 
+// TestElicitationHandler_Interactive_NoChannel verifies that an interactive
+// elicitationHandler call succeeds even when the elicitation bridge has no
+// channel configured (no RunStream is active). This used to be a hard
+// failure because delivery depended entirely on the bridge; with per-request
+// waiters (#3584) the bridge send is best-effort only, and ResumeElicitation
+// still routes the response correctly via the waiter registry.
 func TestElicitationHandler_Interactive_NoChannel(t *testing.T) {
 	t.Parallel()
 
@@ -4152,7 +4173,7 @@ func TestElicitationHandler_Interactive_NoChannel(t *testing.T) {
 	root := agent.New("root", "test", agent.WithModel(prov))
 	tm := team.New(team.WithAgents(root))
 
-	// Default runtime (interactive mode) with no events channel set
+	// Default runtime (interactive mode) with no events channel set on the bridge.
 	rt, err := NewLocalRuntime(t.Context(), tm)
 	require.NoError(t, err)
 
@@ -4160,10 +4181,29 @@ func TestElicitationHandler_Interactive_NoChannel(t *testing.T) {
 		Message: "Authorize OAuth?",
 	}
 
-	_, err = rt.elicitationHandler(t.Context(), params)
+	type handlerResult struct {
+		result tools.ElicitationResult
+		err    error
+	}
+	done := make(chan handlerResult, 1)
+	go func() {
+		result, err := rt.elicitationHandler(t.Context(), params)
+		done <- handlerResult{result: result, err: err}
+	}()
 
-	require.Error(t, err, "interactive runtime with no events channel should error")
-	assert.ErrorIs(t, err, errNoElicitationChannel)
+	require.Eventually(t, func() bool { return rt.elicitationWaiters.count() == 1 }, time.Second, time.Millisecond,
+		"elicitationHandler must register a waiter even though the bridge has no channel")
+
+	require.NoError(t, rt.ResumeElicitation(t.Context(), tools.ElicitationActionAccept, map[string]any{"ok": true}, ""))
+
+	select {
+	case got := <-done:
+		require.NoError(t, got.err)
+		assert.Equal(t, tools.ElicitationActionAccept, got.result.Action)
+		assert.Equal(t, map[string]any{"ok": true}, got.result.Content)
+	case <-time.After(2 * time.Second):
+		t.Fatal("elicitationHandler did not return after ResumeElicitation")
+	}
 }
 
 // TestRunAgentPersistsSubSessionToStore is the regression test for the
@@ -4272,11 +4312,75 @@ func TestRunAgentPersistsSubSessionOnError(t *testing.T) {
 		"parent session must record the sub-session even when the background agent errored")
 }
 
+// TestRunAgentImmediateFailureEmitsNoZeroUsageEvent guards runCollecting's
+// final authoritative snapshot: a background child that fails before
+// recording any usage or cost (here the provider errors on stream creation)
+// must not surface a zero-usage TokenUsageEvent — it would add an empty
+// sub-session row to the UI and clobber per-agent context accounting. The
+// guard keys off the child's recorded usage alone and skips the event — and
+// the context-limit lookup — before any model resolution; the model store
+// still resolves a real limit so a wrongly emitted event would carry one.
+func TestRunAgentImmediateFailureEmitsNoZeroUsageEvent(t *testing.T) {
+	t.Parallel()
+
+	parentProv := &mockProvider{id: "test/mock-model", stream: &mockStream{}}
+	failingProv := &mockProviderWithError{id: "test/mock-model"}
+
+	worker := agent.New("worker", "Worker agent", agent.WithModel(failingProv))
+	root := agent.New("root", "Root agent", agent.WithModel(parentProv))
+	agent.WithSubAgents(worker)(root)
+
+	rt, err := NewLocalRuntime(t.Context(), team.New(team.WithAgents(root, worker)),
+		WithSessionCompaction(false),
+		WithModelStore(mockModelStoreWithCostAndLimit{limit: 100_000, cost: modelsdev.Cost{Input: 10, Output: 20}}))
+	require.NoError(t, err)
+
+	var forwarded []Event
+	rt.OnBackgroundEvent(func(event Event) { forwarded = append(forwarded, event) })
+
+	sess := session.New(session.WithUserMessage("Test"), session.WithToolsApproved(true))
+	result := rt.RunAgent(t.Context(), agenttool.RunParams{
+		AgentName:     "worker",
+		Task:          "do something",
+		ParentSession: sess,
+	})
+	require.NotEmpty(t, result.ErrMsg, "RunAgent should surface the sub-session error")
+
+	assert.Empty(t, forwarded,
+		"a child that failed before any billed work must not emit a zero-usage snapshot")
+}
+
+// mockModelStoreWithCostAndLimit prices tokens so usage snapshots carry a
+// nonzero cost, in addition to a resolvable context limit.
+type mockModelStoreWithCostAndLimit struct {
+	ModelStore
+
+	limit int
+	cost  modelsdev.Cost
+}
+
+func (m mockModelStoreWithCostAndLimit) GetModel(_ context.Context, _ modelsdev.ID) (*modelsdev.Model, error) {
+	return &modelsdev.Model{Limit: modelsdev.Limit{Context: m.limit}, Cost: &m.cost}, nil
+}
+
+// lastAttachedSubSession returns the most recent sub-session recorded on sess.
+func lastAttachedSubSession(sess *session.Session) *session.Session {
+	var sub *session.Session
+	for _, item := range sess.Messages {
+		if item.SubSession != nil {
+			sub = item.SubSession
+		}
+	}
+	return sub
+}
+
 // TestRunAgentForwardsTokenUsageOutOfBand verifies runCollecting surfaces the
 // background sub-session's TokenUsageEvents through OnBackgroundEvent — the
 // out-of-band path that lets the TUI keep per-agent context accounting for
 // background agents — tagged with the sub-session id and the worker's name,
-// and forwards nothing else.
+// and forwards nothing else. The last event is the authoritative final
+// snapshot runCollecting emits before attaching the child, and must match
+// the child's final recorded state.
 func TestRunAgentForwardsTokenUsageOutOfBand(t *testing.T) {
 	t.Parallel()
 
@@ -4289,7 +4393,8 @@ func TestRunAgentForwardsTokenUsageOutOfBand(t *testing.T) {
 	agent.WithSubAgents(worker)(root)
 
 	tm := team.New(team.WithAgents(root, worker))
-	rt, err := NewLocalRuntime(t.Context(), tm, WithSessionCompaction(false), WithModelStore(mockModelStore{}))
+	rt, err := NewLocalRuntime(t.Context(), tm, WithSessionCompaction(false),
+		WithModelStore(mockModelStoreWithCostAndLimit{limit: 100_000, cost: modelsdev.Cost{Input: 10, Output: 20}}))
 	require.NoError(t, err)
 
 	var forwarded []Event
@@ -4311,9 +4416,109 @@ func TestRunAgentForwardsTokenUsageOutOfBand(t *testing.T) {
 		assert.NotEqual(t, sess.ID, usage.SessionID, "usage carries the sub-session id, not the parent's")
 		assert.NotEmpty(t, usage.SessionID)
 	}
+
+	// Once attached, the child is live-attached and the parent's own events
+	// exclude its cost, so the last out-of-band snapshot must already carry
+	// the child's final accounting: cumulative tokens, cost (100×$10 +
+	// 50×$20 per 1M tokens), and the resolved context limit.
+	sub := lastAttachedSubSession(sess)
+	require.NotNil(t, sub)
 	last := forwarded[len(forwarded)-1].(*TokenUsageEvent)
 	require.NotNil(t, last.Usage)
+	assert.Equal(t, sub.ID, last.SessionID)
 	assert.Equal(t, int64(150), last.Usage.ContextLength, "final snapshot carries the worker's cumulative usage")
+	assert.InDelta(t, 0.002, last.Usage.Cost, 1e-9, "final snapshot carries the worker's final cost")
+	assert.InDelta(t, sub.OwnCost()+sub.EmbeddedSubSessionCost(), last.Usage.Cost, 1e-9,
+		"the snapshot's cost is exactly what the attached child reports for itself")
+	assert.Equal(t, int64(100_000), last.Usage.ContextLimit, "final snapshot resolves the worker's context limit")
+}
+
+// TestRunAgentEmitsFinalUsageOnCancellation is the regression test for the
+// background cancellation accounting gap: when the task's context is
+// cancelled, runCollecting's forwarding loop breaks and blindly drains the
+// remaining events — including the TokenUsageEvent carrying the child's
+// recorded usage. Because the child is then attached live to the parent
+// (excluded from the parent's own snapshots), nothing would ever surface its
+// cost. runCollecting must emit one final authoritative snapshot before
+// attaching the child.
+func TestRunAgentEmitsFinalUsageOnCancellation(t *testing.T) {
+	t.Parallel()
+
+	// The worker streams content, then calls a tool that cancels the task
+	// context — strictly after the turn's usage was recorded and its
+	// TokenUsageEvent buffered. onContent (below) blocks until the
+	// cancellation is visible, so the forwarding loop deterministically
+	// breaks before reaching that TokenUsageEvent.
+	ctx, cancel := context.WithCancel(t.Context())
+	contentSeen := make(chan struct{})
+	cancelled := make(chan struct{})
+
+	workerTools := []tools.Tool{{
+		Name:       "cancel_task",
+		Parameters: map[string]any{},
+		Handler: func(context.Context, tools.ToolCall, tools.Runtime) (*tools.ToolCallResult, error) {
+			<-contentSeen
+			cancel()
+			close(cancelled)
+			return tools.ResultSuccess("cancelling"), nil
+		},
+	}}
+	workerStream := newStreamBuilder().
+		AddContent("partial").
+		AddToolCallName("call-1", "cancel_task").
+		AddToolCallArguments("call-1", "{}").
+		AddToolCallStopWithUsage(100, 50).
+		Build()
+
+	worker := agent.New("worker", "Worker agent",
+		agent.WithModel(&mockProvider{id: "test/mock-model", stream: workerStream}),
+		agent.WithToolSets(newStubToolSet(nil, workerTools, nil)),
+	)
+	root := agent.New("root", "Root agent", agent.WithModel(&mockProvider{id: "test/mock-model", stream: &mockStream{}}))
+	agent.WithSubAgents(worker)(root)
+
+	rt, err := NewLocalRuntime(t.Context(), team.New(team.WithAgents(root, worker)),
+		WithSessionCompaction(false),
+		WithModelStore(mockModelStoreWithCostAndLimit{limit: 100_000, cost: modelsdev.Cost{Input: 10, Output: 20}}))
+	require.NoError(t, err)
+
+	var forwarded []*TokenUsageEvent
+	rt.OnBackgroundEvent(func(event Event) {
+		if usage, ok := event.(*TokenUsageEvent); ok {
+			forwarded = append(forwarded, usage)
+		}
+	})
+
+	sess := session.New(session.WithUserMessage("Test"), session.WithToolsApproved(true))
+	var once sync.Once
+	rt.RunAgent(ctx, agenttool.RunParams{
+		AgentName:     "worker",
+		Task:          "do something",
+		ParentSession: sess,
+		OnContent: func(string) {
+			once.Do(func() {
+				close(contentSeen)
+				<-cancelled
+			})
+		},
+	})
+
+	// The cancelled child still attached with the turn it completed.
+	sub := lastAttachedSubSession(sess)
+	require.NotNil(t, sub, "the cancelled child must still be attached to the parent")
+	require.Equal(t, int64(150), sub.InputTokens+sub.OutputTokens, "the child recorded the turn before cancellation")
+
+	require.NotEmpty(t, forwarded,
+		"a final authoritative snapshot must be emitted even though the loop broke on cancellation")
+	last := forwarded[len(forwarded)-1]
+	require.NotNil(t, last.Usage)
+	assert.Equal(t, sub.ID, last.SessionID)
+	assert.Equal(t, "worker", last.AgentName)
+	assert.Equal(t, int64(150), last.Usage.ContextLength, "final snapshot carries the usage recorded before cancellation")
+	assert.InDelta(t, sub.OwnCost()+sub.EmbeddedSubSessionCost(), last.Usage.Cost, 1e-9,
+		"the snapshot's cost is exactly what the attached child reports for itself")
+	assert.Positive(t, last.Usage.Cost, "cost is mandatory on the final snapshot")
+	assert.Equal(t, int64(100_000), last.Usage.ContextLimit, "context limit resolves even after cancellation")
 }
 
 // TestReasoningOnlyTurnEmitsWarning is a regression test for

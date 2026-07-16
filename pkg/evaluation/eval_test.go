@@ -2,10 +2,13 @@ package evaluation
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +16,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/docker/docker-agent/pkg/config"
+	"github.com/docker/docker-agent/pkg/environment"
 	"github.com/docker/docker-agent/pkg/session"
 )
 
@@ -949,6 +954,104 @@ func TestMatchesAnyPattern(t *testing.T) {
 			got := matchesAnyPattern(tt.fileName, tt.patterns)
 			assert.Equal(t, tt.want, got)
 		})
+	}
+}
+
+// TestRunDockerAgentInContainerCancelInterruptsDocker verifies that
+// canceling the context interrupts the docker CLI with SIGINT and returns
+// promptly, instead of killing it with SIGKILL (which docker never proxies
+// to the container) or waiting on it forever.
+//
+// No Docker daemon is involved: a fake docker executable on PATH re-execs
+// this test binary as a helper process (see
+// TestRunDockerAgentInContainerHelperProcess) that waits for os.Interrupt.
+func TestRunDockerAgentInContainerCancelInterruptsDocker(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake docker executable is a POSIX shell script")
+	}
+
+	testBin, err := os.Executable()
+	require.NoError(t, err)
+
+	tmpDir := t.TempDir()
+	startedMarker := filepath.Join(tmpDir, "started")
+	interruptMarker := filepath.Join(tmpDir, "interrupted")
+
+	// The wrapper script execs the test binary so that the SIGINT sent by
+	// cmd.Cancel reaches the helper process directly.
+	binDir := filepath.Join(tmpDir, "bin")
+	require.NoError(t, os.Mkdir(binDir, 0o755))
+	script := "#!/bin/sh\nexec \"" + testBin + "\" -test.run='^TestRunDockerAgentInContainerHelperProcess$'\n"
+	require.NoError(t, os.WriteFile(filepath.Join(binDir, "docker"), []byte(script), 0o755))
+
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("GO_WANT_HELPER_PROCESS", "1")
+	t.Setenv("EVAL_HELPER_STARTED_MARKER", startedMarker)
+	t.Setenv("EVAL_HELPER_INTERRUPT_MARKER", interruptMarker)
+
+	runner := newRunner(
+		config.NewFileSource(filepath.Join(tmpDir, "agent.yaml")),
+		&config.RuntimeConfig{EnvProviderForTests: environment.NewNoEnvProvider()},
+		nil,
+		Config{},
+	)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := runner.runDockerAgentInContainer(ctx, "image-id", []string{"question"}, "")
+		errCh <- err
+	}()
+
+	// Wait until the helper reports that its os.Interrupt handler is
+	// installed; interrupting it earlier would kill it via the default
+	// signal disposition.
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(startedMarker)
+		return err == nil
+	}, 10*time.Second, 10*time.Millisecond, "fake docker process never started")
+
+	cancel()
+
+	// The call must return promptly, well before cmd.WaitDelay expires.
+	select {
+	case err := <-errCh:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(5 * time.Second):
+		t.Fatal("runDockerAgentInContainer did not return after context cancellation")
+	}
+
+	assert.FileExists(t, interruptMarker, "fake docker process was not interrupted")
+}
+
+// TestRunDockerAgentInContainerHelperProcess is not a real test. It is
+// re-executed by the fake docker script above and stands in for the docker
+// CLI: it installs an os.Interrupt handler, reports readiness through the
+// started marker, and records the received interrupt through the interrupt
+// marker.
+func TestRunDockerAgentInContainerHelperProcess(*testing.T) {
+	if os.Getenv("GO_WANT_HELPER_PROCESS") != "1" {
+		return
+	}
+
+	interrupt := make(chan os.Signal, 1)
+	signal.Notify(interrupt, os.Interrupt)
+
+	if err := os.WriteFile(os.Getenv("EVAL_HELPER_STARTED_MARKER"), nil, 0o600); err != nil {
+		os.Exit(1)
+	}
+
+	select {
+	case <-interrupt:
+		if err := os.WriteFile(os.Getenv("EVAL_HELPER_INTERRUPT_MARKER"), nil, 0o600); err != nil {
+			os.Exit(1)
+		}
+		os.Exit(0)
+	case <-time.After(30 * time.Second):
+		// Bail out so a regression cannot hang the test binary.
+		os.Exit(1)
 	}
 }
 

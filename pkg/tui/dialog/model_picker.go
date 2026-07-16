@@ -14,6 +14,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/docker/docker-agent/pkg/modelpicker"
 	"github.com/docker/docker-agent/pkg/runtime"
 	"github.com/docker/docker-agent/pkg/tui/components/toolcommon"
 	"github.com/docker/docker-agent/pkg/tui/core"
@@ -324,22 +325,13 @@ func (d *modelPickerDialog) filterModels() {
 	// If query contains "/", show "Custom" option as well as matches
 	isCustomQuery := strings.Contains(query, "/")
 
-	d.filtered = d.filtered[:0]
-	for _, model := range d.models {
-		if query == "" {
-			d.filtered = append(d.filtered, model)
-			continue
-		}
+	d.filtered = modelpicker.Filter(d.models, query)
 
-		// Match against name, provider, and model
-		searchText := strings.ToLower(model.Name + " " + model.Provider + " " + model.Model)
-		if strings.Contains(searchText, query) {
-			d.filtered = append(d.filtered, model)
-		}
-	}
-
-	// If query looks like a custom model spec and we have no exact match, show it as an option
-	if isCustomQuery && len(d.filtered) == 0 {
+	// Keep an explicit provider/model option alongside fuzzy matches unless
+	// the query already identifies an available choice.
+	if isCustomQuery && !slices.ContainsFunc(d.models, func(model runtime.ModelChoice) bool {
+		return strings.EqualFold(model.Ref, query) || strings.EqualFold(model.Provider+"/"+model.Model, query)
+	}) {
 		d.filtered = append(d.filtered, runtime.ModelChoice{
 			Name: "Custom: " + query,
 			Ref:  query,

@@ -292,6 +292,8 @@ func DefaultMatcher(onError func(err error)) recorder.MatcherFunc {
 	// strict gateways (LiteLLM) accept the request, but older cassettes were
 	// recorded without it.
 	toolChoiceRegex := regexp.MustCompile(`"tool_choice":"[^"]*",?`)
+	// Normalize prompt-file paths (they are machine-specific absolute paths).
+	promptFileRegex := regexp.MustCompile(`Instructions from: [^\\"]+`)
 
 	return func(r *http.Request, i cassette.Request) bool {
 		if r.Body == nil || r.Body == http.NoBody {
@@ -322,11 +324,13 @@ func DefaultMatcher(onError func(err error)) recorder.MatcherFunc {
 		normalizedReq = thinkingConfigRegex.ReplaceAllString(normalizedReq, "")
 		normalizedReq = reasoningRegex.ReplaceAllString(normalizedReq, "")
 		normalizedReq = toolChoiceRegex.ReplaceAllString(normalizedReq, "")
+		normalizedReq = promptFileRegex.ReplaceAllString(normalizedReq, "Instructions from: FILE")
 		normalizedCassette := callIDRegex.ReplaceAllString(i.Body, "call_ID")
 		normalizedCassette = maxTokensRegex.ReplaceAllString(normalizedCassette, "")
 		normalizedCassette = thinkingConfigRegex.ReplaceAllString(normalizedCassette, "")
 		normalizedCassette = reasoningRegex.ReplaceAllString(normalizedCassette, "")
 		normalizedCassette = toolChoiceRegex.ReplaceAllString(normalizedCassette, "")
+		normalizedCassette = promptFileRegex.ReplaceAllString(normalizedCassette, "Instructions from: FILE")
 
 		return normalizedReq == normalizedCassette
 	}

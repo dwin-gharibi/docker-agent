@@ -45,6 +45,8 @@ const (
 	ApprovalSourceReadOnlyHint               = "readonly_hint"
 	ApprovalSourceUserApproved               = "user_approved"
 	ApprovalSourceUserApprovedSession        = "user_approved_session"
+	ApprovalSourceUserApprovedSafe           = "user_approved_safe"
+	ApprovalSourceUserApprovedSafer          = "user_approved_safer"
 	ApprovalSourceUserApprovedTool           = "user_approved_tool"
 	ApprovalSourceUserRejected               = "user_rejected"
 	ApprovalSourceContextCanceled            = "context_canceled"
@@ -136,6 +138,8 @@ type ResumeType string
 const (
 	ResumeTypeApprove        ResumeType = "approve"
 	ResumeTypeApproveSession ResumeType = "approve-session"
+	ResumeTypeApproveSafe    ResumeType = "approve-safe"
+	ResumeTypeApproveSafer   ResumeType = "approve-safer"
 	ResumeTypeApproveTool    ResumeType = "approve-tool"
 	ResumeTypeReject         ResumeType = "reject"
 )
@@ -408,6 +412,14 @@ func (c *call) approveAndRun(ctx context.Context, runTool func() CallOutcome) Ca
 		// DecisionAllow / "" → advisory; fall through to Decide().
 	}
 
+	// safe-auto / safer opt-ins bypass the permissions layer for the
+	// calls each policy considers auto-approvable. Otherwise
+	// permissions.ask: "*" would defeat the opt-in.
+	if source, ok := c.policyAutoApprove(); ok {
+		c.notifyApproval(ctx, ApprovalDecisionAllow, source)
+		return runTool()
+	}
+
 	// readOnlyHint is intentionally false here so the pre_tool_use hook
 	// gets a turn before the read-only fast-path applies.
 	decision := c.permissionDecision(false)
@@ -507,6 +519,30 @@ func (c *call) sessionPermissionsAllow() bool {
 		return shellGrantCoversCommand(perms.Allow, args)
 	}
 	return true
+}
+
+// policyAutoApprove returns (source, true) when the session's safety
+// policy allows this call to skip the permissions layer. Under
+// safe-auto that requires a positive safe verdict (preempt-yolo Allow
+// or ReadOnlyHint). Under safer it just requires the tool not to
+// declare itself destructive — destructive preempt-yolo verdicts
+// already short-circuited to askUser at Stage 0.
+func (c *call) policyAutoApprove() (string, bool) {
+	switch c.sess.SafetyPolicy {
+	case session.SafetyPolicySafeAuto:
+		if c.preYoloResult != nil && c.preYoloResult.Decision == hooks.DecisionAllow {
+			return ApprovalSourcePreToolUseHookAllow, true
+		}
+		if c.tool.Annotations.ReadOnlyHint {
+			return ApprovalSourceReadOnlyHint, true
+		}
+	case session.SafetyPolicySafer:
+		if c.tool.Annotations.DestructiveHint != nil && *c.tool.Annotations.DestructiveHint {
+			return "", false
+		}
+		return ApprovalSourcePreToolUseHookAllow, true
+	}
+	return "", false
 }
 
 func (c *call) cancellationMessage(ctx context.Context) string {
@@ -825,14 +861,30 @@ func (c *call) confirmationMetadata(permissionMeta map[string]string) map[string
 	if c.preYoloResult != nil {
 		safetyMeta = c.preYoloResult.Metadata
 	}
-	if len(c.tool.Metadata) == 0 && len(permissionMeta) == 0 && len(safetyMeta) == 0 {
+	annotationMeta := blastRadiusFromAnnotations(c.tool.Annotations)
+	if len(annotationMeta) == 0 && len(c.tool.Metadata) == 0 && len(permissionMeta) == 0 && len(safetyMeta) == 0 {
 		return nil
 	}
-	merged := make(map[string]string, len(c.tool.Metadata)+len(permissionMeta)+len(safetyMeta))
+	merged := make(map[string]string, len(annotationMeta)+len(c.tool.Metadata)+len(permissionMeta)+len(safetyMeta))
+	maps.Copy(merged, annotationMeta)
 	maps.Copy(merged, c.tool.Metadata)
 	maps.Copy(merged, permissionMeta)
 	maps.Copy(merged, safetyMeta)
 	return merged
+}
+
+// blastRadiusFromAnnotations derives a blast_radius verdict from a tool's
+// MCP annotations. ReadOnlyHint → safe; DestructiveHint == true → high.
+// Returns nil when neither hint applies so callers keep the empty-map
+// short-circuit path.
+func blastRadiusFromAnnotations(a tools.ToolAnnotations) map[string]string {
+	if a.ReadOnlyHint {
+		return map[string]string{"blast_radius": "safe"}
+	}
+	if a.DestructiveHint != nil && *a.DestructiveHint {
+		return map[string]string{"blast_radius": "high"}
+	}
+	return nil
 }
 
 // handleResume applies the user's confirmation decision: run the tool
@@ -848,6 +900,16 @@ func (c *call) handleResume(ctx context.Context, req ResumeRequest, runTool func
 		slog.DebugContext(ctx, "Resume signal received, approving session", "tool", c.tc.Function.Name, "session_id", c.sess.ID)
 		c.sess.SetToolsApproved(true)
 		c.notifyApproval(ctx, ApprovalDecisionAllow, ApprovalSourceUserApprovedSession)
+		return runTool()
+	case ResumeTypeApproveSafe:
+		slog.DebugContext(ctx, "Resume signal received, opting into safe-auto", "tool", c.tc.Function.Name, "session_id", c.sess.ID)
+		c.sess.SetSafetyPolicy(session.SafetyPolicySafeAuto)
+		c.notifyApproval(ctx, ApprovalDecisionAllow, ApprovalSourceUserApprovedSafe)
+		return runTool()
+	case ResumeTypeApproveSafer:
+		slog.DebugContext(ctx, "Resume signal received, opting into safer", "tool", c.tc.Function.Name, "session_id", c.sess.ID)
+		c.sess.SetSafetyPolicy(session.SafetyPolicySafer)
+		c.notifyApproval(ctx, ApprovalDecisionAllow, ApprovalSourceUserApprovedSafer)
 		return runTool()
 	case ResumeTypeApproveTool:
 		approvedTool := req.ToolName

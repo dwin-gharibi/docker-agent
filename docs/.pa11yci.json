@@ -1,0 +1,20 @@
+{
+  "defaults": {
+    "standard": "WCAG2AA",
+    "timeout": 30000,
+    "wait": 500,
+    "chromeLaunchConfig": {
+      "args": ["--no-sandbox", "--disable-dev-shm-usage"]
+    }
+  },
+  "urls": [
+    "http://127.0.0.1:1313/docker-agent/?theme=light",
+    "http://127.0.0.1:1313/docker-agent/configuration/sandbox/?theme=light",
+    "http://127.0.0.1:1313/docker-agent/getting-started/quickstart/?theme=light",
+    "http://127.0.0.1:1313/docker-agent/404.html?theme=light",
+    "http://127.0.0.1:1313/docker-agent/?theme=dark",
+    "http://127.0.0.1:1313/docker-agent/configuration/sandbox/?theme=dark",
+    "http://127.0.0.1:1313/docker-agent/getting-started/quickstart/?theme=dark",
+    "http://127.0.0.1:1313/docker-agent/404.html?theme=dark"
+  ]
+}

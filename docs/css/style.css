@@ -56,6 +56,7 @@
    * gray-200 for body text. No blue tint in the chrome — only the
    * hero, the primary button, and the info-callout get the brand navy. */
   --bg: var(--bg-dark);
+  --bg-content: var(--bg-dark);       /* content column surface; distinct from chrome only in light */
   --bg-sidebar: var(--gray-900);
   --bg-code: var(--gray-800);
   --bg-code-block: var(--gray-900);
@@ -77,10 +78,13 @@
   --accent-hover: #7AA1F5;
   --accent-light: rgba(75,131,241,0.12);
   --accent-strong: var(--blue-500);   /* Ocean Blue — hero, button, badge */
+  --accent-on-card: var(--blue-300);  /* blue-400 on bg-card gray-900 reads 4.08:1 — marginal fail */
+  --link-hover: var(--blue-200);      /* :hover only — blue-400 read 4.08:1 on bg-card / 4.65:1 on bg-dark, both fail; blue-200 reads 10.34:1 (card) / 11.78:1 (page) */
 
   --success: #34D399;
   --warning: #FBBF24;
   --error: #F87171;
+  --error-strong: #DC2626;            /* white-on-error badges: #F87171 reads 2.77:1, too low */
   --info: #60A5FA;
 
   --shadow-sm: 0 1px 2px rgba(0,0,0,0.3);
@@ -106,6 +110,7 @@
  * and active-navbar surfaces). */
 [data-theme="light"] {
   --bg: var(--gray-100);
+  --bg-content: #FFFFFF;              /* white content column vs. gray-100 chrome, docs.docker.com-style */
   --bg-sidebar: var(--gray-100);
   --bg-code: #FFFFFF;
   --bg-code-block: #F6F8FA;
@@ -114,7 +119,7 @@
 
   --text: #1F242D;                /* headings / strong copy */
   --text-secondary: #3F4750;      /* body — docs.docker.com prose body */
-  --text-muted: var(--gray-500);
+  --text-muted: var(--gray-600);  /* gray-500 read 3.41:1 on chrome / 4.11:1 on white — both fail AA */
   --text-sidebar: var(--gray-700);
   --text-sidebar-active: var(--gray-900);
   --text-code: var(--blue-600);
@@ -126,6 +131,17 @@
   --accent-hover: var(--blue-600);
   --accent-light: var(--blue-100);
   --accent-strong: var(--blue-500);
+  --accent-on-card: var(--blue-500);  /* blue-500 on white cards already reads 5.0:1 */
+  --link-hover: var(--blue-600);      /* :hover only — blue-400 read 3.94:1 on white, fails; blue-600 reads 6.76:1 (white content and white cards alike) */
+}
+
+/* Tiny uppercase chrome labels: --text-muted's gray-600 (4.87:1 on
+ * gray-100 chrome) still reads thin at this size/weight, so bump these
+ * to gray-700 (7.14:1 chrome / 8.63:1 white) instead. */
+[data-theme="light"] .sidebar-heading,
+[data-theme="light"] .site-footer-col h2,
+[data-theme="light"] .page-nav .nav-label {
+  color: var(--gray-700);
 }
 
 /* ===== Skip link (accessibility) ===== */
@@ -145,6 +161,20 @@
 }
 .skip-link:focus {
   top: 8px;
+}
+
+/* Shared focus-visible ring for interactive elements that otherwise
+ * relied on the browser's (inconsistent) default outline. */
+.btn-icon:focus-visible,
+.github-link:focus-visible,
+.sidebar-toggle:focus-visible,
+.btn:focus-visible,
+.page-nav a:focus-visible,
+.ecosystem-tile:focus-visible,
+.site-footer-col a:focus-visible,
+.site-footer-bottom a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 /* ===== Typography ===== */
@@ -218,20 +248,32 @@ body {
 .header-search {
   position: relative;
 }
-.header-search input {
+#search-input {
+  display: block;
   width: 220px;
   padding: 7px 12px 7px 34px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--bg-hover);
-  color: var(--text);
+  color: var(--gray-300);  /* text-muted (gray-400) reads 4.42:1 on bg-hover gray-800 -- marginal fail; gray-300 reads 6.07:1 (same fix as kbd) */
+  font: inherit;
   font-size: 0.8rem;
+  text-align: left;
+  cursor: pointer;
   outline: none;
   transition: border-color 0.2s, box-shadow 0.2s, width 0.2s;
 }
-.header-search input:focus {
+[data-theme="light"] #search-input {
+  color: var(--text-muted);  /* gray-600 reads 5.88:1 on white bg-hover -- already passes */
+}
+#search-input:hover {
+  border-color: var(--text-muted);
+}
+#search-input:focus-visible {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-light);
+  /* --accent-light is only 12%-alpha in dark (used elsewhere as a subtle
+   * fill) — too faint for a focus ring, so use a dedicated color here. */
+  box-shadow: 0 0 0 3px rgba(37, 96, 255, 0.35);
   width: 280px;
 }
 .header-search .search-icon {
@@ -360,7 +402,6 @@ details.sidebar-section[open] > summary.sidebar-heading::after {
   letter-spacing: 0.08em;
   color: var(--text-muted);
   user-select: none;
-  opacity: 0.75;
 }
 
 .sidebar-link.sidebar-link--sub {
@@ -421,6 +462,7 @@ details.sidebar-section[open] > summary.sidebar-heading::after {
   flex: 1;
   min-width: 0;
   position: relative;
+  background: var(--bg-content);
 }
 
 .content {
@@ -477,7 +519,6 @@ details.sidebar-section[open] > summary.sidebar-heading::after {
   padding: 4px 0;
   transition: color 0.12s;
 }
-[data-theme="dark"] .toc-action,
 :root:not([data-theme="light"]) .toc-action {
   color: var(--gray-100);
 }
@@ -523,7 +564,6 @@ details.sidebar-section[open] > summary.sidebar-heading::after {
   white-space: nowrap;
   overflow: hidden;
 }
-[data-theme="dark"] .toc-link,
 :root:not([data-theme="light"]) .toc-link {
   color: var(--gray-100);
 }
@@ -541,7 +581,6 @@ details.sidebar-section[open] > summary.sidebar-heading::after {
   font-weight: 500;
   border-left-color: var(--gray-300);
 }
-[data-theme="dark"] .toc-link.active,
 :root:not([data-theme="light"]) .toc-link.active {
   border-left-color: var(--gray-300);
 }
@@ -601,17 +640,24 @@ details.sidebar-section[open] > summary.sidebar-heading::after {
   color: var(--text-secondary);
 }
 
-.content a {
+.content a:not(.btn) {
   color: var(--accent-hover);
   text-decoration: none;
   font-weight: 500;
   transition: color 0.12s;
 }
-[data-theme="light"] .content a {
+[data-theme="light"] .content a:not(.btn) {
   color: var(--accent);
 }
-.content a:hover {
-  color: var(--docker-blue-light);
+/* A broad `.content a:not(.btn)` hover previously outranked component
+ * link rules (`.preview-banner a`, `.usecase a`, ...) via specificity
+ * and hardcoded a single blue (--docker-blue-light) for both themes —
+ * 4.08:1 on a dark card / 3.94:1 on white, both AA fails. --link-hover
+ * is scoped per theme instead, like the other accent-* tokens, and
+ * verified against both the page background and --bg-card (the
+ * harder case in dark, since --bg-card is lighter than --bg-content). */
+.content a:not(.btn):hover {
+  color: var(--link-hover);
   text-decoration: underline;
 }
 .content a:focus-visible {
@@ -673,12 +719,18 @@ details.sidebar-section[open] > summary.sidebar-heading::after {
 }
 
 /* Rouge / highlighter-rouge overrides */
+/* Only background/text-shadow here: text color is already themed
+ * above (this used to also set color: var(--gray-200), which had the
+ * same specificity as and came after the [data-theme="light"] override,
+ * so it silently won in both themes — breaking any syntax token
+ * without its own explicit color, e.g. Chroma's untyped ".l"/".sd"/
+ * ".cl" fallback tokens, at 1.47:1 in light mode. Found via the PR 9
+ * pa11y-ci gate. */
 .content pre[class*="language-"],
 .content pre code[class*="language-"],
 .content .highlighter-rouge pre.highlight,
 .content .highlighter-rouge pre.highlight code {
   background: var(--bg-code-block);
-  color: var(--gray-200);
   text-shadow: none;
 }
 
@@ -712,7 +764,7 @@ details.sidebar-section[open] > summary.sidebar-heading::after {
 }
 
 /* Rouge syntax token colors – Docker-blue-tinted dark theme */
-.highlight .c, .highlight .c1, .highlight .cm, .highlight .cs { color: #4A5568; font-style: italic; }
+.highlight .c, .highlight .c1, .highlight .cm, .highlight .cs { color: var(--gray-400); font-style: italic; } /* #4A5568 read 2.14:1 on bg-code-block gray-900 */
 .highlight .k, .highlight .kd, .highlight .kn, .highlight .kp, .highlight .kr { color: #A78BFA; }
 .highlight .kc { color: #F59E0B; }
 .highlight .kt { color: #FBBF24; }
@@ -789,10 +841,15 @@ details.sidebar-section[open] > summary.sidebar-heading::after {
 
 /* ===== Tables ===== */
 .content table {
+  display: block;
+  overflow-x: auto;
   width: 100%;
   border-collapse: collapse;
   margin-bottom: 24px;
   font-size: 0.875rem;
+  /* Wide reference tables would otherwise force page-level horizontal
+   * scroll at narrow viewports / high zoom; scope the scroll region to
+   * the table itself instead (WCAG 1.4.10 reflow). */
 }
 .content th {
   text-align: left;
@@ -822,7 +879,7 @@ details.sidebar-section[open] > summary.sidebar-heading::after {
   color: var(--text-secondary);
   font-size: 0.85rem;
 }
-.preview-banner a { color: var(--accent); }
+.preview-banner a { color: var(--accent-on-card); }  /* --accent (blue-400) read 4.08:1 on bg-card in dark -- same fix as elevator/usecase/glossary text-on-card */
 
 /* ===== Callouts / Admonitions =====
  * docs.docker.com-style: rounded panel with a filled, circular icon
@@ -1138,7 +1195,7 @@ details.sidebar-section[open] > summary.sidebar-heading::after {
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.1em;
-  color: var(--accent);
+  color: var(--accent-on-card);
   margin-bottom: 6px;
 }
 
@@ -1166,7 +1223,7 @@ details.sidebar-section[open] > summary.sidebar-heading::after {
 }
 .ecosystem-tile strong {
   display: block;
-  color: var(--accent);
+  color: var(--accent-on-card);
   font-size: 0.95rem;
   margin-bottom: 4px;
 }
@@ -1193,6 +1250,12 @@ details.sidebar-section[open] > summary.sidebar-heading::after {
   padding: 14px 18px 6px;
   display: flex;
   flex-direction: column;
+  /* Grid items default to min-width:auto, so long code content
+   * refuses to shrink below its intrinsic width and forces
+   * page-level horizontal scroll at narrow viewports (WCAG 1.4.10).
+   * min-width:0 lets the item shrink; .compare-side pre's own
+   * overflow-x:auto keeps the long lines scrollable locally instead. */
+  min-width: 0;
 }
 .compare-without {
   border-color: rgba(248, 113, 113, 0.35);
@@ -1270,7 +1333,7 @@ details.sidebar-section[open] > summary.sidebar-heading::after {
 .usecase a {
   font-size: 0.82rem;
   font-weight: 600;
-  color: var(--accent);
+  color: var(--accent-on-card);
 }
 .usecase a:hover { text-decoration: underline; }
 
@@ -1323,7 +1386,7 @@ details.sidebar-section[open] > summary.sidebar-heading::after {
   line-height: 1;
 }
 .pain-x {
-  background: var(--error);
+  background: var(--error-strong);
   color: #ffffff;
 }
 .pain-check {
@@ -1353,6 +1416,13 @@ details.sidebar-section[open] > summary.sidebar-heading::after {
   margin: 0 auto;
   color: var(--text);
 }
+/* The how-it-works diagram ships as two theme-specific SVGs (a single
+ * hardcoded palette can't clear 4.5:1 text contrast against both a
+ * white and a near-black card at once) — show only the one matching
+ * the active theme. Dark is the bare-:root default, per convention. */
+.flow-diagram img.theme-light-only { display: none; }
+[data-theme="light"] .flow-diagram img.theme-light-only { display: block; }
+[data-theme="light"] .flow-diagram img.theme-dark-only { display: none; }
 .flow-diagram figcaption {
   margin-top: 12px;
   font-size: 0.82rem;
@@ -1375,7 +1445,7 @@ details.sidebar-section[open] > summary.sidebar-heading::after {
 }
 .glossary dt {
   font-weight: 700;
-  color: var(--accent);
+  color: var(--accent-on-card);
   align-self: start;
 }
 .glossary dd {
@@ -1391,7 +1461,8 @@ details.sidebar-section[open] > summary.sidebar-heading::after {
   .glossary dd { margin-bottom: 8px; }
 }
 
-/* ===== Demo GIF ===== */
+/* ===== Demo media (video, with a GIF fallback for browsers that
+ * don't support <video>) ===== */
 .demo-container {
   margin: 32px 0;
   border-radius: var(--radius-lg);
@@ -1399,7 +1470,8 @@ details.sidebar-section[open] > summary.sidebar-heading::after {
   border: 1px solid var(--border);
   box-shadow: var(--shadow-md);
 }
-.demo-container img {
+.demo-container img,
+.demo-container video {
   width: 100%;
   height: auto;
   display: block;
@@ -1480,7 +1552,7 @@ details.sidebar-section[open] > summary.sidebar-heading::after {
   grid-template-columns: repeat(3, 1fr);
   gap: 32px;
 }
-.site-footer-col h4 {
+.site-footer-col h2 {
   font-size: 0.7rem;
   font-weight: 700;
   text-transform: uppercase;
@@ -1565,6 +1637,10 @@ details.sidebar-section[open] > summary.sidebar-heading::after {
   outline: none;
   font-family: var(--font-sans);
 }
+.search-modal input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
 .search-results {
   overflow-y: auto;
   max-height: calc(70vh - 56px);
@@ -1584,6 +1660,10 @@ details.sidebar-section[open] > summary.sidebar-heading::after {
   background: var(--bg-hover);
   outline: none;
   text-decoration: none;
+}
+.search-result:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 .search-result-title {
   font-weight: 500;
@@ -1624,9 +1704,15 @@ details.sidebar-section[open] > summary.sidebar-heading::after {
 @media (max-width: 1024px) {
   .sidebar {
     transform: translateX(-100%);
+    /* Closed off-canvas sidebar must not be Tab-reachable; delay the
+     * visibility flip so the slide-out transition still plays. */
+    visibility: hidden;
+    transition: transform 0.3s ease, visibility 0s linear 0.3s;
   }
   .sidebar.open {
     transform: translateX(0);
+    visibility: visible;
+    transition: transform 0.3s ease;
   }
   .sidebar-toggle {
     display: flex;
@@ -1647,7 +1733,7 @@ details.sidebar-section[open] > summary.sidebar-heading::after {
 }
 
 @media (max-width: 640px) {
-  .header-search input { width: 140px; }
+  #search-input { width: 140px; }
   .content h1 { font-size: 1.75rem; }
   .cards { grid-template-columns: 1fr; }
   .features-grid { grid-template-columns: 1fr; }
@@ -1668,17 +1754,35 @@ details.sidebar-section[open] > summary.sidebar-heading::after {
   to { opacity: 1; transform: translateY(0); }
 }
 
+/* Respect the OS-level reduce-motion preference: kill smooth scrolling,
+ * the content fade-in, and the hover/press transform transitions used
+ * throughout (cards, tiles, buttons, sidebar slide). Color/opacity
+ * transitions are left alone — they don't trigger vestibular issues. */
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  .content { animation: none; }
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 /* ===== Keyboard shortcut badge ===== */
 kbd {
   display: inline-block;
   padding: 2px 6px;
   font-family: var(--font-mono);
   font-size: 0.72rem;
-  color: var(--text-muted);
+  color: var(--gray-300);  /* text-muted (gray-400) reads 4.42:1 on bg-code gray-800 — marginal fail */
   background: var(--bg-code);
   border: 1px solid var(--border);
   border-radius: 4px;
   line-height: 1.4;
+}
+[data-theme="light"] kbd {
+  color: var(--text-muted);
 }
 
 /* ===== Copy button on code blocks ===== */
@@ -1689,17 +1793,29 @@ kbd {
   background: rgba(255,255,255,0.06);
   border: 1px solid rgba(255,255,255,0.1);
   border-radius: 4px;
-  color: #64748B;
+  color: var(--gray-400);  /* #64748B read 3.38:1 on the dark code block */
   cursor: pointer;
   padding: 3px 8px;
+  min-height: 24px;        /* WCAG 2.5.8 24px target minimum — was ~22px */
+  display: inline-flex;
+  align-items: center;
   font-size: 0.7rem;
   font-family: var(--font-mono);
   opacity: 0;
   transition: opacity 0.2s, background 0.2s;
 }
-pre:hover .copy-btn { opacity: 1; }
-.copy-btn:hover { background: rgba(255,255,255,0.12); color: #94A3B8; }
+pre:hover .copy-btn,
+.copy-btn:focus-visible {
+  opacity: 1;
+}
+.copy-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.copy-btn:hover { background: rgba(255,255,255,0.12); color: var(--gray-300); }
 .copy-btn.copied { color: var(--success); border-color: var(--success); }
+[data-theme="light"] .copy-btn { color: var(--gray-600); } /* #64748B on #F6F8FA read 4.47:1 marginal */
+[data-theme="light"] .copy-btn:hover { color: var(--gray-700); } /* hover #94A3B8 read 2.41:1 in light */
 
 /* ===== Print stylesheet ===== */
 @media print {

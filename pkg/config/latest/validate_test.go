@@ -73,6 +73,7 @@ func TestModelConfigValidateFirstAvailable(t *testing.T) {
 		{name: "with title_model", model: ModelConfig{FirstAvailable: candidates, TitleModel: "small"}, wantErr: "first_available cannot be combined with title_model"},
 		{name: "with compaction_model", model: ModelConfig{FirstAvailable: candidates, CompactionModel: "small"}, wantErr: "first_available cannot be combined with compaction_model"},
 		{name: "with compaction_threshold", model: ModelConfig{FirstAvailable: candidates, CompactionThreshold: new(0.5)}, wantErr: "first_available cannot be combined with compaction_threshold"},
+		{name: "with cost", model: ModelConfig{FirstAvailable: candidates, Cost: &CostConfig{Input: 1}}, wantErr: "first_available cannot be combined with cost"},
 	}
 
 	for _, tt := range tests {

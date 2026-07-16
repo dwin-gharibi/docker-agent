@@ -1515,7 +1515,7 @@
         },
         "bypass_models_gateway": {
           "type": "boolean",
-          "description": "When true, this model connects directly to its provider, ignoring any configured models gateway (--models-gateway / CAGENT_MODELS_GATEWAY). The model then authenticates with the provider's own credentials (e.g. OPENAI_API_KEY, ANTHROPIC_API_KEY, or token_key) instead of routing through the gateway."
+          "description": "When true, this model connects directly to its provider, ignoring any configured models gateway (--models-gateway / CAGENT_MODELS_GATEWAY). The model then authenticates with the provider's own credentials (e.g. OPENAI_API_KEY, ANTHROPIC_API_KEY, or token_key) instead of routing through the gateway. A custom base_url (set on the model or inherited from a custom provider definition) implies this bypass even when the flag is false."
         },
         "provider_opts": {
           "type": "object",
@@ -1659,6 +1659,10 @@
         "capabilities": {
           "$ref": "#/definitions/CapabilitiesConfig",
           "description": "Explicit attachment capability override for models the models.dev catalogue does not describe correctly (custom OpenAI-compatible providers, local models like Ollama, or dropped model versions). When set, the declared flags are authoritative and no models.dev lookup is performed; when omitted, capabilities are detected automatically. Without it, such models fall back to text-only and their image/PDF attachments are silently dropped."
+        },
+        "cost": {
+          "$ref": "#/definitions/CostConfig",
+          "description": "Explicit token pricing (USD per 1M tokens), overriding the models.dev catalogue. Used for per-turn cost computation, session cost tracking, the /model picker, and the after_llm_call hook's cost field. Makes an uncatalogued model (custom base_url provider, local or private deployment) 'priced' instead of billing $0. Prices must not be negative; an all-zero table means 'priced, free'. Cannot be combined with first_available."
         }
       },
       "additionalProperties": false
@@ -1674,6 +1678,33 @@
         "pdf": {
           "type": "boolean",
           "description": "Whether the model accepts PDF (application/pdf) attachments"
+        }
+      },
+      "additionalProperties": false
+    },
+    "CostConfig": {
+      "type": "object",
+      "description": "Explicit token pricing for a model, in USD per one million tokens. Takes precedence over the models.dev catalogue and prices models the catalogue does not know.",
+      "properties": {
+        "input": {
+          "type": "number",
+          "minimum": 0,
+          "description": "USD price per 1M input tokens"
+        },
+        "output": {
+          "type": "number",
+          "minimum": 0,
+          "description": "USD price per 1M output tokens"
+        },
+        "cache_read": {
+          "type": "number",
+          "minimum": 0,
+          "description": "USD price per 1M cached input tokens"
+        },
+        "cache_write": {
+          "type": "number",
+          "minimum": 0,
+          "description": "USD price per 1M cache-write tokens"
         }
       },
       "additionalProperties": false
@@ -1988,6 +2019,7 @@
             "open_url",
             "model_picker",
             "background_agents",
+            "scheduler",
             "rag"
           ]
         },
@@ -2199,7 +2231,7 @@
         },
         "safer": {
           "type": "boolean",
-          "description": "Opt in to destructive-command detection for the shell toolset (only valid for type 'shell'). When enabled, the agent auto-registers the safer_shell builtin under the pre_tool_use hook event with preempt_yolo:true. Destructive commands (rm -rf, docker volume rm, mkfs, ...) get an Ask verdict with a blast-radius classification; known-safe reads (ls, git status, docker ps, ...) flow through silently; everything else asks with blast_radius=unknown so the user sees the prompt before --yolo or permission allow-rules can auto-approve it. Default false."
+          "description": "Opt in to the safer_shell classifier for the shell toolset (only valid for type 'shell'). When enabled, the agent auto-registers the safer_shell builtin under pre_tool_use with preempt_yolo:true. Verdict adapts to the session's SafetyPolicy (unsafe / safer / safe-auto / strict). See docs/configuration/hooks/index.md for the per-policy behaviour matrix. Default false."
         },
         "url": {
           "type": "string",
@@ -2323,7 +2355,8 @@
                 "lsp",
                 "user_prompt",
                 "model_picker",
-                "background_agents"
+                "background_agents",
+                "scheduler"
               ]
             }
           }

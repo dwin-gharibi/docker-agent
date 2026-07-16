@@ -38,6 +38,21 @@ import (
 // ToggleHideToolResultsMsg triggers hiding/showing tool results
 type ToggleHideToolResultsMsg struct{}
 
+// SessionState is the session-state surface the message list depends on:
+// read access for rendering, plus the two mutations the component performs.
+// *service.SessionState satisfies it; embedders outside the full TUI can
+// provide their own implementation.
+type SessionState interface {
+	service.SessionStateReader
+	SetPreviousMessage(msg *types.Message)
+	ToggleHideToolResults()
+}
+
+var (
+	_ SessionState = (*service.SessionState)(nil)
+	_ SessionState = (*service.EmbeddedSessionState)(nil)
+)
+
 // scrollToBottomMsg requests the message list scroll to the bottom. It is
 // returned by commands (e.g. after appending a message) instead of mutating
 // scroll state directly from the command goroutine: bubbletea runs command
@@ -78,6 +93,11 @@ type Model interface {
 	// when the session is reloaded.
 	AddAgentReturn(fromAgent, toAgent string) tea.Cmd
 	LoadFromSession(sess *session.Session) tea.Cmd
+
+	// StopAnimations unregisters every view from the animation coordinator.
+	// Call it when the list is discarded or its host view goes away, so
+	// abandoned spinners do not keep the tick stream alive.
+	StopAnimations()
 
 	RemoveSpinner()
 	ScrollToBottom() tea.Cmd
@@ -144,7 +164,7 @@ type model struct {
 
 	selection selectionState
 
-	sessionState *service.SessionState
+	sessionState SessionState
 	scrollview   *scrollview.Model
 
 	xPos, yPos int
@@ -175,17 +195,17 @@ type model struct {
 }
 
 // New creates a new message list component
-func New(sessionState *service.SessionState) Model {
+func New(sessionState SessionState) Model {
 	return newModel(120, 24, sessionState)
 }
 
 // NewScrollableView creates a simple scrollable view for displaying messages in dialogs
 // This is a lightweight version that doesn't require app or session state management
-func NewScrollableView(width, height int, sessionState *service.SessionState) Model {
+func NewScrollableView(width, height int, sessionState SessionState) Model {
 	return newModel(width, height, sessionState)
 }
 
-func newModel(width, height int, sessionState *service.SessionState) *model {
+func newModel(width, height int, sessionState SessionState) *model {
 	sv := scrollview.New(
 		scrollview.WithReserveScrollbarSpace(true),
 	)
@@ -1434,6 +1454,7 @@ func (m *model) LoadFromSession(sess *session.Session) tea.Cmd {
 		appendSessionMessage(toolMsg, view)
 	}
 
+	m.StopAnimations()
 	m.messages = nil
 	m.views = nil
 	m.renderedItems.Clear()
@@ -1662,6 +1683,8 @@ func (m *model) AddToolResult(msg *runtime.ToolCallResponseEvent, status types.T
 			toolMessage.ToolResult = msg.Result.WithoutPayload()
 			m.invalidateItem(i)
 
+			// The replaced view may still hold a running-spinner subscription.
+			animation.StopView(m.views[i])
 			view := m.createToolCallView(toolMessage)
 			m.views[i] = view
 			return view.Init()
@@ -2290,4 +2313,11 @@ func (m *model) commitInlineEdit() tea.Cmd {
 type InlineEditCommittedMsg struct {
 	SessionPosition int
 	Content         string
+}
+
+func (m *model) StopAnimations() {
+	m.slackAnimationSub.Stop()
+	for _, v := range m.views {
+		animation.StopView(v)
+	}
 }

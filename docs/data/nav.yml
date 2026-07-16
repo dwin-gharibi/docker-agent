@@ -34,6 +34,8 @@
       url: /configuration/models/
     - title: Tool Config
       url: /configuration/tools/
+    - title: Custom Commands
+      url: /configuration/commands/
     - title: Hooks
       url: /configuration/hooks/
     - title: Permissions
@@ -44,6 +46,8 @@
       url: /configuration/structured-output/
     - title: Model Routing
       url: /configuration/routing/
+    - title: User Settings
+      url: /configuration/user-settings/
 
 - section: Built-in Tools
   groups:
@@ -69,6 +73,8 @@
           url: /tools/transfer-task/
         - title: Background Agents
           url: /tools/background-agents/
+        - title: Background Jobs
+          url: /tools/background-jobs/
     - label: Memory & Knowledge
       items:
         - title: Memory
@@ -91,6 +97,8 @@
           url: /tools/todo/
         - title: Tasks
           url: /tools/tasks/
+        - title: Scheduler
+          url: /tools/scheduler/
     - label: Interaction
       items:
         - title: User Prompt
@@ -112,6 +120,8 @@
       url: /features/tui/
     - title: Snapshots
       url: /features/snapshots/
+    - title: Kanban Board
+      url: /features/board/
     - title: CLI Reference
       url: /features/cli/
     - title: MCP Mode
@@ -149,6 +159,8 @@
       url: /providers/cloudflare-ai-gateway/
     - title: Cloudflare Workers AI
       url: /providers/cloudflare-workers-ai/
+    - title: ChatGPT
+      url: /providers/chatgpt/
     - title: DeepSeek
       url: /providers/deepseek/
     - title: Docker Model Runner
@@ -173,6 +185,8 @@
       url: /providers/moonshot/
     - title: Nebius
       url: /providers/nebius/
+    - title: NVIDIA
+      url: /providers/nvidia/
     - title: OpenAI
       url: /providers/openai/
     - title: OpenCode Go
@@ -204,6 +218,8 @@
           url: /guides/secrets/
         - title: Go SDK
           url: /guides/go-sdk/
+        - title: Managing Context & Compaction
+          url: /guides/compaction/
     - label: Community
       items:
         - title: Contributing

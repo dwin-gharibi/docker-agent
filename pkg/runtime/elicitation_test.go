@@ -27,7 +27,7 @@ func TestElicitationBridge_SendBeforeSwapReturnsError(t *testing.T) {
 	t.Parallel()
 
 	var b elicitationBridge
-	err := b.send(Error("nothing"))
+	err := b.send(t.Context(), Error("nothing"))
 	assert.ErrorIs(t, err, errNoElicitationChannel)
 }
 
@@ -55,7 +55,7 @@ func TestElicitationBridge_SendDeliversToCurrentChannel(t *testing.T) {
 	ch := make(chan Event, 1)
 	b.swap(ch)
 
-	require.NoError(t, b.send(Error("hello")))
+	require.NoError(t, b.send(t.Context(), Error("hello")))
 
 	select {
 	case ev := <-ch:
@@ -75,7 +75,7 @@ func TestElicitationBridge_SendRecoversClosedChannel(t *testing.T) {
 	b.swap(ch)
 	close(ch)
 
-	err := b.send(Error("closed"))
+	err := b.send(t.Context(), Error("closed"))
 	assert.ErrorIs(t, err, errNoElicitationChannel)
 }
 
@@ -97,7 +97,7 @@ func TestElicitationBridge_RestoreAndCloseWaitsForInflightSenders(t *testing.T) 
 
 	sendDone := make(chan error, 1)
 	go func() {
-		sendDone <- b.send(Error("inflight"))
+		sendDone <- b.send(t.Context(), Error("inflight"))
 	}()
 
 	// Wait until the sender holds the read lock: TryLock fails only while
@@ -167,7 +167,7 @@ func TestElicitationBridge_ConcurrentSendsAndCloseAreSerializedSafely(t *testing
 	for range 10 {
 		wg.Go(func() {
 			for range 5 {
-				_ = b.send(Error("x"))
+				_ = b.send(t.Context(), Error("x"))
 			}
 		})
 	}

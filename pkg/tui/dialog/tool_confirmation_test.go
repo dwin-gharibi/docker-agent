@@ -150,3 +150,23 @@ func TestToolConfirmationDialog_ReasonOutsideSafetyVerdictRendersPlain(t *testin
 	assert.NotContains(t, view, "Destructive command",
 		"no warning block without a blast_radius classification")
 }
+
+// The dialog must work with an embedder-provided session state, not just the
+// full application's *service.SessionState; the "all tools" decision flips
+// the embedder's session-wide approval.
+func TestToolConfirmationDialog_EmbeddedSessionState(t *testing.T) {
+	t.Parallel()
+
+	state := &service.EmbeddedSessionState{}
+	dialog := NewToolConfirmationDialog(newConfirmationEvent(nil), state)
+	_, _ = dialog.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	view := ansi.Strip(dialog.View())
+	assert.Contains(t, view, "shell")
+	assert.Contains(t, view, "Do you want to allow this tool call?")
+
+	require.False(t, state.YoloMode())
+	_, cmd := dialog.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	require.NotNil(t, cmd)
+	assert.True(t, state.YoloMode(), "approving all tools must flip the embedder's session-wide approval")
+}

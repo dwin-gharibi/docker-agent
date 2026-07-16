@@ -11,6 +11,7 @@ import (
 
 	"github.com/docker/docker-agent/pkg/effort"
 	"github.com/docker/docker-agent/pkg/leantui/ui"
+	"github.com/docker/docker-agent/pkg/modelpicker"
 	"github.com/docker/docker-agent/pkg/runtime"
 	"github.com/docker/docker-agent/pkg/tui/messages"
 )
@@ -104,8 +105,9 @@ func (m *model) handleInterrupt() {
 func (m *model) handleEnter(ctx context.Context) {
 	if m.screen.Autocomplete.Active {
 		if cmd, ok := m.screen.Autocomplete.Current(); ok {
+			completion := m.screen.Autocomplete.Completion(cmd)
 			m.screen.Autocomplete.Dismiss()
-			m.submitEditor(ctx, "/"+cmd.Name)
+			m.submitEditor(ctx, completion)
 			return
 		}
 	}
@@ -117,7 +119,7 @@ func (m *model) handleTab() {
 		return
 	}
 	if cmd, ok := m.screen.Autocomplete.Current(); ok {
-		m.screen.Editor.SetText("/" + cmd.Name + " ")
+		m.screen.Editor.SetText(m.screen.Autocomplete.Completion(cmd) + " ")
 		m.screen.Autocomplete.Sync(m.screen.Editor.Text())
 	}
 }
@@ -244,6 +246,9 @@ func (m *model) handleSlash(ctx context.Context, text string, mode busySubmitMod
 		m.addUserEcho(text)
 		m.startCompact(ctx, rest)
 		return true
+	case "model":
+		m.handleModelCommand(ctx, rest)
+		return true
 	case "effort":
 		m.handleSetThinkingLevel(ctx, rest)
 		return true
@@ -266,6 +271,61 @@ func (m *model) handleSlash(ctx context.Context, text string, mode busySubmitMod
 	}
 
 	return false
+}
+
+func (m *model) handleModelCommand(ctx context.Context, modelRef string) {
+	if m.app == nil || !m.app.SupportsModelSwitching() {
+		m.addNotice("", "Model switching is not supported with this runtime", ui.StMuted())
+		return
+	}
+
+	if modelRef == "" {
+		models := m.app.AvailableModels(ctx)
+		if len(models) == 0 {
+			m.addNotice("", "No models available for selection", ui.StMuted())
+			return
+		}
+		cmds := make([]ui.Command, 0, len(models))
+		for _, choice := range models {
+			desc := choice.Name
+			if choice.IsCurrent {
+				desc = strings.TrimSpace(desc + " (current)")
+			} else if choice.IsDefault {
+				desc = strings.TrimSpace(desc + " (default)")
+			}
+			value := choice.Ref
+			if choice.IsDefault {
+				value = "default"
+			}
+			cmds = append(cmds, ui.Command{
+				Name:  choice.Ref,
+				Desc:  desc,
+				Value: value,
+				MatchScore: func(query string) (int, bool) {
+					return modelpicker.Score(choice, query)
+				},
+				Kind: ui.CmdBuiltin,
+			})
+		}
+		m.screen.Autocomplete.SetScopedCommands("model ", cmds)
+		m.screen.Editor.SetText("/model ")
+		m.screen.Autocomplete.Sync(m.screen.Editor.Text())
+		return
+	}
+
+	if modelRef == "default" {
+		modelRef = ""
+	}
+	if err := m.app.SetCurrentAgentModel(ctx, modelRef); err != nil {
+		m.addNotice("✗ ", "Failed to change model: "+err.Error(), ui.StError())
+		return
+	}
+	m.refreshCommands(ctx)
+	if modelRef == "" {
+		m.addNotice("", "Model reset to default", ui.StMuted())
+		return
+	}
+	m.addNotice("", "Model changed to "+modelRef, ui.StMuted())
 }
 
 func (m *model) dispatchUserMessage(ctx context.Context, display, content string, mode busySubmitMode) {
@@ -351,7 +411,12 @@ func (m *model) startSkillFork(ctx context.Context, name, task string) {
 }
 
 func (m *model) refreshCommands(ctx context.Context) {
-	cmds := builtinCommands()
+	cmds := make([]ui.Command, 0)
+	for _, cmd := range builtinCommands() {
+		if !m.disabledCommands[cmd.Name] {
+			cmds = append(cmds, cmd)
+		}
+	}
 	for name, c := range m.app.CurrentAgentCommands(ctx) {
 		if m.disabledCommands[name] {
 			continue
@@ -469,6 +534,7 @@ func (m *model) commitHelp() {
 			ui.StBold().Render("Commands"),
 			ui.StMuted().Render("  /new       start a new session"),
 			ui.StMuted().Render("  /compact   summarize and compact the conversation"),
+			ui.StMuted().Render("  /model     change the model for the current agent"),
 			ui.StMuted().Render("  /effort    set the model's reasoning effort (e.g. /effort high)"),
 			ui.StMuted().Render("  /clear     clear the screen"),
 			ui.StMuted().Render("  /help      show this help"),

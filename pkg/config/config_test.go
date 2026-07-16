@@ -374,6 +374,138 @@ func TestCheckRequiredEnvVars_BypassModelsGateway(t *testing.T) {
 	assert.Equal(t, []string{"ANTHROPIC_API_KEY"}, reqErr.Missing)
 }
 
+func TestCheckRequiredEnvVars_CustomBaseURLImpliesBypass(t *testing.T) {
+	t.Parallel()
+
+	env := &fakeEnvProvider{vars: map[string]string{
+		environment.DockerDesktopTokenEnv: "some-jwt-token",
+	}}
+
+	t.Run("model base_url requires its token_key", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := &latest.Config{
+			Agents: []latest.AgentConfig{{Name: "root", Model: "proxied"}},
+			Models: map[string]latest.ModelConfig{
+				"proxied": {Provider: "openai", Model: "gpt-4o", BaseURL: "https://proxy.example.com/v1", TokenKey: "PROXY_KEY"},
+			},
+		}
+
+		// A custom base_url implies the gateway bypass, so the model dials its
+		// endpoint directly and needs its own credentials.
+		err := CheckRequiredEnvVars(t.Context(), cfg, "https://models.docker.com", env)
+		require.Error(t, err)
+		var reqErr *environment.RequiredEnvError
+		require.ErrorAs(t, err, &reqErr)
+		assert.Equal(t, []string{"PROXY_KEY"}, reqErr.Missing)
+	})
+
+	t.Run("custom provider base_url requires its token_key", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := &latest.Config{
+			Agents: []latest.AgentConfig{{Name: "root", Model: "custom"}},
+			Providers: map[string]latest.ProviderConfig{
+				"my_endpoint": {BaseURL: "https://llm.internal.example.com/v1", TokenKey: "MY_TOKEN"},
+			},
+			Models: map[string]latest.ModelConfig{
+				"custom": {Provider: "my_endpoint", Model: "llama-3"},
+			},
+		}
+
+		err := CheckRequiredEnvVars(t.Context(), cfg, "https://models.docker.com", env)
+		require.Error(t, err)
+		var reqErr *environment.RequiredEnvError
+		require.ErrorAs(t, err, &reqErr)
+		assert.Equal(t, []string{"MY_TOKEN"}, reqErr.Missing)
+	})
+
+	t.Run("no base_url still relies on the gateway", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := &latest.Config{
+			Agents: []latest.AgentConfig{{Name: "root", Model: "routed"}},
+			Models: map[string]latest.ModelConfig{
+				"routed": {Provider: "anthropic", Model: "claude-sonnet-4-5"},
+			},
+		}
+
+		err := CheckRequiredEnvVars(t.Context(), cfg, "https://models.docker.com", env)
+		require.NoError(t, err)
+	})
+
+	t.Run("router-level base_url does not bypass the fallback", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := &latest.Config{
+			Agents: []latest.AgentConfig{{Name: "root", Model: "router"}},
+			Models: map[string]latest.ModelConfig{
+				"router": {
+					Provider: "anthropic",
+					Model:    "claude-sonnet-4-5",
+					BaseURL:  "https://proxy.example.com/v1",
+					TokenKey: "PROXY_KEY",
+					Routing:  []latest.RoutingRule{{Model: "openai/gpt-5", Examples: []string{"code"}}},
+				},
+			},
+		}
+
+		// The runtime rebuilds a router's fallback from its "provider/model"
+		// spec, dropping the router-level base_url/token_key, so the whole
+		// subtree still routes through the gateway.
+		err := CheckRequiredEnvVars(t.Context(), cfg, "https://models.docker.com", env)
+		require.NoError(t, err)
+	})
+
+	t.Run("router on a custom provider bypasses the fallback", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := &latest.Config{
+			Agents: []latest.AgentConfig{{Name: "root", Model: "router"}},
+			Providers: map[string]latest.ProviderConfig{
+				"my_endpoint": {BaseURL: "https://llm.internal.example.com/v1", TokenKey: "MY_TOKEN"},
+			},
+			Models: map[string]latest.ModelConfig{
+				"router": {
+					Provider: "my_endpoint",
+					Model:    "llama-3",
+					Routing:  []latest.RoutingRule{{Model: "openai/gpt-5", Examples: []string{"code"}}},
+				},
+			},
+		}
+
+		// The provider name survives the fallback rebuild, so the custom
+		// provider's base_url still implies the bypass for the fallback leaf.
+		err := CheckRequiredEnvVars(t.Context(), cfg, "https://models.docker.com", env)
+		require.Error(t, err)
+		var reqErr *environment.RequiredEnvError
+		require.ErrorAs(t, err, &reqErr)
+		assert.Equal(t, []string{"MY_TOKEN"}, reqErr.Missing)
+	})
+
+	t.Run("env refs in inherited provider base_url are required", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := &latest.Config{
+			Agents: []latest.AgentConfig{{Name: "root", Model: "custom"}},
+			Providers: map[string]latest.ProviderConfig{
+				"proxy": {BaseURL: "${env.PROXY_URL}", TokenKey: "MY_TOKEN"},
+			},
+			Models: map[string]latest.ModelConfig{
+				"custom": {Provider: "proxy", Model: "llama-3"},
+			},
+		}
+
+		// The provider-level base_url is merged and expanded at runtime, so
+		// its ${env.X} references must be preflighted too.
+		err := CheckRequiredEnvVars(t.Context(), cfg, "https://models.docker.com", env)
+		require.Error(t, err)
+		var reqErr *environment.RequiredEnvError
+		require.ErrorAs(t, err, &reqErr)
+		assert.Equal(t, []string{"MY_TOKEN", "PROXY_URL"}, reqErr.Missing)
+	})
+}
+
 func TestCheckRequiredEnvVars_BypassModelsGatewayRouting(t *testing.T) {
 	t.Parallel()
 

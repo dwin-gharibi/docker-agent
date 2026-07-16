@@ -119,7 +119,7 @@ func (p *PersistenceObserver) OnEvent(ctx context.Context, sess *session.Session
 		}
 
 	case *SessionSummaryEvent:
-		if err := p.store.AddSummary(ctx, e.SessionID, e.Summary, e.FirstKeptEntry); err != nil {
+		if err := p.store.AddSummary(ctx, e.SessionID, e.Summary, e.FirstKeptEntry, e.Cost); err != nil {
 			slog.WarnContext(ctx, "Failed to persist summary", "session_id", e.SessionID, "error", err)
 		}
 

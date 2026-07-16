@@ -147,6 +147,7 @@ type SessionResponse struct {
 	Messages      []session.Message          `json:"messages,omitempty"`
 	CreatedAt     time.Time                  `json:"created_at"`
 	ToolsApproved bool                       `json:"tools_approved"`
+	SafetyPolicy  session.SafetyPolicy       `json:"safety_policy,omitempty"`
 	InputTokens   int64                      `json:"input_tokens"`
 	OutputTokens  int64                      `json:"output_tokens"`
 	WorkingDir    string                     `json:"working_dir,omitempty"`
@@ -156,6 +157,12 @@ type SessionResponse struct {
 // UpdateSessionPermissionsRequest represents a request to update session permissions.
 type UpdateSessionPermissionsRequest struct {
 	Permissions *session.PermissionsConfig `json:"permissions"`
+}
+
+// UpdateSessionSafetyPolicyRequest represents a request to change a
+// session's SafetyPolicy mid-session.
+type UpdateSessionSafetyPolicyRequest struct {
+	SafetyPolicy session.SafetyPolicy `json:"safety_policy"`
 }
 
 // ResumeSessionRequest represents a request to resume a session
@@ -174,6 +181,13 @@ type DesktopTokenResponse struct {
 type ResumeElicitationRequest struct {
 	Action  string         `json:"action"`  // "accept", "decline", or "cancel"
 	Content map[string]any `json:"content"` // The submitted form data (only present when action is "accept")
+	// ElicitationID correlates this response with a specific concurrent
+	// elicitation request (see the elicitation_id field on the
+	// ElicitationRequestEvent stream event). Optional and additive: when
+	// empty, the server falls back to resolving the sole pending request,
+	// for backward compatibility with clients that predate per-request
+	// correlation (#3584).
+	ElicitationID string `json:"elicitation_id,omitempty"`
 }
 
 // SteerSessionRequest represents a request to inject user messages into a
@@ -230,8 +244,9 @@ type UpdateMessageRequest struct {
 
 // AddSummaryRequest represents a request to add a summary to a session
 type AddSummaryRequest struct {
-	Summary string `json:"summary"`
-	Tokens  int    `json:"tokens,omitempty"`
+	Summary string  `json:"summary"`
+	Tokens  int     `json:"tokens,omitempty"`
+	Cost    float64 `json:"cost,omitempty"`
 }
 
 // UpdateSessionTokensRequest represents a request to update session token counts
@@ -328,6 +343,7 @@ type SessionSnapshotResponse struct {
 	WorkingDir    string                     `json:"working_dir,omitempty"`
 	Messages      []session.Message          `json:"messages"`
 	ToolsApproved bool                       `json:"tools_approved"`
+	SafetyPolicy  session.SafetyPolicy       `json:"safety_policy,omitempty"`
 	Permissions   *session.PermissionsConfig `json:"permissions,omitempty"`
 	InputTokens   int64                      `json:"input_tokens"`
 	OutputTokens  int64                      `json:"output_tokens"`

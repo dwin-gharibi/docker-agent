@@ -127,7 +127,7 @@ func (u *totalUsage) isSubSessionMarker() bool { return u.marker }
 // plainTextLine returns a fixed-width plain-text representation used by the
 // clipboard-copy output. An optional suffix (e.g. model name) is appended.
 func (u *totalUsage) plainTextLine(suffix string) string {
-	line := fmt.Sprintf("%-8s  input: %-8s  output: %-8s  %s",
+	line := fmt.Sprintf("%-8s  in: %-8s  out: %-8s  %s",
 		formatCostPadded(u.cost),
 		formatTokenCount(u.totalInput()),
 		formatTokenCount(u.OutputTokens),
@@ -183,11 +183,11 @@ func (d *costData) totalStats() []stat {
 	if tok := d.total.totalTokens(); tok > 0 && d.total.cost > 0 {
 		stats = append(stats, stat{"avg cost/1K tokens:", formatCost(d.total.cost / float64(tok) * 1000)})
 	}
-	if candidateIn := d.total.CachedInputTokens + d.total.InputTokens; candidateIn > 0 && d.total.CachedInputTokens > 0 {
-		stats = append(stats, stat{"cache hit rate:", fmt.Sprintf("%.0f%%", float64(d.total.CachedInputTokens)/float64(candidateIn)*100)})
-	}
 	if actual := d.actualMessageCount(); actual > 1 && d.total.cost > 0 {
 		stats = append(stats, stat{"avg cost/message:", formatCost(d.total.cost / float64(actual))})
+	}
+	if candidateIn := d.total.CachedInputTokens + d.total.InputTokens; candidateIn > 0 && d.total.CachedInputTokens > 0 {
+		stats = append(stats, stat{"cache hit rate:", fmt.Sprintf("%.0f%%", float64(d.total.CachedInputTokens)/float64(candidateIn)*100)})
 	}
 	return stats
 }
@@ -238,7 +238,10 @@ func (d *costDialog) gatherCostData() costData {
 
 	var walkSession func(sess *session.Session)
 	walkSession = func(sess *session.Session) {
-		for _, item := range sess.Messages {
+		// Iterate a locked snapshot: runtime goroutines append to the live
+		// Messages slice while the dialog renders. The snapshot releases
+		// sess.mu before the recursive sub-session accessors take theirs.
+		for _, item := range sess.MessagesSnapshot() {
 			switch {
 			case item.IsMessage():
 				msg := item.Message
@@ -264,7 +267,7 @@ func (d *costDialog) gatherCostData() costData {
 
 	// Fall back to remote mode if no per-message data was found.
 	if !data.hasPerMessageData {
-		for _, record := range d.session.MessageUsageHistory {
+		for _, record := range d.session.MessageUsageHistorySnapshot() {
 			addRecord(record.AgentName, record.Model, record.Cost, &record.Usage)
 		}
 	}
@@ -278,11 +281,12 @@ func (d *costDialog) gatherCostData() costData {
 
 	// Fall back to session-level totals (e.g. past sessions without per-message data).
 	if !data.hasPerMessageData {
+		inputTokens, outputTokens := d.session.Usage()
 		data.total = totalUsage{
 			cost: d.session.TotalCost(),
 			Usage: chat.Usage{
-				InputTokens:  d.session.InputTokens,
-				OutputTokens: d.session.OutputTokens,
+				InputTokens:  inputTokens,
+				OutputTokens: outputTokens,
 			},
 		}
 	}
@@ -307,23 +311,26 @@ func (d *costDialog) renderContent(contentWidth, maxHeight int) string {
 		header,
 		RenderSeparator(contentWidth),
 		"",
-		sectionStyle().Render("Total"),
+		sectionStyle().Render("Total") + "  " + accentStyle().Render(formatCost(data.total.cost)),
 		"",
-		accentStyle().Render(formatCost(data.total.cost)),
-		styledStat("tokens:", formatTokenCount(data.total.totalTokens())),
-		d.renderInputLine(data.total, true),
-		styledStat("output:", formatTokenCount(data.total.OutputTokens)),
 	}
-	for _, s := range data.totalStats() {
-		lines = append(lines, styledStat(s.label, s.value))
+	totalStats := append([]stat{
+		{label: "tokens:", value: formatTokenCount(data.total.totalTokens())},
+		{label: "in:", value: inputValue(data.total, true)},
+		{label: "out:", value: formatTokenCount(data.total.OutputTokens)},
+	}, data.totalStats()...)
+	labelWidth := statLabelWidth(totalStats)
+	for _, s := range totalStats {
+		lines = append(lines, styledStat(s, labelWidth))
 	}
 	lines = append(lines, "")
 
 	// By Model
 	if len(data.models) > 0 {
 		lines = append(lines, sectionStyle().Render("By Model"), "")
+		labelWidth := usageLabelWidth(data.models)
 		for _, m := range data.models {
-			lines = append(lines, d.renderUsageLine(m, data.total.cost))
+			lines = append(lines, d.renderUsageLine(m, data.total.cost, labelWidth, false))
 		}
 		lines = append(lines, "")
 	}
@@ -331,11 +338,12 @@ func (d *costDialog) renderContent(contentWidth, maxHeight int) string {
 	// By Message
 	if len(data.messages) > 0 {
 		lines = append(lines, sectionStyle().Render("By Message"), "")
+		labelWidth := usageLabelWidth(data.messages)
 		for _, m := range data.messages {
 			if m.isSubSessionMarker() {
 				lines = append(lines, styles.MutedStyle.Render(m.label))
 			} else {
-				lines = append(lines, d.renderUsageLine(m, data.total.cost))
+				lines = append(lines, d.renderUsageLine(m, data.total.cost, labelWidth, true))
 			}
 		}
 		lines = append(lines, "")
@@ -361,44 +369,75 @@ func (d *costDialog) headerMeta(data costData) string {
 	return strings.Join(parts, "  •  ")
 }
 
-// styledStat renders a single "label: value" line for the Total section.
-func styledStat(label, value string) string {
-	return fmt.Sprintf("%s %s", labelStyle().Render(label), valueStyle().Render(value))
+func statLabelWidth(stats []stat) int {
+	width := 0
+	for _, s := range stats {
+		width = max(width, lipgloss.Width(s.label))
+	}
+	return width
 }
 
-func (d *costDialog) renderInputLine(u totalUsage, showBreakdown bool) string {
-	line := styledStat("input:", formatTokenCount(u.totalInput()))
+func styledStat(s stat, labelWidth int) string {
+	return fmt.Sprintf("%s %s", labelStyle().Render(padToWidth(s.label, labelWidth)), valueStyle().Render(s.value))
+}
+
+func inputValue(u totalUsage, showBreakdown bool) string {
+	value := formatTokenCount(u.totalInput())
 	if showBreakdown && (u.CachedInputTokens > 0 || u.CacheWriteTokens > 0) {
-		line += valueStyle().Render(fmt.Sprintf(" (%s new + %s cached + %s cache write)",
+		value += fmt.Sprintf(" (%s new + %s cached + %s cache write)",
 			formatTokenCount(u.InputTokens),
 			formatTokenCount(u.CachedInputTokens),
-			formatTokenCount(u.CacheWriteTokens)))
+			formatTokenCount(u.CacheWriteTokens))
 	}
-	return line
+	return value
 }
 
-func (d *costDialog) renderUsageLine(u totalUsage, totalCost float64) string {
-	var extras []string
-	if totalCost > 0 && u.cost > 0 {
-		if pct := u.cost / totalCost * 100; pct >= 0.1 {
-			extras = append(extras, fmt.Sprintf("%.0f%%", pct))
+func usageLabelWidth(usages []totalUsage) int {
+	width := 0
+	for _, usage := range usages {
+		if !usage.isSubSessionMarker() {
+			width = max(width, lipgloss.Width(usage.label))
 		}
 	}
+	return width
+}
+
+func (d *costDialog) renderUsageLine(u totalUsage, totalCost float64, labelWidth int, byMessage bool) string {
+	percentage := ""
+	percentageValue := 0.0
+	if totalCost > 0 && u.cost > 0 {
+		if pct := u.cost / totalCost * 100; pct >= 0.1 {
+			percentage = fmt.Sprintf("%.0f%%", pct)
+			percentageValue = pct
+		}
+	}
+
+	showCacheStatus := u.CachedInputTokens > 0 || (byMessage && u.model != "")
+	var extras []string
+	if percentage != "" || (totalCost > 0 && showCacheStatus) {
+		percentageStyle := valueStyle()
+		if byMessage && percentage != "" {
+			percentageStyle = costPercentageStyle(percentageValue)
+		}
+		extras = append(extras, percentageStyle.Render(fmt.Sprintf("%-4s", percentage)))
+	}
 	if u.CachedInputTokens > 0 {
-		extras = append(extras, "cached: "+formatTokenCount(u.CachedInputTokens))
+		extras = append(extras, valueStyle().Render("cached: "+formatTokenCount(u.CachedInputTokens)))
+	} else if showCacheStatus {
+		extras = append(extras, styles.WarningStyle.Render("cache miss"))
 	}
 
 	suffix := ""
 	if len(extras) > 0 {
-		suffix = "  " + valueStyle().Render(strings.Join(extras, "  "))
+		suffix = "  " + strings.Join(extras, "  ")
 	}
 	return fmt.Sprintf("%s  %s %s  %s %s  %s%s",
 		accentStyle().Render(padRight(formatCostPadded(u.cost))),
-		labelStyle().Render("input:"),
+		labelStyle().Render("in:"),
 		valueStyle().Render(padRight(formatTokenCount(u.totalInput()))),
-		labelStyle().Render("output:"),
+		labelStyle().Render("out:"),
 		valueStyle().Render(padRight(formatTokenCount(u.OutputTokens))),
-		accentStyle().Render(u.label),
+		accentStyle().Render(padToWidth(u.label, labelWidth)),
 		suffix)
 }
 
@@ -431,7 +470,7 @@ func (d *costDialog) renderPlainText() string {
 	var lines []string
 
 	// Total section
-	inputLine := "input: " + formatTokenCount(data.total.totalInput())
+	inputLine := "in: " + formatTokenCount(data.total.totalInput())
 	if data.total.CachedInputTokens > 0 || data.total.CacheWriteTokens > 0 {
 		inputLine += fmt.Sprintf(" (%s new + %s cached + %s cache write)",
 			formatTokenCount(data.total.InputTokens),
@@ -439,9 +478,9 @@ func (d *costDialog) renderPlainText() string {
 			formatTokenCount(data.total.CacheWriteTokens))
 	}
 
-	lines = append(lines, "Session Cost Details", "", "Total", formatCost(data.total.cost),
+	lines = append(lines, "Session Cost Details", "", "Total  "+formatCost(data.total.cost), "",
 		"tokens: "+formatTokenCount(data.total.totalTokens()),
-		inputLine, "output: "+formatTokenCount(data.total.OutputTokens))
+		inputLine, "out: "+formatTokenCount(data.total.OutputTokens))
 
 	for _, s := range data.totalStats() {
 		lines = append(lines, s.label+" "+s.value)
@@ -492,6 +531,27 @@ func labelStyle() lipgloss.Style { return lipgloss.NewStyle().Bold(true) }
 
 func valueStyle() lipgloss.Style {
 	return lipgloss.NewStyle().Foreground(styles.TextSecondary)
+}
+
+func costPercentageStyle(percentage float64) lipgloss.Style {
+	const warningAt = 0.35
+
+	ratio := min(max(percentage/100, 0), 1)
+	from, to := styles.TextSecondary, styles.Warning
+	if ratio >= warningAt {
+		from, to = styles.Warning, styles.Error
+		ratio = (ratio - warningAt) / (1 - warningAt)
+	} else {
+		ratio /= warningAt
+	}
+
+	fromR, fromG, fromB := styles.ColorToRGB(from)
+	toR, toG, toB := styles.ColorToRGB(to)
+	return lipgloss.NewStyle().Foreground(styles.RGBToColor(
+		fromR+(toR-fromR)*ratio,
+		fromG+(toG-fromG)*ratio,
+		fromB+(toB-fromB)*ratio,
+	))
 }
 
 func accentStyle() lipgloss.Style {
@@ -556,9 +616,12 @@ func formatDuration(d time.Duration) string {
 }
 
 func padRight(s string) string {
-	const width = 8
-	if len(s) >= width {
-		return s
+	return padToWidth(s, 8)
+}
+
+func padToWidth(s string, width int) string {
+	if currentWidth := lipgloss.Width(s); currentWidth < width {
+		return s + strings.Repeat(" ", width-currentWidth)
 	}
-	return s + strings.Repeat(" ", width-len(s))
+	return s
 }

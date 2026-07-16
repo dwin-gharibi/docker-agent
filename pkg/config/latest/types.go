@@ -966,11 +966,15 @@ type ModelConfig struct {
 	// the provider's own credentials (e.g. OPENAI_API_KEY, ANTHROPIC_API_KEY, or
 	// token_key) instead of routing through the gateway.
 	//
+	// A custom base_url (set on the model or inherited from a custom provider
+	// definition) implies the bypass even when this flag is false: user-chosen
+	// endpoints are never routed through the models gateway.
+	//
 	// Security note: a model that bypasses the gateway sends the provider's
-	// ambient credentials directly to its endpoint. Combined with a custom
-	// base_url this lets a config exfiltrate those credentials to an arbitrary
-	// host, so only enable it on configs you trust. For a router model the
-	// bypass propagates to its fallback and every routed target.
+	// ambient credentials directly to its endpoint. A malicious base_url thus
+	// lets a config exfiltrate those credentials to an arbitrary host, so only
+	// run configs you trust. For a router model the bypass propagates to its
+	// fallback and every routed target.
 	BypassModelsGateway bool `json:"bypass_models_gateway,omitempty"`
 	// ProviderOpts allows provider-specific options.
 	ProviderOpts map[string]any `json:"provider_opts,omitempty"`
@@ -1030,6 +1034,48 @@ type ModelConfig struct {
 	// Capabilities optionally declares the model's attachment capabilities,
 	// overriding the automatic models.dev-based detection. See [CapabilitiesConfig].
 	Capabilities *CapabilitiesConfig `json:"capabilities,omitempty"`
+	// Cost optionally declares the model's token pricing explicitly,
+	// overriding the models.dev catalogue. See [CostConfig].
+	Cost *CostConfig `json:"cost,omitempty"`
+}
+
+// CostConfig declares a model's token pricing explicitly, in USD per one
+// million tokens. When set it takes precedence over the models.dev catalogue
+// for per-turn cost computation, session cost tracking, and the after_llm_call
+// hook's cost field. It also makes an uncatalogued model "priced", so custom
+// endpoints (base_url providers, local models, private deployments) can carry
+// accurate spend accounting instead of billing $0.
+type CostConfig struct {
+	// Input is the USD price per 1M input tokens.
+	Input float64 `json:"input,omitempty"`
+	// Output is the USD price per 1M output tokens.
+	Output float64 `json:"output,omitempty"`
+	// CacheRead is the USD price per 1M cached input tokens.
+	CacheRead float64 `json:"cache_read,omitempty"`
+	// CacheWrite is the USD price per 1M cache-write tokens.
+	CacheWrite float64 `json:"cache_write,omitempty"`
+}
+
+// validate rejects negative prices. All-zero is valid and means "priced,
+// free" — distinct from an unset Cost (unpriced).
+func (c *CostConfig) validate() error {
+	if c == nil {
+		return nil
+	}
+	for _, f := range []struct {
+		name  string
+		value float64
+	}{
+		{"input", c.Input},
+		{"output", c.Output},
+		{"cache_read", c.CacheRead},
+		{"cache_write", c.CacheWrite},
+	} {
+		if f.value < 0 {
+			return fmt.Errorf("cost.%s must not be negative, got %v", f.name, f.value)
+		}
+	}
+	return nil
 }
 
 // CapabilitiesConfig declares a model's attachment capabilities explicitly,
@@ -1225,7 +1271,8 @@ func (f *FlexibleModelConfig) isShorthandOnly() bool {
 		f.TitleModel == "" &&
 		f.CompactionModel == "" &&
 		f.CompactionThreshold == nil &&
-		f.Capabilities == nil
+		f.Capabilities == nil &&
+		f.Cost == nil
 }
 
 // RoutingRule defines a single routing rule for model selection.

@@ -82,6 +82,7 @@ func (s *Server) registerRoutes() {
 	group.GET("/sessions/:id/snapshot", s.getSessionSnapshot)
 	group.POST("/sessions/:id/resume", s.resumeSession)
 	group.POST("/sessions/:id/tools/toggle", s.toggleSessionYolo)
+	group.PATCH("/sessions/:id/safety-policy", s.updateSessionSafetyPolicy)
 	group.PATCH("/sessions/:id/permissions", s.updateSessionPermissions)
 	group.PATCH("/sessions/:id/title", s.updateSessionTitle)
 	group.PATCH("/sessions/:id/tokens", s.updateSessionTokens)
@@ -229,13 +230,17 @@ func (s *Server) getSessions(c echo.Context) error {
 
 	responses := make([]api.SessionsResponse, len(sessions))
 	for i, sess := range sessions {
+		// The in-memory store hands back live session pointers, so read the
+		// mutable scalars through one locked snapshot each.
+		title := sess.TitleSnapshot()
+		inputTokens, outputTokens := sess.Usage()
 		responses[i] = api.SessionsResponse{
 			ID:           sess.ID,
-			Title:        sess.Title,
+			Title:        title,
 			CreatedAt:    sess.CreatedAt.Format(time.RFC3339),
 			NumMessages:  len(sess.GetAllMessages()),
-			InputTokens:  sess.InputTokens,
-			OutputTokens: sess.OutputTokens,
+			InputTokens:  inputTokens,
+			OutputTokens: outputTokens,
 			WorkingDir:   sess.WorkingDir,
 		}
 	}
@@ -282,6 +287,7 @@ func (s *Server) forkSession(c echo.Context) error {
 		CreatedAt:     forked.CreatedAt,
 		Messages:      forked.GetAllMessages(),
 		ToolsApproved: forked.ToolsApproved,
+		SafetyPolicy:  forked.SafetyPolicy,
 		InputTokens:   forked.InputTokens,
 		OutputTokens:  forked.OutputTokens,
 		WorkingDir:    forked.WorkingDir,
@@ -295,14 +301,17 @@ func (s *Server) getSession(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, fmt.Sprintf("session not found: %v", err))
 	}
 
+	title := sess.TitleSnapshot()
+	inputTokens, outputTokens := sess.Usage()
 	return c.JSON(http.StatusOK, api.SessionResponse{
 		ID:            sess.ID,
-		Title:         sess.Title,
+		Title:         title,
 		CreatedAt:     sess.CreatedAt,
 		Messages:      sess.GetAllMessages(),
 		ToolsApproved: sess.ToolsApproved,
-		InputTokens:   sess.InputTokens,
-		OutputTokens:  sess.OutputTokens,
+		SafetyPolicy:  sess.SafetyPolicy,
+		InputTokens:   inputTokens,
+		OutputTokens:  outputTokens,
 		WorkingDir:    sess.WorkingDir,
 		Permissions:   sess.Permissions,
 	})
@@ -368,6 +377,17 @@ func (s *Server) toggleSessionYolo(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("failed to toggle session tool approval mode: %v", err))
 	}
 	return c.JSON(http.StatusOK, nil)
+}
+
+func (s *Server) updateSessionSafetyPolicy(c echo.Context) error {
+	var req api.UpdateSessionSafetyPolicyRequest
+	if err := c.Bind(&req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("invalid request body: %v", err))
+	}
+	if err := s.sm.SetSessionSafetyPolicy(c.Request().Context(), c.Param("id"), req.SafetyPolicy); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
+	return c.JSON(http.StatusOK, map[string]string{"message": "session safety policy updated"})
 }
 
 func (s *Server) getAgentToolCount(c echo.Context) error {
@@ -494,7 +514,7 @@ func (s *Server) elicitation(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("invalid request body: %v", err))
 	}
 
-	if err := s.sm.ResumeElicitation(c.Request().Context(), sessionID, req.Action, req.Content); err != nil {
+	if err := s.sm.ResumeElicitation(c.Request().Context(), sessionID, req.Action, req.Content, req.ElicitationID); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("failed to resume elicitation: %v", err))
 	}
 
@@ -781,7 +801,7 @@ func (s *Server) addSummary(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "summary is required")
 	}
 
-	if err := s.sm.AddSummary(c.Request().Context(), sessionID, req.Summary, req.Tokens); err != nil {
+	if err := s.sm.AddSummary(c.Request().Context(), sessionID, req.Summary, req.Tokens, req.Cost); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("failed to add summary: %v", err))
 	}
 
