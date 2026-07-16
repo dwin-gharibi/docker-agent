@@ -27,6 +27,11 @@ type Config struct {
 
 	AppName          string
 	DisabledCommands []string
+
+	// Banner overrides the ASCII-art welcome banner. When nil the built-in
+	// bannerLines ("docker agent") is used; embedders set it to brand the lean
+	// TUI with their own art (each line ideally within 56 columns).
+	Banner []string
 }
 
 // Run drives the lean TUI until the user exits. It owns the terminal (raw
@@ -159,6 +164,7 @@ type model struct {
 
 	quitting         bool
 	appName          string
+	banner           []string
 	disabledCommands map[string]bool
 }
 
@@ -189,6 +195,7 @@ func newModel(term *ui.Terminal, cfg Config) *model {
 		sessionState:     sessionState,
 		usage:            ui.NewUsageTracker(),
 		appName:          appName,
+		banner:           cfg.Banner,
 		disabledCommands: disabled,
 	}
 }
@@ -208,14 +215,18 @@ func (m *model) renderFinal() {
 }
 
 func (m *model) commitWelcome() {
+	banner := m.banner
+	if len(banner) == 0 {
+		banner = bannerLines
+	}
 	m.screen.Transcript.AddBlock(func(int) []string {
-		lines := make([]string, 0, bannerTopPadding+len(bannerLines)+2)
+		lines := make([]string, 0, bannerTopPadding+len(banner)+2)
 		for range bannerTopPadding {
 			lines = append(lines, "")
 		}
 
 		leftPad := strings.Repeat(" ", bannerLeftPadding)
-		for _, l := range bannerLines {
+		for _, l := range banner {
 			lines = append(lines, ui.StAccent().Render(leftPad+l))
 		}
 		lines = append(lines,

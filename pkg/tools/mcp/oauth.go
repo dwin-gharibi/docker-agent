@@ -307,8 +307,16 @@ func callbackRedirectURLFrom(c *latest.RemoteOAuthConfig) string {
 // oauthTransport wraps an HTTP transport with OAuth support
 type oauthTransport struct {
 	base http.RoundTripper
-	// TODO(rumpl): remove client reference, we need to find a better way to send elicitation requests
-	client                    *remoteMCPClient
+	// requestElicitation forwards an elicitation request raised by the OAuth
+	// flow to the runtime's registered handler; production wiring points it
+	// at sessionClient.requestElicitation. May be nil (tests); elicit() then
+	// defers the flow with AuthorizationRequiredError, matching the
+	// no-handler behaviour of sessionClient.requestElicitation.
+	requestElicitation func(ctx context.Context, params *mcpsdk.ElicitParams) (tools.ElicitationResult, error)
+	// onOAuthSuccess notifies the runtime that a token was obtained or
+	// silently refreshed; production wiring points it at
+	// sessionClient.oauthSuccess. May be nil (tests); then it's a no-op.
+	onOAuthSuccess            func()
 	tokenStore                OAuthTokenStore
 	baseURL                   string
 	managed                   bool
@@ -354,6 +362,24 @@ type oauthTransport struct {
 
 func (t *oauthTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return t.roundTrip(req, false)
+}
+
+// elicit sends an elicitation request through the injected callback. When no
+// callback is wired up, the flow is deferred with the recognisable
+// AuthorizationRequiredError sentinel, exactly like
+// sessionClient.requestElicitation does when no handler is registered.
+func (t *oauthTransport) elicit(ctx context.Context, params *mcpsdk.ElicitParams) (tools.ElicitationResult, error) {
+	if t.requestElicitation == nil {
+		return tools.ElicitationResult{}, &AuthorizationRequiredError{URL: t.baseURL}
+	}
+	return t.requestElicitation(ctx, params)
+}
+
+// notifyOAuthSuccess invokes the injected OAuth-success callback, if any.
+func (t *oauthTransport) notifyOAuthSuccess() {
+	if t.onOAuthSuccess != nil {
+		t.onOAuthSuccess()
+	}
 }
 
 func (t *oauthTransport) oauthClient() *http.Client {
@@ -411,7 +437,7 @@ func (t *oauthTransport) handleServerRejectedToken(ctx context.Context, prev *OA
 		_, err := t.refreshStoredToken(ctx, prev)
 		if err == nil {
 			slog.DebugContext(ctx, "Silently refreshed server-rejected token", "url", t.baseURL)
-			t.client.oauthSuccess()
+			t.notifyOAuthSuccess()
 			return nil
 		}
 		slog.DebugContext(ctx, "Refresh failed after server-side token rejection; falling back to interactive auth",
@@ -1061,7 +1087,7 @@ func (t *oauthTransport) handleManagedOAuthFlow(ctx context.Context, authServer,
 		scopes,
 	)
 
-	result, err := t.client.requestElicitation(ctx, &mcpsdk.ElicitParams{
+	result, err := t.elicit(ctx, &mcpsdk.ElicitParams{
 		Message:         fmt.Sprintf("The MCP server at %s requires OAuth authorization. Do you want to proceed?", t.baseURL),
 		RequestedSchema: nil,
 		Meta: map[string]any{
@@ -1118,7 +1144,7 @@ func (t *oauthTransport) handleManagedOAuthFlow(ctx context.Context, authServer,
 	}
 
 	// Notify the runtime that the OAuth flow was successful
-	t.client.oauthSuccess()
+	t.notifyOAuthSuccess()
 
 	slog.DebugContext(ctx, "OAuth flow completed successfully")
 	return nil
@@ -1128,7 +1154,8 @@ func (t *oauthTransport) handleManagedOAuthFlow(ctx context.Context, authServer,
 // scopes) used for both the authorize URL and the token exchange. Explicit
 // credentials from the per-toolset config take precedence; otherwise we
 // attempt RFC 7591 Dynamic Client Registration against the authorization
-// server. Returns an error if neither path is available.
+// server. When registration is unsupported or fails, we fall back to asking
+// the user for pre-registered client credentials via a form elicitation.
 func (t *oauthTransport) resolveClientCredentials(ctx context.Context, authServerMetadata *AuthorizationServerMetadata, redirectURI string) (clientID, clientSecret string, scopes []string, err error) {
 	switch {
 	case t.oauthConfig != nil && t.oauthConfig.ClientID != "":
@@ -1145,15 +1172,71 @@ func (t *oauthTransport) resolveClientCredentials(ctx context.Context, authServe
 			nil,
 		)
 		if err != nil {
-			slog.DebugContext(ctx, "Dynamic registration failed", "error", err)
-			// TODO(rumpl): fall back to requesting client ID from user
-			return "", "", nil, err
+			slog.DebugContext(ctx, "Dynamic registration failed, asking the user for client credentials", "error", err)
+			promptedID, promptedSecret, promptErr := t.promptForClientCredentials(ctx, "Dynamic client registration failed.")
+			if promptErr != nil {
+				return "", "", nil, fmt.Errorf("dynamic client registration failed (%w): %w", err, promptErr)
+			}
+			return promptedID, promptedSecret, configuredScopes(t.oauthConfig), nil
 		}
 		return clientID, clientSecret, nil, nil
 	default:
-		// TODO(rumpl): fall back to requesting client ID from user
-		return "", "", nil, errors.New("authorization server does not support dynamic client registration and no explicit OAuth credentials configured")
+		slog.DebugContext(ctx, "Authorization server does not support dynamic client registration, asking the user for client credentials")
+		promptedID, promptedSecret, promptErr := t.promptForClientCredentials(ctx, "The authorization server does not support dynamic client registration.")
+		if promptErr != nil {
+			return "", "", nil, fmt.Errorf("authorization server does not support dynamic client registration and no explicit OAuth credentials configured: %w", promptErr)
+		}
+		return promptedID, promptedSecret, configuredScopes(t.oauthConfig), nil
 	}
+}
+
+// promptForClientCredentials asks the user for an OAuth client_id and an
+// optional client_secret via a form elicitation. It is the fallback for
+// authorization servers where Dynamic Client Registration is unavailable or
+// failed: the user may have registered an application with the provider
+// manually and can supply its credentials directly. reason is a short,
+// user-facing sentence explaining why the credentials are needed.
+//
+// A decline or cancel surfaces as *OAuthDeclinedError so callers latch it
+// exactly like a declined authorization dialog; when no elicitation bridge
+// is available, elicit() defers with AuthorizationRequiredError. The secret
+// is never logged.
+func (t *oauthTransport) promptForClientCredentials(ctx context.Context, reason string) (clientID, clientSecret string, err error) {
+	result, err := t.elicit(ctx, &mcpsdk.ElicitParams{
+		Message: fmt.Sprintf("%s Enter the OAuth client ID (and client secret, if any) of an application registered with the authorization server for %s.", reason, t.baseURL),
+		RequestedSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"client_id": map[string]any{
+					"type":  "string",
+					"title": "Client ID",
+				},
+				"client_secret": map[string]any{
+					"type":   "string",
+					"title":  "Client secret (optional)",
+					"format": "password",
+				},
+			},
+			"required": []any{"client_id"},
+		},
+		Meta: map[string]any{
+			"docker-agent/type":       "oauth_client_credentials",
+			"docker-agent/server_url": t.baseURL,
+		},
+	})
+	if err != nil {
+		return "", "", fmt.Errorf("failed to request OAuth client credentials: %w", err)
+	}
+	if result.Action != tools.ElicitationActionAccept {
+		return "", "", &OAuthDeclinedError{URL: t.baseURL}
+	}
+	clientID, _ = result.Content["client_id"].(string)
+	clientID = strings.TrimSpace(clientID)
+	if clientID == "" {
+		return "", "", errors.New("elicitation reply did not include a client_id")
+	}
+	clientSecret, _ = result.Content["client_secret"].(string)
+	return clientID, clientSecret, nil
 }
 
 // unmanagedRedirectURI returns the redirect_uri docker-agent should use when
@@ -1328,7 +1411,7 @@ func (t *oauthTransport) handleUnmanagedOAuthFlow(ctx context.Context, authServe
 	elicCtx, elicCancel := context.WithTimeout(ctx, waitTimeout)
 	defer elicCancel()
 	go func() {
-		r, e := t.client.requestElicitation(elicCtx, &mcpsdk.ElicitParams{
+		r, e := t.elicit(elicCtx, &mcpsdk.ElicitParams{
 			Message:         "OAuth authorization required for " + t.baseURL,
 			RequestedSchema: nil,
 			Meta:            meta,
@@ -1457,7 +1540,7 @@ func (t *oauthTransport) handleUnmanagedOAuthFlow(ctx context.Context, authServe
 	}
 
 	// Notify the runtime that the OAuth flow was successful
-	t.client.oauthSuccess()
+	t.notifyOAuthSuccess()
 
 	slog.DebugContext(ctx, "Unmanaged OAuth flow completed successfully")
 	return nil

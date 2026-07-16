@@ -80,6 +80,12 @@ type Settings struct {
 	SoundThreshold int `yaml:"sound_threshold,omitempty"`
 	// Snapshot enables automatic shadow-git snapshots globally when true.
 	Snapshot *bool `yaml:"snapshot,omitempty"`
+	// CacheStablePrompts keeps changing trusted context out of the frozen system
+	// prefix and appends chronological updates instead. Defaults to false.
+	CacheStablePrompts *bool `yaml:"cache_stable_prompts,omitempty"`
+	// WarnOnCacheMiss shows a warning when a model call after the first one in
+	// a session reports no cached input tokens. Defaults to false.
+	WarnOnCacheMiss *bool `yaml:"warn_on_cache_miss,omitempty"`
 	// Permissions defines global permission patterns applied across all sessions
 	// and agents. These act as user-wide defaults; session-level and agent-level
 	// permissions override them.
@@ -114,6 +120,8 @@ type LayoutSettings struct {
 	// SectionSpacing controls the blank space between sidebar sections:
 	// "normal" (default), "compact", or "relaxed".
 	SectionSpacing string `yaml:"section_spacing,omitempty"`
+	// HideSessionPath hides the working directory (session path) line in the sidebar.
+	HideSessionPath bool `yaml:"hide_session_path,omitempty"`
 	// HideUsage hides the token usage section in the sidebar.
 	HideUsage bool `yaml:"hide_usage,omitempty"`
 	// HideAgents hides the agents section in the sidebar.
@@ -209,6 +217,16 @@ func (s *Settings) GetRestoreTabs() bool {
 // SnapshotsEnabled returns whether global snapshot auto-injection is enabled.
 func (s *Settings) SnapshotsEnabled() bool {
 	return s != nil && s.Snapshot != nil && *s.Snapshot
+}
+
+// CacheStablePromptsEnabled reports whether chronological instruction updates are enabled.
+func (s *Settings) CacheStablePromptsEnabled() bool {
+	return s != nil && s.CacheStablePrompts != nil && *s.CacheStablePrompts
+}
+
+// CacheMissWarningsEnabled reports whether cache-miss notifications are enabled.
+func (s *Settings) CacheMissWarningsEnabled() bool {
+	return s != nil && s.WarnOnCacheMiss != nil && *s.WarnOnCacheMiss
 }
 
 // GlobalHooks returns the user-level hooks config, if configured. Invalid

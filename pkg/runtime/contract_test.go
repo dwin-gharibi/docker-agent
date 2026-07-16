@@ -124,7 +124,7 @@ func runRuntimeContract(t *testing.T, newRT func(t *testing.T) Runtime) {
 		t.Cleanup(func() { _ = rt.Close() })
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
-		_ = rt.ResumeElicitation(ctx, tools.ElicitationActionDecline, nil)
+		_ = rt.ResumeElicitation(ctx, tools.ElicitationActionDecline, nil, "")
 	})
 }
 

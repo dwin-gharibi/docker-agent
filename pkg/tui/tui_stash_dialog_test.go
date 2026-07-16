@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"reflect"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -169,4 +170,86 @@ func TestReplayPendingEvent_NoPendingEvent_ClearsStash(t *testing.T) {
 	assert.Nil(t, cmd, "no pending event ⇒ no command to run")
 	_, stillStashed := m.stashedDialogs[sessionID]
 	assert.False(t, stillStashed, "orphaned stash must be cleared")
+}
+
+// drainInOrder unwraps a tea.Cmd exactly the way bubbletea's real
+// Program.execSequenceMsg does (see charm.land/bubbletea/v2 tea.go): a
+// sequenceMsg (produced by tea.Sequence) is drained by executing each cmd
+// ONE AT A TIME, IN ORDER, recursing into any nested sequence; anything else
+// is a leaf Msg. sequenceMsg is an unexported `[]tea.Cmd`, so reflection is
+// used to recognize its shape without depending on bubbletea internals by
+// name — but a slice-of-Cmd shape alone is not enough to tell it apart from
+// the exported tea.BatchMsg (also `[]tea.Cmd`, produced by tea.Batch and run
+// CONCURRENTLY with no ordering guarantee by the real Program). Treating
+// both shapes the same here would make this helper — and the FIFO-order test
+// below — pass identically whether production used tea.Sequence or
+// tea.Batch, silently defeating the regression test it exists for. So a
+// tea.BatchMsg is rejected outright, and only a value whose concrete type is
+// bubbletea's private sequenceMsg is recursed into.
+func drainInOrder(t *testing.T, cmd tea.Cmd) []tea.Msg {
+	t.Helper()
+	if cmd == nil {
+		return nil
+	}
+	msg := cmd()
+	if msg == nil {
+		return []tea.Msg{msg}
+	}
+	rt := reflect.TypeOf(msg)
+	if rt == reflect.TypeFor[tea.BatchMsg]() {
+		t.Fatalf("drainInOrder got a tea.BatchMsg: production must batch replayed dialogs with tea.Sequence (ordered), not tea.Batch (concurrent, unordered)")
+	}
+	if rt.Kind() == reflect.Slice && rt.Elem() == reflect.TypeFor[tea.Cmd]() && rt.Name() == "sequenceMsg" {
+		v := reflect.ValueOf(msg)
+		var out []tea.Msg
+		for i := range v.Len() {
+			sub, _ := v.Index(i).Interface().(tea.Cmd)
+			out = append(out, drainInOrder(t, sub)...)
+		}
+		return out
+	}
+	return []tea.Msg{msg}
+}
+
+// TestReplayPendingEvent_ReplaysConcurrentElicitationsInFIFOOrder is the
+// should-fix regression test for deterministic replay ordering: two
+// concurrent background-job elicitations queued on the same inactive tab
+// must reopen as dialogs in the order they arrived. Before the fix,
+// replayPendingEvent batched the OpenDialogMsg commands with tea.Batch,
+// which bubbletea's real Program executes CONCURRENTLY with no ordering
+// guarantee on which resulting Msg reaches Update first (see
+// Program.execBatchMsg) — so which prompt ended up on top of the dialog
+// stack was nondeterministic. This drains the actual tea.Cmd graph the way
+// the real Program does (see drainInOrder) instead of only inspecting the
+// internal queue slice order, so it would catch a regression back to
+// tea.Batch.
+func TestReplayPendingEvent_ReplaysConcurrentElicitationsInFIFOOrder(t *testing.T) {
+	t.Parallel()
+
+	const sessionID = "session-A"
+
+	m, _ := newTestModel(t)
+	m.supervisor = supervisor.New(nil)
+	m.supervisor.AddSession(t.Context(), nil, &session.Session{ID: sessionID}, "/tmp", nil)
+	m.sessionStates[sessionID] = service.NewSessionState(&session.Session{ID: sessionID})
+
+	first := &runtime.ElicitationRequestEvent{Message: "worker1 needs input", ElicitationID: "e1"}
+	second := &runtime.ElicitationRequestEvent{Message: "worker2 needs input", ElicitationID: "e2"}
+	runner := m.supervisor.GetRunner(sessionID)
+	require.NotNil(t, runner)
+	runner.PendingEvents = []tea.Msg{first, second}
+
+	cmd := m.replayPendingEvent(sessionID)
+	require.NotNil(t, cmd)
+
+	msgs := drainInOrder(t, cmd)
+	require.Len(t, msgs, 2, "both queued elicitations must be replayed")
+
+	open1, ok := msgs[0].(dialog.OpenDialogMsg)
+	require.True(t, ok, "expected dialog.OpenDialogMsg, got %T", msgs[0])
+	open2, ok := msgs[1].(dialog.OpenDialogMsg)
+	require.True(t, ok, "expected dialog.OpenDialogMsg, got %T", msgs[1])
+
+	assert.Same(t, first, open1.OriginatingEvent, "the first-queued elicitation must be replayed first")
+	assert.Same(t, second, open2.OriginatingEvent, "the second-queued elicitation must be replayed second, not first")
 }

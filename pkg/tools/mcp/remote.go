@@ -13,7 +13,9 @@ import (
 	gomcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/docker/docker-agent/pkg/config/latest"
+	"github.com/docker/docker-agent/pkg/environment"
 	"github.com/docker/docker-agent/pkg/httpclient"
+	"github.com/docker/docker-agent/pkg/js"
 	"github.com/docker/docker-agent/pkg/upstream"
 )
 
@@ -23,6 +25,7 @@ type remoteMCPClient struct {
 	url                       string
 	transportType             string
 	headers                   map[string]string
+	envExpander               *js.Expander // nil when no env provider was supplied
 	tokenStore                OAuthTokenStore
 	managed                   bool
 	unmanagedOAuthRedirectURI string
@@ -36,6 +39,7 @@ func newRemoteClient(
 	tokenStore OAuthTokenStore,
 	oauthConfig *latest.RemoteOAuthConfig,
 	allowPrivateIPs bool,
+	env environment.Provider,
 ) *remoteMCPClient {
 	slog.Debug("Creating remote MCP client",
 		"url", url,
@@ -48,11 +52,17 @@ func newRemoteClient(
 		tokenStore = NewInMemoryTokenStore()
 	}
 
+	var envExpander *js.Expander
+	if env != nil {
+		envExpander = js.NewJsExpander(env)
+	}
+
 	return &remoteMCPClient{
 		sessionClient:   sessionClient{serverAddress: sanitizeRemoteAddress(url)},
 		url:             url,
 		transportType:   transportType,
 		headers:         headers,
+		envExpander:     envExpander,
 		tokenStore:      tokenStore,
 		oauthConfig:     oauthConfig,
 		allowPrivateIPs: allowPrivateIPs,
@@ -201,8 +211,9 @@ func (c *remoteMCPClient) SetUnmanagedOAuthRedirectURI(uri string) {
 }
 
 // createHTTPClient creates an HTTP client with custom headers and OAuth support.
-// Header values may contain ${headers.NAME} placeholders that are resolved
-// at request time from upstream headers stored in the request context.
+// Header values may contain ${env.NAME} and ${headers.NAME} placeholders that
+// are resolved on every request (see expandHeaders), so dynamically-provided
+// values never go stale on a long-lived connection.
 //
 // The oauthTransport is returned alongside the client so callers can inspect
 // the most recent server-side failure (via lastServerError) when Connect()
@@ -223,13 +234,14 @@ func (c *remoteMCPClient) createHTTPClient() (*http.Client, *oauthTransport, err
 	// Then wrap with OAuth support
 	oauthT := &oauthTransport{
 		base:                      base,
-		client:                    c,
+		requestElicitation:        c.requestElicitation,
+		onOAuthSuccess:            c.oauthSuccess,
 		tokenStore:                c.tokenStore,
 		baseURL:                   c.url,
 		managed:                   c.managed,
 		unmanagedOAuthRedirectURI: c.unmanagedOAuthRedirectURI,
 		oauthConfig:               c.oauthConfig,
-		oauthHTTPClient:           oauthHTTPClientWithHeaders(c.url, c.headers, c.allowPrivateIPs),
+		oauthHTTPClient:           oauthHTTPClientWithHeaders(c.url, c.headers, c.allowPrivateIPs, c.expandHeaders),
 	}
 
 	// Persist cookies across requests
@@ -239,6 +251,23 @@ func (c *remoteMCPClient) createHTTPClient() (*http.Client, *oauthTransport, err
 		return nil, nil, fmt.Errorf("creating cookie jar: %w", err)
 	}
 	return &http.Client{Transport: httpclient.WrapWithOTel(oauthT), Jar: jar}, oauthT, nil
+}
+
+// expandHeaders resolves the configured header values for one outbound
+// request: ${env.X} placeholders first (via the toolset's environment
+// provider, when one was supplied), then ${headers.X} placeholders (via
+// upstream headers carried in ctx). Running once per request keeps
+// env-backed values (e.g. short-lived tokens from a dynamic provider)
+// fresh on a long-lived connection.
+//
+// Env expansion deliberately runs first, on the configured values only,
+// so untrusted upstream header values are never fed through the JS
+// expander. Placeholders that cannot be resolved are left as-is.
+func (c *remoteMCPClient) expandHeaders(ctx context.Context, headers map[string]string) map[string]string {
+	if c.envExpander != nil {
+		headers = c.envExpander.ExpandMap(ctx, headers)
+	}
+	return upstream.ResolveHeaders(ctx, headers)
 }
 
 func (c *remoteMCPClient) headerTransport() http.RoundTripper {
@@ -251,7 +280,7 @@ func (c *remoteMCPClient) headerTransport() http.RoundTripper {
 		base = t
 	}
 	if len(c.headers) > 0 {
-		return upstream.NewHeaderTransport(base, c.headers)
+		return upstream.NewHeaderTransportWithResolver(base, c.headers, c.expandHeaders)
 	}
 	return base
 }

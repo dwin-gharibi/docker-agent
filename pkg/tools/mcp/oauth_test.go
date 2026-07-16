@@ -927,7 +927,7 @@ func TestOAuthHTTPClientWithHeaders_StripsDefaultPort(t *testing.T) {
 	t.Parallel()
 
 	client := oauthHTTPClientWithHeaders("https://mcp.example.com:443/mcp",
-		map[string]string{"X-Grafana-URL": "https://instance.grafana.net/"}, false)
+		map[string]string{"X-Grafana-URL": "https://instance.grafana.net/"}, false, nil)
 	hst, ok := client.Transport.(*hostScopedHeaderTransport)
 	require.True(t, ok, "expected a host-scoped transport when headers are configured")
 	assert.Equal(t, "mcp.example.com", hst.host,
@@ -1061,11 +1061,11 @@ func TestOAuthTransportCoalescesConcurrentAuthorization(t *testing.T) {
 	})
 
 	transport := &oauthTransport{
-		base:            base,
-		client:          client,
-		tokenStore:      NewInMemoryTokenStore(),
-		baseURL:         "http://mcp.example.test/mcp",
-		oauthHTTPClient: authSrv.Client(),
+		base:               base,
+		requestElicitation: client.requestElicitation,
+		tokenStore:         NewInMemoryTokenStore(),
+		baseURL:            "http://mcp.example.test/mcp",
+		oauthHTTPClient:    authSrv.Client(),
 	}
 
 	firstReq, err := http.NewRequestWithContext(t.Context(), http.MethodGet, transport.baseURL, http.NoBody)
@@ -1444,7 +1444,7 @@ func (e *elicitCaptured) handler(_ context.Context, req *gomcp.ElicitParams) (to
 // unmanaged flow and wires the supplied elicitation handler.
 func newUnmanagedTestTransport(t *testing.T, baseURL, redirectURI string, capture *elicitCaptured) (*oauthTransport, *remoteMCPClient) {
 	t.Helper()
-	client := newRemoteClient(baseURL, "streamable", nil, NewInMemoryTokenStore(), nil, false)
+	client := newRemoteClient(baseURL, "streamable", nil, NewInMemoryTokenStore(), nil, false, nil)
 	client.unmanagedOAuthRedirectURI = redirectURI
 	client.SetElicitationHandler(capture.handler)
 	// Allow private-IP destinations so the httptest server's 127.0.0.1 URLs
@@ -1452,7 +1452,8 @@ func newUnmanagedTestTransport(t *testing.T, baseURL, redirectURI string, captur
 	client.allowPrivateIPs = true
 	transport := &oauthTransport{
 		base:                      http.DefaultTransport,
-		client:                    client,
+		requestElicitation:        client.requestElicitation,
+		onOAuthSuccess:            client.oauthSuccess,
 		tokenStore:                client.tokenStore,
 		baseURL:                   baseURL,
 		managed:                   false,
@@ -1542,7 +1543,7 @@ func TestInitialize_CustomHeadersReachOAuthDiscovery(t *testing.T) {
 	defer srv.Close()
 
 	headers := map[string]string{"X-Grafana-URL": "https://instance.grafana.net/"}
-	client := newRemoteClient(srv.URL, "streamable", headers, NewInMemoryTokenStore(), nil, true)
+	client := newRemoteClient(srv.URL, "streamable", headers, NewInMemoryTokenStore(), nil, true, nil)
 
 	// Decline the OAuth elicitation: the unmanaged flow reaches the
 	// protected-resource-metadata discovery request (which carries the
@@ -2229,7 +2230,6 @@ func newTransportWithStaleToken(t *testing.T, baseURL string) *oauthTransport {
 	require.NoError(t, err)
 	return &oauthTransport{
 		base:       http.DefaultTransport,
-		client:     &remoteMCPClient{},
 		tokenStore: store,
 		baseURL:    baseURL,
 		// Allow private IPs so the httptest 127.0.0.1 server is reachable.
@@ -2249,7 +2249,7 @@ func TestRoundTrip_ServerInvalidTokenEvictsAndRefreshes(t *testing.T) {
 
 	var oauthSuccessFired atomic.Bool
 	transport := newTransportWithStaleToken(t, srv.URL)
-	transport.client.SetOAuthSuccessHandler(func() { oauthSuccessFired.Store(true) })
+	transport.onOAuthSuccess = func() { oauthSuccessFired.Store(true) }
 
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL, strings.NewReader("{}"))
 	require.NoError(t, err)
@@ -2375,7 +2375,6 @@ func TestRoundTrip_ServerInvalidToken_NoRefreshToken_NonInteractive(t *testing.T
 
 	transport := &oauthTransport{
 		base:            http.DefaultTransport,
-		client:          &remoteMCPClient{},
 		tokenStore:      store,
 		baseURL:         srv.URL,
 		oauthHTTPClient: oauthHTTPClientForAllowPrivateIPs(true),
@@ -2437,7 +2436,7 @@ func TestRoundTrip_ConcurrentInvalidToken_RefreshesOnce(t *testing.T) {
 	srv, tokenCalls := newInvalidTokenTestServer(t)
 
 	transport := newTransportWithStaleToken(t, srv.URL)
-	transport.client.SetOAuthSuccessHandler(func() {})
+	transport.onOAuthSuccess = func() {}
 
 	const n = 6
 	results := make(chan error, n)
@@ -2511,7 +2510,6 @@ func TestRoundTrip_Bare401WithAttachedTokenUnchanged(t *testing.T) {
 
 	transport := &oauthTransport{
 		base:            http.DefaultTransport,
-		client:          &remoteMCPClient{},
 		tokenStore:      store,
 		baseURL:         srv.URL,
 		oauthHTTPClient: oauthHTTPClientForAllowPrivateIPs(true),
@@ -2600,17 +2598,17 @@ func TestRoundTrip_ConcurrentInvalidToken_NoRefresh_StickyDecline(t *testing.T) 
 		return tools.ElicitationResult{Action: tools.ElicitationActionDecline}
 	}
 
-	client := newRemoteClient(srv.URL, "streamable", nil, store, nil, false)
+	client := newRemoteClient(srv.URL, "streamable", nil, store, nil, false, nil)
 	client.SetElicitationHandler(capture.handler)
 	client.allowPrivateIPs = true
 
 	transport := &oauthTransport{
-		base:            http.DefaultTransport,
-		client:          client,
-		tokenStore:      store,
-		baseURL:         srv.URL,
-		managed:         false,
-		oauthHTTPClient: oauthHTTPClientForAllowPrivateIPs(true),
+		base:               http.DefaultTransport,
+		requestElicitation: client.requestElicitation,
+		tokenStore:         store,
+		baseURL:            srv.URL,
+		managed:            false,
+		oauthHTTPClient:    oauthHTTPClientForAllowPrivateIPs(true),
 	}
 
 	const n = 5
@@ -2730,4 +2728,341 @@ func TestBuildAuthorizationURL(t *testing.T) {
 			}
 		})
 	}
+}
+
+// --------- Client-credential elicitation fallback ---------
+
+// clientCredsElicit returns an elicitation callback that captures the
+// oauth_client_credentials request and answers with the given result.
+func clientCredsElicit(captured **gomcp.ElicitParams, result tools.ElicitationResult) func(context.Context, *gomcp.ElicitParams) (tools.ElicitationResult, error) {
+	return func(_ context.Context, params *gomcp.ElicitParams) (tools.ElicitationResult, error) {
+		*captured = params
+		return result, nil
+	}
+}
+
+// TestResolveClientCredentials_NoDCR_PromptsUser verifies the fallback when
+// the authorization server does not advertise a registration endpoint: the
+// user is asked for pre-registered client credentials via a form
+// elicitation, and the configured scopes are preserved on accept.
+func TestResolveClientCredentials_NoDCR_PromptsUser(t *testing.T) {
+	t.Parallel()
+
+	var captured *gomcp.ElicitParams
+	transport := &oauthTransport{
+		baseURL: "https://mcp.example.test/mcp",
+		requestElicitation: clientCredsElicit(&captured, tools.ElicitationResult{
+			Action: tools.ElicitationActionAccept,
+			Content: map[string]any{
+				"client_id":     "user-client-id",
+				"client_secret": "user-secret",
+			},
+		}),
+		oauthConfig: &latest.RemoteOAuthConfig{Scopes: []string{"read", "write"}},
+	}
+
+	clientID, clientSecret, scopes, err := transport.resolveClientCredentials(
+		t.Context(), &AuthorizationServerMetadata{}, "https://example.test/cb")
+	require.NoError(t, err)
+	assert.Equal(t, "user-client-id", clientID)
+	assert.Equal(t, "user-secret", clientSecret)
+	assert.Equal(t, []string{"read", "write"}, scopes,
+		"configured scopes must be preserved when the user supplies the client credentials")
+
+	require.NotNil(t, captured, "a client-credentials elicitation must have been sent")
+	assert.Equal(t, "oauth_client_credentials", captured.Meta["docker-agent/type"])
+	assert.Equal(t, transport.baseURL, captured.Meta["docker-agent/server_url"])
+	schema, ok := captured.RequestedSchema.(map[string]any)
+	require.True(t, ok, "the elicitation must carry a form schema")
+	assert.Contains(t, schema["required"], "client_id", "client_id must be a required form field")
+}
+
+// TestResolveClientCredentials_DCRFails_PromptsUser verifies that a failing
+// dynamic client registration falls back to asking the user, instead of
+// aborting the flow outright.
+func TestResolveClientCredentials_DCRFails_PromptsUser(t *testing.T) {
+	t.Parallel()
+
+	var registerCalls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		registerCalls.Add(1)
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer srv.Close()
+
+	var captured *gomcp.ElicitParams
+	transport := &oauthTransport{
+		baseURL: "https://mcp.example.test/mcp",
+		requestElicitation: clientCredsElicit(&captured, tools.ElicitationResult{
+			Action:  tools.ElicitationActionAccept,
+			Content: map[string]any{"client_id": "user-client-id"},
+		}),
+		oauthHTTPClient: oauthHTTPClientForAllowPrivateIPs(true),
+	}
+
+	clientID, clientSecret, scopes, err := transport.resolveClientCredentials(
+		t.Context(),
+		&AuthorizationServerMetadata{RegistrationEndpoint: srv.URL},
+		"https://example.test/cb",
+	)
+	require.NoError(t, err)
+	assert.Equal(t, int32(1), registerCalls.Load(), "dynamic registration must be attempted first")
+	assert.Equal(t, "user-client-id", clientID)
+	assert.Empty(t, clientSecret, "client_secret is optional")
+	assert.Nil(t, scopes, "no scopes configured, none returned")
+	require.NotNil(t, captured)
+	assert.Equal(t, "oauth_client_credentials", captured.Meta["docker-agent/type"])
+}
+
+// TestResolveClientCredentials_PromptDeclined verifies decline and cancel
+// both surface the OAuthDeclinedError sentinel (wrapped, but reachable via
+// errors.As) so the sticky-decline latch in startInteractiveFlowLocked keeps
+// working for this dialog too.
+func TestResolveClientCredentials_PromptDeclined(t *testing.T) {
+	t.Parallel()
+
+	for _, action := range []tools.ElicitationAction{tools.ElicitationActionDecline, tools.ElicitationActionCancel} {
+		t.Run(string(action), func(t *testing.T) {
+			t.Parallel()
+
+			var captured *gomcp.ElicitParams
+			transport := &oauthTransport{
+				baseURL:            "https://mcp.example.test/mcp",
+				requestElicitation: clientCredsElicit(&captured, tools.ElicitationResult{Action: action}),
+			}
+
+			clientID, clientSecret, _, err := transport.resolveClientCredentials(
+				t.Context(), &AuthorizationServerMetadata{}, "https://example.test/cb")
+			require.Error(t, err)
+			assert.Empty(t, clientID)
+			assert.Empty(t, clientSecret)
+			assert.True(t, IsOAuthDeclined(err),
+				"a declined/cancelled credentials prompt must surface OAuthDeclinedError; got: %v", err)
+			assert.Contains(t, err.Error(), "dynamic client registration",
+				"the error must explain why the credentials were needed")
+		})
+	}
+}
+
+// TestResolveClientCredentials_PromptMissingClientID verifies that an
+// accepted reply without a usable client_id is rejected.
+func TestResolveClientCredentials_PromptMissingClientID(t *testing.T) {
+	t.Parallel()
+
+	for name, content := range map[string]map[string]any{
+		"absent":     {},
+		"empty":      {"client_id": ""},
+		"whitespace": {"client_id": "   "},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			var captured *gomcp.ElicitParams
+			transport := &oauthTransport{
+				baseURL: "https://mcp.example.test/mcp",
+				requestElicitation: clientCredsElicit(&captured, tools.ElicitationResult{
+					Action:  tools.ElicitationActionAccept,
+					Content: content,
+				}),
+			}
+
+			clientID, clientSecret, _, err := transport.resolveClientCredentials(
+				t.Context(), &AuthorizationServerMetadata{}, "https://example.test/cb")
+			require.Error(t, err)
+			assert.Empty(t, clientID)
+			assert.Empty(t, clientSecret)
+			assert.Contains(t, err.Error(), "client_id", "the error must mention the missing field")
+		})
+	}
+}
+
+// TestResolveClientCredentials_NoElicitationBridgeDefersAuth verifies the
+// no-handler behaviour: with no elicitation callback wired up the fallback
+// defers with the recognisable AuthorizationRequiredError (same contract as
+// requestElicitation), so a non-interactive startup probe doesn't hard-fail.
+func TestResolveClientCredentials_NoElicitationBridgeDefersAuth(t *testing.T) {
+	t.Parallel()
+
+	transport := &oauthTransport{baseURL: "https://mcp.example.test/mcp"}
+
+	clientID, clientSecret, _, err := transport.resolveClientCredentials(
+		t.Context(), &AuthorizationServerMetadata{}, "https://example.test/cb")
+	require.Error(t, err)
+	assert.Empty(t, clientID)
+	assert.Empty(t, clientSecret)
+	assert.True(t, IsAuthorizationRequired(err),
+		"a missing elicitation bridge must defer with AuthorizationRequiredError; got: %v", err)
+}
+
+// TestUnmanagedOAuthFlow_DriveFlow_NoDCR_UsesPromptedCredentials proves the
+// fallback end-to-end on the docker-agent-driven unmanaged flow: with no
+// registration endpoint advertised, the flow prompts for client
+// credentials, builds the authorize URL with them, and uses them for the
+// token exchange.
+func TestUnmanagedOAuthFlow_DriveFlow_NoDCR_UsesPromptedCredentials(t *testing.T) {
+	t.Parallel()
+
+	var tokenForm url.Values
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	mux.HandleFunc("/.well-known/oauth-protected-resource", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(protectedResourceMetadata{
+			Resource:             srv.URL,
+			AuthorizationServers: []string{srv.URL},
+		})
+	})
+	// Metadata WITHOUT a registration endpoint: DCR is unsupported.
+	mux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(AuthorizationServerMetadata{
+			Issuer:                srv.URL,
+			AuthorizationEndpoint: srv.URL + "/authorize",
+			TokenEndpoint:         srv.URL + "/token",
+		})
+	})
+	mux.HandleFunc("/.well-known/openid-configuration", http.NotFound)
+	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		tokenForm = r.Form
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token":"exchanged-at","token_type":"Bearer","expires_in":3600}`))
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.Header().Set("WWW-Authenticate", `Bearer resource="`+srv.URL+`/.well-known/oauth-protected-resource"`)
+		w.WriteHeader(http.StatusUnauthorized)
+	})
+
+	const redirectURI = "https://example.test/oauth/cb"
+	capture := &elicitCaptured{}
+	var credsPrompted atomic.Int32
+	capture.replyFn = func(req *gomcp.ElicitParams) tools.ElicitationResult {
+		// First elicitation asks for client credentials, second runs the
+		// OAuth flow itself.
+		if req.Meta["docker-agent/type"] == "oauth_client_credentials" {
+			credsPrompted.Add(1)
+			return tools.ElicitationResult{
+				Action: tools.ElicitationActionAccept,
+				Content: map[string]any{
+					"client_id":     "user-client-id",
+					"client_secret": "user-secret",
+				},
+			}
+		}
+		state, _ := req.Meta["docker-agent/state"].(string)
+		authorizeURL, _ := req.Meta["docker-agent/authorize_url"].(string)
+		assert.Contains(t, authorizeURL, "client_id=user-client-id",
+			"the authorize URL must be built with the prompted client_id")
+		return tools.ElicitationResult{
+			Action:  tools.ElicitationActionAccept,
+			Content: map[string]any{"code": "abc", "state": state},
+		}
+	}
+	transport, client := newUnmanagedTestTransport(t, srv.URL, redirectURI, capture)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL, strings.NewReader("{}"))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := transport.RoundTrip(req)
+	require.NoError(t, err)
+	resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	assert.Equal(t, int32(1), credsPrompted.Load(), "the client-credentials form must be shown exactly once")
+	require.NotNil(t, tokenForm, "the token endpoint must have been hit")
+	assert.Equal(t, "user-client-id", tokenForm.Get("client_id"),
+		"the token exchange must use the prompted client_id")
+	assert.Equal(t, "user-secret", tokenForm.Get("client_secret"),
+		"the token exchange must use the prompted client_secret")
+
+	tok, err := client.tokenStore.GetToken(srv.URL)
+	require.NoError(t, err)
+	assert.Equal(t, "user-client-id", tok.ClientID, "credentials must be stamped on the token for later refresh")
+	assert.Equal(t, "user-secret", tok.ClientSecret)
+}
+
+// TestManagedOAuthFlow_NoDCR_PromptsForCredentialsThenHonorsConsentDecline
+// drives handleManagedOAuthFlow directly against an httptest authorization
+// server whose metadata advertises no registration endpoint. The flow must
+// reach the client-credentials prompt fallback, then stop with the user's
+// decline of the subsequent authorization consent. The decline lands before
+// RequestAuthorizationCode, so no browser is ever launched, and the callback
+// server binds an ephemeral 127.0.0.1 port (oauthConfig is nil → port 0), so
+// the test needs no port coordination.
+func TestManagedOAuthFlow_NoDCR_PromptsForCredentialsThenHonorsConsentDecline(t *testing.T) {
+	t.Parallel()
+
+	var tokenCalls atomic.Int32
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	mux.HandleFunc("/.well-known/oauth-protected-resource", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(protectedResourceMetadata{
+			Resource:             srv.URL,
+			AuthorizationServers: []string{srv.URL},
+		})
+	})
+	// Metadata WITHOUT a registration endpoint: DCR is unsupported, so the
+	// flow must fall back to prompting for client credentials.
+	mux.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(AuthorizationServerMetadata{
+			Issuer:                srv.URL,
+			AuthorizationEndpoint: srv.URL + "/authorize",
+			TokenEndpoint:         srv.URL + "/token",
+		})
+	})
+	mux.HandleFunc("/.well-known/openid-configuration", http.NotFound)
+	mux.HandleFunc("/token", func(w http.ResponseWriter, _ *http.Request) {
+		tokenCalls.Add(1)
+		w.WriteHeader(http.StatusBadRequest)
+	})
+
+	// The flow is single-goroutine, so plain slice appends are safe here.
+	var elicitTypes []string
+	capture := &elicitCaptured{}
+	capture.replyFn = func(req *gomcp.ElicitParams) tools.ElicitationResult {
+		typ, _ := req.Meta["docker-agent/type"].(string)
+		elicitTypes = append(elicitTypes, typ)
+		if typ == "oauth_client_credentials" {
+			return tools.ElicitationResult{
+				Action: tools.ElicitationActionAccept,
+				Content: map[string]any{
+					"client_id":     "user-client-id",
+					"client_secret": "user-secret",
+				},
+			}
+		}
+		// The authorization consent that would otherwise open the browser.
+		return tools.ElicitationResult{Action: tools.ElicitationActionDecline}
+	}
+
+	store := NewInMemoryTokenStore()
+	transport := &oauthTransport{
+		base:               http.DefaultTransport,
+		requestElicitation: capture.handler,
+		tokenStore:         store,
+		baseURL:            srv.URL,
+		managed:            true,
+		oauthHTTPClient:    oauthHTTPClientForAllowPrivateIPs(true),
+	}
+
+	err := transport.handleManagedOAuthFlow(t.Context(), srv.URL, "")
+	require.EqualError(t, err, "user declined OAuth authorization")
+
+	assert.Equal(t, []string{"oauth_client_credentials", "oauth_flow"}, elicitTypes,
+		"the credentials fallback must run first, then the authorization consent")
+	assert.Equal(t, int32(0), tokenCalls.Load(),
+		"token endpoint must NOT be hit after the consent decline")
+	_, getErr := store.GetToken(srv.URL)
+	require.Error(t, getErr, "no token must be stored after a declined consent")
 }

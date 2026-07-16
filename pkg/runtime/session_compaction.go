@@ -138,7 +138,7 @@ func (r *LocalRuntime) doCompact(ctx context.Context, sess *session.Session, a *
 	_ = r.sessionStore.UpdateSession(ctx, sess)
 
 	slog.DebugContext(ctx, "Generated session summary", "session_id", sess.ID, "summary_length", len(result.Summary))
-	events.Emit(SessionSummary(sess.ID, result.Summary, a.Name(), result.FirstKeptEntry))
+	events.Emit(SessionSummary(sess.ID, result.Summary, a.Name(), result.FirstKeptEntry, result.Cost))
 
 	// after_compaction: observational. Fired only when a summary was
 	// actually applied to the session. The hook receives the
@@ -276,9 +276,14 @@ func providerContextLimit(p provider.Provider) int64 {
 // runCompactionAgent runs an agent against a sub-session for compaction.
 // It is the runtime-side glue [pkg/runtime/compactor] invokes via callback,
 // which avoids creating an import cycle on [pkg/runtime].
+//
+// The sub-runtime inherits the parent's model store so the summary call is
+// priced from the same catalogue as every other call — otherwise the
+// compaction cost recorded on the summary item would silently be 0 whenever
+// the default lazy store cannot price the model the configured store can.
 func (r *LocalRuntime) runCompactionAgent(ctx context.Context, a *agent.Agent, sess *session.Session) error {
 	t := team.New(team.WithAgents(a))
-	rt, err := New(ctx, t, WithSessionCompaction(false))
+	rt, err := New(ctx, t, WithSessionCompaction(false), WithModelStore(r.modelsStore))
 	if err != nil {
 		return err
 	}

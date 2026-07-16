@@ -133,6 +133,20 @@ agents:
 	assert.Contains(t, err.Error(), "2")
 }
 
+func TestLoadConfig_RequiresAtLeastOneAgent(t *testing.T) {
+	t.Parallel()
+
+	cfg := `version: "12"
+models:
+  fast:
+    provider: openai
+    model: gpt-4o-mini
+`
+	_, err := Load(t.Context(), NewBytesSource("test", []byte(cfg)))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "at least one agent must be configured")
+}
+
 func TestValidSkillsConfiguration(t *testing.T) {
 	t.Parallel()
 

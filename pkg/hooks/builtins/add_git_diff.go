@@ -38,10 +38,23 @@ func addGitDiff(ctx context.Context, in *hooks.Input, args []string) (*hooks.Out
 	out, err := gitOutput(ctx, in.Cwd, gitArgs...)
 	if err != nil {
 		slog.DebugContext(ctx, "add_git_diff: git diff failed; skipping", "cwd", in.Cwd, "error", err)
-		return nil, nil
+		return hooks.NewInstructionContextOutput(hooks.EventTurnStart, hooks.InstructionContext{
+			Key: "core/git-diff", Removed: true,
+			RemovedContent: "The previously reported working-tree diff no longer applies.",
+		}), nil
 	}
 	if out == "" {
-		return nil, nil
+		return hooks.NewInstructionContextOutput(hooks.EventTurnStart, hooks.InstructionContext{
+			Key: "core/git-diff", Removed: true,
+			RemovedContent: "The working tree no longer has a diff.",
+		}), nil
 	}
-	return hooks.NewAdditionalContextOutput(hooks.EventTurnStart, header+out), nil
+	content := header + out
+	return hooks.NewInstructionContextOutput(hooks.EventTurnStart, hooks.InstructionContext{
+		Key:            "core/git-diff",
+		Label:          "working-tree diff",
+		Content:        content,
+		ChangedContent: "The current working-tree diff is now:\n\n" + out,
+		RemovedContent: "The working tree no longer has a diff.",
+	}), nil
 }

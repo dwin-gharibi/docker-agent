@@ -235,6 +235,7 @@ func TestSettings_LayoutRoundTrip(t *testing.T) {
 			Layout: &LayoutSettings{
 				SidebarPosition: "left",
 				SectionSpacing:  "compact",
+				HideSessionPath: true,
 				HideUsage:       true,
 				HideTodos:       true,
 			},
@@ -243,12 +244,17 @@ func TestSettings_LayoutRoundTrip(t *testing.T) {
 
 	require.NoError(t, config.saveTo(configFile))
 
+	data, err := os.ReadFile(configFile)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "hide_session_path: true")
+
 	loaded, err := loadFrom(configFile, "")
 	require.NoError(t, err)
 
 	layout := loaded.GetSettings().GetLayout()
 	assert.Equal(t, "left", layout.SidebarPosition)
 	assert.Equal(t, "compact", layout.SectionSpacing)
+	assert.True(t, layout.HideSessionPath)
 	assert.True(t, layout.HideUsage)
 	assert.False(t, layout.HideAgents)
 	assert.False(t, layout.HideTools)
@@ -971,6 +977,15 @@ func TestSettings_GetSound(t *testing.T) {
 			assert.Equal(t, tt.expected, tt.settings.GetSound())
 		})
 	}
+}
+
+func TestSettings_CacheStablePromptsEnabled(t *testing.T) {
+	t.Parallel()
+
+	assert.False(t, (*Settings)(nil).CacheStablePromptsEnabled())
+	assert.False(t, (&Settings{}).CacheStablePromptsEnabled())
+	assert.True(t, (&Settings{CacheStablePrompts: new(true)}).CacheStablePromptsEnabled())
+	assert.False(t, (&Settings{CacheStablePrompts: new(false)}).CacheStablePromptsEnabled())
 }
 
 func TestSettings_SnapshotsEnabled(t *testing.T) {

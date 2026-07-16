@@ -81,3 +81,33 @@ func (f *filterTools) Tools(ctx context.Context) ([]tools.Tool, error) {
 
 	return filtered, nil
 }
+
+// WithNoToolsFilter creates a toolset that exposes no tools but preserves all other
+// capabilities (like Instructions) of the inner toolset.
+func WithNoToolsFilter(inner tools.ToolSet) tools.ToolSet {
+	return &noToolsFilter{ToolSet: inner}
+}
+
+type noToolsFilter struct {
+	tools.ToolSet
+}
+
+// Verify interface compliance
+var (
+	_ tools.Instructable = (*noToolsFilter)(nil)
+	_ tools.Unwrapper    = (*noToolsFilter)(nil)
+)
+
+// Unwrap implements tools.Unwrapper.
+func (f *noToolsFilter) Unwrap() tools.ToolSet {
+	return f.ToolSet
+}
+
+// Instructions implements tools.Instructable by delegating to the inner toolset.
+func (f *noToolsFilter) Instructions() string {
+	return tools.GetInstructions(f.ToolSet)
+}
+
+func (f *noToolsFilter) Tools(ctx context.Context) ([]tools.Tool, error) {
+	return nil, nil
+}

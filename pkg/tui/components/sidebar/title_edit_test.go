@@ -323,6 +323,59 @@ func TestSidebar_HandleClickType_WorkingDir_Collapsed(t *testing.T) {
 	assert.Equal(t, ClickTitle, result, "click on title should still return ClickTitle")
 }
 
+func TestSidebar_HandleClickType_HiddenPath_Vertical(t *testing.T) {
+	t.Parallel()
+
+	sess := session.New()
+	sessionState := service.NewSessionState(sess)
+	sb := New(t.Context(), sessionState)
+
+	m := sb.(*model)
+	m.sessionHasContent = true
+	m.titleGenerated = true
+	m.mode = ModeVertical
+	m.width = 50
+	m.sessionTitle = "Hi"
+	m.workingDirectory = "~/projects/myapp"
+	m.SetSectionVisibility(SectionVisibility{HideSessionPath: true})
+
+	paddingLeft := m.layoutCfg.PaddingLeft
+	wdY := verticalStarY + m.titleLineCount() + 1
+
+	// The line where the path used to be must not keep a copyable hit target.
+	result, _ := sb.HandleClickType(paddingLeft+3, wdY)
+	assert.Equal(t, ClickNone, result, "a hidden path must not be clickable")
+
+	result, _ = sb.HandleClickType(paddingLeft+3, verticalStarY)
+	assert.Equal(t, ClickTitle, result, "the title stays clickable")
+}
+
+func TestSidebar_HandleClickType_HiddenPath_Collapsed(t *testing.T) {
+	t.Parallel()
+
+	sess := session.New()
+	sessionState := service.NewSessionState(sess)
+	sb := New(t.Context(), sessionState)
+
+	m := sb.(*model)
+	m.sessionHasContent = true
+	m.titleGenerated = true
+	m.mode = ModeCollapsed
+	m.width = 50
+	m.sessionTitle = "Hi"
+	m.workingDirectory = "~/projects/myapp"
+	m.SetSectionVisibility(SectionVisibility{HideSessionPath: true})
+
+	paddingLeft := m.layoutCfg.PaddingLeft
+
+	// The row after the title must not keep a copyable hit target.
+	result, _ := sb.HandleClickType(paddingLeft+3, m.titleLineCount())
+	assert.Equal(t, ClickNone, result, "a hidden path must not be clickable")
+
+	result, _ = sb.HandleClickType(paddingLeft+3, 0)
+	assert.Equal(t, ClickTitle, result, "the title stays clickable")
+}
+
 func TestSidebar_WorkingDirectory(t *testing.T) {
 	t.Parallel()
 

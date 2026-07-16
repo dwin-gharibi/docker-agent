@@ -110,19 +110,21 @@ func CreateToolSet(ctx context.Context, toolset latest.Toolset, runConfig *confi
 		return NewToolsetCommand(toolset.Name, resolvedCommand, toolset.Args, env, cwd, lifecycle.PolicyFromConfig(toolset.Name, toolset.Lifecycle)), nil
 
 	case toolset.Remote.URL != "":
-		expander := js.NewJsExpander(envProvider)
+		// The URL is expanded once: it identifies the connection for the
+		// toolset's lifetime. Headers are deliberately NOT expanded here —
+		// they may reference ${env.X} values backed by dynamic providers
+		// (e.g. rotating tokens), so the remote client re-expands them on
+		// every HTTP request (see remoteMCPClient.expandHeaders).
+		remoteURL := js.NewJsExpander(envProvider).Expand(ctx, toolset.Remote.URL, nil)
 
-		// TODO: expand headers on each request, not at creation time.
-		headers := expander.ExpandMap(ctx, toolset.Remote.Headers)
-		remoteURL := expander.Expand(ctx, toolset.Remote.URL, nil)
-
-		return NewRemoteToolsetWithAllowPrivateIPs(
+		return newRemoteToolset(
 			toolset.Name,
 			remoteURL,
 			toolset.Remote.TransportType,
-			headers,
+			toolset.Remote.Headers,
 			toolset.Remote.OAuth,
 			toolset.AllowPrivateIPsEnabled(),
+			envProvider,
 			lifecycle.PolicyFromConfig(toolset.Name, toolset.Lifecycle),
 		), nil
 
@@ -240,7 +242,7 @@ func NewToolsetCommand(name, command string, args, env []string, cwd string, pol
 // The optional policy lets callers tune restart/backoff behaviour;
 // see NewToolsetCommand for the semantics.
 func NewRemoteToolset(name, urlString, transport string, headers map[string]string, oauthConfig *latest.RemoteOAuthConfig, policy ...lifecycle.Policy) *Toolset {
-	return newRemoteToolset(name, urlString, transport, headers, oauthConfig, false, policy...)
+	return newRemoteToolset(name, urlString, transport, headers, oauthConfig, false, nil, policy...)
 }
 
 // NewRemoteToolsetWithAllowPrivateIPs creates a new remote MCP toolset and
@@ -252,14 +254,19 @@ func NewRemoteToolsetWithAllowPrivateIPs(
 	allowPrivateIPs bool,
 	policy ...lifecycle.Policy,
 ) *Toolset {
-	return newRemoteToolset(name, urlString, transport, headers, oauthConfig, allowPrivateIPs, policy...)
+	return newRemoteToolset(name, urlString, transport, headers, oauthConfig, allowPrivateIPs, nil, policy...)
 }
 
+// newRemoteToolset is the shared constructor behind the exported remote
+// toolset variants. env is optional: when non-nil, ${env.X} placeholders in
+// header values are resolved against it on every outbound HTTP request; when
+// nil (programmatic callers), header values are used as configured.
 func newRemoteToolset(
 	name, urlString, transport string,
 	headers map[string]string,
 	oauthConfig *latest.RemoteOAuthConfig,
 	allowPrivateIPs bool,
+	env environment.Provider,
 	policy ...lifecycle.Policy,
 ) *Toolset {
 	slog.Debug("Creating Remote MCP toolset",
@@ -272,7 +279,7 @@ func newRemoteToolset(
 	desc := buildRemoteDescription(urlString, transport)
 	ts := &Toolset{
 		name:        name,
-		mcpClient:   newRemoteClient(urlString, transport, headers, NewKeyringTokenStore(), oauthConfig, allowPrivateIPs),
+		mcpClient:   newRemoteClient(urlString, transport, headers, NewKeyringTokenStore(), oauthConfig, allowPrivateIPs, env),
 		logID:       urlString,
 		description: desc,
 	}
@@ -473,9 +480,8 @@ func (ts *Toolset) Stop(ctx context.Context) error {
 }
 
 // clientConnector adapts an mcpClient to the lifecycle.Connector interface.
-// It owns the initialize handshake (including the upstream-bug retry for the
-// "failed to send initialized notification" case) and exposes the shared
-// mcpClient as a Session.
+// It owns the initialize handshake and exposes the shared mcpClient as a
+// Session.
 type clientConnector struct {
 	ts *Toolset
 }
@@ -550,54 +556,38 @@ func (c *clientConnector) Connect(ctx context.Context) (lifecycle.Session, error
 		},
 	}
 
-	var result *mcp.InitializeResult
-	const maxRetries = 3
-	for attempt := 0; ; attempt++ {
-		var err error
-		result, err = ts.mcpClient.Initialize(ctx, initRequest)
-		if err == nil {
-			break
+	// Note: a retry loop for "failed to send initialized notification" used
+	// to live here. Its predicate matched an error string only the retired
+	// mark3labs/mcp-go client produced; neither transport in the official
+	// modelcontextprotocol/go-sdk (in use since 814d46a1) emits that string,
+	// so the loop was dead code (docker/docker-agent#3601). Transient
+	// initialize failures are handled by the supervisor's restart policy
+	// instead.
+	result, err := ts.mcpClient.Initialize(ctx, initRequest)
+	if err != nil {
+		classified := lifecycle.Classify(err)
+		if errors.Is(classified, lifecycle.ErrServerUnavailable) {
+			slog.DebugContext(ctx, "MCP client unavailable, will retry on next conversation turn",
+				"server", ts.logID,
+				"error", err,
+			)
+			return nil, errServerUnavailable
 		}
-		// TODO(krissetto): This is a temporary fix to handle the case where the remote server hasn't finished its async init
-		// and we send the notifications/initialized message before the server is ready. Fix upstream in mcp-go if possible.
+		// Map auth-related transport failures to ErrAuthRequired so the
+		// supervisor treats them as permanent (no retry storm) and the
+		// toolset lands in StateFailed for clean interactive recovery on
+		// the next turn. Two signals to check:
 		//
-		// Only retry when initialization fails due to sending the initialized notification.
-		if !isInitNotificationSendError(err) {
-			classified := lifecycle.Classify(err)
-			if errors.Is(classified, lifecycle.ErrServerUnavailable) {
-				slog.DebugContext(ctx, "MCP client unavailable, will retry on next conversation turn",
-					"server", ts.logID,
-					"error", err,
-				)
-				return nil, errServerUnavailable
-			}
-			// Map auth-related transport failures to ErrAuthRequired so the
-			// supervisor treats them as permanent (no retry storm) and the
-			// toolset lands in StateFailed for clean interactive recovery on
-			// the next turn. Two signals to check:
-			//
-			// 1. AuthorizationRequiredError / OAuthDeclinedError from the
-			//    transport: enrichConnectError re-emits these through the SDK's
-			//    %v wrapping so errors.As still works.
-			// 2. lifecycle.Classify detected "invalid_token" in the error
-			//    message, which also resolves to ErrAuthRequired.
-			if IsAuthorizationRequired(err) || IsOAuthDeclined(err) || errors.Is(classified, lifecycle.ErrAuthRequired) {
-				return nil, fmt.Errorf("%w: %w", lifecycle.ErrAuthRequired, err)
-			}
-			slog.ErrorContext(ctx, "Failed to initialize MCP client", "error", err)
-			return nil, fmt.Errorf("failed to initialize MCP client: %w", err)
+		// 1. AuthorizationRequiredError / OAuthDeclinedError from the
+		//    transport: enrichConnectError re-emits these through the SDK's
+		//    %v wrapping so errors.As still works.
+		// 2. lifecycle.Classify detected "invalid_token" in the error
+		//    message, which also resolves to ErrAuthRequired.
+		if IsAuthorizationRequired(err) || IsOAuthDeclined(err) || errors.Is(classified, lifecycle.ErrAuthRequired) {
+			return nil, fmt.Errorf("%w: %w", lifecycle.ErrAuthRequired, err)
 		}
-		if attempt >= maxRetries {
-			slog.ErrorContext(ctx, "Failed to initialize MCP client after retries", "error", err)
-			return nil, fmt.Errorf("failed to initialize MCP client after retries: %w", err)
-		}
-		backoff := time.Duration(200*(attempt+1)) * time.Millisecond
-		slog.DebugContext(ctx, "MCP initialize failed to send initialized notification; retrying", "id", ts.logID, "attempt", attempt+1, "backoff_ms", backoff.Milliseconds())
-		select {
-		case <-time.After(backoff):
-		case <-ctx.Done():
-			return nil, fmt.Errorf("failed to initialize MCP client: %w", ctx.Err())
-		}
+		slog.ErrorContext(ctx, "Failed to initialize MCP client", "error", err)
+		return nil, fmt.Errorf("failed to initialize MCP client: %w", err)
 	}
 
 	slog.DebugContext(ctx, "Started MCP toolset successfully", "server", ts.logID)
@@ -768,20 +758,6 @@ func (ts *Toolset) callTool(ctx context.Context, toolCall tools.ToolCall, _ tool
 	slog.DebugContext(ctx, "MCP tool call completed", "tool", toolCall.Function.Name, "output_length", len(result.Output))
 	slog.DebugContext(ctx, result.Output)
 	return result, nil
-}
-
-// isInitNotificationSendError returns true if initialization failed while sending the
-// notifications/initialized message to the server.
-func isInitNotificationSendError(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	// mcp-go client returns this error
-	if strings.Contains(msg, "failed to send initialized notification") {
-		return true
-	}
-	return false
 }
 
 func processMCPContent(toolResult *mcp.CallToolResult) *tools.ToolCallResult {

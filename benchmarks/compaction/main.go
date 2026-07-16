@@ -233,7 +233,7 @@ func run(ctx context.Context) error {
 // compaction input trimmed of its keep-tail, truncated to the context budget,
 // wrapped in the canonical compaction system/user prompts.
 func buildCompactionMessages(sess *session.Session) []chat.Message {
-	messages, _ := sess.CompactionInput()
+	messages, _, _ := sess.CompactionInput()
 	for i := range messages {
 		messages[i].Cost = 0
 		messages[i].CacheControl = false

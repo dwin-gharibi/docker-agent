@@ -228,6 +228,10 @@ func migrateToLatestConfig(c any, raw []byte) (latest.Config, error) {
 }
 
 func validateConfig(cfg *latest.Config) error {
+	if len(cfg.Agents) == 0 {
+		return errors.New("at least one agent must be configured (add an entry under 'agents')")
+	}
+
 	if err := validateProviders(cfg); err != nil {
 		return err
 	}

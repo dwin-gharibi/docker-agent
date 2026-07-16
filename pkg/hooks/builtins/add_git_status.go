@@ -29,10 +29,17 @@ func addGitStatus(ctx context.Context, in *hooks.Input, _ []string) (*hooks.Outp
 	out, err := gitOutput(ctx, in.Cwd, "status", "--short", "--branch")
 	if err != nil {
 		slog.DebugContext(ctx, "add_git_status: git status failed; skipping", "cwd", in.Cwd, "error", err)
-		return nil, nil
+		return hooks.NewInstructionContextOutput(hooks.EventTurnStart, hooks.InstructionContext{
+			Key: "core/git-status", Removed: true,
+			RemovedContent: "Previously reported git status no longer applies.",
+		}), nil
 	}
-	if out == "" {
-		return nil, nil
-	}
-	return hooks.NewAdditionalContextOutput(hooks.EventTurnStart, "Current git status:\n\n"+out), nil
+	content := "Current git status:\n\n" + out
+	return hooks.NewInstructionContextOutput(hooks.EventTurnStart, hooks.InstructionContext{
+		Key:            "core/git-status",
+		Label:          "git status",
+		Content:        content,
+		ChangedContent: "The current git status is now:\n\n" + out,
+		RemovedContent: "Previously reported git status no longer applies.",
+	}), nil
 }

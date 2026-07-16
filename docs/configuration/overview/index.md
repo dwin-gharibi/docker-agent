@@ -34,7 +34,7 @@ models:
     model: claude-sonnet-4-5
     max_tokens: 64000
 
-# 4. Agents — define AI agents with their behavior
+# 4. Agents — define AI agents with their behavior (at least one is required)
 agents:
   root:
     model: claude

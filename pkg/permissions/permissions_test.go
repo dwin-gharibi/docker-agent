@@ -544,6 +544,28 @@ func TestMatchGlob(t *testing.T) {
 		{"mcp:*", "mcp:github:create_issue", true}, // * matches everything including :
 		{"mcp:github:*", "mcp:github:create_issue", true},
 		{"mcp:github:create_*", "mcp:github:create_issue", true},
+
+		// "*" and "?" span path separators. Argument values (shell commands,
+		// paths, URLs) routinely contain "/", so wildcards must not stop at it.
+		{"*rm -rf*", "rm -rf /", true},
+		{"*/etc/*", "cat /etc/passwd", true},
+		{"a?c", "a/c", true},
+
+		// ...and they span newlines too: shell commands are often multi-line
+		// (heredocs, "&&" chains).
+		{"*rm -rf*", "echo hi\nrm -rf /", true},
+		{"*b*", "a\nb", true},
+		{"a?b", "a\nb", true},
+
+		// Multi-byte UTF-8 in patterns keeps matching literally.
+		{"café", "café", true},
+		{"*café*", "xx café yy", true},
+
+		// "\" escapes the next character, inside and outside classes.
+		{`foo\*`, "foo*", true},
+		{`foo\*`, "foobar", false},
+		{`[\d]`, "d", true}, // literal "d", not regexp's digit class
+		{`[\d]`, "5", false},
 	}
 
 	for _, tt := range tests {
@@ -553,6 +575,85 @@ func TestMatchGlob(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+// TestDenyGlobCrossesPathSeparator guards against a deny rule failing open.
+//
+// A deny pattern with a non-trailing wildcard (e.g. "*rm -rf*") must match the
+// same command whether or not the argument value contains a path separator.
+// Previously it fell through to filepath.Match, whose "*" stops at "/", so the
+// rule fired for "rm -rf tmp" but silently returned Ask for "rm -rf /".
+func TestDenyGlobCrossesPathSeparator(t *testing.T) {
+	t.Parallel()
+
+	checker := NewCheckerFromRules(nil, nil, []string{"shell:cmd=*rm -rf*"})
+
+	assert.Equal(t, Deny, checker.CheckWithArgs("shell",
+		map[string]any{"cmd": "rm -rf tmp"}),
+		"deny rule should block 'rm -rf tmp'")
+	assert.Equal(t, Deny, checker.CheckWithArgs("shell",
+		map[string]any{"cmd": "rm -rf /"}),
+		"deny rule must also block 'rm -rf /'")
+	assert.Equal(t, Deny, checker.CheckWithArgs("shell",
+		map[string]any{"cmd": "echo hi\nrm -rf /"}),
+		"deny rule must also block a multi-line command")
+}
+
+// TestDenyNeverDegradesToAllowOrAsk is an invariant: whatever shape the argument
+// value takes — path separators either way, quoting, chained commands — a
+// matching deny rule must win over an overlapping allow or ask rule. Deny is the
+// operator's explicit guardrail, so anything less than Deny here is fail-open.
+//
+// This is the Checker-level invariant. It deliberately says nothing about --yolo,
+// which short-circuits the checker pipeline entirely in toolexec.Decide.
+func TestDenyNeverDegradesToAllowOrAsk(t *testing.T) {
+	t.Parallel()
+
+	commands := []string{
+		"rm -rf tmp",          // no separator at all
+		"rm -rf /",            // bare separator
+		"sudo rm -rf /etc",    // separator mid-value
+		"echo hi && rm -rf /", // chained with &&
+		"echo hi; rm -rf /",   // chained with ;
+		"echo hi\nrm -rf /",   // chained with a newline
+		`rm -rf "/my dir"`,    // double-quoted, with a separator
+		`rm -rf 'some path'`,  // single-quoted
+		`rm -rf $(pwd)/build`, // command substitution
+	}
+
+	for _, cmd := range commands {
+		t.Run(cmd, func(t *testing.T) {
+			t.Parallel()
+			// The deny rule overlaps both an allow and an ask rule that would
+			// otherwise resolve the call; deny must still win.
+			checker := NewCheckerFromRules(
+				[]string{"shell"},
+				[]string{"shell"},
+				[]string{"shell:cmd=*rm -rf*"},
+			)
+			assert.Equal(t, Deny,
+				checker.CheckWithArgs("shell", map[string]any{"cmd": cmd}),
+				"deny must win over allow/ask for %q", cmd)
+		})
+	}
+}
+
+// TestDenyMatchesBackslashPaths covers the backslash case. "\" is an escape in a
+// glob, so a literal backslash in a pattern is written "\\"; a deny rule spelled
+// that way must match a Windows-style path in the value, and must not be
+// defeated by an overlapping allow rule.
+func TestDenyMatchesBackslashPaths(t *testing.T) {
+	t.Parallel()
+
+	checker := NewCheckerFromRules(
+		[]string{"shell"},
+		nil,
+		[]string{`shell:cmd=*windows\\system32*`},
+	)
+
+	assert.Equal(t, Deny, checker.CheckWithArgs("shell",
+		map[string]any{"cmd": `rd /s /q c:\windows\system32`}),
+		`deny rule "*windows\\system32*" must block a backslash path`)
 }
 
 func TestArgToString(t *testing.T) {

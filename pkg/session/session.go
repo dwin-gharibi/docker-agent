@@ -2,8 +2,11 @@ package session
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"log/slog"
+	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -43,6 +46,11 @@ const (
 	// SafetyPolicySafer: auto-approve except classifier-flagged
 	// destructive calls (blast_radius low/medium/high).
 	SafetyPolicySafer SafetyPolicy = "safer"
+	// SafetyPolicySafeAuto: auto-approve shell calls the classifier
+	// positively recognises as safe (blast_radius=safe); ask on
+	// destructive and unknown. Sits between safer and strict:
+	// safer waves through unknown too, strict prompts for safe.
+	SafetyPolicySafeAuto SafetyPolicy = "safe-auto"
 	// SafetyPolicyStrict: today's no-yolo CLI default — prompt for
 	// anything not auto-approved by a checker rule.
 	SafetyPolicyStrict SafetyPolicy = "strict"
@@ -50,7 +58,7 @@ const (
 
 func (p SafetyPolicy) IsValid() bool {
 	switch p {
-	case "", SafetyPolicyUnsafe, SafetyPolicySafer, SafetyPolicyStrict:
+	case "", SafetyPolicyUnsafe, SafetyPolicySafer, SafetyPolicySafeAuto, SafetyPolicyStrict:
 		return true
 	}
 	return false
@@ -82,6 +90,13 @@ type Item struct {
 	// Cost tracks the cost of operations associated with this item that
 	// don't produce a regular message (e.g., compaction/summarization).
 	Cost float64 `json:"cost,omitempty"`
+
+	// liveAttached marks a sub-session item appended by AddLiveSubSession
+	// in this process, i.e. a sub-session that ran live and reported its
+	// own cost through its own TokenUsageEvents. Deliberately unexported
+	// and not persisted: after a reload the sub-session no longer emits
+	// events, so it must count as embedded (see EmbeddedSubSessionCost).
+	liveAttached bool
 }
 
 // IsMessage returns true if this item contains a message
@@ -116,7 +131,10 @@ type Error struct {
 
 // Session represents the agent's state including conversation history and variables
 type Session struct {
-	// mu protects Messages from concurrent read/write access.
+	// mu protects Messages and the scalar metadata that is written
+	// cross-goroutine (Title, InputTokens, OutputTokens, Cost, ...) from
+	// concurrent read/write access. Shared-session readers must go through
+	// the locked accessors (TitleSnapshot, Usage, TokensAndCost, ...).
 	mu sync.RWMutex `json:"-"`
 
 	// now and newID are per-session sources of time and identity. They are
@@ -137,7 +155,8 @@ type Session struct {
 	// and never used internally. The session's own "id" is always a fresh UUID.
 	InputID string `json:"input_id,omitempty"`
 
-	// Title is the title of the session, set by the runtime
+	// Title is the title of the session, set by the runtime. Protected by
+	// mu: shared-session callers must go through SetTitle/TitleSnapshot.
 	Title string `json:"title"`
 
 	// Evals contains evaluation criteria for this session (used by eval framework)
@@ -207,6 +226,9 @@ type Session struct {
 	// Starred indicates if this session has been starred by the user
 	Starred bool `json:"starred"`
 
+	// InputTokens, OutputTokens, and Cost are cumulative usage counters
+	// protected by mu: shared-session callers must go through
+	// SetTokensAndCost/SetUsage and TokensAndCost/Usage.
 	InputTokens  int64   `json:"input_tokens"`
 	OutputTokens int64   `json:"output_tokens"`
 	Cost         float64 `json:"cost"`
@@ -261,10 +283,52 @@ type Session struct {
 	// within the parent session's Messages array.
 	ParentID string `json:"-"`
 
+	// InstructionContext keeps the cache-stable snapshot and chronological
+	// updates for dynamic system context.
+	InstructionContext *InstructionContextState `json:"instruction_context,omitempty"`
+
 	// MessageUsageHistory stores per-message usage data for remote mode.
 	// In remote mode, messages are managed server-side, so we track usage separately.
 	// This is not persisted (json:"-") as it's only needed for the current session display.
 	MessageUsageHistory []MessageUsageRecord `json:"-"`
+}
+
+// InstructionSource is one independently changing piece of trusted context.
+type InstructionSource struct {
+	Key            string
+	Group          string
+	Label          string
+	Content        string
+	ChangedContent string
+	RemovedContent string
+	Removed        bool
+	Available      bool
+	CompleteGroup  bool
+	SetMarker      bool
+}
+
+// InstructionValue is a content-addressed instruction value.
+type InstructionValue struct {
+	Hash           string `json:"hash"`
+	Group          string `json:"group,omitempty"`
+	Label          string `json:"label,omitempty"`
+	Content        string `json:"content"`
+	RemovedContent string `json:"removed_content,omitempty"`
+}
+
+// InstructionUpdate records an append-only context change at a session item boundary.
+type InstructionUpdate struct {
+	Position int    `json:"position"`
+	Content  string `json:"content"`
+}
+
+// InstructionContextState separates the frozen epoch snapshot from current values.
+type InstructionContextState struct {
+	EpochStart int                         `json:"epoch_start"`
+	Order      []string                    `json:"order,omitempty"`
+	Initial    map[string]InstructionValue `json:"initial,omitempty"`
+	Current    map[string]InstructionValue `json:"current,omitempty"`
+	Updates    []InstructionUpdate         `json:"updates,omitempty"`
 }
 
 // MessageUsageRecord stores usage data for a single assistant message.
@@ -286,6 +350,18 @@ type PermissionsConfig struct {
 	Ask []string `json:"ask,omitempty"`
 	// Deny lists tool name patterns that are always rejected.
 	Deny []string `json:"deny,omitempty"`
+}
+
+// Clone returns a deep copy of the permissions configuration.
+func (c *PermissionsConfig) Clone() *PermissionsConfig {
+	if c == nil {
+		return nil
+	}
+	return &PermissionsConfig{
+		Allow: slices.Clone(c.Allow),
+		Ask:   slices.Clone(c.Ask),
+		Deny:  slices.Clone(c.Deny),
+	}
 }
 
 // Message is a message from an agent
@@ -579,14 +655,21 @@ func cloneSchemaValue(v any) any {
 
 // Session helper methods
 
-// AddMessage adds a message to the session
-func (s *Session) AddMessage(msg *Message) {
+// AddMessage adds a message to the session and returns the index the new
+// item occupies in s.Messages. Callers that need to stamp an event with the
+// message's position (e.g. UserMessageEvent.SessionPosition) must use this
+// return value rather than a separate len(sess.Messages)-1 read: the latter
+// races with concurrent AddMessage/ApplyCompaction calls (e.g. from a live
+// HTTP AddMessage while a stream is running) and can also observe a later,
+// larger length than the one that matched this append.
+func (s *Session) AddMessage(msg *Message) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if msg != nil {
 		capToolResultContent(&msg.Message, s.MaxToolResultTokens)
 	}
 	s.Messages = append(s.Messages, NewMessageItem(msg))
+	return len(s.Messages) - 1
 }
 
 // SetUsage records cumulative input/output token counts under s.mu.
@@ -607,6 +690,48 @@ func (s *Session) Usage() (input, output int64) {
 	return s.InputTokens, s.OutputTokens
 }
 
+// TokensAndCost returns a consistent snapshot of the cumulative token
+// counts together with the session-level cost, the read-side counterpart
+// to SetTokensAndCost.
+func (s *Session) TokensAndCost() (inputTokens, outputTokens int64, cost float64) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.InputTokens, s.OutputTokens, s.Cost
+}
+
+// SetTokensAndCost atomically records the cumulative token counts
+// together with the session-level cost under s.mu. Granular store
+// updates (e.g. InMemorySessionStore.UpdateSessionTokens) and event
+// importers write these fields cross-goroutine with readers such as
+// the persistence observer's UpdateSession snapshot, which reads them
+// under the same lock.
+func (s *Session) SetTokensAndCost(inputTokens, outputTokens int64, cost float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.InputTokens = inputTokens
+	s.OutputTokens = outputTokens
+	s.Cost = cost
+}
+
+// SetTitle updates the session title under s.mu. Title writers (title
+// generation, HTTP title updates, granular store updates) run on
+// different goroutines than readers like the UpdateSession snapshot,
+// so direct field writes would race.
+func (s *Session) SetTitle(title string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Title = title
+}
+
+// TitleSnapshot returns the session title under s.mu, the read-side
+// counterpart to SetTitle. Named TitleSnapshot because the Title field
+// and a method cannot share the name.
+func (s *Session) TitleSnapshot() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.Title
+}
+
 // ApplyCompaction atomically resets the session's cumulative token
 // counts and appends a summary item under s.mu so concurrent readers
 // (e.g. the persistence observer's UpdateSession snapshot) cannot
@@ -619,11 +744,184 @@ func (s *Session) ApplyCompaction(inputTokens, outputTokens int64, item Item) {
 	s.Messages = append(s.Messages, item)
 }
 
-// AddSubSession adds a sub-session to the session
+// PrepareInstructionContext observes dynamic context before a model call. The
+// initial snapshot remains frozen until compaction; later changes become
+// append-only wrapped-user updates at the current history position.
+func (s *Session) PrepareInstructionContext(sources []InstructionSource) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.InstructionContext == nil {
+		for _, source := range sources {
+			if !source.Available {
+				return false
+			}
+		}
+		state := &InstructionContextState{
+			EpochStart: -1,
+			Initial:    make(map[string]InstructionValue),
+			Current:    make(map[string]InstructionValue),
+		}
+		for _, source := range sources {
+			if !source.Available || source.SetMarker || source.Removed || strings.TrimSpace(source.Content) == "" {
+				continue
+			}
+			value := instructionValue(source)
+			state.Order = append(state.Order, source.Key)
+			state.Initial[source.Key] = value
+			state.Current[source.Key] = value
+		}
+		s.InstructionContext = state
+		return true
+	}
+
+	state := s.InstructionContext
+	latestSummary := -1
+	for i := range slices.Backward(s.Messages) {
+		if s.Messages[i].Summary != "" {
+			latestSummary = i
+			break
+		}
+	}
+	changed := false
+	if latestSummary > state.EpochStart {
+		state.EpochStart = latestSummary
+		state.Initial = cloneInstructionValues(state.Current)
+		state.Updates = nil
+		changed = true
+	}
+
+	completeGroups := make(map[string]bool)
+	observedKeys := make(map[string]bool)
+	for _, source := range sources {
+		if source.Available && source.CompleteGroup && source.Group != "" {
+			completeGroups[source.Group] = true
+		}
+		if source.Available && !source.SetMarker && source.Key != "" {
+			observedKeys[source.Key] = true
+		}
+	}
+
+	var rendered []string
+	for _, source := range sources {
+		if !source.Available || source.SetMarker || source.Key == "" {
+			continue
+		}
+		previous, existed := state.Current[source.Key]
+		if source.Removed || strings.TrimSpace(source.Content) == "" {
+			if !existed {
+				continue
+			}
+			delete(state.Current, source.Key)
+			if source.RemovedContent != "" {
+				rendered = append(rendered, source.RemovedContent)
+			} else {
+				rendered = append(rendered, "The context under \""+sourceLabel(source)+"\" no longer applies. Disregard it.")
+			}
+			continue
+		}
+
+		current := instructionValue(source)
+		if existed && previous.Hash == current.Hash {
+			continue
+		}
+		switch {
+		case !existed:
+			state.Order = appendMissing(state.Order, source.Key)
+			rendered = append(rendered, "Additional context is now available under \""+sourceLabel(source)+"\":\n\n"+source.Content)
+		case source.ChangedContent != "":
+			rendered = append(rendered, source.ChangedContent)
+		default:
+			rendered = append(rendered, "The context under \""+sourceLabel(source)+"\" changed and supersedes the previous value:\n\n"+source.Content)
+		}
+		state.Current[source.Key] = current
+	}
+	for _, key := range state.Order {
+		previous, exists := state.Current[key]
+		if !exists || previous.Group == "" || !completeGroups[previous.Group] || observedKeys[key] {
+			continue
+		}
+		delete(state.Current, key)
+		if previous.RemovedContent != "" {
+			rendered = append(rendered, previous.RemovedContent)
+		} else {
+			rendered = append(rendered, "The context under \""+previous.Label+"\" no longer applies. Disregard it.")
+		}
+	}
+	if len(rendered) == 0 {
+		return changed
+	}
+
+	state.Updates = append(state.Updates, InstructionUpdate{
+		Position: len(s.Messages),
+		Content:  "<system-update>\n" + strings.Join(rendered, "\n\n") + "\n</system-update>",
+	})
+	return true
+}
+
+func instructionValue(source InstructionSource) InstructionValue {
+	encoded, _ := json.Marshal(source.Content)
+	sum := sha256.Sum256(encoded)
+	return InstructionValue{
+		Hash:           hex.EncodeToString(sum[:]),
+		Group:          source.Group,
+		Label:          sourceLabel(source),
+		Content:        source.Content,
+		RemovedContent: source.RemovedContent,
+	}
+}
+
+func sourceLabel(source InstructionSource) string {
+	if source.Label != "" {
+		return source.Label
+	}
+	return source.Key
+}
+
+func cloneInstructionValues(values map[string]InstructionValue) map[string]InstructionValue {
+	return maps.Clone(values)
+}
+
+func appendMissing(values []string, value string) []string {
+	if !slices.Contains(values, value) {
+		return append(values, value)
+	}
+	return values
+}
+
+func cloneInstructionContext(state *InstructionContextState) *InstructionContextState {
+	if state == nil {
+		return nil
+	}
+	return &InstructionContextState{
+		EpochStart: state.EpochStart,
+		Order:      slices.Clone(state.Order),
+		Initial:    cloneInstructionValues(state.Initial),
+		Current:    cloneInstructionValues(state.Current),
+		Updates:    slices.Clone(state.Updates),
+	}
+}
+
+// AddSubSession adds a sub-session to the session as embedded history,
+// e.g. when a store hydrates a parent with its children. Its cost counts
+// as embedded (see EmbeddedSubSessionCost); use AddLiveSubSession for a
+// sub-session that ran live in this process.
 func (s *Session) AddSubSession(subSession *Session) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.Messages = append(s.Messages, NewSubSessionItem(subSession))
+}
+
+// AddLiveSubSession adds a sub-session that ran live in this process: it
+// has its own TokenUsageEvent entry, having reported its own cost through
+// its own events, so EmbeddedSubSessionCost skips it to avoid double
+// counting in per-session aggregations.
+func (s *Session) AddLiveSubSession(subSession *Session) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	item := NewSubSessionItem(subSession)
+	item.liveAttached = true
+	s.Messages = append(s.Messages, item)
 }
 
 // AddError appends a recorded error to the session so it survives reload and
@@ -753,6 +1051,15 @@ func (s *Session) AddMessageUsageRecord(agentName, model string, cost float64, u
 	})
 }
 
+// MessageUsageHistorySnapshot returns a copy of the per-message usage
+// records, the lock-safe read-side counterpart to AddMessageUsageRecord for
+// callers on other goroutines (e.g. the TUI cost dialog).
+func (s *Session) MessageUsageHistorySnapshot() []MessageUsageRecord {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return slices.Clone(s.MessageUsageHistory)
+}
+
 // AddAttachedFile records absPath as a file the user attached to this session.
 // The path must be absolute; relative paths are silently dropped (with a debug
 // log) since they would be ambiguous to sub-agents started in a fresh working
@@ -863,7 +1170,7 @@ func WithWorkingDir(workingDir string) Opt {
 
 func WithTitle(title string) Opt {
 	return func(s *Session) {
-		s.Title = title
+		s.SetTitle(title)
 	}
 }
 
@@ -918,7 +1225,7 @@ func WithSendUserMessage(sendUserMessage bool) Opt {
 
 func WithPermissions(perms *PermissionsConfig) Opt {
 	return func(s *Session) {
-		s.Permissions = clonePermissionsConfig(perms)
+		s.Permissions = perms.Clone()
 	}
 }
 
@@ -1025,6 +1332,29 @@ func (s *Session) MessageCount() int {
 	return n
 }
 
+// ItemCount returns the total number of items in s.Messages — messages,
+// sub-sessions, summaries, and recorded errors alike. Unlike MessageCount,
+// it counts every item, matching what len(s.Messages) would return outside
+// the lock. Hot paths that need "the index the next appended item will
+// occupy" (e.g. before calling AddSubSession) should use this instead of
+// reading len(sess.Messages) directly, which races with concurrent
+// AddMessage/ApplyCompaction.
+func (s *Session) ItemCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.Messages)
+}
+
+// MessagesSnapshot returns a lock-safe copy of the session's items, deep-
+// copying each Message so the result cannot alias a concurrent AddMessage /
+// UpdateMessage mutation. It is the exported counterpart of snapshotItems for
+// callers outside this package (e.g. pkg/server's ForkSession) that need to
+// iterate Messages without racing session.mu; in-package callers should keep
+// using snapshotItems directly.
+func (s *Session) MessagesSnapshot() []Item {
+	return s.snapshotItems()
+}
+
 // TotalCost computes the total cost of a session by walking all messages,
 // sub-sessions, and summary items. It does not use the session-level Cost
 // field, which exists only for backward-compatible persistence.
@@ -1063,6 +1393,25 @@ func (s *Session) OwnCost() float64 {
 	return cost
 }
 
+// EmbeddedSubSessionCost returns the total cost of sub-sessions that were
+// already embedded when this session was loaded (restored or branched
+// history), excluding sub-sessions attached live via AddLiveSubSession.
+// Embedded sub-sessions never emit their own TokenUsageEvents, so live
+// cost reporting must fold their cost into this session's own cost;
+// live sub-sessions report theirs through separate per-session events.
+func (s *Session) EmbeddedSubSessionCost() float64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var cost float64
+	for _, item := range s.Messages {
+		if item.IsSubSession() && !item.liveAttached {
+			cost += item.SubSession.TotalCost()
+		}
+	}
+	return cost
+}
+
 // IsToolsApproved returns a consistent snapshot of the ToolsApproved flag.
 // This is safe to call concurrently with session mutations.
 func (s *Session) IsToolsApproved() bool {
@@ -1076,7 +1425,7 @@ func (s *Session) IsToolsApproved() bool {
 func (s *Session) ClonePermissions() *PermissionsConfig {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return clonePermissionsConfig(s.Permissions)
+	return s.Permissions.Clone()
 }
 
 // SetPermissions safely updates the session's PermissionsConfig.
@@ -1095,6 +1444,20 @@ func (s *Session) SetToolsApproved(approved bool) {
 	s.ToolsApproved = approved
 	if approved && s.SafetyPolicy == "" {
 		s.SafetyPolicy = SafetyPolicyUnsafe
+	}
+}
+
+// SetSafetyPolicy updates the session's SafetyPolicy under s.mu.
+// Mirrors WithSafetyPolicy: setting unsafe also flips ToolsApproved
+// so legacy branches on ToolsApproved keep working. Runtime callers
+// use this to persist a user's mid-session mode change (e.g. opting
+// into safe-auto from a confirmation prompt).
+func (s *Session) SetSafetyPolicy(policy SafetyPolicy) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.SafetyPolicy = policy
+	if policy == SafetyPolicyUnsafe {
+		s.ToolsApproved = true
 	}
 }
 
@@ -1330,10 +1693,18 @@ func (s *Session) buildSessionSummaryMessages(items []Item) ([]chat.Message, int
 // have hidden), supplies its own system/user prompt, and runs through
 // a sub-runtime that re-applies sanitization on its own session.
 //
+// The third return value is the snapshot's total item count
+// (len(s.Messages) at the instant the snapshot was taken). Callers that
+// need an out-of-range sentinel for a split computed against messages/
+// sessIndices (i.e. "keep nothing of the tail") must use this value rather
+// than a fresh call to ItemCount(): the live count can already include an
+// append that happened after this snapshot, which would describe a longer
+// session than the one messages/sessIndices actually cover.
+//
 // All work is performed under s.mu.RLock via snapshotItems, so this
 // method is safe to call concurrently with AddMessage / ApplyCompaction
 // on the same session.
-func (s *Session) CompactionInput() ([]chat.Message, []int) {
+func (s *Session) CompactionInput() ([]chat.Message, []int, int) {
 	items := s.snapshotItems()
 
 	lastSummaryIndex := -1
@@ -1381,10 +1752,50 @@ func (s *Session) CompactionInput() ([]chat.Message, []int) {
 		messages = append(messages, msg)
 		sessIndices = append(sessIndices, i)
 	}
-	return messages, sessIndices
+	return messages, sessIndices, len(items)
+}
+
+// ClearInstructionContext removes a previously prepared cache-stable snapshot.
+// It returns whether persisted session metadata changed.
+func (s *Session) ClearInstructionContext() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.InstructionContext == nil {
+		return false
+	}
+	s.InstructionContext = nil
+	return true
+}
+
+func (s *Session) instructionMessages() ([]chat.Message, []InstructionUpdate) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.InstructionContext == nil {
+		return nil, nil
+	}
+
+	initial := make([]chat.Message, 0, len(s.InstructionContext.Initial))
+	for _, key := range s.InstructionContext.Order {
+		value, ok := s.InstructionContext.Initial[key]
+		if !ok || strings.TrimSpace(value.Content) == "" {
+			continue
+		}
+		initial = append(initial, chat.Message{Role: chat.MessageRoleSystem, Content: value.Content})
+	}
+	return initial, slices.Clone(s.InstructionContext.Updates)
 }
 
 func (s *Session) GetMessages(a *agent.Agent, extraSystemMessages ...chat.Message) []chat.Message {
+	return s.getMessages(a, true, extraSystemMessages...)
+}
+
+// GetMessagesWithoutInstructionContext assembles the legacy prompt where
+// dynamic context is supplied directly as extra system messages.
+func (s *Session) GetMessagesWithoutInstructionContext(a *agent.Agent, extraSystemMessages ...chat.Message) []chat.Message {
+	return s.getMessages(a, false, extraSystemMessages...)
+}
+
+func (s *Session) getMessages(a *agent.Agent, includeInstructionContext bool, extraSystemMessages ...chat.Message) []chat.Message {
 	slog.Debug("Getting messages for agent", "agent", a.Name(), "session_id", s.ID)
 
 	// Build invariant system messages (cacheable across sessions/users/projects)
@@ -1394,12 +1805,19 @@ func (s *Session) GetMessages(a *agent.Agent, extraSystemMessages ...chat.Messag
 	// Take a snapshot of Messages under the lock, copying Message structs
 	// to avoid racing with UpdateMessage which may modify the pointed-to objects.
 	items := s.snapshotItems()
+	var instructionInitial []chat.Message
+	var instructionUpdates []InstructionUpdate
+	if includeInstructionContext {
+		instructionInitial, instructionUpdates = s.instructionMessages()
+	}
 
 	// Build session summary messages (vary per session)
 	summaryMessages, startIndex := s.buildSessionSummaryMessages(items)
 
 	var messages []chat.Message
 	messages = append(messages, invariantMessages...)
+	messages = append(messages, instructionInitial...)
+	markLastMessageAsCacheControl(messages)
 	// extraSystemMessages are caller-supplied transient system messages
 	// (e.g. turn_start hook output) inserted after the invariant cache
 	// checkpoint and before the conversation. The last extra carries a
@@ -1415,11 +1833,22 @@ func (s *Session) GetMessages(a *agent.Agent, extraSystemMessages ...chat.Messag
 	}
 	messages = append(messages, summaryMessages...)
 
-	// Begin adding conversation messages
-	for i := startIndex; i < len(items); i++ {
-		item := items[i]
-		if item.IsMessage() {
-			messages = append(messages, item.Message.Message)
+	// Begin adding conversation messages, interleaving instruction changes at
+	// the history position where they were observed.
+	updateIndex := 0
+	for updateIndex < len(instructionUpdates) && instructionUpdates[updateIndex].Position < startIndex {
+		updateIndex++
+	}
+	for i := startIndex; i <= len(items); i++ {
+		for updateIndex < len(instructionUpdates) && instructionUpdates[updateIndex].Position == i {
+			messages = append(messages, chat.Message{
+				Role:    chat.MessageRoleUser,
+				Content: instructionUpdates[updateIndex].Content,
+			})
+			updateIndex++
+		}
+		if i < len(items) && items[i].IsMessage() {
+			messages = append(messages, items[i].Message.Message)
 		}
 	}
 

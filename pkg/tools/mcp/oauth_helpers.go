@@ -46,7 +46,9 @@ func oauthHTTPClientForAllowPrivateIPs(allowPrivateIPs bool) *http.Client {
 // (protected-resource / authorization-server metadata discovery, dynamic
 // client registration, token exchange and refresh). It layers the configured
 // custom headers on top of the SSRF-safe (or allow_private_ips) transport,
-// but ONLY for requests that target the MCP server's own host.
+// but ONLY for requests that target the MCP server's own host. Header values
+// are resolved per request through resolve (nil means ${headers.NAME}-only
+// resolution), so env-backed values stay as fresh here as on the main channel.
 //
 // OAuth metadata can advertise authorization servers on hosts chosen by the
 // (untrusted) server response, so forwarding the configured headers to every
@@ -61,7 +63,7 @@ func oauthHTTPClientForAllowPrivateIPs(allowPrivateIPs bool) *http.Client {
 //
 // The returned client is a fresh instance; the shared oauthHTTPClient
 // singleton is never mutated.
-func oauthHTTPClientWithHeaders(rawURL string, headers map[string]string, allowPrivateIPs bool) *http.Client {
+func oauthHTTPClientWithHeaders(rawURL string, headers map[string]string, allowPrivateIPs bool, resolve upstream.HeaderResolver) *http.Client {
 	base := oauthHTTPClientForAllowPrivateIPs(allowPrivateIPs)
 	if len(headers) == 0 {
 		return base
@@ -83,7 +85,7 @@ func oauthHTTPClientWithHeaders(rawURL string, headers map[string]string, allowP
 		CheckRedirect: base.CheckRedirect,
 		Transport: &hostScopedHeaderTransport{
 			host:        hostWithoutDefaultPort(u.Host, u.Scheme),
-			withHeaders: upstream.NewHeaderTransport(inner, headers),
+			withHeaders: upstream.NewHeaderTransportWithResolver(inner, headers, resolve),
 			base:        inner,
 		},
 	}

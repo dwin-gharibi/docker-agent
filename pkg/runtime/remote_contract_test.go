@@ -41,7 +41,7 @@ func (s *stubRemoteClient) ResumeSession(context.Context, string, string, string
 	return nil
 }
 
-func (s *stubRemoteClient) ResumeElicitation(context.Context, string, tools.ElicitationAction, map[string]any) error {
+func (s *stubRemoteClient) ResumeElicitation(context.Context, string, tools.ElicitationAction, map[string]any, ...string) error {
 	return nil
 }
 
@@ -137,7 +137,7 @@ func (s *stubRemoteClient) UpdateMessage(context.Context, string, string, *sessi
 	return nil
 }
 
-func (s *stubRemoteClient) AddSummary(context.Context, string, string, int) error {
+func (s *stubRemoteClient) AddSummary(context.Context, string, string, int, float64) error {
 	return nil
 }
 

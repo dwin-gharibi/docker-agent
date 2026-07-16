@@ -157,6 +157,16 @@ func (t *TabBar) SetWidth(width int) {
 	t.width = width
 }
 
+// SetMaxTitleLength applies the title truncation limit immediately.
+func (t *TabBar) SetMaxTitleLength(maxTitleLen int) {
+	if maxTitleLen <= 0 {
+		maxTitleLen = defaultMaxTitleLen
+	}
+	t.maxTitleLen = maxTitleLen
+	t.lastEnsuredIdx = noTab
+	t.clampScroll()
+}
+
 // SetTabs updates the list of tabs and active index.
 func (t *TabBar) SetTabs(tabs []messages.TabInfo, activeIdx int) {
 	if activeIdx != t.activeIdx {

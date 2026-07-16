@@ -47,10 +47,8 @@ func TestRegisterInstallsAllBuiltins(t *testing.T) {
 	}
 }
 
-// TestAddDateReturnsTodaysDate verifies the date builtin emits a
-// turn_start AdditionalContext containing today's ISO date. It does NOT
-// verify the exact "Today's date: " prefix — that's a UX detail, but we
-// keep the assertion loose-but-meaningful by anchoring on the date.
+// TestAddDateReturnsTodaysDate verifies the date builtin emits independently
+// diffable date context.
 func TestAddDateReturnsTodaysDate(t *testing.T) {
 	t.Parallel()
 
@@ -62,7 +60,9 @@ func TestAddDateReturnsTodaysDate(t *testing.T) {
 	require.NotNil(t, out.HookSpecificOutput)
 	assert.Equal(t, hooks.EventTurnStart, out.HookSpecificOutput.HookEventName,
 		"add_date must target turn_start, not session_start")
-	assert.Contains(t, out.HookSpecificOutput.AdditionalContext, time.Now().Format("2006-01-02"))
+	require.Len(t, out.HookSpecificOutput.InstructionContext, 1)
+	assert.Equal(t, "core/date", out.HookSpecificOutput.InstructionContext[0].Key)
+	assert.Contains(t, out.HookSpecificOutput.InstructionContext[0].Content, time.Now().Format("2006-01-02"))
 }
 
 // TestAddEnvironmentInfoUsesInputCwd verifies that the env-info builtin
@@ -104,9 +104,8 @@ func TestAddEnvironmentInfoNoCwdIsNoop(t *testing.T) {
 	assert.Nil(t, out)
 }
 
-// TestAddPromptFilesReadsFromCwd verifies that add_prompt_files reads
-// each file named in args (relative to Input.Cwd) and joins their
-// contents into the turn_start AdditionalContext.
+// TestAddPromptFilesReadsFromCwd verifies that add_prompt_files includes
+// both the resolved source path and its contents.
 func TestAddPromptFilesReadsFromCwd(t *testing.T) {
 	t.Parallel()
 
@@ -122,14 +121,18 @@ func TestAddPromptFilesReadsFromCwd(t *testing.T) {
 	require.NotNil(t, out.HookSpecificOutput)
 	assert.Equal(t, hooks.EventTurnStart, out.HookSpecificOutput.HookEventName,
 		"add_prompt_files must target turn_start, not session_start")
-	assert.Contains(t, out.HookSpecificOutput.AdditionalContext, promptBody)
+	require.Len(t, out.HookSpecificOutput.InstructionContext, 1)
+	source := out.HookSpecificOutput.InstructionContext[0]
+	assert.Contains(t, source.Key, "core/prompt-file-")
+	assert.True(t, source.CompleteGroup)
+	assert.Contains(t, source.Content, "Instructions from: "+filepath.Join(dir, "PROMPT.md"))
+	assert.Contains(t, source.Content, promptBody)
+	assert.Contains(t, source.ChangedContent, "replace the previous instructions from that file")
+	assert.Contains(t, source.ChangedContent, filepath.Join(dir, "PROMPT.md"))
 }
 
-// TestAddPromptFilesMissingFileIsTolerated documents that a missing
-// prompt file is logged-and-skipped, not an error: surviving files
-// still contribute, and an args list with only missing files yields a
-// nil Output rather than a hard failure. This matches the original
-// inline loop's silent-skip behavior.
+// TestAddPromptFilesMissingFileIsTolerated documents that missing configured
+// files do not prevent surviving files from contributing.
 func TestAddPromptFilesMissingFileIsTolerated(t *testing.T) {
 	t.Parallel()
 
@@ -143,7 +146,14 @@ func TestAddPromptFilesMissingFileIsTolerated(t *testing.T) {
 	out, err := fn(t.Context(), &hooks.Input{SessionID: "s", Cwd: dir}, []string{"MISSING.md", "OK.md"})
 	require.NoError(t, err)
 	require.NotNil(t, out)
-	assert.Contains(t, out.HookSpecificOutput.AdditionalContext, promptBody)
+	require.Len(t, out.HookSpecificOutput.InstructionContext, 1)
+	assert.Contains(t, out.HookSpecificOutput.InstructionContext[0].Content, promptBody)
+
+	out, err = fn(t.Context(), &hooks.Input{SessionID: "s", Cwd: dir}, []string{"MISSING.md"})
+	require.NoError(t, err)
+	require.Len(t, out.HookSpecificOutput.InstructionContext, 1)
+	assert.True(t, out.HookSpecificOutput.InstructionContext[0].SetMarker)
+	assert.True(t, out.HookSpecificOutput.InstructionContext[0].CompleteGroup)
 }
 
 // TestAddPromptFilesNoArgsIsNoop pins the early-return behavior: with

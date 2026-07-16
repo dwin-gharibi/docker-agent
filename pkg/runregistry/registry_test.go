@@ -37,6 +37,13 @@ func TestWriteAndList_RoundTrip(t *testing.T) {
 	cleanup, err := r.Write(rec)
 	require.NoError(t, err)
 
+	// Unix mode bits are not enforced on Windows.
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(filepath.Join(r.Dir(), "1234.json"))
+		require.NoError(t, err)
+		assert.Equal(t, os.FileMode(0o600), info.Mode().Perm(), "record must not be group- or world-readable")
+	}
+
 	records, err := r.List()
 	require.NoError(t, err)
 	require.Len(t, records, 1)

@@ -4,8 +4,9 @@ package permissions
 
 import (
 	"fmt"
-	"path/filepath"
+	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/docker/docker-agent/pkg/config/latest"
 )
@@ -239,17 +240,24 @@ func argToString(v any) string {
 }
 
 // matchGlob checks if a value matches a glob pattern.
-// Supports glob-style patterns using filepath.Match semantics:
-// - "*" matches any sequence of characters within a path segment
-// - "?" matches any single character
+// Supports glob-style patterns:
+// - "*" matches any sequence of characters, path separators and newlines included
+// - "?" matches any single character, path separator or newline included
 // - "[...]" matches character classes
+// - "\x" matches the literal character x
 //
 // Matching is case-insensitive.
 //
-// Note: filepath.Match's "*" stops at path separators, but for argument
-// matching we want "*" to match any characters including spaces.
-// We handle trailing wildcards specially to support patterns like "sudo*"
-// matching "sudo rm -rf /".
+// Note: filepath.Match's "*"/"?" stop at path separators ("/", or "\" on
+// Windows), but argument values are shell commands, file paths and URLs: they
+// routinely contain "/" and are often multi-line (heredocs, "&&" chains), so
+// matching must not depend on either. We therefore translate the glob to an
+// anchored regexp rather than using filepath.Match. Trailing wildcards keep a
+// plain prefix-match fast path (e.g. "sudo*").
+//
+// One deliberate divergence from filepath.Match: "\" escapes the next character
+// on every platform (filepath.Match treats it as a literal on Windows), and it
+// does so both inside and outside character classes.
 func matchGlob(pattern, value string) bool {
 	// Normalize both to lowercase for case-insensitive matching
 	pattern = strings.ToLower(pattern)
@@ -266,7 +274,144 @@ func matchGlob(pattern, value string) bool {
 		}
 	}
 
-	// Try glob pattern match (also handles exact matches)
-	matched, err := filepath.Match(pattern, value)
-	return err == nil && matched
+	// Full glob match (also handles exact matches).
+	re, err := compileGlob(pattern)
+	if err != nil {
+		return false
+	}
+	return re.MatchString(value)
+}
+
+// globCache memoizes compiled glob patterns. Patterns come from configuration
+// and are stable for the lifetime of a Checker, so the cache is bounded by the
+// number of configured rules.
+var globCache sync.Map // map[string]*regexp.Regexp
+
+// compileGlob returns the compiled form of pattern, translating it on first use.
+func compileGlob(pattern string) (*regexp.Regexp, error) {
+	if cached, ok := globCache.Load(pattern); ok {
+		return cached.(*regexp.Regexp), nil
+	}
+	re, err := globToRegexp(pattern)
+	if err != nil {
+		return nil, err
+	}
+	globCache.Store(pattern, re)
+	return re, nil
+}
+
+// globToRegexp translates a glob into an anchored regular expression whose "*"
+// and "?" match any character, path separators and newlines included.
+//
+// Literal runs are quoted as whole substrings rather than byte by byte, so
+// multi-byte UTF-8 runes survive the translation. Scanning bytes is safe
+// regardless: every glob metacharacter is ASCII, and UTF-8 continuation bytes
+// are always >= 0x80.
+func globToRegexp(pattern string) (*regexp.Regexp, error) {
+	var b strings.Builder
+
+	// (?s) makes "." match "\n" as well. Without it the wildcards would stop at
+	// a line break the same way filepath.Match's stopped at a path separator.
+	b.WriteString(`(?s)\A`)
+
+	lit := 0 // start of the literal run pending emission
+	flush := func(end int) {
+		if lit < end {
+			b.WriteString(regexp.QuoteMeta(pattern[lit:end]))
+		}
+	}
+
+	for i := 0; i < len(pattern); {
+		switch pattern[i] {
+		case '*':
+			flush(i)
+			b.WriteString(`.*`)
+			i++
+			lit = i
+		case '?':
+			flush(i)
+			b.WriteByte('.')
+			i++
+			lit = i
+		case '\\':
+			if i+1 == len(pattern) {
+				i++ // trailing "\": nothing to escape, keep it in the literal run
+				continue
+			}
+			flush(i)
+			// Drop the backslash and start a literal run at the escaped
+			// character. Any UTF-8 continuation bytes fall through to default
+			// and join that run.
+			i += 2
+			lit = i - 1
+		case '[':
+			end := classEnd(pattern, i)
+			if end < 0 {
+				i++ // unterminated class: "[" stays in the literal run
+				continue
+			}
+			flush(i)
+			writeClass(&b, pattern[i:end+1])
+			i = end + 1
+			lit = i
+		default:
+			i++
+		}
+	}
+	flush(len(pattern))
+
+	b.WriteString(`\z`)
+	return regexp.Compile(b.String())
+}
+
+// writeClass translates a glob character class (brackets included) into a
+// regexp character class. Glob "\x" escapes are resolved to the literal x and
+// the remaining members are escaped, so regexp's Perl and POSIX classes cannot
+// leak into glob syntax: "[\d]" stays the literal "d", as it was under
+// filepath.Match. "-" is passed through so that ranges keep working.
+func writeClass(b *strings.Builder, class string) {
+	body := class[1 : len(class)-1]
+
+	b.WriteByte('[')
+	if strings.HasPrefix(body, "^") {
+		b.WriteByte('^')
+		body = body[1:]
+	}
+	for i := 0; i < len(body); i++ {
+		switch c := body[i]; {
+		case c == '\\' && i+1 < len(body):
+			i++
+			writeClassByte(b, body[i])
+		case c == '-':
+			b.WriteByte('-') // range separator
+		default:
+			writeClassByte(b, c)
+		}
+	}
+	b.WriteByte(']')
+}
+
+// writeClassByte writes one literal byte of a character class, escaping the
+// characters regexp treats as special inside "[...]".
+func writeClassByte(b *strings.Builder, c byte) {
+	if strings.IndexByte(`\]^-[`, c) >= 0 {
+		b.WriteByte('\\')
+	}
+	b.WriteByte(c)
+}
+
+// classEnd returns the index of the "]" closing the character class opened at
+// start, or -1 if the class is unterminated. As with filepath.Match, a "]" in
+// the first position closes an empty class rather than being a literal member;
+// the class then fails to compile and, like ErrBadPattern, matches nothing.
+func classEnd(pattern string, start int) int {
+	for i := start + 1; i < len(pattern); i++ {
+		switch pattern[i] {
+		case '\\':
+			i++ // skip the escaped character
+		case ']':
+			return i
+		}
+	}
+	return -1
 }

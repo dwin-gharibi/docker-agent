@@ -360,7 +360,7 @@ func (r *Runner) runSingleEval(ctx context.Context, evalSess *InputSession) (Res
 
 	// Re-apply the display title in case a session_title event overrode it.
 	// This ensures repeated evals retain their '#N' suffix in stored sessions.
-	result.Session.Title = title
+	result.Session.SetTitle(title)
 
 	if len(expectedToolCalls) > 0 || len(actualToolCalls) > 0 {
 		result.ToolCallsScore = toolCallF1Score(expectedToolCalls, actualToolCalls)
@@ -467,6 +467,15 @@ func (r *Runner) runDockerAgentInContainer(ctx context.Context, imageID string, 
 
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	cmd.Env = append(env, os.Environ()...)
+	// On cancellation send SIGINT instead of the default SIGKILL: the docker
+	// CLI proxies SIGINT to the container (SIGKILL is never proxied and would
+	// leave the container running daemon-side). The container's exit also
+	// triggers --rm removal. WaitDelay force-kills the CLI if the container
+	// doesn't stop in time.
+	cmd.Cancel = func() error {
+		return cmd.Process.Signal(os.Interrupt)
+	}
+	cmd.WaitDelay = 10 * time.Second
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, fmt.Errorf("creating stdout pipe: %w", err)

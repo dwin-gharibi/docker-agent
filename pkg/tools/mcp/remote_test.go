@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -16,6 +17,8 @@ import (
 	gomcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/docker/docker-agent/pkg/upstream"
 )
 
 // TestSanitizeRemoteAddress verifies that URLs with embedded credentials
@@ -81,7 +84,7 @@ func TestRemoteClientCustomHeaders(t *testing.T) {
 		"Authorization": "Bearer custom-token",
 	}
 
-	client := newRemoteClient(server.URL, "sse", expectedHeaders, NewInMemoryTokenStore(), nil, false)
+	client := newRemoteClient(server.URL, "sse", expectedHeaders, NewInMemoryTokenStore(), nil, false, nil)
 
 	// Try to initialize (which will make the HTTP request)
 	// We don't care if it succeeds or fails, we just need it to make the request
@@ -130,7 +133,7 @@ func TestRemoteClientHeadersWithStreamable(t *testing.T) {
 		"X-Custom-Auth": "custom-auth-value",
 	}
 
-	client := newRemoteClient(server.URL, "streamable", expectedHeaders, NewInMemoryTokenStore(), nil, false)
+	client := newRemoteClient(server.URL, "streamable", expectedHeaders, NewInMemoryTokenStore(), nil, false, nil)
 
 	// Try to initialize
 	_, _ = client.Initialize(t.Context(), nil)
@@ -170,7 +173,7 @@ func TestRemoteClientNoHeaders(t *testing.T) {
 	defer server.Close()
 
 	// Create remote client without custom headers (nil)
-	client := newRemoteClient(server.URL, "sse", nil, NewInMemoryTokenStore(), nil, false)
+	client := newRemoteClient(server.URL, "sse", nil, NewInMemoryTokenStore(), nil, false, nil)
 
 	_, _ = client.Initialize(t.Context(), nil)
 
@@ -206,7 +209,7 @@ func TestRemoteClientEmptyHeaders(t *testing.T) {
 	defer server.Close()
 
 	// Create remote client with empty headers map
-	client := newRemoteClient(server.URL, "sse", map[string]string{}, NewInMemoryTokenStore(), nil, false)
+	client := newRemoteClient(server.URL, "sse", map[string]string{}, NewInMemoryTokenStore(), nil, false, nil)
 
 	_, _ = client.Initialize(t.Context(), nil)
 
@@ -247,7 +250,7 @@ func TestOAuthHTTPClientWithHeaders_ScopesHeadersToMCPHost(t *testing.T) {
 	defer thirdParty.Close()
 
 	headers := map[string]string{"X-Grafana-URL": "https://instance.grafana.net/"}
-	client := oauthHTTPClientWithHeaders(mcpServer.URL, headers, true)
+	client := oauthHTTPClientWithHeaders(mcpServer.URL, headers, true, nil)
 
 	mcpReq, err := http.NewRequestWithContext(t.Context(), http.MethodGet, mcpServer.URL, http.NoBody)
 	require.NoError(t, err)
@@ -274,7 +277,7 @@ func TestOAuthHTTPClientWithHeaders_ScopesHeadersToMCPHost(t *testing.T) {
 func TestOAuthHTTPClientWithHeaders_NoHeadersReusesBaseClient(t *testing.T) {
 	t.Parallel()
 
-	got := oauthHTTPClientWithHeaders("https://mcp.example.com/mcp", nil, false)
+	got := oauthHTTPClientWithHeaders("https://mcp.example.com/mcp", nil, false, nil)
 	assert.Same(t, oauthHTTPClientForAllowPrivateIPs(false), got,
 		"with no headers the helper must return the base OAuth client unchanged")
 }
@@ -310,7 +313,7 @@ func TestInitialize_SurfacesServerErrorInReturnedError(t *testing.T) {
 	store := NewInMemoryTokenStore()
 	require.NoError(t, store.StoreToken(server.URL, &OAuthToken{AccessToken: "at", TokenType: "Bearer"}))
 
-	client := newRemoteClient(server.URL, "streamable", nil, store, nil, false)
+	client := newRemoteClient(server.URL, "streamable", nil, store, nil, false, nil)
 
 	_, err := client.Initialize(t.Context(), nil)
 	require.Error(t, err, "Initialize should fail against a server that rejects initialize")
@@ -342,7 +345,7 @@ func TestInitialize_NonInteractiveCtxDefersOAuthAndDoesNotBlock(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := newRemoteClient(server.URL, "streamable", nil, NewInMemoryTokenStore(), nil, false)
+	client := newRemoteClient(server.URL, "streamable", nil, NewInMemoryTokenStore(), nil, false, nil)
 
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
@@ -417,7 +420,7 @@ func TestInitialize_OAuthDefersWhenElicitationBridgeNotReady(t *testing.T) {
 	// flow runs. That path reaches requestElicitation without needing
 	// dynamic client registration, which keeps the test focused on the
 	// bridge-not-ready behaviour.
-	client := newRemoteClient(srv.URL, "streamable", nil, NewInMemoryTokenStore(), nil, false)
+	client := newRemoteClient(srv.URL, "streamable", nil, NewInMemoryTokenStore(), nil, false, nil)
 
 	// Plain interactive ctx (no WithoutInteractivePrompts marker). The
 	// elicitation handler is intentionally not wired up.
@@ -467,7 +470,7 @@ func TestCreateHTTPClient_PersistsCookies(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := newRemoteClient(server.URL, "streamable", nil, NewInMemoryTokenStore(), nil, false)
+	client := newRemoteClient(server.URL, "streamable", nil, NewInMemoryTokenStore(), nil, false, nil)
 	httpClient, _, err := client.createHTTPClient()
 	require.NoError(t, err)
 	require.NotNil(t, httpClient.Jar, "createHTTPClient must attach a cookie jar so sticky sessions stick")
@@ -524,7 +527,7 @@ func TestRemoteClientUnixSocket(t *testing.T) {
 	go func() { _ = httpServer.Serve(ln) }()
 	t.Cleanup(func() { _ = httpServer.Close() })
 
-	client := newRemoteClient("unix://"+sockPath, "streamable", nil, NewInMemoryTokenStore(), nil, false)
+	client := newRemoteClient("unix://"+sockPath, "streamable", nil, NewInMemoryTokenStore(), nil, false, nil)
 	_, err = client.Initialize(t.Context(), nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = client.Close(context.WithoutCancel(t.Context())) })
@@ -535,4 +538,274 @@ func TestRemoteClientUnixSocket(t *testing.T) {
 		names = append(names, tool.Name)
 	}
 	assert.Equal(t, []string{"ping"}, names)
+}
+
+// mutableEnvProvider is a context-aware, mutable environment.Provider for
+// tests that need to change a value between two requests on the same
+// connection.
+type mutableEnvProvider struct {
+	mu   sync.Mutex
+	vals map[string]string
+}
+
+func (p *mutableEnvProvider) Get(_ context.Context, name string) (string, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	v, ok := p.vals[name]
+	return v, ok
+}
+
+func (p *mutableEnvProvider) set(name, value string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.vals[name] = value
+}
+
+// headerCaptureMCPServer runs a real streamable MCP server behind a
+// middleware that records the headers of every request it serves.
+type headerCaptureMCPServer struct {
+	*httptest.Server
+
+	mu       sync.Mutex
+	captured []http.Header
+}
+
+func newHeaderCaptureMCPServer(t *testing.T) *headerCaptureMCPServer {
+	t.Helper()
+
+	server := gomcp.NewServer(&gomcp.Implementation{Name: "test-server", Version: "1.0.0"}, nil)
+	gomcp.AddTool(server, &gomcp.Tool{Name: "ping", Description: "ping"}, func(context.Context, *gomcp.CallToolRequest, struct{}) (*gomcp.CallToolResult, struct{}, error) {
+		return &gomcp.CallToolResult{Content: []gomcp.Content{&gomcp.TextContent{Text: "pong"}}}, struct{}{}, nil
+	})
+
+	srv := &headerCaptureMCPServer{}
+	inner := gomcp.NewStreamableHTTPHandler(func(*http.Request) *gomcp.Server { return server }, nil)
+	srv.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		srv.mu.Lock()
+		srv.captured = append(srv.captured, r.Header.Clone())
+		srv.mu.Unlock()
+		inner.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// snapshot returns the number of requests captured so far.
+func (s *headerCaptureMCPServer) snapshot() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.captured)
+}
+
+// valuesSince returns the given header's value for every request captured
+// after the from snapshot.
+func (s *headerCaptureMCPServer) valuesSince(from int, header string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []string
+	for _, h := range s.captured[from:] {
+		out = append(out, h.Get(header))
+	}
+	return out
+}
+
+// TestRemoteClient_ExpandsEnvHeadersPerRequest is the stale-token regression
+// test: a configured header referencing ${env.X} must be re-expanded on every
+// HTTP request of a live connection (same long-lived http.Client/transport),
+// so a value rotated in the environment provider between two requests is
+// picked up without a reconnect.
+func TestRemoteClient_ExpandsEnvHeadersPerRequest(t *testing.T) {
+	t.Parallel()
+
+	srv := newHeaderCaptureMCPServer(t)
+
+	env := &mutableEnvProvider{vals: map[string]string{"TOKEN": "token-1"}}
+	headers := map[string]string{"X-Env-Token": "${env.TOKEN}"}
+	client := newRemoteClient(srv.URL, "streamable", headers, NewInMemoryTokenStore(), nil, false, env)
+
+	_, err := client.Initialize(t.Context(), nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = client.Close(context.WithoutCancel(t.Context())) })
+
+	listTools := func() {
+		t.Helper()
+		for _, err := range client.ListTools(t.Context(), nil) {
+			require.NoError(t, err)
+		}
+	}
+
+	listTools()
+	before := srv.snapshot()
+	require.Positive(t, before, "server should have seen the initialize + tools/list requests")
+	for _, v := range srv.valuesSince(0, "X-Env-Token") {
+		assert.Equal(t, "token-1", v, "every request before the rotation must carry the initial env value")
+	}
+
+	// Rotate the env-backed value; the SAME live connection must pick it up.
+	env.set("TOKEN", "token-2")
+	listTools()
+
+	values := srv.valuesSince(before, "X-Env-Token")
+	require.NotEmpty(t, values, "second tools/list must reach the server")
+	for _, v := range values {
+		assert.Equal(t, "token-2", v, "requests after the env rotation must carry the fresh value, not the stale one")
+	}
+}
+
+// TestRemoteClient_ResolvesUpstreamHeaderPlaceholdersPerRequest verifies the
+// pre-existing ${headers.X} contract still holds alongside env expansion:
+// values are resolved per request from the upstream headers carried in the
+// request context, so two calls with different contexts produce different
+// outbound headers on the same connection.
+func TestRemoteClient_ResolvesUpstreamHeaderPlaceholdersPerRequest(t *testing.T) {
+	t.Parallel()
+
+	srv := newHeaderCaptureMCPServer(t)
+
+	env := &mutableEnvProvider{vals: map[string]string{"TOKEN": "env-tok"}}
+	headers := map[string]string{
+		"Authorization": "${headers.Authorization}",
+		"X-Env-Token":   "${env.TOKEN}",
+	}
+	client := newRemoteClient(srv.URL, "streamable", headers, NewInMemoryTokenStore(), nil, false, env)
+
+	_, err := client.Initialize(t.Context(), nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = client.Close(context.WithoutCancel(t.Context())) })
+
+	listTools := func(ctx context.Context) {
+		t.Helper()
+		for _, err := range client.ListTools(ctx, nil) {
+			require.NoError(t, err)
+		}
+	}
+
+	up1 := http.Header{}
+	up1.Set("Authorization", "Bearer upstream-1")
+	before := srv.snapshot()
+	listTools(upstream.WithHeaders(t.Context(), up1))
+	for _, v := range srv.valuesSince(before, "Authorization") {
+		assert.Equal(t, "Bearer upstream-1", v, "first call must carry the first upstream Authorization")
+	}
+
+	up2 := http.Header{}
+	up2.Set("Authorization", "Bearer upstream-2")
+	before = srv.snapshot()
+	listTools(upstream.WithHeaders(t.Context(), up2))
+	values := srv.valuesSince(before, "Authorization")
+	require.NotEmpty(t, values)
+	for _, v := range values {
+		assert.Equal(t, "Bearer upstream-2", v, "second call must carry the second upstream Authorization")
+	}
+	// Env expansion applies on the same requests too.
+	for _, v := range srv.valuesSince(before, "X-Env-Token") {
+		assert.Equal(t, "env-tok", v)
+	}
+}
+
+// TestRemoteClient_ExpandsMixedEnvAndUpstreamPlaceholdersInOneValue covers a
+// single configured value mixing both placeholder kinds: phase one resolves
+// ${env.X} and leaves ${headers.Y} untouched, phase two fills it from the
+// upstream headers in the request context. Both phases run per request on
+// the same connection, so rotating either source shows up on the next call.
+func TestRemoteClient_ExpandsMixedEnvAndUpstreamPlaceholdersInOneValue(t *testing.T) {
+	t.Parallel()
+
+	srv := newHeaderCaptureMCPServer(t)
+
+	env := &mutableEnvProvider{vals: map[string]string{"SCHEME": "Env"}}
+	headers := map[string]string{"X-Combined": "${env.SCHEME} ${headers.X-Upstream-Token}"}
+	client := newRemoteClient(srv.URL, "streamable", headers, NewInMemoryTokenStore(), nil, false, env)
+
+	_, err := client.Initialize(t.Context(), nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = client.Close(context.WithoutCancel(t.Context())) })
+
+	listTools := func(ctx context.Context) {
+		t.Helper()
+		for _, err := range client.ListTools(ctx, nil) {
+			require.NoError(t, err)
+		}
+	}
+
+	up1 := http.Header{}
+	up1.Set("X-Upstream-Token", "upstream-1")
+	before := srv.snapshot()
+	listTools(upstream.WithHeaders(t.Context(), up1))
+	values := srv.valuesSince(before, "X-Combined")
+	require.NotEmpty(t, values)
+	for _, v := range values {
+		assert.Equal(t, "Env upstream-1", v,
+			"both placeholder kinds in one value must resolve to the combined outbound value")
+	}
+
+	// Rotate both sources; the SAME live connection must combine the fresh
+	// values on the next request.
+	env.set("SCHEME", "Env2")
+	up2 := http.Header{}
+	up2.Set("X-Upstream-Token", "upstream-2")
+	before = srv.snapshot()
+	listTools(upstream.WithHeaders(t.Context(), up2))
+	values = srv.valuesSince(before, "X-Combined")
+	require.NotEmpty(t, values)
+	for _, v := range values {
+		assert.Equal(t, "Env2 upstream-2", v,
+			"the mixed value must be re-expanded per request from both sources")
+	}
+}
+
+// TestOAuthHTTPClientWithHeaders_ResolverKeepsEnvHeadersFreshAndHostScoped
+// verifies the OAuth channel gets the same per-request dynamic expansion as
+// the main channel — a rotated ${env.X} value reaches the next same-host
+// OAuth request — while custom headers still never leak to a third-party
+// authorization-server host.
+func TestOAuthHTTPClientWithHeaders_ResolverKeepsEnvHeadersFreshAndHostScoped(t *testing.T) {
+	t.Parallel()
+
+	var mu sync.Mutex
+	var mcpHostValues []string
+	mcpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		mcpHostValues = append(mcpHostValues, r.Header.Get("X-Env-Header"))
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer mcpServer.Close()
+
+	var thirdPartyHeader atomic.Value
+	thirdParty := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		thirdPartyHeader.Store(r.Header.Get("X-Env-Header"))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer thirdParty.Close()
+
+	env := &mutableEnvProvider{vals: map[string]string{"SECRET": "secret-1"}}
+	headers := map[string]string{"X-Env-Header": "${env.SECRET}"}
+	// Same wiring as remote.go createHTTPClient: the remote client's
+	// expandHeaders is the per-request resolver for the OAuth channel.
+	mcpClient := newRemoteClient(mcpServer.URL, "streamable", headers, NewInMemoryTokenStore(), nil, true, env)
+	client := oauthHTTPClientWithHeaders(mcpServer.URL, headers, true, mcpClient.expandHeaders)
+
+	get := func(url string) {
+		t.Helper()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, url, http.NoBody)
+		require.NoError(t, err)
+		resp, err := client.Do(req)
+		require.NoError(t, err)
+		resp.Body.Close()
+	}
+
+	get(mcpServer.URL)
+	env.set("SECRET", "secret-2")
+	get(mcpServer.URL)
+
+	mu.Lock()
+	assert.Equal(t, []string{"secret-1", "secret-2"}, mcpHostValues,
+		"same-host OAuth requests must re-expand env-backed headers per request")
+	mu.Unlock()
+
+	get(thirdParty.URL)
+	v, _ := thirdPartyHeader.Load().(string)
+	assert.Empty(t, v,
+		"requests to a third-party host must NOT carry the configured header even with a resolver (credential-leak guard)")
 }

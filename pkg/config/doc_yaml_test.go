@@ -94,11 +94,16 @@ func TestDocYAMLSnippetsAreValid(t *testing.T) {
 }
 
 // looksLikeFullConfig returns true when the parsed YAML value is a map whose
-// keys are all recognized top-level config keys. This avoids schema-validating
-// partial snippets that would trivially fail required-field checks.
+// keys are all recognized top-level config keys AND it declares "agents".
+// The schema requires "agents" at the root, so a snippet lacking it is a
+// partial doc example (e.g. a models/permissions fragment), not a full
+// config, and shouldn't be schema-validated as one.
 func looksLikeFullConfig(v any) bool {
 	m, ok := v.(map[string]any)
 	if !ok || len(m) == 0 {
+		return false
+	}
+	if _, hasAgents := m["agents"]; !hasAgents {
 		return false
 	}
 	for k := range m {

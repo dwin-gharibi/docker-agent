@@ -1,6 +1,8 @@
 package upstream
 
 import (
+	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -135,4 +137,67 @@ func TestResolveHeaders_NoUpstreamContext(t *testing.T) {
 	// No upstream headers in context — placeholders are left as-is.
 	got := ResolveHeaders(t.Context(), headers)
 	assert.Equal(t, headers, got)
+}
+
+// captureTransport is a stub RoundTripper that records the headers of each
+// request it receives.
+type captureTransport struct {
+	seen []http.Header
+}
+
+func (c *captureTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	c.seen = append(c.seen, req.Header.Clone())
+	return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody, Request: req}, nil
+}
+
+func TestNewHeaderTransport_ResolvesFromContextPerRequest(t *testing.T) {
+	t.Parallel()
+
+	capture := &captureTransport{}
+	transport := NewHeaderTransport(capture, map[string]string{"Authorization": "${headers.Authorization}"})
+
+	do := func(ctx context.Context) {
+		req := httptest.NewRequestWithContext(ctx, http.MethodGet, "http://example.test/", http.NoBody)
+		resp, err := transport.RoundTrip(req)
+		require.NoError(t, err)
+		_ = resp.Body.Close()
+	}
+
+	up1 := http.Header{}
+	up1.Set("Authorization", "Bearer one")
+	do(WithHeaders(t.Context(), up1))
+
+	up2 := http.Header{}
+	up2.Set("Authorization", "Bearer two")
+	do(WithHeaders(t.Context(), up2))
+
+	require.Len(t, capture.seen, 2)
+	assert.Equal(t, "Bearer one", capture.seen[0].Get("Authorization"))
+	assert.Equal(t, "Bearer two", capture.seen[1].Get("Authorization"),
+		"each request must resolve against its own context, not a cached value")
+}
+
+func TestNewHeaderTransportWithResolver_InvokedPerRequest(t *testing.T) {
+	t.Parallel()
+
+	var calls int
+	resolve := func(_ context.Context, headers map[string]string) map[string]string {
+		calls++
+		return map[string]string{"X-Call": fmt.Sprintf("%s-%d", headers["X-Call"], calls)}
+	}
+
+	capture := &captureTransport{}
+	transport := NewHeaderTransportWithResolver(capture, map[string]string{"X-Call": "req"}, resolve)
+
+	for range 2 {
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://example.test/", http.NoBody)
+		resp, err := transport.RoundTrip(req)
+		require.NoError(t, err)
+		_ = resp.Body.Close()
+	}
+
+	require.Len(t, capture.seen, 2)
+	assert.Equal(t, "req-1", capture.seen[0].Get("X-Call"))
+	assert.Equal(t, "req-2", capture.seen[1].Get("X-Call"),
+		"the resolver must run on every request so dynamic values stay fresh")
 }

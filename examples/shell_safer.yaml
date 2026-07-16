@@ -1,16 +1,14 @@
 agents:
   root:
     model: anthropic/claude-haiku-4-5
-    description: Shell agent with safer mode; enable snapshots in user config
+    description: Shell agent with the safer_shell classifier enabled
     welcome_message: |
-      Shell safer mode is enabled. To capture snapshots for /undo, enable `settings.snapshot: true` in ~/.config/cagent/config.yaml.
+      The safer_shell classifier is enabled. Its verdict follows the
+      session's SafetyPolicy (unsafe / safer / safe-auto / strict, set
+      by the caller — CLI `--yolo` maps to unsafe, the API accepts
+      `safety_policy` on session create, and users can opt into
+      `safe-auto` from a confirmation prompt).
     instruction: Use the shell tool to run the command the user asks for.
     toolsets:
       - type: shell
-    hooks:
-      pre_tool_use:
-        - matcher: "*"
-          preempt_yolo: true
-          hooks:
-            - type: builtin
-              command: safer_shell
+        safer: true

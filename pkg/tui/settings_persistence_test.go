@@ -35,6 +35,7 @@ func TestLayoutSettingsFromConfig(t *testing.T) {
 	got := layoutSettingsFromConfig(userconfig.LayoutSettings{
 		SidebarPosition: "bottom",
 		SectionSpacing:  "compact",
+		HideSessionPath: true,
 		HideUsage:       true,
 		HideAgents:      true,
 		HideTools:       true,
@@ -43,6 +44,7 @@ func TestLayoutSettingsFromConfig(t *testing.T) {
 	assert.Equal(t, messages.LayoutSettings{
 		SidebarPosition: messages.SidebarBottom,
 		SectionSpacing:  messages.SpacingCompact,
+		HideSessionPath: true,
 		HideUsage:       true,
 		HideAgents:      true,
 		HideTools:       true,
@@ -56,6 +58,7 @@ func TestSaveSettingsToUserConfig_RoundTrip(t *testing.T) {
 	saved := messages.LayoutSettings{
 		SidebarPosition: messages.SidebarLeft,
 		SectionSpacing:  messages.SpacingRelaxed,
+		HideSessionPath: true,
 		HideTools:       true,
 	}
 	require.NoError(t, saveSettingsToUserConfig(saved, messages.SendModeQueue))
@@ -97,4 +100,109 @@ func TestSaveSettingsToUserConfig_OmitsDefaultPosition(t *testing.T) {
 	assert.Empty(t, layout.SidebarPosition, "the default position is not written out")
 	assert.Empty(t, layout.SectionSpacing, "the default spacing is not written out")
 	assert.True(t, layout.HideUsage)
+}
+
+func TestSavePreferences_RoundTripAndPreservesExtra(t *testing.T) {
+	setupSettingsConfigTest(t)
+
+	require.NoError(t, userconfig.Update(func(cfg *userconfig.Config) error {
+		cfg.Settings = &userconfig.Settings{Extra: map[string]any{"future_setting": "kept"}}
+		return nil
+	}))
+
+	preferences := messages.Preferences{
+		Layout: messages.LayoutSettings{
+			SidebarPosition: messages.SidebarBottom,
+			SectionSpacing:  messages.SpacingCompact,
+			HideAgents:      true,
+		},
+		SendMode:           messages.SendModeQueue,
+		SplitDiffView:      false,
+		ExpandThinking:     true,
+		HideToolResults:    true,
+		YOLO:               true,
+		RestoreTabs:        true,
+		Snapshot:           true,
+		CacheStablePrompts: true,
+		WarnOnCacheMiss:    true,
+		Lean:               true,
+		TabTitleMaxLength:  42,
+		Sound:              true,
+		SoundThreshold:     17,
+	}
+	require.NoError(t, savePreferences(preferences))
+
+	settings := userconfig.Get()
+	assert.Equal(t, preferences.Layout, layoutSettingsFromConfig(settings.GetLayout()))
+	assert.Equal(t, preferences.SendMode, messages.ParseSendMode(settings.GetBusySendMode()))
+	assert.Equal(t, preferences.SplitDiffView, settings.GetSplitDiffView())
+	assert.Equal(t, preferences.ExpandThinking, settings.GetExpandThinking())
+	assert.Equal(t, preferences.HideToolResults, settings.HideToolResults)
+	assert.Equal(t, preferences.YOLO, settings.YOLO)
+	assert.Equal(t, preferences.RestoreTabs, settings.GetRestoreTabs())
+	assert.Equal(t, preferences.Snapshot, settings.SnapshotsEnabled())
+	assert.Equal(t, preferences.CacheStablePrompts, settings.CacheStablePromptsEnabled())
+	assert.Equal(t, preferences.WarnOnCacheMiss, settings.CacheMissWarningsEnabled())
+	assert.Equal(t, preferences.Lean, settings.Lean)
+	assert.Equal(t, preferences.TabTitleMaxLength, settings.GetTabTitleMaxLength())
+	assert.Equal(t, preferences.Sound, settings.GetSound())
+	assert.Equal(t, preferences.SoundThreshold, settings.GetSoundThreshold())
+	assert.Equal(t, "kept", settings.Extra["future_setting"])
+}
+
+func TestSavePreferences_DefaultsClearEntries(t *testing.T) {
+	setupSettingsConfigTest(t)
+
+	require.NoError(t, savePreferences(messages.Preferences{
+		Layout:             messages.LayoutSettings{SidebarPosition: messages.SidebarLeft},
+		SendMode:           messages.SendModeQueue,
+		SplitDiffView:      false,
+		ExpandThinking:     true,
+		RestoreTabs:        true,
+		Snapshot:           true,
+		CacheStablePrompts: true,
+		WarnOnCacheMiss:    true,
+		TabTitleMaxLength:  40,
+		SoundThreshold:     40,
+	}))
+	require.NoError(t, savePreferences(messages.Preferences{
+		Layout:            messages.LayoutSettings{SidebarPosition: messages.SidebarRight, SectionSpacing: messages.SpacingNormal},
+		SendMode:          messages.SendModeSteer,
+		SplitDiffView:     true,
+		TabTitleMaxLength: userconfig.DefaultTabTitleMaxLength,
+		SoundThreshold:    userconfig.DefaultSoundThreshold,
+	}))
+
+	cfg, err := userconfig.Load()
+	require.NoError(t, err)
+	settings := cfg.Settings
+	require.NotNil(t, settings)
+	assert.Nil(t, settings.Layout)
+	assert.Empty(t, settings.BusySendMode)
+	assert.Nil(t, settings.SplitDiffView)
+	assert.Nil(t, settings.ExpandThinking)
+	assert.Nil(t, settings.RestoreTabs)
+	assert.Nil(t, settings.Snapshot)
+	assert.Nil(t, settings.CacheStablePrompts)
+	assert.Nil(t, settings.WarnOnCacheMiss)
+	assert.Zero(t, settings.TabTitleMaxLength)
+	assert.Zero(t, settings.SoundThreshold)
+}
+
+func TestSaveSettingsToUserConfig_HideSessionPathKeepsEntry(t *testing.T) {
+	setupSettingsConfigTest(t)
+
+	saved := messages.LayoutSettings{
+		SidebarPosition: messages.SidebarRight,
+		SectionSpacing:  messages.SpacingNormal,
+		HideSessionPath: true,
+	}
+	require.NoError(t, saveSettingsToUserConfig(saved, messages.SendModeSteer))
+
+	cfg, err := userconfig.Load()
+	require.NoError(t, err)
+	layout := cfg.GetSettings().Layout
+	require.NotNil(t, layout, "hide_session_path alone must keep the layout entry")
+	assert.True(t, layout.HideSessionPath)
+	assert.Equal(t, saved, layoutSettingsFromConfig(userconfig.Get().GetLayout()))
 }

@@ -72,6 +72,7 @@ func (s SectionSpacing) BlankLines() int {
 type LayoutSettings struct {
 	SidebarPosition SidebarPosition
 	SectionSpacing  SectionSpacing
+	HideSessionPath bool
 	HideUsage       bool
 	HideAgents      bool
 	HideTools       bool
@@ -100,6 +101,24 @@ func ParseSendMode(raw string) SendMode {
 	return SendModeSteer
 }
 
+// Preferences contains the persistent values managed by the settings dialog.
+type Preferences struct {
+	Layout             LayoutSettings
+	SendMode           SendMode
+	SplitDiffView      bool
+	ExpandThinking     bool
+	HideToolResults    bool
+	YOLO               bool
+	RestoreTabs        bool
+	Snapshot           bool
+	CacheStablePrompts bool
+	WarnOnCacheMiss    bool
+	Lean               bool
+	TabTitleMaxLength  int
+	Sound              bool
+	SoundThreshold     int
+}
+
 // Settings dialog messages.
 type (
 	// OpenSettingsDialogMsg opens the settings dialog (/settings).
@@ -113,8 +132,7 @@ type (
 	// ApplySettingsMsg applies the settings chosen in the dialog and
 	// persists them to the user config.
 	ApplySettingsMsg struct {
-		Layout   LayoutSettings
-		SendMode SendMode
+		Preferences Preferences
 	}
 
 	// CancelLayoutPreviewMsg restores the layout that was active before a preview.

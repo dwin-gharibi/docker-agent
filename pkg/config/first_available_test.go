@@ -160,6 +160,59 @@ func TestResolveFirstAvailableModels_GatewaySelectsFirst(t *testing.T) {
 	assert.Equal(t, "claude-sonnet-4-6", got.Model)
 }
 
+func TestResolveFirstAvailableModels_GatewaySkipsBypassingCandidateWithMissingCredentials(t *testing.T) {
+	t.Parallel()
+
+	cfg := &latest.Config{
+		Providers: map[string]latest.ProviderConfig{
+			"my_endpoint": {BaseURL: "https://llm.internal.example.com/v1", TokenKey: "MY_TOKEN"},
+		},
+		Models: map[string]latest.ModelConfig{
+			"direct": {Provider: "anthropic", Model: "claude-sonnet-4-6", BypassModelsGateway: true},
+			"smart": {
+				FirstAvailable: []string{
+					"my_endpoint/llama-3", // custom base_url implies the bypass; MY_TOKEN unset
+					"direct",              // explicit bypass; ANTHROPIC_API_KEY unset
+					"openai/gpt-5",        // gateway supplies credentials
+				},
+			},
+		},
+	}
+
+	// Bypassing candidates dial their endpoint directly even under a gateway,
+	// so they need their own credentials to be selected.
+	require.NoError(t, ResolveFirstAvailableModels(t.Context(), cfg, "gateway:8080", environment.NewNoEnvProvider()))
+
+	got := cfg.Models["smart"]
+	assert.Equal(t, "openai", got.Provider)
+	assert.Equal(t, "gpt-5", got.Model)
+}
+
+func TestResolveFirstAvailableModels_GatewaySelectsBypassingCandidateWithCredentials(t *testing.T) {
+	t.Parallel()
+
+	cfg := &latest.Config{
+		Providers: map[string]latest.ProviderConfig{
+			"my_endpoint": {BaseURL: "https://llm.internal.example.com/v1", TokenKey: "MY_TOKEN"},
+		},
+		Models: map[string]latest.ModelConfig{
+			"smart": {
+				FirstAvailable: []string{
+					"my_endpoint/llama-3",
+					"openai/gpt-5",
+				},
+			},
+		},
+	}
+
+	env := environment.NewMapEnvProvider(map[string]string{"MY_TOKEN": "test-key"})
+	require.NoError(t, ResolveFirstAvailableModels(t.Context(), cfg, "gateway:8080", env))
+
+	got := cfg.Models["smart"]
+	assert.Equal(t, "my_endpoint", got.Provider)
+	assert.Equal(t, "llama-3", got.Model)
+}
+
 func TestResolveFirstAvailableModels_NoCandidateAvailable(t *testing.T) {
 	t.Parallel()
 

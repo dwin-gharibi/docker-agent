@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/docker/docker-agent/pkg/chat"
@@ -114,7 +115,8 @@ type Store interface {
 
 	// AddSummary adds a summary item to a session at the next position.
 	// firstKeptEntry is the index of the first message kept verbatim during compaction.
-	AddSummary(ctx context.Context, sessionID, summary string, firstKeptEntry int) error
+	// cost is the dollar cost of producing the summary (0 when nothing was billed).
+	AddSummary(ctx context.Context, sessionID, summary string, firstKeptEntry int, cost float64) error
 
 	// AddError appends a recorded error item to a session at the next position.
 	// Persisting failures lets them survive a reload and travel with a JSON export.
@@ -134,7 +136,7 @@ type Store interface {
 
 type InMemorySessionStore struct {
 	sessions  *concurrent.Map[string, *Session]
-	messageID int64 // simple counter for message IDs
+	messageID atomic.Int64 // counter for message IDs, incremented via Add(1)
 }
 
 func NewInMemorySessionStore() Store {
@@ -179,7 +181,7 @@ func (s *InMemorySessionStore) GetSessionSummaries(_ context.Context) ([]Summary
 		}
 		summaries = append(summaries, Summary{
 			ID:          value.ID,
-			Title:       value.Title,
+			Title:       value.TitleSnapshot(),
 			CreatedAt:   value.CreatedAt,
 			Starred:     value.Starred,
 			NumMessages: value.MessageCount(),
@@ -232,9 +234,10 @@ func (s *InMemorySessionStore) UpdateSession(_ context.Context, session *Session
 		InputTokens:         session.InputTokens,
 		OutputTokens:        session.OutputTokens,
 		Cost:                session.Cost,
-		Permissions:         clonePermissionsConfig(session.Permissions),
+		Permissions:         session.Permissions.Clone(),
 		AgentModelOverrides: cloneStringMap(session.AgentModelOverrides),
 		CustomModelsUsed:    cloneStringSlice(session.CustomModelsUsed),
+		InstructionContext:  cloneInstructionContext(session.InstructionContext),
 		AttachedFiles:       slices.Clone(session.AttachedFiles),
 		ParentID:            session.ParentID,
 	}
@@ -280,10 +283,10 @@ func (s *InMemorySessionStore) AddMessage(_ context.Context, sessionID string, m
 	// concurrently by another goroutine (snapshotItems → cloneMessage),
 	// and writing msg.ID directly races with those reads.
 	stored := cloneMessage(msg)
-	s.messageID++
-	stored.ID = s.messageID
+	id := s.messageID.Add(1)
+	stored.ID = id
 	session.AddMessage(stored)
-	return s.messageID, nil
+	return id, nil
 }
 
 // UpdateMessage updates an existing message by its ID.
@@ -330,7 +333,7 @@ func (s *InMemorySessionStore) AddSubSession(_ context.Context, parentSessionID 
 }
 
 // AddSummary adds a summary item to a session at the next position.
-func (s *InMemorySessionStore) AddSummary(_ context.Context, sessionID, summary string, firstKeptEntry int) error {
+func (s *InMemorySessionStore) AddSummary(_ context.Context, sessionID, summary string, firstKeptEntry int, cost float64) error {
 	if sessionID == "" {
 		return ErrEmptyID
 	}
@@ -340,7 +343,7 @@ func (s *InMemorySessionStore) AddSummary(_ context.Context, sessionID, summary 
 	}
 	session.mu.Lock()
 	defer session.mu.Unlock()
-	session.Messages = append(session.Messages, Item{Summary: summary, FirstKeptEntry: firstKeptEntry})
+	session.Messages = append(session.Messages, Item{Summary: summary, FirstKeptEntry: firstKeptEntry, Cost: cost})
 	return nil
 }
 
@@ -373,7 +376,7 @@ type SQLiteSessionStore struct {
 // sessionSelectColumns is the canonical SELECT list for the sessions table.
 // The column order matches what scanSession expects; all read paths use this
 // constant so that adding a column requires updating exactly one place.
-const sessionSelectColumns = `id, tools_approved, input_tokens, output_tokens, title, cost, send_user_message, max_iterations, working_dir, created_at, starred, permissions, agent_model_overrides, custom_models_used, thinking, parent_id`
+const sessionSelectColumns = `id, tools_approved, input_tokens, output_tokens, title, cost, send_user_message, max_iterations, working_dir, created_at, starred, permissions, agent_model_overrides, custom_models_used, thinking, parent_id, instruction_context`
 
 // sessionPersistedFields holds the encoded form of a Session's JSON-bearing
 // columns plus the SQL representation of parent_id (nil for the empty
@@ -382,6 +385,7 @@ type sessionPersistedFields struct {
 	PermissionsJSON         string
 	AgentModelOverridesJSON string
 	CustomModelsUsedJSON    string
+	InstructionContextJSON  string
 	ParentID                any // string or nil
 }
 
@@ -418,6 +422,14 @@ func sessionPersistedFieldsOf(session *Session) (sessionPersistedFields, error) 
 		f.CustomModelsUsedJSON = string(customBytes)
 	}
 
+	if session.InstructionContext != nil {
+		contextBytes, err := json.Marshal(session.InstructionContext)
+		if err != nil {
+			return f, err
+		}
+		f.InstructionContextJSON = string(contextBytes)
+	}
+
 	// Use NULL for empty parent_id to avoid foreign key constraint issues.
 	if session.ParentID != "" {
 		f.ParentID = session.ParentID
@@ -435,9 +447,7 @@ func (s *InMemorySessionStore) UpdateSessionTokens(_ context.Context, sessionID 
 	if !exists {
 		return ErrNotFound
 	}
-	session.InputTokens = inputTokens
-	session.OutputTokens = outputTokens
-	session.Cost = cost
+	session.SetTokensAndCost(inputTokens, outputTokens, cost)
 	return nil
 }
 
@@ -450,7 +460,7 @@ func (s *InMemorySessionStore) UpdateSessionTitle(_ context.Context, sessionID, 
 	if !exists {
 		return ErrNotFound
 	}
-	session.Title = title
+	session.SetTitle(title)
 	return nil
 }
 
@@ -635,12 +645,12 @@ func (s *SQLiteSessionStore) AddSession(ctx context.Context, session *Session) e
 		`INSERT INTO sessions (
 			id, tools_approved, input_tokens, output_tokens, title, cost, send_user_message,
 			max_iterations, working_dir, created_at, permissions, agent_model_overrides,
-			custom_models_used, thinking, parent_id
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			custom_models_used, thinking, parent_id, instruction_context
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		session.ID, session.ToolsApproved, session.InputTokens, session.OutputTokens, session.Title,
 		session.Cost, session.SendUserMessage, session.MaxIterations, session.WorkingDir,
 		session.CreatedAt.Format(time.RFC3339), fields.PermissionsJSON, fields.AgentModelOverridesJSON,
-		fields.CustomModelsUsedJSON, false, fields.ParentID)
+		fields.CustomModelsUsedJSON, false, fields.ParentID, fields.InstructionContextJSON)
 	if err != nil {
 		return err
 	}
@@ -670,6 +680,7 @@ func scanSession(scanner interface {
 		parentID                sql.NullString
 		agentModelOverridesJSON string
 		customModelsUsedJSON    string
+		instructionContextJSON  sql.NullString
 		createdAtStr            string
 		thinking                bool // discarded
 	)
@@ -678,7 +689,7 @@ func scanSession(scanner interface {
 		&sess.ID, &sess.ToolsApproved, &sess.InputTokens, &sess.OutputTokens,
 		&sess.Title, &sess.Cost, &sess.SendUserMessage, &sess.MaxIterations,
 		&workingDir, &createdAtStr, &sess.Starred, &permissionsJSON,
-		&agentModelOverridesJSON, &customModelsUsedJSON, &thinking, &parentID,
+		&agentModelOverridesJSON, &customModelsUsedJSON, &thinking, &parentID, &instructionContextJSON,
 	)
 	if err != nil {
 		return nil, err
@@ -707,6 +718,13 @@ func scanSession(scanner interface {
 		}
 	}
 
+	if instructionContextJSON.Valid && instructionContextJSON.String != "" {
+		sess.InstructionContext = &InstructionContextState{}
+		if err := json.Unmarshal([]byte(instructionContextJSON.String), sess.InstructionContext); err != nil {
+			return nil, err
+		}
+	}
+
 	return &sess, nil
 }
 
@@ -728,6 +746,7 @@ type sessionItemRow struct {
 	subsessionID   sql.NullString
 	summaryText    sql.NullString
 	firstKeptEntry int
+	cost           float64
 }
 
 // loadSessionItems loads all items for a session from session_items.
@@ -735,7 +754,7 @@ type sessionItemRow struct {
 // loadSession when resolving sub-sessions inside a transaction.
 func (s *SQLiteSessionStore) loadSessionItems(ctx context.Context, q querier, sessionID string) ([]Item, error) {
 	rows, err := q.QueryContext(ctx,
-		`SELECT position, item_type, agent_name, message_json, implicit, subsession_id, summary_text, COALESCE(first_kept_entry, 0)
+		`SELECT position, item_type, agent_name, message_json, implicit, subsession_id, summary_text, COALESCE(first_kept_entry, 0), cost
 		 FROM session_items WHERE session_id = ? ORDER BY position`, sessionID)
 	if err != nil {
 		return nil, err
@@ -747,7 +766,7 @@ func (s *SQLiteSessionStore) loadSessionItems(ctx context.Context, q querier, se
 	var rawRows []sessionItemRow
 	for rows.Next() {
 		var row sessionItemRow
-		if err := rows.Scan(&row.position, &row.itemType, &row.agentName, &row.messageJSON, &row.implicit, &row.subsessionID, &row.summaryText, &row.firstKeptEntry); err != nil {
+		if err := rows.Scan(&row.position, &row.itemType, &row.agentName, &row.messageJSON, &row.implicit, &row.subsessionID, &row.summaryText, &row.firstKeptEntry, &row.cost); err != nil {
 			return nil, err
 		}
 		rawRows = append(rawRows, row)
@@ -797,7 +816,7 @@ func (s *SQLiteSessionStore) loadSessionItems(ctx context.Context, q querier, se
 			items = append(items, Item{SubSession: subSession})
 
 		case "summary":
-			items = append(items, Item{Summary: row.summaryText.String, FirstKeptEntry: row.firstKeptEntry})
+			items = append(items, Item{Summary: row.summaryText.String, FirstKeptEntry: row.firstKeptEntry, Cost: row.cost})
 
 		case "error":
 			var e Error
@@ -954,9 +973,10 @@ func (s *SQLiteSessionStore) UpdateSession(ctx context.Context, session *Session
 		InputTokens:         session.InputTokens,
 		OutputTokens:        session.OutputTokens,
 		Cost:                session.Cost,
-		Permissions:         clonePermissionsConfig(session.Permissions),
+		Permissions:         session.Permissions.Clone(),
 		AgentModelOverrides: cloneStringMap(session.AgentModelOverrides),
 		CustomModelsUsed:    cloneStringSlice(session.CustomModelsUsed),
+		InstructionContext:  cloneInstructionContext(session.InstructionContext),
 		ParentID:            session.ParentID,
 	}
 	session.mu.RUnlock()
@@ -978,9 +998,9 @@ func (s *SQLiteSessionStore) UpdateSession(ctx context.Context, session *Session
 		`INSERT INTO sessions (
 			id, tools_approved, input_tokens, output_tokens, title, cost, send_user_message,
 			max_iterations, working_dir, created_at, starred, permissions, agent_model_overrides,
-			custom_models_used, thinking, parent_id
+			custom_models_used, thinking, parent_id, instruction_context
 		)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(id) DO UPDATE SET
 		   title = excluded.title,
 		   tools_approved = excluded.tools_approved,
@@ -995,11 +1015,12 @@ func (s *SQLiteSessionStore) UpdateSession(ctx context.Context, session *Session
 		   agent_model_overrides = excluded.agent_model_overrides,
 		   custom_models_used = excluded.custom_models_used,
 		   thinking = excluded.thinking,
-		   parent_id = excluded.parent_id`,
+		   parent_id = excluded.parent_id,
+		   instruction_context = excluded.instruction_context`,
 		snapshot.ID, snapshot.ToolsApproved, snapshot.InputTokens, snapshot.OutputTokens,
 		snapshot.Title, snapshot.Cost, snapshot.SendUserMessage, snapshot.MaxIterations, snapshot.WorkingDir,
 		snapshot.CreatedAt.Format(time.RFC3339), snapshot.Starred, fields.PermissionsJSON, fields.AgentModelOverridesJSON,
-		fields.CustomModelsUsedJSON, false, fields.ParentID)
+		fields.CustomModelsUsedJSON, false, fields.ParentID, fields.InstructionContextJSON)
 	if err != nil {
 		return err
 	}
@@ -1146,14 +1167,14 @@ func (s *SQLiteSessionStore) addSessionTx(ctx context.Context, tx *sql.Tx, sessi
 		`INSERT INTO sessions (
 			id, tools_approved, input_tokens, output_tokens, title, cost, send_user_message,
 			max_iterations, working_dir, created_at, starred, permissions, agent_model_overrides,
-			custom_models_used, thinking, parent_id
+			custom_models_used, thinking, parent_id, instruction_context
 		)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		session.ID, session.ToolsApproved, session.InputTokens, session.OutputTokens,
 		session.Title, session.Cost, session.SendUserMessage, session.MaxIterations,
 		session.WorkingDir, session.CreatedAt.Format(time.RFC3339), session.Starred,
 		fields.PermissionsJSON, fields.AgentModelOverridesJSON, fields.CustomModelsUsedJSON, false,
-		fields.ParentID)
+		fields.ParentID, fields.InstructionContextJSON)
 	return err
 }
 
@@ -1194,9 +1215,9 @@ func (s *SQLiteSessionStore) addItemTx(ctx context.Context, tx *sql.Tx, sessionI
 
 	case item.Summary != "":
 		_, err := tx.ExecContext(ctx,
-			`INSERT INTO session_items (session_id, position, item_type, summary_text, first_kept_entry)
-			 VALUES (?, ?, 'summary', ?, ?)`,
-			sessionID, position, item.Summary, item.FirstKeptEntry)
+			`INSERT INTO session_items (session_id, position, item_type, summary_text, first_kept_entry, cost)
+			 VALUES (?, ?, 'summary', ?, ?, ?)`,
+			sessionID, position, item.Summary, item.FirstKeptEntry, item.Cost)
 		return err
 
 	case item.Error != nil:
@@ -1216,15 +1237,15 @@ func (s *SQLiteSessionStore) addItemTx(ctx context.Context, tx *sql.Tx, sessionI
 }
 
 // AddSummary adds a summary item to a session at the next position.
-func (s *SQLiteSessionStore) AddSummary(ctx context.Context, sessionID, summary string, firstKeptEntry int) error {
+func (s *SQLiteSessionStore) AddSummary(ctx context.Context, sessionID, summary string, firstKeptEntry int, cost float64) error {
 	if sessionID == "" {
 		return ErrEmptyID
 	}
 
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO session_items (session_id, position, item_type, summary_text, first_kept_entry)
-		 VALUES (?, (SELECT COALESCE(MAX(position), -1) + 1 FROM session_items WHERE session_id = ?), 'summary', ?, ?)`,
-		sessionID, sessionID, summary, firstKeptEntry)
+		`INSERT INTO session_items (session_id, position, item_type, summary_text, first_kept_entry, cost)
+		 VALUES (?, (SELECT COALESCE(MAX(position), -1) + 1 FROM session_items WHERE session_id = ?), 'summary', ?, ?, ?)`,
+		sessionID, sessionID, summary, firstKeptEntry, cost)
 	if err != nil {
 		return err
 	}

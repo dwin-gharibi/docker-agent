@@ -82,8 +82,16 @@ type Runtime interface {
 	// Resume allows resuming execution after user confirmation.
 	// The ResumeRequest carries the decision type and an optional reason (for rejections).
 	Resume(ctx context.Context, req ResumeRequest)
-	// ResumeElicitation sends an elicitation response back to a waiting elicitation request
-	ResumeElicitation(_ context.Context, action tools.ElicitationAction, content map[string]any) error
+	// ResumeElicitation sends an elicitation response back to a waiting
+	// elicitation request. elicitationID correlates the response with a
+	// specific concurrent request (see ElicitationRequestEvent.ElicitationID);
+	// omit it (or pass "") to fall back to resolving the sole pending
+	// request, for backward compatibility with older clients. The parameter
+	// is variadic — rather than a required 4th positional argument — purely
+	// so pre-#3584 callers of this interface method keep compiling unchanged;
+	// implementations should treat more than one value as a caller error and
+	// use only the first.
+	ResumeElicitation(_ context.Context, action tools.ElicitationAction, content map[string]any, elicitationID ...string) error
 	// SessionStore returns the session store for browsing/loading past sessions.
 	// Returns nil if no persistent session store is configured.
 	SessionStore() session.Store
@@ -176,6 +184,14 @@ type Runtime interface {
 	// background work can implement this as a no-op.
 	OnBackgroundEvent(handler func(Event))
 
+	// OnElicitationRequest registers a handler invoked whenever an MCP
+	// toolset raises an elicitation request, regardless of which stream
+	// (foreground or a detached background job) is currently "active" for
+	// the runtime's internal elicitation bridge. This is the reliable
+	// delivery route for background-job elicitations (#3584); runtimes
+	// that don't run local background work can implement this as a no-op.
+	OnElicitationRequest(handler func(Event))
+
 	// QueueStatus returns the current depth and capacity of message queues
 	QueueStatus() QueueStatus
 
@@ -215,6 +231,7 @@ type ModelStore interface {
 type LocalRuntime struct {
 	ctx                       func() context.Context
 	toolMap                   map[string]ToolHandlerFunc
+	toolDeferrals             tools.DeferralTracker
 	team                      *team.Team
 	agents                    *agentRouter
 	resumeChan                chan ResumeRequest
@@ -224,16 +241,23 @@ type LocalRuntime struct {
 	managedOAuth              bool
 	unmanagedOAuthRedirectURI string
 	nonInteractive            bool
-	startupInfoEmitted        bool                   // Track if startup info has been emitted to avoid unnecessary duplication
-	elicitationRequestCh      chan ElicitationResult // Channel for receiving elicitation responses
-	elicitation               elicitationBridge      // Owns the per-stream events channel for outbound elicitation requests
-	sessionStore              session.Store
-	workingDir                string   // Working directory for hooks execution
-	env                       []string // Environment variables for hooks execution
-	modelSwitcherCfg          *ModelSwitcherConfig
-	providerRegistry          *provider.Registry
-	gatewayModels             gatewayModelsCache
-	dmrModels                 dmrModelsCache
+	startupInfoEmitted        atomic.Bool        // Track if startup info has been emitted to avoid unnecessary duplication
+	elicitation               elicitationBridge  // Owns the per-stream events channel for outbound elicitation requests
+	elicitationWaiters        elicitationWaiters // Routes elicitation responses to the request awaiting them, keyed by ID (#3584)
+	elicitationDeclines       elicitationDeclineNotes
+
+	// elicitationSinkMu guards onElicitationRequest; elicitation requests can
+	// arrive from background-job goroutines (runCollecting) concurrently with
+	// the sink being (re)registered.
+	elicitationSinkMu    sync.RWMutex
+	onElicitationRequest func(Event)
+	sessionStore         session.Store
+	workingDir           string   // Working directory for hooks execution
+	env                  []string // Environment variables for hooks execution
+	modelSwitcherCfg     *ModelSwitcherConfig
+	providerRegistry     *provider.Registry
+	gatewayModels        gatewayModelsCache
+	dmrModels            dmrModelsCache
 
 	// hooksRegistry is the runtime-private hooks.Registry used to build
 	// every Executor. It carries the runtime-owned builtin hooks
@@ -303,7 +327,11 @@ type LocalRuntime struct {
 	recallMu      sync.RWMutex
 	recallHandler RecallHandler
 
-	// onToolsChanged is called when an MCP toolset reports a tool list change.
+	// onToolsChanged is called when an MCP toolset reports a tool list
+	// change. Protected by toolsChangedMu because MCP change-notification
+	// goroutines call emitToolsChanged concurrently, mirroring
+	// onBackgroundEvent/backgroundEventMu below.
+	toolsChangedMu sync.RWMutex
 	onToolsChanged func(Event)
 
 	// onBackgroundEvent is called for events surfaced from detached
@@ -610,7 +638,6 @@ func NewLocalRuntime(ctx context.Context, agents *team.Team, opts ...Opt) (*Loca
 		team:                   agents,
 		agents:                 newAgentRouter(agents, defaultAgent.Name()),
 		resumeChan:             make(chan ResumeRequest),
-		elicitationRequestCh:   make(chan ElicitationResult),
 		steerQueue:             NewInMemoryMessageQueue(defaultSteerQueueCapacity),
 		followUpQueue:          NewInMemoryMessageQueue(defaultFollowUpQueueCapacity),
 		sessionCompaction:      true,
@@ -1396,7 +1423,7 @@ func (r *LocalRuntime) Close() error {
 
 // UpdateSessionTitle persists the session title via the session store.
 func (r *LocalRuntime) UpdateSessionTitle(ctx context.Context, sess *session.Session, title string) error {
-	sess.Title = title
+	sess.SetTitle(title)
 	if r.sessionStore != nil {
 		return r.sessionStore.UpdateSession(ctx, sess)
 	}
@@ -1421,14 +1448,16 @@ func (r *LocalRuntime) PermissionsInfo() *PermissionsInfo {
 // This should be called when replacing a session to allow re-emission of
 // agent, team, and toolset info to the UI.
 func (r *LocalRuntime) ResetStartupInfo() {
-	r.startupInfoEmitted = false
+	r.startupInfoEmitted.Store(false)
 }
 
 // OnToolsChanged registers a handler that is called when an MCP toolset
 // reports a tool list change outside of a RunStream. This allows the UI
 // to update the tool count immediately.
 func (r *LocalRuntime) OnToolsChanged(handler func(Event)) {
+	r.toolsChangedMu.Lock()
 	r.onToolsChanged = handler
+	r.toolsChangedMu.Unlock()
 
 	for _, name := range r.team.AgentNames() {
 		a, err := r.team.Agent(name)
@@ -1446,7 +1475,10 @@ func (r *LocalRuntime) OnToolsChanged(handler func(Event)) {
 // emitToolsChanged is the callback registered on MCP toolsets. It re-reads
 // the current agent's full tool list and pushes a ToolsetInfo event.
 func (r *LocalRuntime) emitToolsChanged() {
-	if r.onToolsChanged == nil {
+	r.toolsChangedMu.RLock()
+	handler := r.onToolsChanged
+	r.toolsChangedMu.RUnlock()
+	if handler == nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.ctx(), toolsChangedTimeout)
@@ -1456,7 +1488,7 @@ func (r *LocalRuntime) emitToolsChanged() {
 	if err != nil {
 		return
 	}
-	r.onToolsChanged(ToolsetInfo(len(agentTools), false, r.currentAgentName()))
+	handler(ToolsetInfo(len(agentTools), false, r.currentAgentName()))
 }
 
 // OnBackgroundEvent registers a handler that receives events surfaced from
@@ -1526,11 +1558,13 @@ func (r *LocalRuntime) EmitAgentInfo(ctx context.Context, events EventSink) {
 // When sess is non-nil and contains token data, a TokenUsageEvent is also emitted so that the
 // sidebar can display context usage percentage on session restore.
 func (r *LocalRuntime) EmitStartupInfo(ctx context.Context, sess *session.Session, events EventSink) {
-	// Prevent duplicate emissions
-	if r.startupInfoEmitted {
+	// CompareAndSwap makes the check-and-set atomic: App.Start emits from a
+	// spawned goroutine while reEmitStartupInfo (e.g. on /new session) resets
+	// and re-emits from another, and a plain bool check-then-set race would
+	// let both goroutines through or miss an emission.
+	if !r.startupInfoEmitted.CompareAndSwap(false, true) {
 		return
 	}
-	r.startupInfoEmitted = true
 
 	a := r.CurrentAgent()
 
@@ -1555,13 +1589,16 @@ func (r *LocalRuntime) EmitStartupInfo(ctx context.Context, sess *session.Sessio
 	// The context limit comes from the model definition (models.dev), which
 	// is a model property — not persisted in the session.
 	//
-	// Use TotalCost (not OwnCost) because this is a restore/branch context:
-	// sub-sessions won't emit their own events, so the parent must include
-	// their costs.
-	if sess != nil && (sess.InputTokens > 0 || sess.OutputTokens > 0) {
+	// SessionUsage folds embedded sub-session costs into the parent's cost,
+	// which is what a restore/branch context needs: those sub-sessions
+	// won't emit their own events.
+	var restoredInput, restoredOutput int64
+	if sess != nil {
+		restoredInput, restoredOutput = sess.Usage()
+	}
+	if restoredInput > 0 || restoredOutput > 0 {
 		contextLimit := r.contextLimitForAgentModel(ctx, a, modelID)
 		usage := SessionUsage(sess, contextLimit, a.CompactionThreshold())
-		usage.Cost = sess.TotalCost()
 
 		// Reconstruct LastMessage from the parent session's last assistant
 		// message so that FinishReason (and other per-message fields) are
@@ -1570,8 +1607,13 @@ func (r *LocalRuntime) EmitStartupInfo(ctx context.Context, sess *session.Sessio
 		// parent agent's state: this event carries the parent session_id,
 		// and sub-agents emit their own token_usage events with their own
 		// session_id during live streaming.
-		for i := range slices.Backward(sess.Messages) {
-			item := &sess.Messages[i]
+		//
+		// MessagesSnapshot takes sess.mu so this cannot race a concurrent
+		// AddMessage/ApplyCompaction (e.g. a live HTTP AddMessage arriving
+		// while startup info is being emitted for a restored session).
+		items := sess.MessagesSnapshot()
+		for i := range slices.Backward(items) {
+			item := &items[i]
 			if !item.IsMessage() || item.Message.Message.Role != chat.MessageRoleAssistant {
 				continue
 			}

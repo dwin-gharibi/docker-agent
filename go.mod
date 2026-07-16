@@ -1,6 +1,6 @@
 module github.com/docker/docker-agent
 
-go 1.26.4
+go 1.26.5
 
 require (
 	charm.land/bubbles/v2 v2.1.1
@@ -14,13 +14,13 @@ require (
 	github.com/a2aproject/a2a-go v0.3.15
 	github.com/alecthomas/chroma/v2 v2.27.0
 	github.com/alpkeskin/gotoon v0.1.1
-	github.com/anthropics/anthropic-sdk-go v1.56.0
+	github.com/anthropics/anthropic-sdk-go v1.57.0
 	github.com/atotto/clipboard v0.1.4
 	github.com/aws/aws-sdk-go-v2 v1.42.1
-	github.com/aws/aws-sdk-go-v2/config v1.32.28
-	github.com/aws/aws-sdk-go-v2/credentials v1.19.27
-	github.com/aws/aws-sdk-go-v2/service/bedrockruntime v1.55.0
-	github.com/aws/aws-sdk-go-v2/service/sts v1.44.0
+	github.com/aws/aws-sdk-go-v2/config v1.32.30
+	github.com/aws/aws-sdk-go-v2/credentials v1.19.29
+	github.com/aws/aws-sdk-go-v2/service/bedrockruntime v1.55.1
+	github.com/aws/aws-sdk-go-v2/service/sts v1.44.1
 	github.com/aws/smithy-go v1.27.3
 	github.com/aymanbagabas/go-udiff v0.4.1
 	github.com/bmatcuk/doublestar/v4 v4.10.0
@@ -32,7 +32,7 @@ require (
 	github.com/docker/aijson v0.1.0
 	github.com/docker/cli v29.6.1+incompatible
 	github.com/docker/go-units v0.5.0
-	github.com/docker/portcullis v0.0.0-20260701222309-2dda79706998
+	github.com/docker/portcullis v0.0.0-20260708112053-4399abc601ee
 	github.com/dop251/goja v0.0.0-20260701091749-b07b74453ea9
 	github.com/expr-lang/expr v1.17.8
 	github.com/fatih/color v1.19.0
@@ -48,12 +48,12 @@ require (
 	github.com/junegunn/fzf v0.74.0
 	github.com/k3a/html2text v1.4.0
 	github.com/labstack/echo/v4 v4.15.4
-	github.com/mattn/go-isatty v0.0.22
+	github.com/mattn/go-isatty v0.0.23
 	github.com/mattn/go-runewidth v0.0.24
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 	github.com/natefinch/atomic v1.0.1
-	github.com/openai/openai-go/v3 v3.41.0
-	github.com/pb33f/libopenapi v0.38.5
+	github.com/openai/openai-go/v3 v3.43.0
+	github.com/pb33f/libopenapi v0.38.7
 	github.com/rivo/uniseg v0.4.7
 	github.com/rumpl/harness v0.0.0-20260612213434-3f63cb8efc05
 	github.com/smacker/go-tree-sitter v0.0.0-20240827094217-dd81d9e9be82
@@ -62,7 +62,7 @@ require (
 	github.com/temoto/robotstxt v1.1.2
 	github.com/wk8/go-ordered-map/v2 v2.1.9-0.20250401010720-46d686821e33
 	github.com/xeipuuv/gojsonschema v1.2.0
-	github.com/yuin/goldmark v1.8.2
+	github.com/yuin/goldmark v1.8.4
 	github.com/zclconf/go-cty v1.19.0
 	go.opentelemetry.io/otel v1.44.0
 	go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp v0.20.0
@@ -71,13 +71,13 @@ require (
 	go.opentelemetry.io/otel/sdk v1.44.0
 	go.opentelemetry.io/otel/sdk/log v0.20.0
 	go.opentelemetry.io/otel/trace v1.44.0
-	golang.org/x/image v0.43.0
+	golang.org/x/image v0.44.0
 	golang.org/x/oauth2 v0.36.0
-	golang.org/x/sync v0.21.0
-	golang.org/x/sys v0.46.0
-	golang.org/x/term v0.44.0
+	golang.org/x/sync v0.22.0
+	golang.org/x/sys v0.47.0
+	golang.org/x/term v0.45.0
 	google.golang.org/adk v1.2.0
-	google.golang.org/genai v1.62.0
+	google.golang.org/genai v1.63.0
 	gopkg.in/dnaeon/go-vcr.v4 v4.0.7
 	gotest.tools/v3 v3.5.2
 	modernc.org/sqlite v1.53.0
@@ -106,7 +106,7 @@ require (
 	github.com/standard-webhooks/standard-webhooks/libraries v0.0.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.63.0 // indirect
 	golang.org/x/mod v0.37.0 // indirect
-	golang.org/x/tools v0.46.0 // indirect
+	golang.org/x/tools v0.47.0 // indirect
 	google.golang.org/api v0.272.0 // indirect
 )
 
@@ -124,16 +124,16 @@ require (
 	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.7.30 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.13 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.13.30 // indirect
-	github.com/aws/aws-sdk-go-v2/service/signin v1.3.0 // indirect
-	github.com/aws/aws-sdk-go-v2/service/sso v1.32.0 // indirect
-	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.37.0 // indirect
+	github.com/aws/aws-sdk-go-v2/service/signin v1.4.1 // indirect
+	github.com/aws/aws-sdk-go-v2/service/sso v1.32.1 // indirect
+	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.37.1 // indirect
 	github.com/aymerick/douceur v0.2.0 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/buger/jsonparser v1.1.2 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/charmbracelet/colorprofile v0.4.3 // indirect
-	github.com/charmbracelet/ultraviolet v0.0.0-20260703014108-f5a850f9c2b7
+	github.com/charmbracelet/ultraviolet v0.0.0-20260713092251-4bee1914c0cf
 	github.com/charmbracelet/x/exp/slice v0.0.0-20251113172435-cef867b85f6a // indirect
 	github.com/charmbracelet/x/term v0.2.2 // indirect
 	github.com/charmbracelet/x/termios v0.1.1 // indirect
@@ -222,7 +222,7 @@ require (
 	go.yaml.in/yaml/v4 v4.0.0-rc.6
 	golang.org/x/crypto v0.53.0 // indirect
 	golang.org/x/net v0.56.0 // indirect
-	golang.org/x/text v0.38.0 // indirect
+	golang.org/x/text v0.40.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect

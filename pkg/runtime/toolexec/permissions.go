@@ -58,11 +58,11 @@ type PermissionDecision struct {
 // Decide resolves the final permission outcome for a tool call by walking
 // the configured pipeline in priority order:
 //
-//  1. yoloApproved (--yolo) — auto-allow everything.
-//  2. checkers (in order; typically session-level first, then team-level)
+//  1. checkers (in order; typically session-level first, then team-level)
 //     — the first checker that returns Allow / Deny / ForceAsk wins.
-//     ForceAsk produces [OutcomeAsk]: an explicit ask pattern always
-//     overrides the read-only fast path below.
+//     However, if the outcome is ForceAsk and yoloApproved is true,
+//     YOLO overrides ForceAsk and auto-allows the call.
+//  2. yoloApproved (--yolo) — auto-allow everything else.
 //  3. readOnlyHint — auto-allow.
 //  4. default — Ask.
 //
@@ -75,10 +75,6 @@ func Decide(
 	toolArgs map[string]any,
 	readOnlyHint bool,
 ) PermissionDecision {
-	if yoloApproved {
-		return PermissionDecision{Outcome: OutcomeAllow, Reason: ReasonYolo}
-	}
-
 	for _, pc := range checkers {
 		switch pc.Checker.CheckWithArgs(toolName, toolArgs) {
 		case permissions.Deny:
@@ -86,10 +82,17 @@ func Decide(
 		case permissions.Allow:
 			return PermissionDecision{Outcome: OutcomeAllow, Reason: ReasonChecker, Source: pc.Source}
 		case permissions.ForceAsk:
+			if yoloApproved {
+				return PermissionDecision{Outcome: OutcomeAllow, Reason: ReasonYolo}
+			}
 			return PermissionDecision{Outcome: OutcomeAsk, Reason: ReasonChecker, Source: pc.Source}
 		case permissions.Ask:
 			// No explicit match at this level; fall through to next checker.
 		}
+	}
+
+	if yoloApproved {
+		return PermissionDecision{Outcome: OutcomeAllow, Reason: ReasonYolo}
 	}
 
 	if readOnlyHint {

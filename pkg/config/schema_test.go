@@ -56,6 +56,51 @@ func TestJsonSchemaWorksForExamples(t *testing.T) {
 	}
 }
 
+// TestJsonSchemaRejectsZeroAgents pins the runtime's "at least one agent"
+// invariant (enforced by validateConfig) at the schema level too. Both the
+// root-level "required": ["agents"] and the "agents"."minProperties": 1
+// constraints are needed: without either one, one of these shapes would
+// pass schema validation despite being rejected at runtime.
+func TestJsonSchemaRejectsZeroAgents(t *testing.T) {
+	t.Parallel()
+
+	schemaBytes, err := os.ReadFile(schemaFile)
+	require.NoError(t, err)
+
+	schema, err := gojsonschema.NewSchema(gojsonschema.NewBytesLoader(schemaBytes))
+	require.NoError(t, err)
+
+	tests := []struct {
+		name string
+		yaml string
+	}{
+		{
+			name: "agents omitted entirely",
+			yaml: `version: "12"
+`,
+		},
+		{
+			name: "agents is an empty map",
+			yaml: `version: "12"
+agents: {}
+`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var rawJSON any
+			require.NoError(t, yaml.Unmarshal([]byte(tt.yaml), &rawJSON))
+
+			result, err := schema.Validate(gojsonschema.NewRawLoader(rawJSON))
+			require.NoError(t, err)
+			assert.False(t, result.Valid(), "expected schema to reject config with %s", tt.name)
+		})
+	}
+}
+
 // TestSchemaMatchesGoTypes verifies that every JSON-tagged field in the Go
 // config structs has a corresponding property in agent-schema.json (and
 // vice-versa). This prevents the schema from silently drifting out of sync

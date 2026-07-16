@@ -92,7 +92,12 @@ func (r *Registry) createDirectProvider(ctx context.Context, cfg *latest.ModelCo
 	// A model may opt out of the models gateway and dial its provider directly.
 	// Clearing the gateway option makes the leaf provider take its direct-auth
 	// path (provider API key / token_key) instead of the gateway path.
-	if enhancedCfg.BypassModelsGateway && globalOptions.Gateway() != "" {
+	// A custom base_url (set on the model or inherited from a custom provider
+	// definition) implies the bypass: the endpoint was explicitly chosen by the
+	// user and is not one the gateway serves. Checked on the pre-defaults cfg so
+	// built-in alias default base URLs don't count.
+	bypass := enhancedCfg.BypassModelsGateway || latest.HasCustomBaseURL(*cfg, globalOptions.Providers())
+	if bypass && globalOptions.Gateway() != "" {
 		slog.DebugContext(ctx, "Bypassing models gateway for model", "provider", enhancedCfg.Provider, "model", enhancedCfg.Model)
 		opts = append(opts, options.WithGateway(""))
 	}

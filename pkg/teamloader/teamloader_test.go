@@ -879,6 +879,50 @@ agents:
 	assert.Contains(t, err.Error(), "escapes parent directory")
 }
 
+// WithWorkingDir must not leak the merged value onto a shared *RuntimeConfig
+// that is reused across sessions: after Load returns, runConfig.WorkingDir
+// must be exactly what the caller passed in.
+func TestLoadWithConfig_WithWorkingDirDoesNotLeak(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "dummy")
+
+	data := []byte(`agents:
+  root:
+    model: openai/gpt-4o
+    instruction: test
+    toolsets:
+      - type: shell
+        tools: [shell]
+`)
+
+	// Caller pins its own WorkingDir on the shared runConfig.
+	callerDir := t.TempDir()
+	runConfig := &config.RuntimeConfig{}
+	runConfig.WorkingDir = callerDir
+
+	// First load with a per-session override.
+	sessionDir := t.TempDir()
+	_, err := Load(
+		t.Context(),
+		config.NewBytesSource("t.yaml", data),
+		runConfig,
+		append(withTestProviderRegistry(), WithWorkingDir(sessionDir))...,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, callerDir, runConfig.WorkingDir,
+		"per-session WithWorkingDir must be restored on return")
+
+	// Second load with no override must see the caller's original WorkingDir,
+	// not the previous session's value.
+	_, err = Load(
+		t.Context(),
+		config.NewBytesSource("t.yaml", data),
+		runConfig,
+		withTestProviderRegistry()...,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, callerDir, runConfig.WorkingDir)
+}
+
 // TestLoadRetainsAgentConfig verifies the loader retains the raw resolved
 // per-agent config on the team (team.WithAgentConfigs) so the agent inspector
 // can surface declared toolset allow-lists, limits and flags. It uses a

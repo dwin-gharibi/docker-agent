@@ -215,12 +215,17 @@ func (m *Manager) Initialize(ctx context.Context) (err error) {
 		}()
 	}
 
-	// Wait for all strategies to complete
+	// Wait for all strategies to complete. On cancellation the buffered
+	// channel lets abandoned strategy goroutines send and exit.
 	var firstError error
 	for range len(m.strategies) {
-		res := <-resultsChan
-		if res.err != nil && firstError == nil {
-			firstError = res.err
+		select {
+		case res := <-resultsChan:
+			if res.err != nil && firstError == nil {
+				firstError = res.err
+			}
+		case <-ctx.Done():
+			return ctx.Err()
 		}
 	}
 

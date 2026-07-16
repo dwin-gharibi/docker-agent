@@ -57,17 +57,5 @@ func isInlineModelEntry(name string, modelCfg latest.ModelConfig) bool {
 // hasCustomBaseURL checks if a model config has a custom base_url, either directly
 // or through a referenced provider definition.
 func hasCustomBaseURL(modelCfg *latest.ModelConfig, providers map[string]latest.ProviderConfig) bool {
-	// Check if the model has a direct base_url
-	if modelCfg.BaseURL != "" {
-		return true
-	}
-
-	// Check if the model references a provider with a base_url
-	if providers != nil && modelCfg.Provider != "" {
-		if providerCfg, exists := providers[modelCfg.Provider]; exists {
-			return providerCfg.BaseURL != ""
-		}
-	}
-
-	return false
+	return latest.HasCustomBaseURL(*modelCfg, providers)
 }

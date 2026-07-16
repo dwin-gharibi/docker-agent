@@ -52,6 +52,7 @@ type App struct {
 	titleGenerating        atomic.Bool                 // True when title generation is in progress
 	titleGen               *sessiontitle.Generator     // Title generator for local runtime (nil for remote)
 	snapshotController     builtins.SnapshotController // Drives /undo, /snapshots, /reset; nil for runtimes that don't capture snapshots
+	streamGuard            sync.Locker                 // Held for the duration of every direct RunStream call; nil when not attached to a SessionManager (see WithStreamGuard)
 
 	startOnce  sync.Once
 	subsMu     sync.Mutex
@@ -121,6 +122,21 @@ func WithSnapshotController(c builtins.SnapshotController) Opt {
 	}
 }
 
+// WithStreamGuard makes the App hold l for the duration of every direct
+// RunStream call (Run, Retry, RunWithMessage). When the App is attached to a
+// SessionManager (the --listen control plane or the local recall
+// coordinator), l is the SAME lock RunSession and AddMessage/UpdateMessage
+// already use (via TryLock) to detect a session's active stream, so a
+// concurrent REST mutation correctly sees the App's own stream as busy
+// instead of racing it (#3590). Without this option (a bare App with no
+// attached SessionManager) there is nothing to race against, so omitting it
+// is safe.
+func WithStreamGuard(l sync.Locker) Opt {
+	return func(a *App) {
+		a.streamGuard = l
+	}
+}
+
 func New(ctx context.Context, rt runtime.Runtime, sess *session.Session, opts ...Opt) *App {
 	app := &App{
 		ctx:              func() context.Context { return context.WithoutCancel(ctx) },
@@ -177,6 +193,22 @@ func (a *App) Start(ctx context.Context) {
 			case a.events <- event:
 			case <-ctx.Done():
 			}
+		})
+
+		// Forward elicitation requests raised anywhere in the runtime —
+		// including background-job (run_background_agent) sub-sessions whose
+		// RunStream has no live UI reading its own events channel — so they
+		// always reach the TUI as a dialog. For runtimes that mirror sink
+		// deliveries onto their RunStream channel too (LocalRuntime: the
+		// swap-based bridge best-effort-sends the same event on the very
+		// RunStream channel Run/Retry/RunWithMessage read from below), this
+		// sink is the single, exactly-once delivery point and those loops skip
+		// the mirrored copy (see mustSkipMirroredElicitation). Runtimes that
+		// don't mirror it (RemoteRuntime, whose OnElicitationRequest below is
+		// a no-op) deliver elicitations only through that RunStream copy,
+		// which those loops forward unfiltered (#3584 review).
+		a.runtime.OnElicitationRequest(func(event runtime.Event) {
+			a.sendEvent(ctx, event)
 		})
 	})
 }
@@ -468,38 +500,22 @@ func (a *App) Run(ctx context.Context, cancel context.CancelFunc, message string
 	a.cancel = cancel
 
 	// If this is the first message and no title exists, start local title generation
-	if a.session.Title == "" && a.titleGen != nil {
+	if a.session.TitleSnapshot() == "" && a.titleGen != nil {
 		a.titleGenerating.Store(true)
 		go a.generateTitle(ctx, []string{message})
 	}
 
 	go func() {
+		release := a.acquireStreamGuard()
+		defer release()
+
 		if len(attachments) > 0 {
 			multiContent := a.buildUserMultiContent(ctx, message, attachments)
 			a.session.AddMessage(session.UserMessage(message, multiContent...))
 		} else {
 			a.session.AddMessage(session.UserMessage(message))
 		}
-		for event := range a.runtime.RunStream(ctx, a.session) {
-			// If context is cancelled, continue draining but don't forward events
-			// — except StreamStoppedEvent, which must always propagate so the
-			// supervisor can mark the session as no longer running.
-			if ctx.Err() != nil {
-				if _, ok := event.(*runtime.StreamStoppedEvent); ok {
-					// ctx is cancelled; detach cancellation but keep its trace
-					// context so the stop event still reaches subscribers.
-					a.sendEvent(context.WithoutCancel(ctx), event)
-				}
-				continue
-			}
-
-			// Clear titleGenerating flag when title is generated (from server for remote runtime)
-			if _, ok := event.(*runtime.SessionTitleEvent); ok {
-				a.titleGenerating.Store(false)
-			}
-
-			a.sendEvent(ctx, event)
-		}
+		a.forwardRunStreamEvents(ctx, a.runtime.RunStream(ctx, a.session), nil)
 	}()
 }
 
@@ -666,6 +682,107 @@ func (a *App) sendEvent(ctx context.Context, event tea.Msg) {
 	}
 }
 
+// isElicitationRequestEvent reports whether event is an
+// *runtime.ElicitationRequestEvent.
+func isElicitationRequestEvent(event runtime.Event) bool {
+	_, ok := event.(*runtime.ElicitationRequestEvent)
+	return ok
+}
+
+// elicitationSinkMirror is an optional runtime capability satisfied by
+// runtimes whose OnElicitationRequest sink is the single, exactly-once
+// delivery point for elicitation requests even though the runtime ALSO
+// best-effort-mirrors the same event onto its RunStream channel, for the
+// benefit of out-of-process consumers reading RunStream directly (see
+// runtime.LocalRuntime.MirrorsElicitationOnRunStream and elicitationHandler,
+// #3584).
+type elicitationSinkMirror interface {
+	MirrorsElicitationOnRunStream()
+}
+
+// mustSkipMirroredElicitation reports whether rt implements
+// elicitationSinkMirror, i.e. whether Start's OnElicitationRequest sink
+// (below) already delivers every elicitation from rt exactly once, making
+// any *runtime.ElicitationRequestEvent read directly off RunStream a
+// duplicate that Run/Retry/RunWithMessage must skip to avoid a second
+// dialog for the same request.
+//
+// Runtimes that do NOT implement it (RemoteRuntime, whose
+// OnElicitationRequest is a documented no-op) deliver elicitations ONLY via
+// RunStream, so that copy is the sole delivery and must reach a.events
+// unfiltered — an earlier fix skipped this event unconditionally and
+// silently dropped every remote elicitation as a result (#3584 review).
+func mustSkipMirroredElicitation(rt runtime.Runtime) bool {
+	_, ok := rt.(elicitationSinkMirror)
+	return ok
+}
+
+// forwardRunStreamEvents drains ch and forwards each event to a.events,
+// applying the bookkeeping shared by Run, Retry, and RunWithMessage. This is
+// the SINGLE place that decides whether a RunStream event reaches a.events:
+// centralizing it here (instead of three copies of the same loop) is what
+// lets one set of tests cover all three entry points, and makes it
+// impossible for one of them to silently regress independently of the
+// others (#3584 review — Retry and RunWithMessage had duplicated this exact
+// logic untested).
+//
+// filter, when non-nil, runs after the elicitation-mirroring skip below and
+// may itself veto forwarding an event by returning false. Retry uses it to
+// suppress the pre-StreamStarted re-emitted user message; Run and
+// RunWithMessage pass nil.
+func (a *App) forwardRunStreamEvents(ctx context.Context, ch <-chan runtime.Event, filter func(event runtime.Event) (forward bool)) {
+	skipMirroredElicitation := mustSkipMirroredElicitation(a.runtime)
+	for event := range ch {
+		// If context is cancelled, continue draining but don't forward events
+		// — except StreamStoppedEvent, which must always propagate so the
+		// supervisor can mark the session as no longer running.
+		if ctx.Err() != nil {
+			if _, ok := event.(*runtime.StreamStoppedEvent); ok {
+				// ctx is cancelled; detach cancellation but keep its trace
+				// context so the stop event still reaches subscribers.
+				a.sendEvent(context.WithoutCancel(ctx), event)
+			}
+			continue
+		}
+
+		// Already delivered via the OnElicitationRequest sink (Start) for
+		// runtimes that mirror it onto RunStream too; skip that duplicate
+		// copy to avoid a second dialog for the same request. Runtimes that
+		// deliver ONLY via RunStream (e.g. RemoteRuntime) are unaffected —
+		// mustSkipMirroredElicitation is false for them (#3584 review).
+		if skipMirroredElicitation && isElicitationRequestEvent(event) {
+			continue
+		}
+
+		if filter != nil && !filter(event) {
+			continue
+		}
+
+		// Clear titleGenerating flag when title is generated (from server for remote runtime)
+		if _, ok := event.(*runtime.SessionTitleEvent); ok {
+			a.titleGenerating.Store(false)
+		}
+
+		a.sendEvent(ctx, event)
+	}
+}
+
+// acquireStreamGuard locks a.streamGuard (set via WithStreamGuard) and
+// returns the matching release func, or a no-op release when no guard is
+// attached (a bare App with no SessionManager to race against). Callers must
+// hold the lock for the entire direct RunStream call — acquire it before
+// mutating the session and defer the release only after the stream ends —
+// mirroring the order SessionManager.RunSession already uses so a concurrent
+// AddMessage/UpdateMessage/RunSession sees this stream as busy the same way
+// (#3590).
+func (a *App) acquireStreamGuard() func() {
+	if a.streamGuard == nil {
+		return func() {}
+	}
+	a.streamGuard.Lock()
+	return a.streamGuard.Unlock
+}
+
 // processInlineAttachment handles content that is already in memory (e.g. pasted
 // text). The content is appended to textBuilder wrapped in an XML tag for context.
 func (a *App) processInlineAttachment(att messages.Attachment, textBuilder *strings.Builder) {
@@ -690,33 +807,21 @@ func (a *App) Retry(ctx context.Context, cancel context.CancelFunc) {
 	a.cancel = cancel
 
 	go func() {
-		streamStarted := false
-		for event := range a.runtime.RunStream(ctx, a.session) {
-			// If context is cancelled, continue draining but don't forward events
-			// — except StreamStoppedEvent, which must always propagate so the
-			// supervisor can mark the session as no longer running.
-			if ctx.Err() != nil {
-				if _, ok := event.(*runtime.StreamStoppedEvent); ok {
-					a.sendEvent(context.WithoutCancel(ctx), event)
-				}
-				continue
-			}
+		release := a.acquireStreamGuard()
+		defer release()
 
+		streamStarted := false
+		a.forwardRunStreamEvents(ctx, a.runtime.RunStream(ctx, a.session), func(event runtime.Event) bool {
 			switch event.(type) {
 			case *runtime.StreamStartedEvent:
 				streamStarted = true
 			case *runtime.UserMessageEvent:
 				if !streamStarted {
-					continue
+					return false
 				}
 			}
-
-			if _, ok := event.(*runtime.SessionTitleEvent); ok {
-				a.titleGenerating.Store(false)
-			}
-
-			a.sendEvent(ctx, event)
-		}
+			return true
+		})
 	}()
 }
 
@@ -726,7 +831,7 @@ func (a *App) RunWithMessage(ctx context.Context, cancel context.CancelFunc, msg
 	a.cancel = cancel
 
 	// If this is the first message and no title exists, start local title generation
-	if a.session.Title == "" && a.titleGen != nil {
+	if a.session.TitleSnapshot() == "" && a.titleGen != nil {
 		a.titleGenerating.Store(true)
 		// Extract text content from the message for title generation
 		userMessage := msg.Message.Content
@@ -742,27 +847,11 @@ func (a *App) RunWithMessage(ctx context.Context, cancel context.CancelFunc, msg
 	}
 
 	go func() {
+		release := a.acquireStreamGuard()
+		defer release()
+
 		a.session.AddMessage(msg)
-		for event := range a.runtime.RunStream(ctx, a.session) {
-			// If context is cancelled, continue draining but don't forward events
-			// — except StreamStoppedEvent, which must always propagate so the
-			// supervisor can mark the session as no longer running.
-			if ctx.Err() != nil {
-				if _, ok := event.(*runtime.StreamStoppedEvent); ok {
-					// ctx is cancelled; detach cancellation but keep its trace
-					// context so the stop event still reaches subscribers.
-					a.sendEvent(context.WithoutCancel(ctx), event)
-				}
-				continue
-			}
-
-			// Clear titleGenerating flag when title is generated (from server for remote runtime)
-			if _, ok := event.(*runtime.SessionTitleEvent); ok {
-				a.titleGenerating.Store(false)
-			}
-
-			a.sendEvent(ctx, event)
-		}
+		a.forwardRunStreamEvents(ctx, a.runtime.RunStream(ctx, a.session), nil)
 	}()
 }
 
@@ -933,9 +1022,13 @@ func (a *App) TogglePause() (paused, supported bool) {
 	return p, true
 }
 
-// ResumeElicitation resumes an elicitation request with the given action and content
-func (a *App) ResumeElicitation(ctx context.Context, action tools.ElicitationAction, content map[string]any) error {
-	return a.runtime.ResumeElicitation(ctx, action, content)
+// ResumeElicitation resumes an elicitation request with the given action and
+// content. elicitationID is variadic, mirroring runtime.Runtime.ResumeElicitation,
+// purely so pre-#3584 3-arg callers keep compiling unchanged; at most the
+// first value is meaningful, and "" (or omitting it) falls back to resolving
+// the sole pending request.
+func (a *App) ResumeElicitation(ctx context.Context, action tools.ElicitationAction, content map[string]any, elicitationID ...string) error {
+	return a.runtime.ResumeElicitation(ctx, action, content, elicitationID...)
 }
 
 func (a *App) NewSession() {

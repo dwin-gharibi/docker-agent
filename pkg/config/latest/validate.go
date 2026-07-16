@@ -31,6 +31,9 @@ func (t *Config) Validate() error {
 		if err := validateCompactionThreshold(m.CompactionThreshold); err != nil {
 			return fmt.Errorf("models.%s: %w", name, err)
 		}
+		if err := m.Cost.validate(); err != nil {
+			return fmt.Errorf("models.%s: %w", name, err)
+		}
 		if err := m.Auth.Validate(EffectiveProviderType(m, t.Providers)); err != nil {
 			return fmt.Errorf("models.%s: %w", name, err)
 		}
@@ -140,6 +143,9 @@ func (m *ModelConfig) validateFirstAvailable() error {
 	}
 	if m.CompactionThreshold != nil {
 		return errors.New("first_available cannot be combined with compaction_threshold")
+	}
+	if m.Cost != nil {
+		return errors.New("first_available cannot be combined with cost (set it on the candidate models instead)")
 	}
 	for i, ref := range m.FirstAvailable {
 		if strings.TrimSpace(ref) == "" {

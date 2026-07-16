@@ -153,6 +153,9 @@ type Tool struct {
 	OutputSchema            any             `json:"outputSchema"`
 	Handler                 ToolHandler     `json:"-"`
 	AddDescriptionParameter bool            `json:"-"`
+	// Deferred keeps tools added after the first model call out of cached prompt prefixes.
+	Deferred             bool   `json:"-"`
+	DeferredAtToolCallID string `json:"-"`
 	// ModelOverride is the per-toolset model for the LLM turn that processes
 	// this tool's results. Set automatically from the toolset "model" field.
 	ModelOverride string `json:"-"`

@@ -48,6 +48,8 @@ import (
 // cobra's optional-value flags the two are indistinguishable by design.
 const worktreeAutoName = "auto"
 
+var projectDefaultAgentFiles = []string{"docker-agent.yaml", "docker-agent.yml", "docker-agent.hcl"}
+
 type runExecFlags struct {
 	agentName         string
 	autoApprove       bool
@@ -119,7 +121,7 @@ func newRunCmd() *cobra.Command {
 		Long:  "Run an agent with the specified configuration and prompt",
 		Example: `  docker-agent run ./agent.yaml
   docker-agent run ./team.yaml --agent root
-  docker-agent run # built-in default agent
+  docker-agent run # project config or built-in default agent
   docker-agent run coder # built-in coding agent
   docker-agent run ./echo.yaml "INSTRUCTIONS"
   docker-agent run ./echo.yaml "First question" "Follow-up question"
@@ -275,6 +277,9 @@ func (f *runExecFlags) runRunCommand(cmd *cobra.Command, args []string) (command
 		args = prependAgentRef(chosen, args)
 	}
 
+	var discoveredProjectConfig bool
+	args, discoveredProjectConfig = f.discoverRunAgentArgs(args)
+
 	// Resolve alias / runtime-declared sandbox opt-in before dispatch.
 	// An explicit --sandbox=<bool> on the CLI always wins, so we only
 	// consult the lower-priority sources when the flag wasn't set.
@@ -285,6 +290,11 @@ func (f *runExecFlags) runRunCommand(cmd *cobra.Command, args []string) (command
 			agentRef = args[0]
 		}
 		f.sandbox, agentCfg = resolveSandboxDefault(ctx, agentRef, f.sandbox)
+	}
+
+	out := cli.NewPrinter(cmd.OutOrStdout())
+	if discoveredProjectConfig {
+		out.Println("Using project config: " + args[0])
 	}
 
 	if f.sandbox {
@@ -304,8 +314,6 @@ func (f *runExecFlags) runRunCommand(cmd *cobra.Command, args []string) (command
 	if f.worktreeBase != "" && !f.worktree {
 		return errors.New("--worktree-base requires --worktree")
 	}
-
-	out := cli.NewPrinter(cmd.OutOrStdout())
 
 	// When an interactive run cannot find any usable model, offer the setup
 	// wizard instead of leaving the user alone with the error.
@@ -327,10 +335,7 @@ func (f *runExecFlags) runOrExec(ctx context.Context, out *cli.Printer, args []s
 		}
 	}()
 
-	var agentFileName string
-	if len(args) > 0 {
-		agentFileName = args[0]
-	}
+	agentFileName := f.resolveRunAgentFileName(args)
 
 	// Apply global user settings first (lowest priority)
 	// User settings only apply if the flag wasn't explicitly set by the user
@@ -463,6 +468,10 @@ func (f *runExecFlags) runOrExec(ctx context.Context, out *cli.Printer, args []s
 		return f.handleExecMode(ctx, out, rt, sess, args)
 	}
 
+	// startSessionCoordinator wires the App's own RunStream calls into the
+	// same busy guard RunSession/AddMessage/UpdateMessage use, so a
+	// concurrent REST call is correctly rejected with 409 instead of racing
+	// the TUI's live stream (#3590); see app.WithStreamGuard.
 	coordinatorOpt, err := f.startSessionCoordinator(ctx, out, rt, sess)
 	if err != nil {
 		return err
@@ -524,6 +533,38 @@ func (f *runExecFlags) runOrExec(ctx context.Context, out *cli.Printer, args []s
 		f.cleanupWorktree(context.WithoutCancel(ctx), out, createdWorktree)
 	}
 	return nil
+}
+
+func (f *runExecFlags) resolveRunAgentFileName(args []string) string {
+	if len(args) > 0 {
+		return args[0]
+	}
+	return ""
+}
+
+func (f *runExecFlags) discoverRunAgentArgs(args []string) ([]string, bool) {
+	if len(args) > 0 || f.remoteAddress != "" {
+		return args, false
+	}
+	if name, ok := discoverProjectDefaultAgentFile(); ok {
+		return prependAgentRef(name, args), true
+	}
+	return args, false
+}
+
+func discoverProjectDefaultAgentFile() (string, bool) {
+	for _, name := range projectDefaultAgentFiles {
+		info, err := os.Stat(name)
+		if err == nil && !info.IsDir() {
+			return name, true
+		}
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			// Surface unreadable or otherwise broken project configs instead of
+			// silently falling through to a later candidate or the built-in default.
+			return name, true
+		}
+	}
+	return "", false
 }
 
 // loadTeamInWorktree creates the requested worktree (if any) and then loads
@@ -1104,7 +1145,8 @@ func (f *runExecFlags) createSessionSpawner(agentSource config.Source, sessStore
 		if ctrl != nil {
 			appOpts = append(appOpts, app.WithSnapshotController(ctrl))
 		}
-		if coordinatorOpt := f.recallCoordinatorOpt(spawnCtx, localRt, newSess); coordinatorOpt != nil {
+		coordinatorOpt := f.recallCoordinatorOpt(spawnCtx, localRt, newSess)
+		if coordinatorOpt != nil {
 			appOpts = append(appOpts, coordinatorOpt)
 		}
 

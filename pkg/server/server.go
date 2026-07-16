@@ -17,10 +17,12 @@ import (
 	"time"
 
 	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/docker/docker-agent/pkg/api"
 	"github.com/docker/docker-agent/pkg/config"
+	"github.com/docker/docker-agent/pkg/config/latest"
 	"github.com/docker/docker-agent/pkg/echolog"
 	"github.com/docker/docker-agent/pkg/runtime"
 	"github.com/docker/docker-agent/pkg/session"
@@ -43,12 +45,15 @@ func New(ctx context.Context, sessionStore session.Store, runConfig *config.Runt
 	return NewWithManager(NewSessionManager(ctx, agentSources, sessionStore, refreshInterval, runConfig), authToken), nil
 }
 
+const defaultMaxRequestBytes int64 = 1 << 20 // 1 MiB
+
 // NewWithManager builds a Server around an already-constructed SessionManager.
 // Useful when the runtime is owned by another component (e.g. the TUI) and
 // only needs to be exposed over HTTP.
 func NewWithManager(sm *SessionManager, authToken string) *Server {
 	e := echo.New()
 	e.Use(echolog.RedactedRequestLogger())
+	e.Use(middleware.BodyLimit(strconv.FormatInt(defaultMaxRequestBytes, 10)))
 	e.Use(echo.WrapMiddleware(upstream.Handler))
 
 	// Add bearer token middleware if token is configured
@@ -77,6 +82,7 @@ func (s *Server) registerRoutes() {
 	group.GET("/sessions/:id/snapshot", s.getSessionSnapshot)
 	group.POST("/sessions/:id/resume", s.resumeSession)
 	group.POST("/sessions/:id/tools/toggle", s.toggleSessionYolo)
+	group.PATCH("/sessions/:id/safety-policy", s.updateSessionSafetyPolicy)
 	group.PATCH("/sessions/:id/permissions", s.updateSessionPermissions)
 	group.PATCH("/sessions/:id/title", s.updateSessionTitle)
 	group.PATCH("/sessions/:id/tokens", s.updateSessionTokens)
@@ -157,31 +163,18 @@ func (s *Server) getAgents(c echo.Context) error {
 	for k, agentSource := range s.sm.Sources {
 		slog.Debug("API source", "source", agentSource.Name())
 
-		c, err := config.Load(c.Request().Context(), agentSource)
+		cfg, err := config.Load(c.Request().Context(), agentSource)
 		if err != nil {
 			slog.Error("Failed to load config from API source", "key", k, "error", err)
 			continue
 		}
 
-		desc := c.Agents.First().Description
-
-		switch {
-		case len(c.Agents) > 1:
-			agents = append(agents, api.Agent{
-				Name:        k,
-				Multi:       true,
-				Description: desc,
-			})
-		case len(c.Agents) == 1:
-			agents = append(agents, api.Agent{
-				Name:        k,
-				Multi:       false,
-				Description: desc,
-			})
-		default:
+		agent, ok := agentsAPIEntry(k, cfg)
+		if !ok {
 			slog.Warn("No agents found in config from API source", "key", k)
 			continue
 		}
+		agents = append(agents, agent)
 	}
 
 	slices.SortFunc(agents, func(a, b api.Agent) int {
@@ -189,6 +182,23 @@ func (s *Server) getAgents(c echo.Context) error {
 	})
 
 	return c.JSON(http.StatusOK, agents)
+}
+
+// agentsAPIEntry summarizes a loaded config into the api.Agent listing
+// entry for /api/agents. The len(cfg.Agents)==0 check MUST run before any
+// access to cfg.Agents (e.g. First()), which panics on an empty slice: this
+// guards the handler even though validateConfig already rejects agent-less
+// configs at load time (defense in depth against a bypass or future
+// regression in that check).
+func agentsAPIEntry(name string, cfg *latest.Config) (api.Agent, bool) {
+	if len(cfg.Agents) == 0 {
+		return api.Agent{}, false
+	}
+	return api.Agent{
+		Name:        name,
+		Multi:       len(cfg.Agents) > 1,
+		Description: cfg.Agents.First().Description,
+	}, true
 }
 
 func (s *Server) getAgentConfig(c echo.Context) error {
@@ -220,13 +230,17 @@ func (s *Server) getSessions(c echo.Context) error {
 
 	responses := make([]api.SessionsResponse, len(sessions))
 	for i, sess := range sessions {
+		// The in-memory store hands back live session pointers, so read the
+		// mutable scalars through one locked snapshot each.
+		title := sess.TitleSnapshot()
+		inputTokens, outputTokens := sess.Usage()
 		responses[i] = api.SessionsResponse{
 			ID:           sess.ID,
-			Title:        sess.Title,
+			Title:        title,
 			CreatedAt:    sess.CreatedAt.Format(time.RFC3339),
 			NumMessages:  len(sess.GetAllMessages()),
-			InputTokens:  sess.InputTokens,
-			OutputTokens: sess.OutputTokens,
+			InputTokens:  inputTokens,
+			OutputTokens: outputTokens,
 			WorkingDir:   sess.WorkingDir,
 		}
 	}
@@ -273,6 +287,7 @@ func (s *Server) forkSession(c echo.Context) error {
 		CreatedAt:     forked.CreatedAt,
 		Messages:      forked.GetAllMessages(),
 		ToolsApproved: forked.ToolsApproved,
+		SafetyPolicy:  forked.SafetyPolicy,
 		InputTokens:   forked.InputTokens,
 		OutputTokens:  forked.OutputTokens,
 		WorkingDir:    forked.WorkingDir,
@@ -286,14 +301,17 @@ func (s *Server) getSession(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, fmt.Sprintf("session not found: %v", err))
 	}
 
+	title := sess.TitleSnapshot()
+	inputTokens, outputTokens := sess.Usage()
 	return c.JSON(http.StatusOK, api.SessionResponse{
 		ID:            sess.ID,
-		Title:         sess.Title,
+		Title:         title,
 		CreatedAt:     sess.CreatedAt,
 		Messages:      sess.GetAllMessages(),
 		ToolsApproved: sess.ToolsApproved,
-		InputTokens:   sess.InputTokens,
-		OutputTokens:  sess.OutputTokens,
+		SafetyPolicy:  sess.SafetyPolicy,
+		InputTokens:   inputTokens,
+		OutputTokens:  outputTokens,
 		WorkingDir:    sess.WorkingDir,
 		Permissions:   sess.Permissions,
 	})
@@ -359,6 +377,17 @@ func (s *Server) toggleSessionYolo(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("failed to toggle session tool approval mode: %v", err))
 	}
 	return c.JSON(http.StatusOK, nil)
+}
+
+func (s *Server) updateSessionSafetyPolicy(c echo.Context) error {
+	var req api.UpdateSessionSafetyPolicyRequest
+	if err := c.Bind(&req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("invalid request body: %v", err))
+	}
+	if err := s.sm.SetSessionSafetyPolicy(c.Request().Context(), c.Param("id"), req.SafetyPolicy); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
+	return c.JSON(http.StatusOK, map[string]string{"message": "session safety policy updated"})
 }
 
 func (s *Server) getAgentToolCount(c echo.Context) error {
@@ -485,7 +514,7 @@ func (s *Server) elicitation(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("invalid request body: %v", err))
 	}
 
-	if err := s.sm.ResumeElicitation(c.Request().Context(), sessionID, req.Action, req.Content); err != nil {
+	if err := s.sm.ResumeElicitation(c.Request().Context(), sessionID, req.Action, req.Content, req.ElicitationID); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("failed to resume elicitation: %v", err))
 	}
 
@@ -730,6 +759,9 @@ func (s *Server) addMessage(c echo.Context) error {
 	}
 
 	if err := s.sm.AddMessage(c.Request().Context(), sessionID, req.Message); err != nil {
+		if errors.Is(err, ErrSessionBusy) {
+			return echo.NewHTTPError(http.StatusConflict, err.Error())
+		}
 		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("failed to add message: %v", err))
 	}
 
@@ -749,6 +781,9 @@ func (s *Server) updateMessage(c echo.Context) error {
 	}
 
 	if err := s.sm.UpdateMessage(c.Request().Context(), sessionID, msgID, req.Message); err != nil {
+		if errors.Is(err, ErrSessionBusy) {
+			return echo.NewHTTPError(http.StatusConflict, err.Error())
+		}
 		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("failed to update message: %v", err))
 	}
 
@@ -766,7 +801,7 @@ func (s *Server) addSummary(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "summary is required")
 	}
 
-	if err := s.sm.AddSummary(c.Request().Context(), sessionID, req.Summary, req.Tokens); err != nil {
+	if err := s.sm.AddSummary(c.Request().Context(), sessionID, req.Summary, req.Tokens, req.Cost); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("failed to add summary: %v", err))
 	}
 

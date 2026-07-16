@@ -9,7 +9,9 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/docker/docker-agent/pkg/app"
+	"github.com/docker/docker-agent/pkg/config/types"
 	"github.com/docker/docker-agent/pkg/feedback"
+	mcptools "github.com/docker/docker-agent/pkg/tools/mcp"
 	"github.com/docker/docker-agent/pkg/tui/components/toolcommon"
 	"github.com/docker/docker-agent/pkg/tui/core"
 	"github.com/docker/docker-agent/pkg/tui/messages"
@@ -387,35 +389,13 @@ func builtInSettingsCommands() []Item {
 	return []Item{
 		{
 			ID:           "settings.open",
-			Label:        "Settings",
+			Label:        "Preferences",
 			SlashCommand: "/settings",
-			Description:  "Open settings: layout visuals and message send behavior",
+			Description:  "Manage appearance, behavior, and notification preferences",
 			Category:     "Settings",
 			Immediate:    true,
 			Execute: func(string) tea.Cmd {
 				return core.CmdHandler(messages.OpenSettingsDialogMsg{})
-			},
-		},
-		{
-			ID:           "settings.split-diff",
-			Label:        "Split Diff",
-			SlashCommand: "/split-diff",
-			Description:  "Toggle split diff view mode",
-			Category:     "Settings",
-			Immediate:    true,
-			Execute: func(string) tea.Cmd {
-				return core.CmdHandler(messages.ToggleSplitDiffMsg{})
-			},
-		},
-		{
-			ID:           "settings.theme",
-			Label:        "Theme",
-			SlashCommand: "/theme",
-			Description:  "Change the color theme",
-			Category:     "Settings",
-			Immediate:    true,
-			Execute: func(string) tea.Cmd {
-				return core.CmdHandler(messages.OpenThemePickerMsg{})
 			},
 		},
 	}
@@ -498,6 +478,105 @@ func removeByIDs(items []Item, ids map[string]bool) []Item {
 	return out
 }
 
+// newAgentCommandItem builds the command-palette / slash-command Item for a
+// single agent command. SlashCommand and Immediate are set so the command
+// dispatches from the keyboard (not only from the palette); Execute forwards
+// the slash command, with any argument appended, to the agent as an
+// AgentCommandMsg.
+func newAgentCommandItem(commandName string, cmd types.Command) Item {
+	return Item{
+		ID:           "agent.command." + commandName,
+		Label:        commandName,
+		Description:  toolcommon.TruncateText(cmd.DisplayText(), 60),
+		Category:     "Agent Commands",
+		SlashCommand: "/" + commandName,
+		Immediate:    true,
+		Execute: func(arg string) tea.Cmd {
+			input := "/" + commandName
+			if arg = strings.TrimSpace(arg); arg != "" {
+				input += " " + arg
+			}
+			return core.CmdHandler(messages.AgentCommandMsg{Command: input})
+		},
+	}
+}
+
+// newMCPPromptItem builds the command-palette / slash-command Item for a single
+// MCP prompt. SlashCommand and Immediate are set so the prompt dispatches from
+// the keyboard (not only from the palette dialog); Execute maps a non-empty
+// argument string to the prompt's first declared argument, and otherwise runs
+// with empty arguments (no required args) or opens the input dialog (a required
+// argument is missing).
+func newMCPPromptItem(promptName string, promptInfo mcptools.PromptInfo) Item {
+	// Build description with argument info
+	description := promptInfo.Description
+	if len(promptInfo.Arguments) > 0 {
+		// Count required arguments
+		requiredCount := 0
+		for _, arg := range promptInfo.Arguments {
+			if arg.Required {
+				requiredCount++
+			}
+		}
+
+		if requiredCount > 0 {
+			if description != "" {
+				description += " "
+			}
+			if requiredCount == 1 {
+				description += "(1 required arg)"
+			} else {
+				description += fmt.Sprintf("(%d required args)", requiredCount)
+			}
+		}
+	}
+
+	// Truncate long descriptions to fit on one line
+	description = toolcommon.TruncateText(description, 55)
+
+	return Item{
+		ID:           "mcp.prompt." + promptName,
+		Label:        promptName,
+		Description:  description,
+		Category:     "MCP Prompts",
+		SlashCommand: "/" + promptName,
+		Immediate:    true,
+		Execute: func(arg string) tea.Cmd {
+			arg = strings.TrimSpace(arg)
+
+			// Slash command with argument: map to the first declared prompt argument.
+			if arg != "" && len(promptInfo.Arguments) > 0 {
+				return core.CmdHandler(messages.MCPPromptMsg{
+					PromptName: promptName,
+					Arguments:  map[string]string{promptInfo.Arguments[0].Name: arg},
+				})
+			}
+
+			// No arg provided (palette click or slash with no arg): original behavior.
+			hasRequiredArgs := false
+			for _, a := range promptInfo.Arguments {
+				if a.Required {
+					hasRequiredArgs = true
+					break
+				}
+			}
+
+			if !hasRequiredArgs {
+				// Execute prompt with empty arguments
+				return core.CmdHandler(messages.MCPPromptMsg{
+					PromptName: promptName,
+					Arguments:  make(map[string]string),
+				})
+			}
+			// Show parameter input dialog for prompts with required arguments
+			return core.CmdHandler(messages.ShowMCPPromptInputMsg{
+				PromptName: promptName,
+				PromptInfo: promptInfo,
+			})
+		},
+	}
+}
+
 // BuildCommandCategories builds the list of command categories for the command palette
 func BuildCommandCategories(ctx context.Context, application *app.App) []Category {
 	// Get session commands and filter based on model capabilities
@@ -515,24 +594,9 @@ func BuildCommandCategories(ctx context.Context, application *app.App) []Categor
 
 	agentCommands := application.CurrentAgentCommands(ctx)
 	if len(agentCommands) > 0 {
-		var commands []Item
+		commands := make([]Item, 0, len(agentCommands))
 		for name, cmd := range agentCommands {
-			commandName := name
-			commands = append(commands, Item{
-				ID:           "agent.command." + commandName,
-				Label:        commandName,
-				Description:  toolcommon.TruncateText(cmd.DisplayText(), 60),
-				Category:     "Agent Commands",
-				SlashCommand: "/" + commandName,
-				Immediate:    true,
-				Execute: func(arg string) tea.Cmd {
-					input := "/" + commandName
-					if arg = strings.TrimSpace(arg); arg != "" {
-						input += " " + arg
-					}
-					return core.CmdHandler(messages.AgentCommandMsg{Command: input})
-				},
-			})
+			commands = append(commands, newAgentCommandItem(name, cmd))
 		}
 
 		categories = append(categories, Category{
@@ -545,66 +609,7 @@ func BuildCommandCategories(ctx context.Context, application *app.App) []Categor
 	if len(mcpPrompts) > 0 {
 		mcpCommands := make([]Item, 0, len(mcpPrompts))
 		for promptName, promptInfo := range mcpPrompts {
-			// Build description with argument info
-			description := promptInfo.Description
-			if len(promptInfo.Arguments) > 0 {
-				// Count required arguments
-				requiredCount := 0
-				for _, arg := range promptInfo.Arguments {
-					if arg.Required {
-						requiredCount++
-					}
-				}
-
-				if requiredCount > 0 {
-					if description != "" {
-						description += " "
-					}
-					if requiredCount == 1 {
-						description += "(1 required arg)"
-					} else {
-						description += fmt.Sprintf("(%d required args)", requiredCount)
-					}
-				}
-			}
-
-			// Truncate long descriptions to fit on one line
-			description = toolcommon.TruncateText(description, 55)
-
-			// Create closure variables to capture current iteration values
-			currentPromptName := promptName
-			currentPromptInfo := promptInfo
-
-			mcpCommands = append(mcpCommands, Item{
-				ID:          "mcp.prompt." + promptName,
-				Label:       promptName,
-				Description: description,
-				Category:    "MCP Prompts",
-				Execute: func(string) tea.Cmd {
-					// If prompt has no required arguments, execute immediately
-					hasRequiredArgs := false
-					for _, arg := range currentPromptInfo.Arguments {
-						if arg.Required {
-							hasRequiredArgs = true
-							break
-						}
-					}
-
-					if !hasRequiredArgs {
-						// Execute prompt with empty arguments
-						return core.CmdHandler(messages.MCPPromptMsg{
-							PromptName: currentPromptName,
-							Arguments:  make(map[string]string),
-						})
-					} else {
-						// Show parameter input dialog for prompts with required arguments
-						return core.CmdHandler(messages.ShowMCPPromptInputMsg{
-							PromptName: currentPromptName,
-							PromptInfo: currentPromptInfo,
-						})
-					}
-				},
-			})
+			mcpCommands = append(mcpCommands, newMCPPromptItem(promptName, promptInfo))
 		}
 
 		categories = append(categories, Category{

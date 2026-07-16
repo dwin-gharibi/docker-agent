@@ -1,6 +1,6 @@
 module github.com/docker/docker-agent/benchmarks/compaction
 
-go 1.26.4
+go 1.26.5
 
 require github.com/docker/docker-agent v0.0.0
 

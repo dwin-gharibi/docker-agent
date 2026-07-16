@@ -114,8 +114,6 @@ func NewClient(baseURL string, opts ...ClientOption) (*Client, error) {
 			"message_added":          func() Event { return &MessageAddedEvent{} },
 			"model_fallback":         func() Event { return &ModelFallbackEvent{} },
 			"sub_session_completed":  func() Event { return &SubSessionCompletedEvent{} },
-			"connection_lost":        func() Event { return &ConnectionLostEvent{} },
-			"connection_restored":    func() Event { return &ConnectionRestoredEvent{} },
 		},
 	}
 
@@ -458,8 +456,8 @@ func (c *Client) DeleteRemoteSession(ctx context.Context, sessionID string) erro
 	return c.doRequest(ctx, http.MethodDelete, "/api/sessions/"+sessionID, nil, nil)
 }
 
-func (c *Client) ResumeElicitation(ctx context.Context, sessionID string, action tools.ElicitationAction, content map[string]any) error {
-	req := api.ResumeElicitationRequest{Action: string(action), Content: content}
+func (c *Client) ResumeElicitation(ctx context.Context, sessionID string, action tools.ElicitationAction, content map[string]any, elicitationID ...string) error {
+	req := api.ResumeElicitationRequest{Action: string(action), Content: content, ElicitationID: firstElicitationID(elicitationID)}
 	return c.doRequest(ctx, http.MethodPost, "/api/sessions/"+sessionID+"/elicitation", req, nil)
 }
 
@@ -689,9 +687,9 @@ func (c *Client) UpdateMessage(ctx context.Context, sessionID, msgID string, msg
 }
 
 // AddSummary adds a summary to a session.
-func (c *Client) AddSummary(ctx context.Context, sessionID, summary string, tokens int) error {
+func (c *Client) AddSummary(ctx context.Context, sessionID, summary string, tokens int, cost float64) error {
 	endpoint := fmt.Sprintf("/api/sessions/%s/summaries", sessionID)
-	req := api.AddSummaryRequest{Summary: summary, Tokens: tokens}
+	req := api.AddSummaryRequest{Summary: summary, Tokens: tokens, Cost: cost}
 	return c.doRequest(ctx, http.MethodPost, endpoint, req, nil)
 }
 
@@ -722,80 +720,6 @@ func (c *Client) Ready(ctx context.Context) (*api.ReadyResponse, error) {
 		return nil, err
 	}
 	return &resp, nil
-}
-
-// StreamSessionEventsWithRetry streams events for a session with exponential backoff reconnection.
-// It emits ConnectionLostEvent and ConnectionRestoredEvent on connection changes.
-// Backs off exponentially between retries: 100ms, 200ms, 400ms, 800ms, 1600ms (max).
-func (c *Client) StreamSessionEventsWithRetry(ctx context.Context, sessionID string) (<-chan Event, error) {
-	output := make(chan Event, defaultEventChannelCapacity)
-
-	go func() {
-		defer close(output)
-		attempt := 0
-		const maxBackoff = 1600 * time.Millisecond
-		const initialBackoff = 100 * time.Millisecond
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
-
-			attempt++
-			stream, err := c.StreamSessionEvents(ctx, sessionID)
-			if err != nil {
-				if attempt == 1 {
-					// First attempt failed; report and exit
-					return
-				}
-				// Emit connection lost event
-				select {
-				case output <- ConnectionLost(err.Error(), attempt):
-				case <-ctx.Done():
-					return
-				}
-
-				// Calculate backoff: 100ms, 200ms, 400ms, 800ms, 1600ms (max)
-				backoff := initialBackoff
-				if attempt > 1 {
-					backoff = initialBackoff * time.Duration(1<<uint(attempt-2))
-				}
-				if backoff > maxBackoff {
-					backoff = maxBackoff
-				}
-				select {
-				case <-time.After(backoff):
-					continue
-				case <-ctx.Done():
-					return
-				}
-			}
-
-			// Connection successful; emit restored event (if not first attempt)
-			if attempt > 1 {
-				select {
-				case output <- ConnectionRestored(attempt):
-				case <-ctx.Done():
-					return
-				}
-			}
-
-			// Stream events until error
-			for event := range stream {
-				select {
-				case output <- event:
-				case <-ctx.Done():
-					return
-				}
-			}
-
-			// Stream ended; will retry
-		}
-	}()
-
-	return output, nil
 }
 
 // GetSessionRecoveryData retrieves recovery data for a session in case of store failure

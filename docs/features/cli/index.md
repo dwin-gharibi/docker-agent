@@ -13,7 +13,7 @@ _Complete reference for all docker-agent command-line commands and flags._
 > [!TIP]
 > **No config needed**
 >
-> Running `docker agent run` without a config file uses a built-in default agent. Perfect for quick experimentation.
+> Running `docker agent run` without a config argument uses `docker-agent.yaml`, `docker-agent.yml`, or `docker-agent.hcl` from the current directory when present. Otherwise, it uses a built-in default agent that is perfect for quick experimentation.
 
 ## Commands
 
@@ -28,7 +28,7 @@ $ docker agent run [config] [message...] [flags]
 | Flag                                    | Description                                                                                                                               |
 | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
 | `-a, --agent <name>`                    | Run a specific agent from the config                                                                                                      |
-| `--yolo`                                | Auto-approve all tool calls                                                                                                               |
+| `--yolo`                                | Auto-approve tool calls (unless explicitly denied)                                                                                        |
 | `--model <ref>`                         | Override model(s). Use `provider/model` for all agents, or `agent=provider/model` for specific agents. Comma-separate multiple overrides. |
 | `--session <id>`                        | Resume a previous session. Supports relative refs (`-1` = last, `-2` = second to last). An explicit ID that does not exist yet is created with that ID, so a supervisor can own the session ID upfront and reuse it across runs. |
 | `-s, --session-db <path>`               | Path to the SQLite session database (default: `<data-dir>/session.db`, so `~/.cagent/session.db` unless `--data-dir` is set)              |
@@ -197,6 +197,24 @@ $ docker agent models                                 # only providers you can u
 $ docker agent models --all                           # every provider the catalog knows about
 $ docker agent models --provider openai
 $ docker agent models --format json | jq
+```
+
+### `docker agent toolsets`
+
+List the built-in toolset types available for use in an agent configuration. Each type can be referenced under `toolsets:` in an agent YAML file. Use this to discover what's available without leaving the terminal.
+
+```bash
+$ docker agent toolsets [flags]
+```
+
+| Flag             | Default | Description                       |
+| ---------------- | ------- | --------------------------------- |
+| `--format <fmt>` | `table` | Output format: `table` or `json`. |
+
+```bash
+# Examples
+$ docker agent toolsets                                # human-readable table
+$ docker agent toolsets --format json | jq             # machine-readable (type, summary, docs URL)
 ```
 
 ### `docker agent setup`
@@ -479,7 +497,7 @@ $ docker agent run yolo-coder
 
 **Alias Options:** Aliases can include runtime options that apply automatically when used:
 
-- `--yolo` — Auto-approve all tool calls when running the alias
+- `--yolo` — Auto-approve tool calls (unless explicitly denied) when running the alias
 - `--model <ref>` — Override the model for the alias
 - `--hide-tool-results` — Hide tool call results in the TUI when running the alias
 - `--sandbox` — Always run the alias inside a [Docker sandbox](../../configuration/sandbox/index.md)
@@ -609,7 +627,7 @@ Commands that accept a config support multiple reference types:
 | OCI registry  | `docker.io/username/agent:latest`           |
 | Agent catalog | `agentcatalog/pirate`                       |
 | Alias         | `pirate` (after `docker agent alias add`)   |
-| Default       | (no argument) — uses built-in default agent |
+| Default       | (no argument) — uses project config or built-in default agent |
 
 > [!NOTE]
 > **Debugging**
