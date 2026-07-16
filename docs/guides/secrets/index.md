@@ -16,7 +16,7 @@ Docker Agent needs API keys to talk to model providers (OpenAI, Anthropic, etc.)
 | --- | --- | --- |
 | 1 | [Environment variables](#environment-variables) | `export OPENAI_API_KEY=sk-...` |
 | 2 | [Docker Compose secrets](#docker-compose-secrets) | Files in `/run/secrets/` |
-| 3 | [docker agent env file](#docker-agent-env-file) | `~/.config/cagent/.env`, written by `docker agent setup` |
+| 3 | [Docker Agent env file](#docker-agent-env-file) | `~/.config/cagent/.env`, written by `docker agent setup` |
 | 4 | [Credential helper](#credential-helper) | Custom command declared in `~/.config/cagent/config.yaml` under `credential_helper:` |
 | 5 | [Docker Desktop](#docker-desktop) | Secrets stored by the Docker Desktop backend (no setup on a Desktop install) |
 | 6 | [`pass` password manager](#pass-password-manager) | `pass insert OPENAI_API_KEY` |
@@ -85,7 +85,7 @@ The file format supports:
 > [!IMPORTANT]
 > Add `.env` to your `.gitignore` to avoid committing secrets to version control.
 
-## docker agent env file
+## Docker Agent env file
 
 A `.env` file (same format as above) at `~/.config/cagent/.env` is read automatically on every run — no `--env-from-file` flag needed. It is where [`docker agent setup`](../../features/cli/index.md#docker-agent-setup) stores API keys when you choose the env-file location, and you can edit it by hand:
 
@@ -253,7 +253,7 @@ References follow the `op://<vault>/<item>/<field>` format. Make sure the `op` C
 | --- | --- | --- |
 | Environment variables | Quick local development, scripts | Low |
 | Env files | Team projects, multiple keys | Low |
-| docker agent env file | Keys used across all projects, written by `docker agent setup` | Low |
+| Docker Agent env file | Keys used across all projects, written by `docker agent setup` | Low |
 | Docker Compose secrets | Containerized deployments, CI/CD | Medium |
 | `pass` | Linux/macOS, GPG-based workflows | Medium |
 | macOS Keychain | macOS local development | Low |

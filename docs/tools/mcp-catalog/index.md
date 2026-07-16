@@ -27,7 +27,7 @@ toolsets:
   - type: mcp_catalog
 ```
 
-The catalog is embedded in the Docker Agent binary and refreshed with each release. By default every server in the embedded subset is offered.
+The catalog is embedded in the `docker-agent` binary and refreshed with each release. By default every server in the embedded subset is offered.
 
 ### Restricting the offered servers
 

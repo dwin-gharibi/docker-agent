@@ -138,12 +138,12 @@ toolsets:
 
 ## Auto-Installing Tools
 
-When configuring MCP or LSP tools that require a binary command, docker agent can **automatically download and install** the command if it's not already available on your system. This uses the [aqua registry](https://github.com/aquaproj/aqua-registry) — a curated index of CLI tool packages.
+When configuring MCP or LSP tools that require a binary command, Docker Agent can **automatically download and install** the command if it's not already available on your system. This uses the [aqua registry](https://github.com/aquaproj/aqua-registry) — a curated index of CLI tool packages.
 
 ### How It Works
 
-1. When a toolset with a `command` is loaded, docker agent checks if the command is available in your `PATH`
-2. If not found, it checks the docker agent tools directory (`~/.cagent/tools/bin/`)
+1. When a toolset with a `command` is loaded, Docker Agent checks if the command is available in your `PATH`
+2. If not found, it checks the Docker Agent tools directory (`~/.cagent/tools/bin/`)
 3. If still not found, it looks up the command in the aqua registry and installs it automatically
 
 ### Explicit Package Reference
@@ -166,7 +166,7 @@ The format is `owner/repo` or `owner/repo@version`. When a version is omitted, t
 
 ### Automatic Detection
 
-If the `version` property is not set, docker agent tries to auto-detect the package from the command name by searching the aqua registry:
+If the `version` property is not set, Docker Agent tries to auto-detect the package from the command name by searching the aqua registry:
 
 ```yaml
 toolsets:
