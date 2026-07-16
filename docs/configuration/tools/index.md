@@ -40,7 +40,7 @@ Built-in tools are included with Docker Agent and require no external dependenci
 | `open_url` | Open a fixed URL in the user's default browser | [Open URL](../../tools/open-url/index.md) |
 | `transfer_task` | Delegate to sub-agents (auto-enabled) | [Transfer Task](../../tools/transfer-task/index.md) |
 | `background_agents` | Parallel sub-agent dispatch | [Background Agents](../../tools/background-agents/index.md) |
-| `webhook` | Send outbound notifications (Slack, Discord, Telegram, IFTTT, Teams, …) | [Webhook](../../tools/webhook/index.md) |
+| `webhook` | Reliable notifications to a configured destination, with retries (Slack, Discord, Telegram, IFTTT, Teams, …) | [Webhook](../../tools/webhook/index.md) |
 | `handoff` | Local conversation handoff to another agent in the same config (auto-enabled by `handoffs:`) | [Handoff](../../tools/handoff/index.md) |
 | `a2a` | A2A remote agent connection | [A2A](../../tools/a2a/index.md) |
 | `mcp_catalog` | Discover and activate remote MCP servers from the Docker MCP Catalog on demand | [MCP Catalog](../../tools/mcp-catalog/index.md) |
