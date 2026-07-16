@@ -1235,6 +1235,12 @@ details.sidebar-section[open] > summary.sidebar-heading::after {
   padding: 14px 18px 6px;
   display: flex;
   flex-direction: column;
+  /* Grid items default to min-width:auto, so long code content
+   * refuses to shrink below its intrinsic width and forces
+   * page-level horizontal scroll at narrow viewports (WCAG 1.4.10).
+   * min-width:0 lets the item shrink; .compare-side pre's own
+   * overflow-x:auto keeps the long lines scrollable locally instead. */
+  min-width: 0;
 }
 .compare-without {
   border-color: rgba(248, 113, 113, 0.35);
