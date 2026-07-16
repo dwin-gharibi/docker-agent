@@ -140,11 +140,16 @@ name: Agent code review
 on:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   review:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Install docker-agent
         run: |
@@ -175,8 +180,8 @@ This job auto-approves every shell call the review agent makes (`--yolo`) rather
 $ docker-agent run --sandbox --exec --yolo .github/agents/review-agent.yaml --json "..."
 ```
 
-Without `--sandbox`, this workflow's safety instead rests on least-privilege secrets (only `ANTHROPIC_API_KEY` is injected — no repo-write token) and the job running on a GitHub-hosted, ephemeral runner that's discarded after the job.
+Without `--sandbox`, this workflow's safety instead rests on least-privilege secrets (only `ANTHROPIC_API_KEY` is injected — no repo-write token), the top-level `permissions: contents: read` block and `persist-credentials: false` on the checkout step (which together mean the job never holds a write-capable `GITHUB_TOKEN` and never persists one to disk for `git` to pick up), and the job running on a GitHub-hosted, ephemeral runner that's discarded after the job.
 
-This example omits the GitHub MCP toolset (`docker:github-official`) shown in earlier revisions of this guide: that server requires a `GITHUB_PERSONAL_ACCESS_TOKEN` this workflow doesn't provide, and — because the toolset above has no `name:` field — its tools would be exposed under their raw MCP names (`get_file_contents`, `search_code`, …) rather than a `mcp:github:*`-style qualified name, so permission patterns written against that prefix wouldn't match anything anyway. If your review agent needs GitHub API access, add the toolset back with an explicit `name: github`, wire `GITHUB_PERSONAL_ACCESS_TOKEN` through `env:` from a repository secret, and write any `permissions` patterns against the tool names it actually exposes (`mcp:github:get_*` only works once the toolset carries that `name:`).
+This example omits the GitHub MCP toolset (`docker:github-official`) shown in earlier revisions of this guide: that server requires a `GITHUB_PERSONAL_ACCESS_TOKEN` this workflow doesn't provide, and — because the toolset above has no `name:` field — its tools would be exposed under their raw MCP names (`get_file_contents`, `search_code`, …) rather than a `github_*`-style qualified name, so permission patterns written against that prefix wouldn't match anything anyway. If your review agent needs GitHub API access, add the toolset back with an explicit `name: github`, wire `GITHUB_PERSONAL_ACCESS_TOKEN` through `env:` from a repository secret, and write any `permissions` patterns against the tool names it actually exposes (`github_get_*` only works once the toolset carries that `name:`).
 
 Swap the model, toolsets, and provider secret for your own — the shape (checkout, install the binary, run `--exec` with `--json` against a checked-in config, upload the transcript) generalizes to any CI provider that can run a shell step.
