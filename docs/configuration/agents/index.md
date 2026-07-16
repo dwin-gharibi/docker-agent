@@ -381,6 +381,15 @@ Commands support three formats:
 
 When `agent` is set without `instruction`, any text typed after the slash command (e.g., `/plan build a web app`) is forwarded as a prompt to the target agent. The target agent can be **any agent defined in the team configuration** — it does not need to be listed in the current agent's `sub_agents` array.
 
+**Argument and expansion syntax**
+
+An `instruction` string can reference the command's arguments and expand tool calls:
+
+- `${args[0]}`, `${args[1]}`, … — individual positional arguments, in the order the user typed them after the command
+- `${args.join(" ")}` — all arguments joined into a single string
+- `${tool_name({...})}` — calls a tool and inlines its return value (any tool available to the agent)
+- `!tool_name(key=value)` — legacy tool-call form: calls a tool with plain `key=value` arguments and inlines its output
+
 ### Agent-Switching Commands
 
 Commands with an `agent` field switch the active agent for that command's scope. This is useful for building workflow shortcuts where `/plan`, `/review`, `/deploy` each route the user to the appropriate specialist.
