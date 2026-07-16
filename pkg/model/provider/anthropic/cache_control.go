@@ -1,6 +1,7 @@
 package anthropic
 
 import (
+	"log/slog"
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -32,12 +33,15 @@ func messageCacheBreakpoints(requestTools []tools.Tool) int {
 // markSystemBlockCacheControl marks the block as a cache breakpoint if the
 // system-block budget allows it, returning the updated count of marked
 // blocks. Re-marking an already-marked block is a no-op so that duplicate
-// upstream marks don't burn budget.
+// upstream marks don't burn budget; over-budget marks are dropped (and
+// logged) so a request can never exceed Anthropic's breakpoint limit.
 func markSystemBlockCacheControl(block *anthropic.TextBlockParam, marked int) int {
 	if block.CacheControl.Type != "" {
 		return marked
 	}
 	if marked >= maxSystemCacheBreakpoints {
+		slog.Debug("Dropping over-budget system cache breakpoint mark",
+			"max", maxSystemCacheBreakpoints)
 		return marked
 	}
 	block.CacheControl = anthropic.NewCacheControlEphemeralParam()
