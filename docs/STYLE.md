@@ -341,23 +341,68 @@ that touches `js/app.js`, `layouts/`, or the demo media:
 ### Running the accessibility scan locally
 
 CI (`docs-a11y` workflow) runs [pa11y-ci](https://github.com/pa11y/pa11y-ci)
-against the URLs in `docs/.pa11yci.json` at the `WCAG2AA` standard.
-Each page is listed twice, once with `?theme=light` and once with
-`?theme=dark` — `js/app.js`'s `initTheme()` honors that query param
-ahead of `localStorage`/`prefers-color-scheme`, so the gate
-deterministically exercises both themes regardless of the scanning
-browser's default color scheme (observed to default to light
-headless, which is exactly why earlier local runs only ever caught
-light-mode regressions). To reproduce locally:
+at the `WCAG2AA` standard against a two-tier URL list:
+
+- **Tier 1 (always)** — a small static set of layout-archetype pages
+  in `docs/.pa11yci.json`: home (`/`), `configuration/sandbox/`
+  (wide tables + callouts), `getting-started/quickstart/` (tutorial
+  prose), `404.html` (standalone layout), `features/tui/` (the
+  densest page — images, inline HTML, many callouts/tables), and
+  `concepts/multi-agent/` (deep heading structure, tables). Each is
+  listed twice, once with `?theme=light` and once with `?theme=dark`
+  — 12 URLs in total. This tier guards against systemic regressions
+  (shared CSS/JS/templates/SVG) and runs on every push and PR.
+- **Tier 2 (pull requests only)** — the content pages the PR actually
+  modifies. `scripts/docs-a11y-urls.sh` maps changed Markdown to
+  rendered URLs (dropping `_index.md`/`STYLE.md`/non-content files,
+  de-duping against the Tier 1 list, live-probing to catch renames,
+  and emitting both themes), deterministically capped at
+  `${A11Y_MAX_PAGES:-10}` changed pages (lexicographic sort, so a
+  PR touching more than that always scans the same subset and logs
+  the rest as skipped). The CI workflow jq-merges these URLs into a
+  generated config on top of `docs/.pa11yci.json`; a push to `main`
+  or a PR that touches no content Markdown stays static-only (Tier 1).
+
+`js/app.js`'s `initTheme()` honors the `?theme=` query param ahead of
+`localStorage`/`prefers-color-scheme`, so the gate deterministically
+exercises both themes regardless of the scanning browser's default
+color scheme (observed to default to light headless, which is exactly
+why earlier local runs only ever caught light-mode regressions).
+
+To reproduce the full two-tier scan locally:
 
 ```bash
 # Serve the site the same way the Dockerfile does
 docker build -t docs docs/
 docker run --rm -p 1313:1313 -v $(pwd)/docs:/src docs
 
-# In another terminal, once it's serving at http://localhost:1313/docker-agent/
+# In another terminal, once it's serving at http://localhost:1313/docker-agent/:
+
+# Tier 1 only (the static archetype list):
 cd docs && npx --yes pa11y-ci@3.1.0 --config .pa11yci.json
+
+# Tier 1 + Tier 2 (mirrors what a PR's CI run scans), from the repo root:
+git diff --name-only main...HEAD | A11Y_BASE_URL=http://localhost:1313 ./scripts/docs-a11y-urls.sh > /tmp/changed-urls.txt
+jq -Rn '[inputs]' /tmp/changed-urls.txt > /tmp/changed-urls.json
+jq --slurpfile extra /tmp/changed-urls.json '.urls += $extra[0]' docs/.pa11yci.json > /tmp/pa11yci.generated.json
+npx --yes pa11y-ci@3.1.0 --config /tmp/pa11yci.generated.json
 ```
+
+`scripts/docs-a11y-urls.sh --self-test` exercises the mapping rules
+against fixtures (no server needed) and is safe to run any time.
+
+**Adding or retiring a Tier 1 archetype:** edit the `urls` array in
+`docs/.pa11yci.json` (both the light and dark entries — never add
+or remove just one theme). Before adding a page, run the full local
+scan above with it included and confirm 0 errors in both themes
+first (the "green-baseline" rule) — a latent shared-CSS bug that
+happens to be invisible on the current six pages must be fixed
+*before* the new archetype joins the always-on gate, or every future
+PR starts failing on a pre-existing issue unrelated to its own change.
+
+**Tuning the Tier-2 cap:** `A11Y_MAX_PAGES` (default 10) is the only
+knob; raise it in the workflow's `Compute changed-page URLs` step if
+PRs regularly touch more content pages than that.
 
 `pa11y-ci` only fails the build on HTML_CodeSniffer `error`-level
 results (warnings/notices are informational and don't fail CI), so a
