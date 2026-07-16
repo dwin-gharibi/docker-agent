@@ -80,9 +80,9 @@ models:
 ## Attachment Capability Overrides
 
 For custom OpenAI-compatible providers, local models (Ollama, DMR), and any
-model the built-in catalogue does not describe, docker-agent cannot
+model the built-in catalogue does not describe, Docker Agent cannot
 auto-detect whether the endpoint accepts image or PDF attachments. When the
-model is absent from the catalogue, docker-agent logs a diagnostic and falls
+model is absent from the catalogue, Docker Agent logs a diagnostic and falls
 back to text-only, silently dropping attachments.
 
 Declare `capabilities` to make the model's attachment support authoritative
@@ -119,7 +119,7 @@ See [`examples/capability-overrides.yaml`](https://github.com/docker/docker-agen
 
 ## Custom Token Pricing
 
-docker-agent prices each model call from the [models.dev](https://models.dev/)
+Docker Agent prices each model call from the [models.dev](https://models.dev/)
 catalogue. Models the catalogue does not know — custom OpenAI-compatible
 providers, local models, private deployments — are "unpriced": every call is
 recorded at $0 despite consuming tokens, with only a log warning.
@@ -208,7 +208,7 @@ The value can be a named entry from the `models` stanza or an inline
 `provider/model` string. When omitted, the primary model compacts.
 
 If the compaction model has a **smaller context window** than the primary,
-docker-agent triggers compaction against the smaller window so the summary
+Docker Agent triggers compaction against the smaller window so the summary
 call can always ingest the full conversation. Pair the primary with a
 compaction model whose window is at least as large to keep the proactive
 trigger aligned with the primary's window.
@@ -281,7 +281,7 @@ See [`examples/bypass_models_gateway.yaml`](https://github.com/docker/docker-age
 
 ## First Available Models
 
-Use `first_available` when the same agent should work with whichever provider credentials are available in the current environment. docker-agent checks the candidates in order at load time and replaces the selector with the first candidate whose required environment variables are configured.
+Use `first_available` when the same agent should work with whichever provider credentials are available in the current environment. Docker Agent checks the candidates in order at load time and replaces the selector with the first candidate whose required environment variables are configured.
 
 ```yaml
 models:
@@ -300,7 +300,7 @@ agents:
 
 Candidates can be inline `provider/model` references or names from the same `models:` section. Local providers such as `dmr` and `ollama` do not require credentials, so they are useful as final fallbacks.
 
-If none of the candidates has credentials configured, docker-agent reports the missing environment variables grouped by candidate. You only need to configure one group of credentials, not every provider in the list.
+If none of the candidates has credentials configured, Docker Agent reports the missing environment variables grouped by candidate. You only need to configure one group of credentials, not every provider in the list.
 
 A `first_available` model is only a selector. It cannot be combined with `provider`, `model`, `routing`, `token_key`, budgets, sampling options, or other model settings. Put those settings on named candidate models instead:
 
@@ -388,9 +388,9 @@ models:
 thinking_budget: none # or 0
 ```
 
-`none` and `0` both clear docker-agent's local thinking configuration (omitting `thinking_budget` has the same effect); neither is guaranteed to reach the API as a real "off" switch:
+`none` and `0` both clear Docker Agent's local thinking configuration (omitting `thinking_budget` has the same effect); neither is guaranteed to reach the API as a real "off" switch:
 
-- **OpenAI gpt-5.6+** (Sol/Terra/Luna) is the only case with a genuine API-level `none` reasoning effort: docker-agent sends it as-is and the model does not reason.
+- **OpenAI gpt-5.6+** (Sol/Terra/Luna) is the only case with a genuine API-level `none` reasoning effort: Docker Agent sends it as-is and the model does not reason.
 - **Older OpenAI reasoning models** (o-series, gpt-5 through gpt-5.5) have no such switch: `none`/`0` just clear the local config, and the model falls back to the API's own default effort and still reasons internally. Same for other always-reasoning models (Gemini 3).
 - Providers with a true optional-thinking switch (Gemini 2.5, Claude, local models) are fully disabled by `none`/`0`.
 
@@ -415,10 +415,10 @@ choose a tight per-call `max_tokens`.
 
 It is forwarded to Anthropic's
 [`output_config.task_budget`](https://platform.claude.com/docs/en/about-claude/models/whats-new-claude-4-7)
-request field. docker-agent automatically attaches the required
+request field. Docker Agent automatically attaches the required
 `task-budgets-2026-03-13` beta header whenever this field is set.
 
-You can configure `task_budget` on **any** Claude model — docker-agent never
+You can configure `task_budget` on **any** Claude model — Docker Agent never
 gates it by model name. At the time of writing only **Claude Opus 4.7**
 actually honors the field; other Claude models will reject requests that
 include it. Check the Anthropic release notes linked above for the current
@@ -475,7 +475,7 @@ models:
 
 ## Thinking Display (Anthropic)
 
-For Anthropic Claude models, `thinking_display` controls whether thinking blocks are returned in responses when thinking is enabled. Newer Claude models (Opus 4.7+, Fable 5) hide thinking content by default (`omitted`); docker-agent requests `summarized` thinking by default for adaptive/effort-based budgets so reasoning stays visible. Set this provider option to override:
+For Anthropic Claude models, `thinking_display` controls whether thinking blocks are returned in responses when thinking is enabled. Newer Claude models (Opus 4.7+, Fable 5) hide thinking content by default (`omitted`); Docker Agent requests `summarized` thinking by default for adaptive/effort-based budgets so reasoning stays visible. Set this provider option to override:
 
 ```yaml
 models:

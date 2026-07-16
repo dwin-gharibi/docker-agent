@@ -13,7 +13,7 @@ _Complete reference for configuring built-in tools, MCP tools, and Docker-based 
 
 ## Built-in Tools
 
-Built-in tools are included with docker-agent and require no external dependencies. Add them to your agent's `toolsets` list by `type`. Each tool's dedicated page covers its full configuration options, available operations, and examples.
+Built-in tools are included with Docker Agent and require no external dependencies. Add them to your agent's `toolsets` list by `type`. Each tool's dedicated page covers its full configuration options, available operations, and examples.
 
 | Type | Description | Page |
 | --- | --- | --- |
@@ -133,7 +133,7 @@ toolsets:
 | ----------------------- | ------- | --------------------------------------------------------------------------------------------------------------------- |
 | `remote.url`            | string  | URL of the MCP server. Accepts `https://`, `http://`, and `unix://` (Unix domain socket) schemes.                     |
 | `remote.transport_type` | string  | `streamable` or `sse`                                                                                                 |
-| `remote.headers`        | object  | HTTP headers sent on every request. Values support `${env.VAR}` and `${headers.NAME}` placeholders, resolved per request. `${env.VAR}` reads an environment variable; `${headers.NAME}` forwards a header from the caller's incoming request (useful when docker-agent runs as an API server). |
+| `remote.headers`        | object  | HTTP headers sent on every request. Values support `${env.VAR}` and `${headers.NAME}` placeholders, resolved per request. `${env.VAR}` reads an environment variable; `${headers.NAME}` forwards a header from the caller's incoming request (useful when Docker Agent runs as an API server). |
 | `allow_private_ips`     | boolean | Permit remote MCP OAuth helper requests to dial non-public IP addresses. Use only for trusted internal servers.        |
 
 ## Auto-Installing Tools
@@ -225,7 +225,7 @@ The simplest knob is `profile`, which picks a preset:
 
 | Profile | Auto-restart | Use case |
 | --- | --- | --- |
-| `resilient` | Yes | Default. Exponential backoff on disconnect; the agent keeps running if the toolset is unavailable. Matches the historical docker-agent behaviour. |
+| `resilient` | Yes | Default. Exponential backoff on disconnect; the agent keeps running if the toolset is unavailable. Matches the historical Docker Agent behaviour. |
 | `strict` | No | Fail-fast. Marks the toolset as required. Intended for CI / headless runs where a missing dependency should be a hard error. |
 | `best-effort` | No | Single attempt, no retries. Good for experimental MCPs whose flakiness should not amplify into a restart loop. |
 
