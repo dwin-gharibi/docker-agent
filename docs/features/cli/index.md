@@ -30,14 +30,14 @@ $ docker agent run [config] [message...] [flags]
 | `-a, --agent <name>`                    | Run a specific agent from the config                                                                                                      |
 | `--yolo`                                | Auto-approve tool calls (unless explicitly denied)                                                                                        |
 | `--model <ref>`                         | Override model(s). Use `provider/model` for all agents, or `agent=provider/model` for specific agents. Comma-separate multiple overrides. |
-| `--session <id>`                        | Resume a previous session. Supports relative refs (`-1` = last, `-2` = second to last). An explicit ID that does not exist yet is created with that ID, so a supervisor can own the session ID upfront and reuse it across runs. |
+| `--session <id>`                        | Resume a previous session. Supports relative refs (`-1` = newest by creation time, `-2` = second-newest, … — creation order, not last-used). An explicit ID that does not exist yet is created with that ID, so a supervisor can own the session ID upfront and reuse it across runs. |
 | `-s, --session-db <path>`               | Path to the SQLite session database (default: `<data-dir>/session.db`, so `~/.cagent/session.db` unless `--data-dir` is set)              |
 | `--session-read-only`                   | Open the TUI in read-only mode: conversation history is displayed but no new messages can be sent to the LLM. Cannot be used with `--exec`. |
 | `--prompt-file <path>`                  | Include file contents as additional system context (repeatable)                                                                           |
 | `--attach <path>`                       | Attach an image file to the initial message                                                                                               |
 | `--dry-run`                             | Initialize the agent without executing anything (useful for validating a config)                                                          |
 | `--remote <addr>`                       | Use a remote runtime at the given address instead of running the agent locally. Mutually exclusive with `--sandbox`, `--worktree`, `--worktree-pr`, `--worktree-base`, `--session`, `--session-db`, `--record`, and `--fake` — a remote runtime owns its own session storage and execution environment, so these local-only concerns don't apply. |
-| `--listen <addr>`                       | Expose this run's control plane over HTTP so an external process can drive the running TUI (send follow-ups, stream events, read the title). Accepts `host:port` or `unix://`, `npipe://`, `fd://`. See the [API Server](../api-server/index.md#listen). |
+| `--listen <addr>`                       | Expose this run's control plane over HTTP so an external process can drive the running TUI (send follow-ups, stream events, read the title). Accepts `host:port` or `unix://`, `npipe://`, `fd://`. Hidden from `docker agent run --help` — like `debug`, it's a stable but advanced/automation-oriented flag rather than a day-to-day one. See the [API Server](../api-server/index.md#listen) guide for the full walkthrough. |
 | `--lean`                                | Use a simplified, non-alternate-screen TUI. Unlike the default full-screen TUI, this renders inline in the normal terminal buffer — useful in environments where an alternate screen is unwanted (e.g. inside tmux panes, CI with a tty, or log-friendly pipelines). Displays an ASCII art banner on startup. |
 | `--app-name <name>`                     | Override the application name label shown in the TUI (status bar, window title, "/exit" notifications).                                   |
 | `--sidebar`                             | Control sidebar visibility. Set to `--sidebar=false` to hide the sidebar and disable the Ctrl+B toggle (default: `true`).                 |
@@ -617,6 +617,11 @@ $ docker agent debug oauth list
 $ docker agent debug oauth login agent.yaml github
 ```
 
+> [!WARNING]
+> **`debug auth --json` prints the full bearer token**
+>
+> The text output of `debug auth` truncates the token to a short preview, but `--json` includes the complete, unredacted JWT in its `token` field. Never paste `debug auth --json` output into logs, issue trackers, or bug reports — anyone with that token can act as you against Docker Desktop's backend. Use the plain-text output (or redact the `token` field yourself) when sharing diagnostic output.
+
 The `config`, `toolsets`, `skills`, and `title` subcommands also accept [runtime configuration flags](#runtime-configuration-flags) (`--working-dir`, `--models-gateway`, …); `title` additionally accepts `--model` to override the model used to resolve the config before generating the title.
 
 ### `docker agent completion`
@@ -687,6 +692,7 @@ These flags are accepted by every command that loads an agent (`run`, `run --exe
 | `--hook-session-end <cmd>`      | Add a session-end hook command (repeatable).                                                                             |
 | `--hook-on-user-input <cmd>`    | Add an on-user-input hook command (repeatable).                                                                          |
 | `--hook-stop <cmd>`             | Add a stop hook command, fired when the model finishes responding (repeatable).                                          |
+| `--mcp-oauth-redirect-uri <url>` | Public HTTPS URL to advertise as the OAuth `redirect_uri` for MCP servers running in unmanaged OAuth mode. When set, docker-agent drives PKCE and the code exchange in-process instead of expecting the client to. See [Remote MCP](../remote-mcp/index.md) for details. |
 
 ## Agent References
 
