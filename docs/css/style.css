@@ -77,10 +77,12 @@
   --accent-hover: #7AA1F5;
   --accent-light: rgba(75,131,241,0.12);
   --accent-strong: var(--blue-500);   /* Ocean Blue — hero, button, badge */
+  --accent-on-card: var(--blue-300);  /* blue-400 on bg-card gray-900 reads 4.08:1 — marginal fail */
 
   --success: #34D399;
   --warning: #FBBF24;
   --error: #F87171;
+  --error-strong: #DC2626;            /* white-on-error badges: #F87171 reads 2.77:1, too low */
   --info: #60A5FA;
 
   --shadow-sm: 0 1px 2px rgba(0,0,0,0.3);
@@ -126,6 +128,7 @@
   --accent-hover: var(--blue-600);
   --accent-light: var(--blue-100);
   --accent-strong: var(--blue-500);
+  --accent-on-card: var(--blue-500);  /* blue-500 on white cards already reads 5.0:1 */
 }
 
 /* Tiny uppercase chrome labels: --text-muted's gray-600 (4.87:1 on
@@ -720,7 +723,7 @@ details.sidebar-section[open] > summary.sidebar-heading::after {
 }
 
 /* Rouge syntax token colors – Docker-blue-tinted dark theme */
-.highlight .c, .highlight .c1, .highlight .cm, .highlight .cs { color: #4A5568; font-style: italic; }
+.highlight .c, .highlight .c1, .highlight .cm, .highlight .cs { color: var(--gray-400); font-style: italic; } /* #4A5568 read 2.14:1 on bg-code-block gray-900 */
 .highlight .k, .highlight .kd, .highlight .kn, .highlight .kp, .highlight .kr { color: #A78BFA; }
 .highlight .kc { color: #F59E0B; }
 .highlight .kt { color: #FBBF24; }
@@ -1146,7 +1149,7 @@ details.sidebar-section[open] > summary.sidebar-heading::after {
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.1em;
-  color: var(--accent);
+  color: var(--accent-on-card);
   margin-bottom: 6px;
 }
 
@@ -1174,7 +1177,7 @@ details.sidebar-section[open] > summary.sidebar-heading::after {
 }
 .ecosystem-tile strong {
   display: block;
-  color: var(--accent);
+  color: var(--accent-on-card);
   font-size: 0.95rem;
   margin-bottom: 4px;
 }
@@ -1278,7 +1281,7 @@ details.sidebar-section[open] > summary.sidebar-heading::after {
 .usecase a {
   font-size: 0.82rem;
   font-weight: 600;
-  color: var(--accent);
+  color: var(--accent-on-card);
 }
 .usecase a:hover { text-decoration: underline; }
 
@@ -1331,7 +1334,7 @@ details.sidebar-section[open] > summary.sidebar-heading::after {
   line-height: 1;
 }
 .pain-x {
-  background: var(--error);
+  background: var(--error-strong);
   color: #ffffff;
 }
 .pain-check {
@@ -1383,7 +1386,7 @@ details.sidebar-section[open] > summary.sidebar-heading::after {
 }
 .glossary dt {
   font-weight: 700;
-  color: var(--accent);
+  color: var(--accent-on-card);
   align-self: start;
 }
 .glossary dd {
@@ -1682,11 +1685,14 @@ kbd {
   padding: 2px 6px;
   font-family: var(--font-mono);
   font-size: 0.72rem;
-  color: var(--text-muted);
+  color: var(--gray-300);  /* text-muted (gray-400) reads 4.42:1 on bg-code gray-800 — marginal fail */
   background: var(--bg-code);
   border: 1px solid var(--border);
   border-radius: 4px;
   line-height: 1.4;
+}
+[data-theme="light"] kbd {
+  color: var(--text-muted);
 }
 
 /* ===== Copy button on code blocks ===== */
@@ -1697,7 +1703,7 @@ kbd {
   background: rgba(255,255,255,0.06);
   border: 1px solid rgba(255,255,255,0.1);
   border-radius: 4px;
-  color: #64748B;
+  color: var(--gray-400);  /* #64748B read 3.38:1 on the dark code block */
   cursor: pointer;
   padding: 3px 8px;
   font-size: 0.7rem;
@@ -1705,9 +1711,18 @@ kbd {
   opacity: 0;
   transition: opacity 0.2s, background 0.2s;
 }
-pre:hover .copy-btn { opacity: 1; }
-.copy-btn:hover { background: rgba(255,255,255,0.12); color: #94A3B8; }
+pre:hover .copy-btn,
+.copy-btn:focus-visible {
+  opacity: 1;
+}
+.copy-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.copy-btn:hover { background: rgba(255,255,255,0.12); color: var(--gray-300); }
 .copy-btn.copied { color: var(--success); border-color: var(--success); }
+[data-theme="light"] .copy-btn { color: var(--gray-600); } /* #64748B on #F6F8FA read 4.47:1 marginal */
+[data-theme="light"] .copy-btn:hover { color: var(--gray-700); } /* hover #94A3B8 read 2.41:1 in light */
 
 /* ===== Print stylesheet ===== */
 @media print {
