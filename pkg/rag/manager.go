@@ -348,10 +348,16 @@ func (m *Manager) Query(ctx context.Context, query string) (results []database.S
 		}(strategyName, strategyImpl, strategyCfg)
 	}
 
-	// Collect results from all strategies
+	// Collect results from all strategies. On cancellation the buffered
+	// channel lets abandoned strategy goroutines send and exit.
 	strategyResults := make(map[string][]database.SearchResult)
 	for range len(m.strategies) {
-		result := <-resultsChan
+		var result strategyResult
+		select {
+		case result = <-resultsChan:
+		case <-ctx.Done():
+			return nil, types.Usage{}, ctx.Err()
+		}
 
 		if result.err != nil {
 			slog.ErrorContext(ctx, "[RAG Manager] Strategy query failed",
