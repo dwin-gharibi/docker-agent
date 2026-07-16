@@ -1335,6 +1335,31 @@ type APIToolConfig struct {
 	OutputSchema map[string]any `json:"output_schema,omitempty"`
 }
 
+// WebhookToolConfig configures the `webhook` toolset: where a notification is
+// delivered and how it authenticates.
+//
+// The destination is deployment configuration, not something the model chooses:
+// every provider's webhook URL is itself a credential (Slack and Mattermost
+// embed a secret path, Discord a token, IFTTT a key, Telegram a bot token), so
+// the agent only supplies the message. URL and Headers are expanded at call
+// time, so secrets are referenced as ${env.VAR} and never stored in the config.
+type WebhookToolConfig struct {
+	// Provider selects the payload shape: slack, discord, ifttt, telegram,
+	// mattermost, rocketchat, googlechat, teams, or generic (default).
+	Provider string `json:"provider,omitempty"`
+
+	// URL is the webhook endpoint. It usually embeds a secret, so prefer
+	// ${env.VAR} over a literal.
+	URL string `json:"url,omitempty"`
+
+	// Headers are sent with the request, for endpoints that authenticate with a
+	// token instead of a secret URL (e.g. Authorization: Bearer ${env.TOKEN}).
+	Headers map[string]string `json:"headers,omitempty"`
+
+	// ChatID is the destination chat for provider: telegram.
+	ChatID string `json:"chat_id,omitempty"`
+}
+
 // PostEditConfig represents a post-edit command configuration
 type PostEditConfig struct {
 	Path string `json:"path"`
@@ -1394,6 +1419,9 @@ type Toolset struct {
 	PostEdit []PostEditConfig `json:"post_edit,omitempty"`
 
 	APIConfig APIToolConfig `json:"api_config"`
+
+	// For the `webhook` tool - destination and credentials.
+	WebhookConfig WebhookToolConfig `json:"webhook_config"`
 
 	// For the `filesystem` tool - VCS integration
 	IgnoreVCS *bool `json:"ignore_vcs,omitempty"`
