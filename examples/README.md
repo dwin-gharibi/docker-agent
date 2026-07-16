@@ -227,6 +227,7 @@ remote MCP endpoints.
 | File | What it shows |
 |------|---------------|
 | [`permissions.yaml`](permissions.yaml) | Top-level `permissions` block with `allow`/`deny` patterns for tool calls. |
+| [`ci_safe_permissions.yaml`](ci_safe_permissions.yaml) | Headless/CI-friendly auto-approval: `permissions` deny/allow lists plus `safer_shell` pinned to the `safe-auto` policy via a `preempt_yolo` hook. |
 | [`llm_judge.yaml`](llm_judge.yaml) | Layered defense: deterministic permissions + an LLM-as-judge `pre_tool_use` hook + user prompts. |
 | [`redact_secrets.yaml`](redact_secrets.yaml) | Single-flag (`redact_secrets: true`) scrubbing of detected secrets in args, chat content, and tool output. |
 | [`redact_secrets_hooks.yaml`](redact_secrets_hooks.yaml) | The same scrubbing wired manually as three hooks. |

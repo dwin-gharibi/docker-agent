@@ -1,0 +1,30 @@
+# Narrower than --yolo: only auto-approve read-only shell commands (via the
+# safer_shell classifier pinned to safe-auto) and MCP reads. See
+# docs/guides/headless/index.md#auto-approval-strategy-in-ci.
+agents:
+  root:
+    model: anthropic/claude-sonnet-4-5
+    description: CI agent restricted to safe, read-only shell and MCP calls
+    instruction: You are a helpful assistant.
+    toolsets:
+      - type: shell
+        safer: true # registers the safer_shell classifier; the hooks entry below is what pins it to safe-auto
+      - type: mcp
+        ref: docker:github-official
+    hooks:
+      pre_tool_use:
+        - matcher: "*"
+          preempt_yolo: true
+          hooks:
+            - type: builtin
+              command: safer_shell
+              args: ["safe-auto"] # without this pin, safer_shell defaults to "strict" and asks for every shell call
+
+permissions:
+  allow:
+    - "read_file"
+    - "mcp:github:get_*"
+    - "mcp:github:list_*"
+  deny:
+    - "shell:cmd=sudo*"
+    - "shell:cmd=rm*"
