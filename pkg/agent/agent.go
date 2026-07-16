@@ -436,12 +436,33 @@ func (a *Agent) collectTools(ctx context.Context) ([]tools.Tool, error) {
 		}
 	}
 
-	for _, toolSet := range a.toolsets {
+	// List every started toolset concurrently — a remote MCP tools/list is a
+	// network round-trip — then merge in configuration order so dedup
+	// ("first toolset in config wins") and warning semantics are unchanged.
+	type listResult struct {
+		tools   []tools.Tool
+		err     error
+		started bool
+	}
+	results := make([]listResult, len(a.toolsets))
+	var wg sync.WaitGroup
+	for i, toolSet := range a.toolsets {
 		if !toolSet.IsStarted() {
+			continue
+		}
+		results[i].started = true
+		wg.Go(func() {
+			results[i].tools, results[i].err = toolSet.Tools(ctx)
+		})
+	}
+	wg.Wait()
+
+	for i, toolSet := range a.toolsets {
+		if !results[i].started {
 			// Toolset not started; skip it
 			continue
 		}
-		ta, err := toolSet.Tools(ctx)
+		ta, err := results[i].tools, results[i].err
 		if err != nil {
 			desc := tools.DescribeToolSet(toolSet)
 			// Route through the once-per-streak guard so a toolset stuck
