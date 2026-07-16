@@ -1670,6 +1670,24 @@ func (r *LocalRuntime) emitToolsProgressively(ctx context.Context, a *agent.Agen
 		return
 	}
 
+	// Start every toolset concurrently so one slow start (e.g. an MCP server
+	// pulling an image) doesn't delay the others; the context is already
+	// non-interactive here so no start can block on a user-driven flow. Each
+	// start keeps its own bounded timeout. Results are then processed in
+	// configuration order so progress events and warnings are deterministic.
+	startErrs := make([]error, totalToolsets)
+	var wg sync.WaitGroup
+	for i, toolset := range toolsets {
+		startable, ok := toolset.(*tools.StartableToolSet)
+		if !ok {
+			continue
+		}
+		wg.Go(func() {
+			startErrs[i] = startToolsetWithTimeout(ctx, startable, r.toolStartTimeout)
+		})
+	}
+	wg.Wait()
+
 	// Load tools from each toolset and emit progress
 	var totalTools int
 	for i, toolset := range toolsets {
@@ -1680,13 +1698,13 @@ func (r *LocalRuntime) emitToolsProgressively(ctx context.Context, a *agent.Agen
 
 		isLast := i == totalToolsets-1
 
-		// Start the toolset if needed, including recovery: a previously-started
+		// Handle the start outcome, including recovery: a previously-started
 		// toolset whose inner connection died (e.g. background invalid_token)
-		// must have its recovery Start() called here so ShouldReportRecoveryFailure
+		// had its recovery Start() called above so ShouldReportRecoveryFailure
 		// can fire the targeted re-auth notice. Start() is a no-op when the
 		// toolset is already healthy, so calling it unconditionally is safe.
 		if startable, ok := toolset.(*tools.StartableToolSet); ok {
-			if err := startToolsetWithTimeout(ctx, startable, r.toolStartTimeout); err != nil {
+			if err := startErrs[i]; err != nil {
 				desc := tools.DescribeToolSet(startable.ToolSet)
 				// A start that outlived its deadline (e.g. an MCP container
 				// stuck behind a wedged Docker daemon) is reported directly:
