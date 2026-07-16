@@ -125,3 +125,87 @@ one of these standard one-liners:
   Docker Agent ships with.
 - **OCI** — Open Container Initiative; the same registry format used
   for Docker images. Docker Agent reuses it for sharing agents.
+
+## Accessibility (site chrome: `css/style.css`, `js/app.js`, `layouts/`)
+
+The github.io layout targets WCAG 2.1 AA in both themes. When touching
+tokens, templates, or JS, keep these conventions:
+
+- **Never de-emphasize text with `opacity`.** It multiplies through to
+  contrast against the background and silently drops already-muted
+  text below AA (this bit both `.sidebar-subheading` and
+  `how-it-works.svg`'s secondary labels). Use a token with a real,
+  computed contrast ratio instead — the muted-but-legible look comes
+  from choosing the right gray, not from fading a legible one.
+- **Recompute contrast for both themes whenever a shared token or rule
+  changes.** Dark is `:root`'s default; light is the `[data-theme="light"]`
+  override block. A value that passes on one background can fail badly
+  on the other — see the token table below.
+- **`--bg-content`** is the content column's background (`.main`):
+  white in light mode, the same `--bg-dark` as the page in dark mode
+  (so dark is unaffected). Header/sidebar/footer chrome stays on
+  `--bg`/`--bg-sidebar` (gray-100 in light) — don't apply `--bg-content`
+  to chrome elements, or the light chrome-vs-content contrast is lost.
+- **`--accent-on-card`** is for brand-blue text sitting on `--bg-card`
+  (elevator labels, ecosystem tile headings, usecase links, glossary
+  terms): blue-300 in dark (blue-400 only reads 4.08:1 on the dark
+  card), blue-500 in light (already 5.0:1 there). Use it instead of
+  the bare `--accent` for any *new* text-on-card component.
+- **Static, theme-unaware assets** (SVGs embedded via `<img>`, so they
+  can't inherit `currentColor` from the page) need one hardcoded
+  palette that clears AA against *both* a near-black dark card
+  (`#1E2129`) and a white light card simultaneously. A neutral gray
+  can't do much better than ~4:1 against both at once (see
+  `assets/how-it-works.svg`'s header comment for the derivation) — if
+  a new diagram needs true per-theme colors, inline the SVG in the
+  Markdown instead so CSS custom properties apply.
+- **Watch CSS specificity when a rule sets `color` on `code`/`pre`
+  elements.** A same-specificity, theme-unconditional rule that comes
+  *later* in the stylesheet silently wins over an earlier
+  `[data-theme="light"]` override in both themes — this is exactly how
+  the old "Rouge / highlighter-rouge overrides" block broke every
+  untyped Chroma syntax token (`.l`, `.sd`, `.cl`, ...) in light mode
+  (1.47:1) despite the correctly-themed rule sitting right above it.
+  Caught by the `pa11y-ci` gate below — when in doubt, let the scanner
+  decide rather than eyeballing the cascade.
+
+### Contrast reference (light / dark, WCAG AA: 4.5:1 normal text, 3:1 large text / non-text UI)
+
+| Token / use | Light | Dark |
+|---|---|---|
+| `--text-muted` on chrome (`--bg`) / content (`--bg-content`) | gray-600, 4.87:1 / 5.88:1 | gray-400, 6.37:1 |
+| Tiny uppercase labels (sidebar/footer/page-nav headings) | gray-700, 7.14:1 / 8.61:1 | gray-100 (unchanged) |
+| `--accent` on `.content a` | blue-500, 5.00:1 (on white) | blue-400 + `--accent-hover` blue, 7.2:1 |
+| `--accent-on-card` | blue-500, 5.0:1 | blue-300, 5.89:1 |
+| Dark syntax comments | n/a | gray-400, 5.59:1 |
+| `kbd` text | `--text-muted` (as above) | gray-300, 6.07:1 |
+| `.copy-btn` text | gray-600, 5.52:1 | gray-400, 5.59:1 |
+| `.pain-x` badge (white text) | `--error-strong` `#DC2626`, 4.83:1 | same |
+
+### Motion
+
+Every animation/transition (fade-in, hover transforms, sidebar slide,
+smooth scroll) is disabled under `@media (prefers-reduced-motion: reduce)`
+in `style.css`; `js/app.js`'s TOC scroll gates `scrollIntoView`'s
+`behavior` on the same query. Animated media (the homepage demo) must
+stay pausable/stoppable (WCAG 2.2.2) — it's a `<video controls>`, not
+an auto-looping GIF with no user control.
+
+### Running the accessibility scan locally
+
+CI (`docs-a11y` workflow) runs [pa11y-ci](https://github.com/pa11y/pa11y-ci)
+against the URLs in `docs/.pa11yci.json` at the `WCAG2AA` standard. To
+reproduce locally:
+
+```bash
+# Serve the site the same way the Dockerfile does
+docker build -t docs docs/
+docker run --rm -p 1313:1313 -v $(pwd)/docs:/src docs
+
+# In another terminal, once it's serving at http://localhost:1313/docker-agent/
+cd docs && npx --yes pa11y-ci@3.1.0 --config .pa11yci.json
+```
+
+`pa11y-ci` only fails the build on HTML_CodeSniffer `error`-level
+results (warnings/notices are informational and don't fail CI), so a
+local failure here is a real regression worth fixing before pushing.
