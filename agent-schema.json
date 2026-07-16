@@ -2357,8 +2357,7 @@
                 "user_prompt",
                 "model_picker",
                 "background_agents",
-                "scheduler"
-                "background_agents",
+                "scheduler",
                 "git"
               ]
             }
