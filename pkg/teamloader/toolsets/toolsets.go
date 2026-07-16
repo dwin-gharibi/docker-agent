@@ -122,8 +122,8 @@ func DefaultToolsetCreators() map[string]teamloader.ToolsetCreator {
 		"rag": func(ctx context.Context, toolset latest.Toolset, parentDir string, runConfig *config.RuntimeConfig, _ string) (tools.ToolSet, error) {
 			return rag.CreateToolSet(ctx, toolset, parentDir, runConfig)
 		},
-		"webhook": func(_ context.Context, _ latest.Toolset, _ string, runConfig *config.RuntimeConfig, _ string) (tools.ToolSet, error) {
-			return webhook.CreateToolSet(runConfig)
+		"webhook": func(_ context.Context, toolset latest.Toolset, _ string, runConfig *config.RuntimeConfig, _ string) (tools.ToolSet, error) {
+			return webhook.CreateToolSet(toolset, runConfig)
 		},
 	}
 }
