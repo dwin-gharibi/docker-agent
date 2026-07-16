@@ -2,6 +2,7 @@ package anthropic
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -69,4 +70,80 @@ func TestDeferredToolsAreReferencedAtTheirLoadPoint(t *testing.T) {
 	betaJSON, err := json.Marshal(beta)
 	require.NoError(t, err)
 	assert.Contains(t, string(betaJSON), `"tool_name":"search","type":"tool_reference"`)
+}
+
+func TestDeferredToolsKeepSingleMessageCacheBreakpoint(t *testing.T) {
+	messages := []chat.Message{
+		{Role: chat.MessageRoleUser, Content: "first"},
+		{Role: chat.MessageRoleAssistant, Content: "second"},
+		{Role: chat.MessageRoleUser, Content: "third"},
+	}
+	deferredTools := []tools.Tool{{Name: "search", Parameters: map[string]any{"type": "object"}, Deferred: true}}
+
+	countBreakpoints := func(v any) int {
+		data, err := json.Marshal(v)
+		require.NoError(t, err)
+		return strings.Count(string(data), `"cache_control"`)
+	}
+
+	standard, err := testClient().convertMessagesWithDeferred(t.Context(), messages, deferredTools)
+	require.NoError(t, err)
+	assert.Equal(t, 1, countBreakpoints(standard))
+
+	beta, err := testClient().convertBetaMessagesWithDeferred(t.Context(), messages, deferredTools)
+	require.NoError(t, err)
+	assert.Equal(t, 1, countBreakpoints(beta))
+
+	// Without deferred tools the tool list carries no breakpoint, so two
+	// message breakpoints remain in use.
+	standard, err = testClient().convertMessagesWithDeferred(t.Context(), messages, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 2, countBreakpoints(standard))
+
+	beta, err = testClient().convertBetaMessagesWithDeferred(t.Context(), messages, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 2, countBreakpoints(beta))
+}
+
+// Anthropic rejects requests with more than 4 cache_control blocks. Build the
+// worst-case request (2 system breakpoints from the session, deferred tools,
+// long conversation) and count breakpoints across system + tools + messages.
+func TestRequestStaysWithinCacheBreakpointLimit(t *testing.T) {
+	messages := []chat.Message{
+		{Role: chat.MessageRoleSystem, Content: "invariant instructions", CacheControl: true},
+		{Role: chat.MessageRoleSystem, Content: "dynamic context", CacheControl: true},
+		{Role: chat.MessageRoleUser, Content: "first"},
+		{Role: chat.MessageRoleAssistant, Content: "second"},
+		{Role: chat.MessageRoleUser, Content: "third"},
+	}
+
+	countBreakpoints := func(parts ...any) int {
+		total := 0
+		for _, part := range parts {
+			data, err := json.Marshal(part)
+			require.NoError(t, err)
+			total += strings.Count(string(data), `"cache_control"`)
+		}
+		return total
+	}
+
+	for _, requestTools := range [][]tools.Tool{
+		nil,
+		{
+			{Name: "read", Parameters: map[string]any{"type": "object"}},
+			{Name: "search", Parameters: map[string]any{"type": "object"}, Deferred: true},
+		},
+	} {
+		convertedTools, err := convertTools(requestTools)
+		require.NoError(t, err)
+		converted, err := testClient().convertMessagesWithDeferred(t.Context(), messages, requestTools)
+		require.NoError(t, err)
+		assert.LessOrEqual(t, countBreakpoints(extractSystemBlocks(messages), convertedTools, converted), 4)
+
+		betaTools, err := convertBetaTools(requestTools)
+		require.NoError(t, err)
+		betaConverted, err := testClient().convertBetaMessagesWithDeferred(t.Context(), messages, requestTools)
+		require.NoError(t, err)
+		assert.LessOrEqual(t, countBreakpoints(extractBetaSystemBlocks(messages), betaTools, betaConverted), 4)
+	}
 }

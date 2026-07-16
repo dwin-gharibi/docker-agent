@@ -137,8 +137,14 @@ func (c *Client) convertBetaMessagesWithDeferred(ctx context.Context, messages [
 		}
 	}
 
-	// Add ephemeral cache to last 2 messages' last content block
-	applyBetaMessageCacheControl(betaMessages)
+	// Anthropic allows at most 4 cache_control breakpoints per request.
+	// Deferred tools consume one on the tool list, so keep a single message
+	// breakpoint in that case.
+	breakpoints := 2
+	if containsDeferredTool(requestTools) {
+		breakpoints = 1
+	}
+	applyBetaMessageCacheControl(betaMessages, breakpoints)
 
 	return betaMessages, nil
 }
@@ -380,9 +386,9 @@ func convertBetaTools(t []tools.Tool) ([]anthropic.BetaToolUnionParam, error) {
 }
 
 // applyBetaMessageCacheControl adds ephemeral cache control to the last content block
-// of the last 2 messages for prompt caching.
-func applyBetaMessageCacheControl(messages []anthropic.BetaMessageParam) {
-	for i := len(messages) - 1; i >= 0 && i >= len(messages)-2; i-- {
+// of the last `breakpoints` messages for prompt caching.
+func applyBetaMessageCacheControl(messages []anthropic.BetaMessageParam, breakpoints int) {
+	for i := len(messages) - 1; i >= 0 && i >= len(messages)-breakpoints; i-- {
 		msg := &messages[i]
 		if len(msg.Content) == 0 {
 			continue
