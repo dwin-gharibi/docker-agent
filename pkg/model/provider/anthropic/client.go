@@ -622,41 +622,6 @@ func (c *Client) convertUserMultiContent(ctx context.Context, parts []chat.Messa
 	return contentBlocks, nil
 }
 
-// extractSystemBlocks converts any system-role messages into Anthropic system text blocks
-// to be set on the top-level MessageNewParams.System field.
-func extractSystemBlocks(messages []chat.Message) []anthropic.TextBlockParam {
-	var systemBlocks []anthropic.TextBlockParam
-	marked := 0
-	for i := range messages {
-		msg := &messages[i]
-		if msg.Role != chat.MessageRoleSystem {
-			continue
-		}
-
-		if len(msg.MultiContent) > 0 {
-			for _, part := range msg.MultiContent {
-				if part.Type == chat.MessagePartTypeText {
-					if txt := strings.TrimSpace(part.Text); txt != "" {
-						systemBlocks = append(systemBlocks, anthropic.TextBlockParam{Text: txt})
-					}
-				}
-			}
-		} else if txt := strings.TrimSpace(msg.Content); txt != "" {
-			// Trim system-message content: YAML literal blocks (instruction: |) always
-			// append a trailing newline, and we don't want that in API payloads.
-			systemBlocks = append(systemBlocks, anthropic.TextBlockParam{
-				Text: txt,
-			})
-		}
-
-		if msg.CacheControl && len(systemBlocks) > 0 {
-			marked = markSystemBlockCacheControl(&systemBlocks[len(systemBlocks)-1], marked)
-		}
-	}
-
-	return systemBlocks
-}
-
 func (c *Client) supportsDeferredTools() bool {
 	if enabled, ok := providerutil.GetProviderOptBool(c.ModelConfig.ProviderOpts, "supports_deferred_tools"); ok {
 		return enabled

@@ -322,26 +322,6 @@ func (c *Client) convertBetaUserMultiContent(ctx context.Context, parts []chat.M
 	return contentBlocks, nil
 }
 
-// extractBetaSystemBlocks extracts system messages for Beta API format
-func extractBetaSystemBlocks(messages []chat.Message) []anthropic.BetaTextBlockParam {
-	regularBlocks := extractSystemBlocks(messages)
-
-	betaBlocks := make([]anthropic.BetaTextBlockParam, len(regularBlocks))
-	for i, block := range regularBlocks {
-		betaBlocks[i] = anthropic.BetaTextBlockParam{Text: block.Text}
-
-		// Copy over cache control from regular blocks (already set on first 2)
-		if block.CacheControl.Type != "" {
-			betaBlocks[i].CacheControl = anthropic.BetaCacheControlEphemeralParam{
-				Type: block.CacheControl.Type,
-				TTL:  anthropic.BetaCacheControlEphemeralTTL(block.CacheControl.TTL),
-			}
-		}
-	}
-
-	return betaBlocks
-}
-
 // convertBetaTools converts tools to Beta API format
 func convertBetaTools(t []tools.Tool) ([]anthropic.BetaToolUnionParam, error) {
 	hasDeferredTools := containsDeferredTool(t)

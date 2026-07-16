@@ -1,8 +1,11 @@
 package anthropic
 
 import (
+	"strings"
+
 	"github.com/anthropics/anthropic-sdk-go"
 
+	"github.com/docker/docker-agent/pkg/chat"
 	"github.com/docker/docker-agent/pkg/tools"
 )
 
@@ -39,6 +42,61 @@ func markSystemBlockCacheControl(block *anthropic.TextBlockParam, marked int) in
 	}
 	block.CacheControl = anthropic.NewCacheControlEphemeralParam()
 	return marked + 1
+}
+
+// extractSystemBlocks converts any system-role messages into Anthropic system text blocks
+// to be set on the top-level MessageNewParams.System field.
+func extractSystemBlocks(messages []chat.Message) []anthropic.TextBlockParam {
+	var systemBlocks []anthropic.TextBlockParam
+	marked := 0
+	for i := range messages {
+		msg := &messages[i]
+		if msg.Role != chat.MessageRoleSystem {
+			continue
+		}
+
+		if len(msg.MultiContent) > 0 {
+			for _, part := range msg.MultiContent {
+				if part.Type == chat.MessagePartTypeText {
+					if txt := strings.TrimSpace(part.Text); txt != "" {
+						systemBlocks = append(systemBlocks, anthropic.TextBlockParam{Text: txt})
+					}
+				}
+			}
+		} else if txt := strings.TrimSpace(msg.Content); txt != "" {
+			// Trim system-message content: YAML literal blocks (instruction: |) always
+			// append a trailing newline, and we don't want that in API payloads.
+			systemBlocks = append(systemBlocks, anthropic.TextBlockParam{
+				Text: txt,
+			})
+		}
+
+		if msg.CacheControl && len(systemBlocks) > 0 {
+			marked = markSystemBlockCacheControl(&systemBlocks[len(systemBlocks)-1], marked)
+		}
+	}
+
+	return systemBlocks
+}
+
+// extractBetaSystemBlocks extracts system messages for Beta API format
+func extractBetaSystemBlocks(messages []chat.Message) []anthropic.BetaTextBlockParam {
+	regularBlocks := extractSystemBlocks(messages)
+
+	betaBlocks := make([]anthropic.BetaTextBlockParam, len(regularBlocks))
+	for i, block := range regularBlocks {
+		betaBlocks[i] = anthropic.BetaTextBlockParam{Text: block.Text}
+
+		// Copy over cache control from regular blocks (already set on first 2)
+		if block.CacheControl.Type != "" {
+			betaBlocks[i].CacheControl = anthropic.BetaCacheControlEphemeralParam{
+				Type: block.CacheControl.Type,
+				TTL:  anthropic.BetaCacheControlEphemeralTTL(block.CacheControl.TTL),
+			}
+		}
+	}
+
+	return betaBlocks
 }
 
 // applyMessageCacheControl adds ephemeral cache control to the last content block
