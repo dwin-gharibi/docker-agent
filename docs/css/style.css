@@ -1428,7 +1428,8 @@ details.sidebar-section[open] > summary.sidebar-heading::after {
   .glossary dd { margin-bottom: 8px; }
 }
 
-/* ===== Demo GIF ===== */
+/* ===== Demo media (video, with a GIF fallback for browsers that
+ * don't support <video>) ===== */
 .demo-container {
   margin: 32px 0;
   border-radius: var(--radius-lg);
@@ -1436,7 +1437,8 @@ details.sidebar-section[open] > summary.sidebar-heading::after {
   border: 1px solid var(--border);
   box-shadow: var(--shadow-md);
 }
-.demo-container img {
+.demo-container img,
+.demo-container video {
   width: 100%;
   height: auto;
   display: block;

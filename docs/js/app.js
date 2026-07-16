@@ -363,6 +363,20 @@ function restoreSidebarScroll() {
   });
 }
 
+// ---------- Demo video runtime fallback ----------
+// The nested <img> inside <video> is native fallback CONTENT: browsers
+// only render it when they don't recognize the <video> element at all,
+// never on a decode/network failure of a supported element. Catch that
+// case explicitly so a broken/blocked demo.mp4 still shows the GIF.
+function handleVideoFallback() {
+  document.querySelectorAll('.demo-container video').forEach(video => {
+    video.addEventListener('error', () => {
+      const fallback = video.querySelector('img');
+      if (fallback) video.replaceWith(fallback);
+    });
+  });
+}
+
 // ---------- Bind buttons (no inline handlers) ----------
 function bindButtons() {
   document.getElementById('theme-toggle')?.addEventListener('click', toggleTheme);
@@ -380,3 +394,4 @@ buildSearchIndex();
 buildTOC();
 addCopyButtons();
 bindButtons();
+handleVideoFallback();
