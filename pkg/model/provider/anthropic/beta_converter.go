@@ -378,21 +378,6 @@ func convertBetaTools(t []tools.Tool) ([]anthropic.BetaToolUnionParam, error) {
 	return betaTools, nil
 }
 
-// applyBetaMessageCacheControl adds ephemeral cache control to the last content block
-// of the last `breakpoints` messages for prompt caching.
-func applyBetaMessageCacheControl(messages []anthropic.BetaMessageParam, breakpoints int) {
-	for i := len(messages) - 1; i >= 0 && i >= len(messages)-breakpoints; i-- {
-		content := messages[i].Content
-		if len(content) == 0 {
-			continue
-		}
-		// nil for block kinds without cache control (e.g. thinking blocks).
-		if cc := content[len(content)-1].GetCacheControl(); cc != nil {
-			*cc = anthropic.NewBetaCacheControlEphemeralParam()
-		}
-	}
-}
-
 // stdBlocksToBeta converts standard Anthropic SDK content blocks to their Beta
 // API equivalents. The beta path (convertBetaUserMultiContent) requires
 // BetaContentBlockParamUnion, but convertDocument produces the standard type.
