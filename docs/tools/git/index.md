@@ -3,7 +3,7 @@ title: "Git Tool"
 description: "Read-only inspection of the working git repository."
 keywords: docker agent, ai agents, tools, toolsets, git tool
 linkTitle: "Git"
-weight: 130
+weight: 125
 canonical: https://docs.docker.com/ai/docker-agent/tools/git/
 ---
 
@@ -26,6 +26,20 @@ toolsets:
 ```
 
 No configuration options. The repository is opened at the agent's working directory; a subdirectory still resolves to the repository root.
+
+> [!WARNING]
+> **The repository is discovered by walking up parent directories.** If the working
+> directory is not itself a repository but an ancestor is (for example a
+> home directory tracked as dotfiles), the toolset resolves to that ancestor and
+> `git_show` / `git_blame` can expose its full history and file contents. The
+> filesystem toolset's allow/deny lists do **not** apply here. Only enable this
+> toolset where the surrounding repository is safe to read.
+
+> [!NOTE]
+> **Performance.** go-git is pure Go, which costs speed on large repositories:
+> `git_status` rehashes the whole worktree, and `git_blame` scales with history
+> depth times file size — its 400-line output cap is applied *after* the full
+> computation, so it does not make blaming a large file cheaper.
 
 ## Tools
 
