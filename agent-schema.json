@@ -2106,6 +2106,10 @@
           "$ref": "#/definitions/ApiConfig",
           "description": "API tool configuration"
         },
+        "webhook_config": {
+          "$ref": "#/definitions/WebhookConfig",
+          "description": "Webhook tool configuration"
+        },
         "rag_config": {
           "$ref": "#/definitions/RAGConfig",
           "description": "RAG configuration for type: rag toolsets"
@@ -2359,8 +2363,7 @@
                 "model_picker",
                 "background_agents",
                 "scheduler",
-                "git",
-                "webhook"
+                "git"
               ]
             }
           }
@@ -2393,6 +2396,22 @@
             {
               "required": [
                 "api_config"
+              ]
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "properties": {
+                "type": {
+                  "const": "webhook"
+                }
+              }
+            },
+            {
+              "required": [
+                "webhook_config"
               ]
             }
           ]
@@ -2563,6 +2582,42 @@
         "cmd"
       ],
       "additionalProperties": false
+    },
+    "WebhookConfig": {
+      "type": "object",
+      "description": "Webhook tool configuration: delivery destination and credentials",
+      "properties": {
+        "provider": {
+          "type": "string",
+          "description": "Payload shape for the target service",
+          "enum": [
+            "slack",
+            "discord",
+            "ifttt",
+            "telegram",
+            "mattermost",
+            "rocketchat",
+            "googlechat",
+            "teams",
+            "generic"
+          ]
+        },
+        "url": {
+          "type": "string",
+          "description": "Webhook endpoint URL. Usually embeds a secret, so prefer ${env.VAR}"
+        },
+        "headers": {
+          "type": "object",
+          "description": "HTTP headers sent with the request; use ${env.VAR} for tokens",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "chat_id": {
+          "type": "string",
+          "description": "Destination chat id (provider: telegram)"
+        }
+      }
     },
     "ApiConfig": {
       "type": "object",
