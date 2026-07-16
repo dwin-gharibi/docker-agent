@@ -710,12 +710,18 @@ details.sidebar-section[open] > summary.sidebar-heading::after {
 }
 
 /* Rouge / highlighter-rouge overrides */
+/* Only background/text-shadow here: text color is already themed
+ * above (this used to also set color: var(--gray-200), which had the
+ * same specificity as and came after the [data-theme="light"] override,
+ * so it silently won in both themes — breaking any syntax token
+ * without its own explicit color, e.g. Chroma's untyped ".l"/".sd"/
+ * ".cl" fallback tokens, at 1.47:1 in light mode. Found via the PR 9
+ * pa11y-ci gate. */
 .content pre[class*="language-"],
 .content pre code[class*="language-"],
 .content .highlighter-rouge pre.highlight,
 .content .highlighter-rouge pre.highlight code {
   background: var(--bg-code-block);
-  color: var(--gray-200);
   text-shadow: none;
 }
 

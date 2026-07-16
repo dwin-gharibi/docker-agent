@@ -1,0 +1,16 @@
+{
+  "defaults": {
+    "standard": "WCAG2AA",
+    "timeout": 30000,
+    "wait": 500,
+    "chromeLaunchConfig": {
+      "args": ["--no-sandbox", "--disable-dev-shm-usage"]
+    }
+  },
+  "urls": [
+    "http://127.0.0.1:1313/docker-agent/",
+    "http://127.0.0.1:1313/docker-agent/configuration/sandbox/",
+    "http://127.0.0.1:1313/docker-agent/getting-started/quickstart/",
+    "http://127.0.0.1:1313/docker-agent/404.html"
+  ]
+}
