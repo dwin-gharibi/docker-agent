@@ -48,6 +48,8 @@ import (
 // cobra's optional-value flags the two are indistinguishable by design.
 const worktreeAutoName = "auto"
 
+var projectDefaultAgentFiles = []string{"docker-agent.yaml", "docker-agent.yml"}
+
 type runExecFlags struct {
 	agentName         string
 	autoApprove       bool
@@ -327,10 +329,7 @@ func (f *runExecFlags) runOrExec(ctx context.Context, out *cli.Printer, args []s
 		}
 	}()
 
-	var agentFileName string
-	if len(args) > 0 {
-		agentFileName = args[0]
-	}
+	agentFileName := f.resolveRunAgentFileName(args)
 
 	// Apply global user settings first (lowest priority)
 	// User settings only apply if the flag wasn't explicitly set by the user
@@ -528,6 +527,32 @@ func (f *runExecFlags) runOrExec(ctx context.Context, out *cli.Printer, args []s
 		f.cleanupWorktree(context.WithoutCancel(ctx), out, createdWorktree)
 	}
 	return nil
+}
+
+func (f *runExecFlags) resolveRunAgentFileName(args []string) string {
+	if len(args) > 0 {
+		return args[0]
+	}
+	if f.remoteAddress != "" {
+		return ""
+	}
+	if agentFileName, ok := discoverProjectDefaultAgentFile(); ok {
+		return agentFileName
+	}
+	return ""
+}
+
+func discoverProjectDefaultAgentFile() (string, bool) {
+	for _, name := range projectDefaultAgentFiles {
+		info, err := os.Stat(name)
+		if err == nil && !info.IsDir() {
+			return name, true
+		}
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return name, true
+		}
+	}
+	return "", false
 }
 
 // loadTeamInWorktree creates the requested worktree (if any) and then loads
