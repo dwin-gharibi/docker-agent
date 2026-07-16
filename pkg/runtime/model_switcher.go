@@ -7,9 +7,11 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/docker/docker-agent/pkg/agent"
+	"github.com/docker/docker-agent/pkg/concurrent"
 	"github.com/docker/docker-agent/pkg/config/latest"
 	"github.com/docker/docker-agent/pkg/effort"
 	"github.com/docker/docker-agent/pkg/environment"
@@ -794,12 +796,28 @@ func (r *LocalRuntime) getAvailableProviders(ctx context.Context) map[string]boo
 		return available
 	}
 
-	// Check credentials for each alias provider
-	for name, alias := range provider.EachAlias() {
-		if alias.TokenEnvVar == "" {
-			continue
+	aliases := provider.EachAlias()
+	credentialNames := []string{
+		"OPENAI_API_KEY",
+		"ANTHROPIC_API_KEY",
+		"GOOGLE_API_KEY",
+		"AWS_ACCESS_KEY_ID",
+		"AWS_PROFILE",
+		"AWS_DEFAULT_PROFILE",
+		"AWS_WEB_IDENTITY_TOKEN_FILE",
+		"AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+		"AWS_ROLE_ARN",
+	}
+	for _, alias := range aliases {
+		if alias.TokenEnvVar != "" {
+			credentialNames = append(credentialNames, alias.TokenEnvVar)
 		}
-		if key, _ := env.Get(ctx, alias.TokenEnvVar); key == "" {
+	}
+	credentials := lookupEnvironmentValues(ctx, env, credentialNames)
+
+	// Check credentials for each alias provider.
+	for name, alias := range aliases {
+		if credentials[alias.TokenEnvVar] == "" {
 			continue
 		}
 		// A templated base URL (e.g. Cloudflare's account/gateway-scoped
@@ -811,14 +829,14 @@ func (r *LocalRuntime) getAvailableProviders(ctx context.Context) map[string]boo
 		available[name] = true
 	}
 
-	// Check core providers with well-known env vars
-	if key, _ := env.Get(ctx, "OPENAI_API_KEY"); key != "" {
+	// Check core providers with well-known env vars.
+	if credentials["OPENAI_API_KEY"] != "" {
 		available["openai"] = true
 	}
-	if key, _ := env.Get(ctx, "ANTHROPIC_API_KEY"); key != "" {
+	if credentials["ANTHROPIC_API_KEY"] != "" {
 		available["anthropic"] = true
 	}
-	if key, _ := env.Get(ctx, "GOOGLE_API_KEY"); key != "" {
+	if credentials["GOOGLE_API_KEY"] != "" {
 		available["google"] = true
 	}
 
@@ -858,13 +876,41 @@ func (r *LocalRuntime) getAvailableProviders(ctx context.Context) map[string]boo
 		"AWS_ROLE_ARN",
 	}
 	for _, indicator := range awsCredentialIndicators {
-		if val, _ := env.Get(ctx, indicator); val != "" {
+		if credentials[indicator] != "" {
 			available["amazon-bedrock"] = true
 			break
 		}
 	}
 
 	return available
+}
+
+func lookupEnvironmentValues(ctx context.Context, env environment.Provider, names []string) map[string]string {
+	values := concurrent.NewMap[string, string]()
+	unique := make(map[string]struct{}, len(names))
+	var wg sync.WaitGroup
+	for _, name := range names {
+		if name == "" {
+			continue
+		}
+		if _, ok := unique[name]; ok {
+			continue
+		}
+		unique[name] = struct{}{}
+		wg.Go(func() {
+			if value, _ := env.Get(ctx, name); value != "" {
+				values.Store(name, value)
+			}
+		})
+	}
+	wg.Wait()
+
+	result := make(map[string]string, values.Length())
+	values.Range(func(name, value string) bool {
+		result[name] = value
+		return true
+	})
+	return result
 }
 
 // modelHasAnthropicAuth reports whether the model (or its referenced
