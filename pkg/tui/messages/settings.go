@@ -108,6 +108,7 @@ type Preferences struct {
 	SplitDiffView      bool
 	ExpandThinking     bool
 	HideToolResults    bool
+	RenderImages       bool
 	YOLO               bool
 	RestoreTabs        bool
 	Snapshot           bool

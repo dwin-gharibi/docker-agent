@@ -51,6 +51,9 @@ type Settings struct {
 	// SplitDiffView enables side-by-side split diff rendering for file edits.
 	// Defaults to true when not set.
 	SplitDiffView *bool `yaml:"split_diff_view,omitempty"`
+	// RenderImages displays images returned by tools in supported terminals.
+	// Defaults to true when not set.
+	RenderImages *bool `yaml:"render_images,omitempty"`
 	// Theme is the default theme reference (e.g., "dark", "light")
 	// Theme files are loaded from ~/.cagent/themes/<theme>.yaml
 	// The special value "auto" follows the terminal's light/dark background,
@@ -203,6 +206,14 @@ func (s *Settings) GetSplitDiffView() bool {
 		return true
 	}
 	return *s.SplitDiffView
+}
+
+// GetRenderImages returns whether tool result images are displayed, defaulting to true.
+func (s *Settings) GetRenderImages() bool {
+	if s == nil || s.RenderImages == nil {
+		return true
+	}
+	return *s.RenderImages
 }
 
 // GetRestoreTabs returns whether previously open tabs are restored on

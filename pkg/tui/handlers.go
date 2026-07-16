@@ -28,6 +28,7 @@ import (
 	"github.com/docker/docker-agent/pkg/tui/components/tool/editfile"
 	"github.com/docker/docker-agent/pkg/tui/core"
 	"github.com/docker/docker-agent/pkg/tui/dialog"
+	tuiimage "github.com/docker/docker-agent/pkg/tui/image"
 	"github.com/docker/docker-agent/pkg/tui/messages"
 	"github.com/docker/docker-agent/pkg/tui/service"
 	"github.com/docker/docker-agent/pkg/tui/styles"
@@ -881,6 +882,7 @@ func (m *appModel) handleOpenSettingsDialog() (tea.Model, tea.Cmd) {
 		SplitDiffView:      settings.GetSplitDiffView(),
 		ExpandThinking:     settings.GetExpandThinking(),
 		HideToolResults:    settings.HideToolResults,
+		RenderImages:       settings.GetRenderImages(),
 		YOLO:               settings.YOLO,
 		RestoreTabs:        settings.GetRestoreTabs(),
 		Snapshot:           settings.SnapshotsEnabled(),
@@ -912,6 +914,10 @@ func (m *appModel) handleApplySettings(msg messages.ApplySettingsMsg) (tea.Model
 	}
 	m.sessionState.SetExpandThinking(preferences.ExpandThinking)
 	m.sessionState.SetHideToolResults(preferences.HideToolResults)
+	if m.imageWriter != nil {
+		m.imageWriter.SetEnabled(preferences.RenderImages)
+		tuiimage.SetRenderingEnabled(m.imageWriter.RenderingEnabled())
+	}
 	m.tabBar.SetMaxTitleLength(preferences.TabTitleMaxLength)
 	cmd = tea.Batch(cmd, m.updateChatCmd(messages.SessionToggleChangedMsg{}), m.resizeAll())
 
@@ -973,6 +979,7 @@ func savePreferences(p messages.Preferences) error {
 		s.CacheStablePrompts = boolPreference(p.CacheStablePrompts, false)
 		s.WarnOnCacheMiss = boolPreference(p.WarnOnCacheMiss, false)
 		s.HideToolResults = p.HideToolResults
+		s.RenderImages = boolPreference(p.RenderImages, true)
 		s.YOLO = p.YOLO
 		s.Lean = p.Lean
 		s.Sound = p.Sound
@@ -1023,7 +1030,7 @@ func saveSettingsToUserConfig(layout messages.LayoutSettings, mode messages.Send
 	return savePreferences(messages.Preferences{
 		Layout: layout, SendMode: mode, SplitDiffView: settings.GetSplitDiffView(),
 		ExpandThinking: settings.GetExpandThinking(), HideToolResults: settings.HideToolResults,
-		YOLO: settings.YOLO, RestoreTabs: settings.GetRestoreTabs(), Snapshot: settings.SnapshotsEnabled(),
+		RenderImages: settings.GetRenderImages(), YOLO: settings.YOLO, RestoreTabs: settings.GetRestoreTabs(), Snapshot: settings.SnapshotsEnabled(),
 		CacheStablePrompts: settings.CacheStablePromptsEnabled(),
 		WarnOnCacheMiss:    settings.CacheMissWarningsEnabled(),
 		Lean:               settings.Lean, TabTitleMaxLength: settings.GetTabTitleMaxLength(),

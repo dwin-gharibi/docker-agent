@@ -36,6 +36,7 @@ import (
 	"github.com/docker/docker-agent/pkg/telemetry"
 	"github.com/docker/docker-agent/pkg/tour"
 	"github.com/docker/docker-agent/pkg/tui"
+	tuiimage "github.com/docker/docker-agent/pkg/tui/image"
 	"github.com/docker/docker-agent/pkg/tui/recorder"
 	"github.com/docker/docker-agent/pkg/tui/styles"
 	"github.com/docker/docker-agent/pkg/userconfig"
@@ -1030,6 +1031,7 @@ func (f *runExecFlags) runLeanTUI(ctx context.Context, rt runtime.Runtime, sess 
 	if wd == "" {
 		wd, _ = os.Getwd()
 	}
+	renderImages := userconfig.Get().GetRenderImages() && tuiimage.SupportsKittyGraphics(os.Stdin, os.Stdout)
 	return leantui.Run(ctx, leantui.Config{
 		App:                    a,
 		WorkingDir:             wd,
@@ -1039,6 +1041,7 @@ func (f *runExecFlags) runLeanTUI(ctx context.Context, rt runtime.Runtime, sess 
 		QueuedMessages:         queued,
 		AppName:                f.appName,
 		DisabledCommands:       f.disabledCommands,
+		RenderImages:           &renderImages,
 	})
 }
 

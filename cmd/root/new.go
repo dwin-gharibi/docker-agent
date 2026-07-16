@@ -20,6 +20,7 @@ import (
 	tuiimage "github.com/docker/docker-agent/pkg/tui/image"
 	tuiinput "github.com/docker/docker-agent/pkg/tui/input"
 	"github.com/docker/docker-agent/pkg/tui/styles"
+	"github.com/docker/docker-agent/pkg/userconfig"
 )
 
 type newFlags struct {
@@ -134,6 +135,8 @@ func runTUIWrapped(ctx context.Context, rt runtime.Runtime, sess *session.Sessio
 	}
 	imageWriter := tuiimage.NewWriter(os.Stdout)
 	imageWriter.SetSupported(tuiimage.SupportsKittyGraphics(os.Stdin, os.Stdout))
+	imageWriter.SetEnabled(userconfig.Get().GetRenderImages())
+	tuiimage.SetRenderingEnabled(imageWriter.RenderingEnabled())
 	tuiOpts = append(tuiOpts, tui.WithImageWriter(imageWriter))
 	model := tui.New(ctx, spawner, a, wd, cleanup, tuiOpts...)
 	if wrap != nil {

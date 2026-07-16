@@ -644,6 +644,20 @@ func TestConfig_Settings_Empty(t *testing.T) {
 	assert.False(t, settings.HideToolResults)
 	assert.False(t, settings.Lean)
 	assert.False(t, settings.GetExpandThinking())
+	assert.True(t, settings.GetRenderImages())
+}
+
+func TestConfig_Settings_RenderImages(t *testing.T) {
+	t.Parallel()
+
+	configFile := filepath.Join(t.TempDir(), "config.yaml")
+	renderImages := false
+	config := &Config{Settings: &Settings{RenderImages: &renderImages}}
+	require.NoError(t, config.saveTo(configFile))
+
+	loaded, err := loadFrom(configFile, "")
+	require.NoError(t, err)
+	assert.False(t, loaded.Settings.GetRenderImages())
 }
 
 func TestConfig_Settings_ExpandThinking(t *testing.T) {
@@ -678,6 +692,7 @@ func TestConfig_Settings_GetSettingsNil(t *testing.T) {
 	assert.NotNil(t, settings)
 	assert.False(t, settings.HideToolResults)
 	assert.False(t, settings.GetExpandThinking())
+	assert.True(t, settings.GetRenderImages())
 }
 
 func TestConfig_AliasWithHideToolResults(t *testing.T) {
