@@ -156,6 +156,17 @@ tokens, templates, or JS, keep these conventions:
   there, but a real 2.55:1 fail in dark. Fixed by excluding button
   links from the prose-link rule (`.content a:not(.btn)`) rather than
   trying to out-specificity it per button.
+- **The same shadowing bug recurred for `:hover`.** `.content
+  a:not(.btn):hover` has higher specificity than component link rules
+  like `.preview-banner a` and `.usecase a`, so it — not the
+  component's own color — decided the hover color for card links too.
+  It also hardcoded a single blue (`--docker-blue-light`, blue-400)
+  for both themes, which reads only 4.08:1 on a dark `--bg-card` and
+  3.94:1 on white — both AA fails, while the default (non-hover)
+  states passed. Fixed with a dedicated `--link-hover` token, themed
+  like the other accent-* tokens (blue-200 in dark, blue-600 in
+  light) and verified against `--bg-card` specifically, since it's
+  lighter than `--bg-content` in dark and so the harder case to pass.
 - **Inline `style="...var(--accent)..."` on a content page** (e.g.
   `404.md`'s "Back to Docs" button) should reach for `--accent-strong`
   (a fixed `--blue-500`, identical in both themes, 5.0:1 for white
@@ -198,6 +209,15 @@ tokens, templates, or JS, keep these conventions:
   (1.47:1) despite the correctly-themed rule sitting right above it.
   Caught by the `pa11y-ci` gate below — when in doubt, let the scanner
   decide rather than eyeballing the cascade.
+- **Grid/flex items default to `min-width: auto`**, which sizes them to
+  their content's intrinsic (min-content) width — long unbreakable
+  content (e.g. code in `.compare-side`) then refuses to shrink with
+  its column, forcing page-level horizontal scroll at narrow viewports
+  (WCAG 1.4.10 reflow) even though the code block itself has its own
+  `overflow-x: auto`. `min-width: 0` on the grid/flex item fixes this;
+  scanners like `pa11y-ci` can't catch it since it only shows up as an
+  actual viewport/zoom measurement, not a static HTML/CSS violation —
+  verify with a real narrow-viewport check (see the checklist below).
 
 ### Contrast reference (light / dark, WCAG AA: 4.5:1 normal text, 3:1 large text / non-text UI)
 
@@ -206,6 +226,7 @@ tokens, templates, or JS, keep these conventions:
 | `--text-muted` on chrome (`--bg`) / content (`--bg-content`) | gray-600, 4.87:1 / 5.88:1 | gray-400, 6.37:1 |
 | Tiny uppercase labels (sidebar/footer/page-nav headings) | gray-700, 7.14:1 / 8.61:1 | gray-100 (unchanged) |
 | `--accent` on `.content a` | blue-500, 5.00:1 (on white) | blue-400 + `--accent-hover` blue, 7.2:1 |
+| `--link-hover` on `.content a:not(.btn):hover` (prose & card links) | blue-600, 6.76:1 (white content and white cards) | blue-200, 11.78:1 (page) / 10.34:1 (`--bg-card`, the harder case) — was `--docker-blue-light` blue-400, 3.94:1 / 4.08:1, both AA fails |
 | `--accent-on-card` | blue-500, 5.0:1 | blue-300, 5.89:1 |
 | Dark syntax comments | n/a | gray-400, 5.59:1 |
 | `kbd` text | `--text-muted` (as above) | gray-300, 6.07:1 |
@@ -232,11 +253,16 @@ media's true aspect ratio (currently 1200×960, 5:4 — `demo.mp4` is
 that rule preserves whatever ratio the attributes declare. The nested
 `<img src="demo.gif">` inside `<video>` is HTML fallback *content*:
 browsers only render it when they don't recognize the `<video>`
-element at all, not on a network/decode failure of a supported one.
-`js/app.js`'s `handleVideoFallback()` covers that gap by swapping in
-the GIF on the video's `error` event — covering the common "file
-failed to load" case, though not every conceivable partial-decode
-failure a browser could report differently.
+element at all, not on a network/decode failure of a supported one —
+so it stays as-is for that genuine no-`<video>`-support case. A
+decode/fetch failure of a *supported* `<video>` is a different,
+far more common path, and must not fall back to that same auto-playing,
+unpausable, infinitely-looping GIF — doing so would reintroduce
+exactly the WCAG 2.2.2 issue the video swap was meant to fix.
+`js/app.js`'s `handleVideoFallback()` instead swaps in the static
+`demo-poster.png` frame on the video's `error` event: a still image
+needs no pause control, so it's always a safe fallback regardless of
+*why* playback failed.
 
 ### Manual verification checklist (JS-driven interactions)
 
@@ -278,6 +304,22 @@ that touches `js/app.js`, `layouts/`, or the demo media:
    its true aspect ratio (no stretching, cropping, or overflow), and
    the how-it-works diagram must swap cleanly between the two
    theme-specific SVGs with the theme toggle.
+8. **Video-error fallback**: force the `<video>` element's `error`
+   event (e.g. temporarily point its `src` at a missing file, or block
+   `demo.mp4` in DevTools' Network tab and reload) — it must be
+   replaced by the static `demo-poster.png` image, never by the
+   looping `demo.gif` (WCAG 2.2.2: a decode/fetch failure must not
+   reintroduce uncontrolled auto-playing motion).
+9. **Link hover contrast**: hover a prose link and a card link (e.g.
+   `.usecase a` or `.preview-banner a`) in both themes — the hover
+   color must stay clearly readable (this is `--link-hover`; verify
+   with a contrast checker if unsure, target ≥4.5:1) and must not
+   regress to the flat blue that used to fail on white / dark cards.
+10. **Narrow-viewport reflow**: at a 320–360px viewport, load the
+    homepage and confirm the *page* never scrolls horizontally
+    (`document.documentElement.scrollWidth` must equal `clientWidth`);
+    only the `.compare-side` code blocks should scroll horizontally,
+    and only within their own box.
 
 ### Running the accessibility scan locally
 
