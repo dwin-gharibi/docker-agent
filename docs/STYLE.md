@@ -197,8 +197,14 @@ tokens, templates, or JS, keep these conventions:
   `.content .callout a:not(.btn):hover` rule too — an unconditional,
   equal-specificity selector coming later in the stylesheet otherwise
   wins over a `:hover` one regardless of hover state, flattening the
-  hover color. Same lesson as the specificity bullets above: always
-  check what a new equal-or-higher-specificity rule shadows nearby.
+  hover color. **The same shadowing hit the light override too**: the
+  `[data-theme="light"]` default sits after the shared `:hover` rule,
+  so light hover silently fell back to `--accent` instead of
+  `--link-hover` (still AA — 4.60–4.83:1 — but not the intended token).
+  Fixed with a `[data-theme="light"] ... :hover` rule of its own, right
+  after the light default. Same lesson as the specificity bullets
+  above: always check what a new equal-or-higher-specificity rule
+  shadows nearby — including rules added later for the *other* theme.
 - **SVGs embedded via `<img>` can't inherit `currentColor` or CSS
   custom properties from the page**, so a single hardcoded palette has
   to clear AA against *both* a near-black dark card (`#1E2129`) and a
@@ -251,6 +257,7 @@ tokens, templates, or JS, keep these conventions:
 | `#search-input` (search trigger button) text | `--text-muted` (gray-600), 5.88:1 on `--bg-hover` white | gray-300, 6.07:1 on `--bg-hover` gray-800 (was `--text-muted` gray-400, 4.42:1 — fail) |
 | `.preview-banner a` | `--accent-on-card` (unchanged, blue-500 5.0:1) | `--accent-on-card` blue-300, 5.89:1 (was `--accent` blue-400, 4.08:1 — fail) |
 | `.content .callout a:not(.btn)` (links inside a callout) | `--accent`, 4.60–4.83:1 (unchanged) | `--blue-200`, 6.46:1 warning / 11.50:1 info / 8.51:1 tip (was `--accent-hover` blue-400, 3.95:1 on warning — fail) |
+| `.content .callout a:not(.btn):hover` | `--link-hover` blue-600, 6.21–6.52:1 (was silently `--accent`, same as default — not a fail, but not the intended token) | `--link-hover` blue-200 (unchanged, same token/ratios as the shared prose-link hover above) |
 | `.btn-primary`/`.btn-secondary` as `.content a` links (Quick Start, Back to Docs) | unchanged (blue-500-on-white 5.00:1 / white-on-translucent) | own `color` restored via `.content a:not(.btn)`, was 2.55:1 (`--accent-hover` leaking onto a white button bg) |
 | `how-it-works.svg` diagram text | gray-600 body 5.88:1 / blue-500 accent 5.00:1 (light-only file, on white) | gray-400 body 5.59:1 / blue-300 accent 5.89:1 (dark-only file, on `#1E2129`) |
 
