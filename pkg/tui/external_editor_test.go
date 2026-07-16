@@ -75,3 +75,15 @@ func TestExternalEditorCallback_EditorError(t *testing.T) {
 	_, err := os.Stat(path)
 	assert.True(t, os.IsNotExist(err), "the temp file must be removed on error")
 }
+
+func TestExternalEditorCallback_ReadError(t *testing.T) {
+	ed := &valueRecordingEditor{value: "untouched"}
+	path := filepath.Join(t.TempDir(), "missing.md")
+
+	msg := externalEditorCallback(ed, path)(nil)
+
+	show, ok := msg.(notification.ShowMsg)
+	require.True(t, ok, "a read failure must surface as an error notification")
+	assert.Equal(t, notification.TypeError, show.Type)
+	assert.Equal(t, "untouched", ed.value, "the editor content must not change when the temp file cannot be read")
+}
