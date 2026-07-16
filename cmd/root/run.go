@@ -48,7 +48,7 @@ import (
 // cobra's optional-value flags the two are indistinguishable by design.
 const worktreeAutoName = "auto"
 
-var projectDefaultAgentFiles = []string{"docker-agent.yaml", "docker-agent.yml"}
+var projectDefaultAgentFiles = []string{"docker-agent.yaml", "docker-agent.yml", "docker-agent.hcl"}
 
 type runExecFlags struct {
 	agentName         string

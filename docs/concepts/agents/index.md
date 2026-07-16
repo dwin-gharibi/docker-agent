@@ -97,7 +97,7 @@ Commands support environment variable interpolation using JavaScript template li
 
 ## Default Agent
 
-Running `docker agent run` without a config argument uses `docker-agent.yaml` or `docker-agent.yml` from the current directory when present. Otherwise, it uses a capable built-in default agent for quick tasks without needing any configuration.
+Running `docker agent run` without a config argument uses `docker-agent.yaml`, `docker-agent.yml`, or `docker-agent.hcl` from the current directory when present. Otherwise, it uses a capable built-in default agent for quick tasks without needing any configuration.
 
 ```bash
 # Use the project config or built-in default agent

@@ -22,6 +22,7 @@ func TestResolveRunAgentFileName(t *testing.T) {
 		t.Chdir(t.TempDir())
 		require.NoError(t, os.WriteFile("docker-agent.yaml", []byte("agents: {}\n"), 0o644))
 		require.NoError(t, os.WriteFile("docker-agent.yml", []byte("agents: {}\n"), 0o644))
+		require.NoError(t, os.WriteFile("docker-agent.hcl", []byte("agent \"root\" {}\n"), 0o644))
 
 		got := (&runExecFlags{}).resolveRunAgentFileName(nil)
 
@@ -35,6 +36,25 @@ func TestResolveRunAgentFileName(t *testing.T) {
 		got := (&runExecFlags{}).resolveRunAgentFileName(nil)
 
 		assert.Equal(t, "docker-agent.yml", got)
+	})
+
+	t.Run("discovers docker-agent hcl last", func(t *testing.T) {
+		t.Chdir(t.TempDir())
+		require.NoError(t, os.WriteFile("docker-agent.yml", []byte("agents: {}\n"), 0o644))
+		require.NoError(t, os.WriteFile("docker-agent.hcl", []byte("agent \"root\" {}\n"), 0o644))
+
+		got := (&runExecFlags{}).resolveRunAgentFileName(nil)
+
+		assert.Equal(t, "docker-agent.yml", got)
+	})
+
+	t.Run("discovers docker-agent hcl", func(t *testing.T) {
+		t.Chdir(t.TempDir())
+		require.NoError(t, os.WriteFile("docker-agent.hcl", []byte("agent \"root\" {}\n"), 0o644))
+
+		got := (&runExecFlags{}).resolveRunAgentFileName(nil)
+
+		assert.Equal(t, "docker-agent.hcl", got)
 	})
 
 	t.Run("ignores directories", func(t *testing.T) {
