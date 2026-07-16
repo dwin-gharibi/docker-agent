@@ -1,9 +1,10 @@
 package git
 
 import (
-	"context"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,6 +12,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/require"
+
+	"github.com/docker/docker-agent/pkg/config"
 )
 
 var fixedTime = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
@@ -41,6 +44,104 @@ func addCommit(t *testing.T, repo *gogit.Repository, dir string, files map[strin
 	return h
 }
 
+func TestGitUnbornHead(t *testing.T) {
+	t.Parallel()
+	dir, _ := newRepo(t)
+
+	res, err := New(dir).status(t.Context(), StatusArgs{})
+	require.NoError(t, err)
+	require.False(t, res.IsError, res.Output)
+	require.Contains(t, res.Output, "no commits yet")
+
+	logRes, err := New(dir).log(t.Context(), LogArgs{})
+	require.NoError(t, err)
+	require.False(t, logRes.IsError, logRes.Output)
+	require.Contains(t, logRes.Output, "No commits yet")
+}
+
+func TestGitLogLimitIsCapped(t *testing.T) {
+	t.Parallel()
+	dir, repo := newRepo(t)
+	for i := range maxLogLimit + 5 {
+		addCommit(t, repo, dir, map[string]string{"a.txt": strconv.Itoa(i) + "\n"}, "commit "+strconv.Itoa(i))
+	}
+
+	res, err := New(dir).log(t.Context(), LogArgs{Limit: 1000000})
+	require.NoError(t, err)
+	require.False(t, res.IsError, res.Output)
+	require.Len(t, strings.Split(strings.TrimRight(res.Output, "\n"), "\n"), maxLogLimit)
+}
+
+func TestGitLogPathFilter(t *testing.T) {
+	t.Parallel()
+	dir, repo := newRepo(t)
+	addCommit(t, repo, dir, map[string]string{"a.txt": "1\n"}, "touch a")
+	addCommit(t, repo, dir, map[string]string{"b.txt": "1\n"}, "touch b")
+
+	res, err := New(dir).log(t.Context(), LogArgs{Path: "b.txt"})
+	require.NoError(t, err)
+	require.False(t, res.IsError, res.Output)
+	require.Contains(t, res.Output, "touch b")
+	require.NotContains(t, res.Output, "touch a")
+}
+
+func TestGitShowExplicitAndInvalidRef(t *testing.T) {
+	t.Parallel()
+	dir, repo := newRepo(t)
+	first := addCommit(t, repo, dir, map[string]string{"a.txt": "1\n"}, "first commit")
+	addCommit(t, repo, dir, map[string]string{"a.txt": "2\n"}, "second commit")
+
+	res, err := New(dir).show(t.Context(), ShowArgs{Ref: first.String()})
+	require.NoError(t, err)
+	require.False(t, res.IsError, res.Output)
+	require.Contains(t, res.Output, "first commit")
+	require.NotContains(t, res.Output, "second commit")
+
+	bad, err := New(dir).show(t.Context(), ShowArgs{Ref: "no-such-ref"})
+	require.NoError(t, err)
+	require.True(t, bad.IsError)
+}
+
+func TestGitBlameAtRev(t *testing.T) {
+	t.Parallel()
+	dir, repo := newRepo(t)
+	first := addCommit(t, repo, dir, map[string]string{"a.txt": "original\n"}, "first")
+	addCommit(t, repo, dir, map[string]string{"a.txt": "rewritten\n"}, "second")
+
+	res, err := New(dir).blame(t.Context(), BlameArgs{Path: "a.txt", Rev: first.String()})
+	require.NoError(t, err)
+	require.False(t, res.IsError, res.Output)
+	require.Contains(t, res.Output, "original")
+	require.NotContains(t, res.Output, "rewritten")
+}
+
+func TestGitBlameTruncates(t *testing.T) {
+	t.Parallel()
+	dir, repo := newRepo(t)
+	var big strings.Builder
+	for i := range maxBlameLines + 50 {
+		big.WriteString("line " + strconv.Itoa(i) + "\n")
+	}
+	addCommit(t, repo, dir, map[string]string{"big.txt": big.String()}, "add big")
+
+	res, err := New(dir).blame(t.Context(), BlameArgs{Path: "big.txt"})
+	require.NoError(t, err)
+	require.False(t, res.IsError, res.Output)
+	require.Contains(t, res.Output, "more lines truncated")
+}
+
+func TestCreateToolSetUsesWorkingDir(t *testing.T) {
+	t.Parallel()
+	dir, repo := newRepo(t)
+	addCommit(t, repo, dir, map[string]string{"a.txt": "x\n"}, "initial")
+
+	ts, err := CreateToolSet(&config.RuntimeConfig{Config: config.Config{WorkingDir: dir}})
+	require.NoError(t, err)
+	toolz, err := ts.Tools(t.Context())
+	require.NoError(t, err)
+	require.Len(t, toolz, 5)
+}
+
 func TestGitStatus(t *testing.T) {
 	t.Parallel()
 	dir, repo := newRepo(t)
@@ -49,7 +150,7 @@ func TestGitStatus(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("changed\n"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "b.txt"), []byte("new\n"), 0o644))
 
-	res, err := New(dir).status(context.Background(), StatusArgs{})
+	res, err := New(dir).status(t.Context(), StatusArgs{})
 	require.NoError(t, err)
 	require.False(t, res.IsError, res.Output)
 	require.Contains(t, res.Output, "a.txt")
@@ -61,7 +162,7 @@ func TestGitStatusClean(t *testing.T) {
 	dir, repo := newRepo(t)
 	addCommit(t, repo, dir, map[string]string{"a.txt": "x\n"}, "initial")
 
-	res, err := New(dir).status(context.Background(), StatusArgs{})
+	res, err := New(dir).status(t.Context(), StatusArgs{})
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 	require.Contains(t, res.Output, "clean")
@@ -73,13 +174,13 @@ func TestGitLog(t *testing.T) {
 	addCommit(t, repo, dir, map[string]string{"a.txt": "1\n"}, "first commit")
 	addCommit(t, repo, dir, map[string]string{"a.txt": "2\n"}, "second commit")
 
-	res, err := New(dir).log(context.Background(), LogArgs{})
+	res, err := New(dir).log(t.Context(), LogArgs{})
 	require.NoError(t, err)
 	require.False(t, res.IsError, res.Output)
 	require.Contains(t, res.Output, "first commit")
 	require.Contains(t, res.Output, "second commit")
 
-	res2, err := New(dir).log(context.Background(), LogArgs{Limit: 1})
+	res2, err := New(dir).log(t.Context(), LogArgs{Limit: 1})
 	require.NoError(t, err)
 	require.Contains(t, res2.Output, "second commit")
 	require.NotContains(t, res2.Output, "first commit")
@@ -94,7 +195,7 @@ func TestGitBranches(t *testing.T) {
 	require.NoError(t, err)
 	current := head.Name().Short()
 
-	res, err := New(dir).branches(context.Background(), BranchesArgs{})
+	res, err := New(dir).branches(t.Context(), BranchesArgs{})
 	require.NoError(t, err)
 	require.False(t, res.IsError, res.Output)
 	require.Contains(t, res.Output, current)
@@ -106,7 +207,7 @@ func TestGitShow(t *testing.T) {
 	dir, repo := newRepo(t)
 	addCommit(t, repo, dir, map[string]string{"a.txt": "one\ntwo\n"}, "add a.txt")
 
-	res, err := New(dir).show(context.Background(), ShowArgs{})
+	res, err := New(dir).show(t.Context(), ShowArgs{})
 	require.NoError(t, err)
 	require.False(t, res.IsError, res.Output)
 	require.Contains(t, res.Output, "add a.txt")
@@ -119,7 +220,7 @@ func TestGitBlame(t *testing.T) {
 	dir, repo := newRepo(t)
 	addCommit(t, repo, dir, map[string]string{"a.txt": "line one\nline two\n"}, "initial")
 
-	res, err := New(dir).blame(context.Background(), BlameArgs{Path: "a.txt"})
+	res, err := New(dir).blame(t.Context(), BlameArgs{Path: "a.txt"})
 	require.NoError(t, err)
 	require.False(t, res.IsError, res.Output)
 	require.Contains(t, res.Output, "alice@example.com")
@@ -131,14 +232,14 @@ func TestGitBlameRequiresPath(t *testing.T) {
 	dir, repo := newRepo(t)
 	addCommit(t, repo, dir, map[string]string{"a.txt": "x\n"}, "initial")
 
-	res, err := New(dir).blame(context.Background(), BlameArgs{})
+	res, err := New(dir).blame(t.Context(), BlameArgs{})
 	require.NoError(t, err)
 	require.True(t, res.IsError)
 }
 
 func TestGitNotARepo(t *testing.T) {
 	t.Parallel()
-	res, err := New(t.TempDir()).status(context.Background(), StatusArgs{})
+	res, err := New(t.TempDir()).status(t.Context(), StatusArgs{})
 	require.NoError(t, err)
 	require.True(t, res.IsError)
 }
@@ -146,7 +247,7 @@ func TestGitNotARepo(t *testing.T) {
 func TestGitToolSetInterfaces(t *testing.T) {
 	t.Parallel()
 	ts := New(t.TempDir())
-	toolz, err := ts.Tools(context.Background())
+	toolz, err := ts.Tools(t.Context())
 	require.NoError(t, err)
 	require.Len(t, toolz, 5)
 	require.NotEmpty(t, ts.Instructions())
