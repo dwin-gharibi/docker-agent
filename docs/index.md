@@ -13,7 +13,9 @@ description: "Run AI agents like containers. Define them in YAML, share them thr
 </div>
 
 <div class="demo-container">
-  <img src="demo.gif" alt="Docker Agent TUI demo showing an interactive agent session" loading="lazy">
+  <video src="demo.mp4" poster="demo-poster.png" width="1200" height="960" autoplay muted loop playsinline controls preload="metadata" aria-label="Docker Agent TUI demo showing an interactive agent session">
+    <img src="demo.gif" alt="Docker Agent TUI demo showing an interactive agent session" loading="lazy">
+  </video>
 </div>
 
 <div class="elevator">
@@ -238,7 +240,8 @@ What people build with Docker Agent today:
 Docker Agent follows a simple loop:
 
 <figure class="flow-diagram">
-  <img src="assets/how-it-works.svg" alt="agent.yaml is run by 'docker agent run', which loops through Model, Tools and Sub-agents, then streams results to the TUI or API." loading="lazy">
+  <img src="assets/how-it-works.svg" alt="agent.yaml is run by 'docker agent run', which loops through Model, Tools and Sub-agents, then streams results to the TUI or API." loading="lazy" class="theme-light-only">
+  <img src="assets/how-it-works-dark.svg" alt="agent.yaml is run by 'docker agent run', which loops through Model, Tools and Sub-agents, then streams results to the TUI or API." loading="lazy" class="theme-dark-only">
   <figcaption>Your YAML config is the input; the runtime drives a Model ↔ Tools ↔ Sub-agents loop until the task is done; results stream back to the TUI or any API client.</figcaption>
 </figure>
 

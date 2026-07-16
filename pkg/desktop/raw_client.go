@@ -17,17 +17,20 @@ type RawClient struct {
 }
 
 func newRawClient(dialer func(ctx context.Context) (net.Conn, error)) *RawClient {
-	return &RawClient{
-		client: func() *http.Client {
-			return &http.Client{
-				Transport: &http.Transport{
-					DialContext: func(ctx context.Context, _, _ string) (conn net.Conn, err error) {
-						return dialer(ctx)
-					},
-				},
-			}
+	client := &http.Client{
+		Transport: &http.Transport{
+			DisableKeepAlives: true,
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return dialer(ctx)
+			},
 		},
+	}
+
+	return &RawClient{
 		timeout: 10 * time.Second,
+		client: func() *http.Client {
+			return client
+		},
 	}
 }
 

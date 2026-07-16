@@ -56,6 +56,24 @@ type SessionManager struct {
 
 	mux sync.Mutex
 
+	// eventLogsMu serialises event-log lifecycle transitions: on-demand
+	// creation (ensureEventLog), source attachment (RegisterEventSource) and
+	// teardown (dropEventLog), together with deletedEventLogs. Reads of
+	// eventLogs stay lock-free. It is a leaf lock: sm.mux may be held when
+	// acquiring it (DeleteSession/BatchDeleteSessions), never the reverse —
+	// ensureEventLog runs on runtime goroutines (elicitation sink callbacks)
+	// and must not need sm.mux.
+	eventLogsMu sync.Mutex
+
+	// deletedEventLogs tombstones the IDs of deleted sessions so a stale
+	// elicitation-sink closure — held by an in-flight or detached background
+	// elicitation that outlives DeleteSession — cannot lazily recreate an
+	// event log for a session that no longer exists (#3584 review). Entries
+	// are permanent: session IDs are never reused, and one string per deleted
+	// session is far cheaper than the leaked event log it prevents. Guarded
+	// by eventLogsMu.
+	deletedEventLogs map[string]struct{}
+
 	// sessionReady is closed once the first session is attached or created,
 	// signalling that the server is ready to accept session-scoped requests.
 	sessionReady     chan struct{}
@@ -95,6 +113,7 @@ func NewSessionManager(ctx context.Context, sources config.Sources, sessionStore
 		runtimeSessions:   concurrent.NewMap[string, *activeRuntimes](),
 		deletedSessions:   concurrent.NewMap[string, *activeRuntimes](),
 		eventLogs:         concurrent.NewMap[string, *pumpedEventLog](),
+		deletedEventLogs:  make(map[string]struct{}),
 		followUpInjectors: concurrent.NewMap[string, FollowUpInjector](),
 		followUpKeys:      concurrent.NewMap[string, *idempotencyCache](),
 		sessionStore:      sessionStore,
@@ -129,6 +148,11 @@ func (sm *SessionManager) WaitReady(ctx context.Context) error {
 type pumpedEventLog struct {
 	log    *eventLog
 	cancel context.CancelFunc
+
+	// lazy marks a log created on demand by ensureEventLog: ring buffer
+	// only, no pump goroutine. RegisterEventSource adopts such a log (see
+	// there) instead of clobbering it.
+	lazy bool
 }
 
 // RegisterEventSource attaches an event source for sessionID and immediately
@@ -140,10 +164,38 @@ type pumpedEventLog struct {
 // The pump runs for the session's lifetime (until DeleteSession or the source
 // returns), buffering events even when no client is connected, so a client
 // that connects or reconnects later can replay what it missed.
+//
+// A lazily-created log (see ensureEventLog) that already exists for
+// sessionID — because an out-of-band event beat the source registration —
+// is adopted rather than replaced: its buffered events, sequence numbers
+// and connected listeners all survive, and only the lifetime owner changes.
+// The adopted entry's cancel becomes the pump cancel, whose deferred close
+// below ends the log — the exact same contract a brand-new attached source
+// gets. The lazy entry's old cancel closure held nothing but the log, so
+// dropping it leaks nothing.
+//
+// Registering for a deleted session is a no-op: like ensureEventLog, the
+// registration is serialised with dropEventLog under eventLogsMu and gated
+// on the deletedEventLogs tombstone, so a registration racing
+// DeleteSession/BatchDeleteSessions can neither store a log nobody will ever
+// tear down nor start a pump for a session that is gone — src is never
+// invoked. The pump context is only created after the tombstone check, so a
+// rejected registration leaves nothing behind to clean up.
 func (sm *SessionManager) RegisterEventSource(sessionID string, src EventSource) {
+	sm.eventLogsMu.Lock()
+	if _, deleted := sm.deletedEventLogs[sessionID]; deleted {
+		sm.eventLogsMu.Unlock()
+		return
+	}
+	var log *eventLog
+	if pe, ok := sm.eventLogs.Load(sessionID); ok && pe.lazy {
+		log = pe.log
+	} else {
+		log = newEventLog(defaultEventLogCapacity)
+	}
 	pumpCtx, cancel := context.WithCancel(context.Background())
-	log := newEventLog(defaultEventLogCapacity)
 	sm.eventLogs.Store(sessionID, &pumpedEventLog{log: log, cancel: cancel})
+	sm.eventLogsMu.Unlock()
 
 	go func() {
 		defer log.close("session ended")
@@ -155,6 +207,102 @@ func (sm *SessionManager) RegisterEventSource(sessionID string, src EventSource)
 func (sm *SessionManager) HasEventSource(sessionID string) bool {
 	_, ok := sm.eventLogs.Load(sessionID)
 	return ok
+}
+
+// ensureEventLog returns sessionID's [pumpedEventLog], creating a bare one —
+// ring buffer only, no pump goroutine — if none is registered yet. An
+// existing log (e.g. one attached via RegisterEventSource) is always reused,
+// never replaced. Used by appendSessionEvent to give a session a replayable
+// event route even when it was never attached via RegisterEventSource (the
+// common case for a session created directly by the API server rather than
+// by an external embedder like the TUI).
+//
+// Returns nil — and creates nothing — once the session has been deleted:
+// creation is serialised with dropEventLog under eventLogsMu and gated on
+// the deletedEventLogs tombstone, so a stale elicitation-sink closure that
+// fires after DeleteSession cannot resurrect a log for a session whose
+// runtime is gone (its events would be permanently unanswerable) or leak
+// one nobody will ever tear down (#3584 review). The lock-free fast path is
+// safe without the tombstone check: a log that deletion is concurrently
+// tearing down is closed before it is removed, and appends to a closed log
+// are no-ops.
+//
+// cancel closes the log (delivering session_exited and disconnecting any
+// live listener) instead of being a no-op: there is no external source pump
+// to stop, but DeleteSession/BatchDeleteSessions call pe.cancel()
+// unconditionally expecting it to end the log's lifetime. A no-op here would
+// leave a connected GET /api/sessions/:id/events request on a lazily-created
+// log blocked forever after deletion — it would never see session_exited and
+// never close, contradicting the end-of-session contract documented on
+// Server.sessionEvents.
+func (sm *SessionManager) ensureEventLog(sessionID string) *pumpedEventLog {
+	if pe, ok := sm.eventLogs.Load(sessionID); ok {
+		return pe
+	}
+
+	sm.eventLogsMu.Lock()
+	defer sm.eventLogsMu.Unlock()
+	if _, deleted := sm.deletedEventLogs[sessionID]; deleted {
+		return nil
+	}
+	if pe, ok := sm.eventLogs.Load(sessionID); ok {
+		return pe
+	}
+	log := newEventLog(defaultEventLogCapacity)
+	pe := &pumpedEventLog{log: log, cancel: func() { log.close("session ended") }, lazy: true}
+	sm.eventLogs.Store(sessionID, pe)
+	return pe
+}
+
+// dropEventLog tombstones sessionID and tears down its event log, if any.
+// Serialised with ensureEventLog/RegisterEventSource under eventLogsMu so
+// that once it returns, no event log for sessionID exists or can ever be
+// created again — neither lazily nor via a source registration. Callers may
+// hold sm.mux (see eventLogsMu's lock ordering note).
+func (sm *SessionManager) dropEventLog(sessionID string) {
+	sm.eventLogsMu.Lock()
+	defer sm.eventLogsMu.Unlock()
+	sm.deletedEventLogs[sessionID] = struct{}{}
+	if pe, ok := sm.eventLogs.Load(sessionID); ok {
+		pe.cancel()
+		sm.eventLogs.Delete(sessionID)
+	}
+}
+
+// appendSessionEvent appends event to sessionID's event log, creating the
+// log on demand (see ensureEventLog) if this is the first out-of-band event
+// the session has ever produced. Events for a deleted session are dropped.
+func (sm *SessionManager) appendSessionEvent(sessionID string, event any) {
+	if pe := sm.ensureEventLog(sessionID); pe != nil {
+		pe.log.append(event)
+	}
+}
+
+// sessionElicitationSink returns the OnElicitationRequest handler that
+// runtimeForSession registers on every API/server-created runtime: it
+// appends the event to sessionID's (lazily created) event log, giving
+// out-of-band elicitations — chiefly from detached background jobs — a
+// session-scoped route to any client streaming GET /api/sessions/:id/events,
+// instead of the runtime treating an absent sink as "no UI" and
+// auto-declining (#3584). Split out as its own method so the exact wiring is
+// unit-testable without spinning up a real runtime/team.
+func (sm *SessionManager) sessionElicitationSink(sessionID string) func(runtime.Event) {
+	return func(ev runtime.Event) {
+		sm.appendSessionEvent(sessionID, ev)
+	}
+}
+
+// elicitationSinkMirror is the optional capability marking a runtime whose
+// OnElicitationRequest sink is the exactly-once delivery point for
+// elicitation requests even though the same event is ALSO best-effort
+// mirrored onto its RunStream channel (see
+// [runtime.LocalRuntime.MirrorsElicitationOnRunStream]). Consumers that copy
+// RunStream events into the session event log must skip that mirror copy or
+// the log would carry the same request twice. Runtimes without the
+// capability (e.g. RemoteRuntime, whose OnElicitationRequest is a no-op)
+// deliver ONLY via RunStream, so their copy must never be skipped.
+type elicitationSinkMirror interface {
+	MirrorsElicitationOnRunStream()
 }
 
 // LastEventSeq returns the most recent event sequence number for sessionID,
@@ -299,13 +447,15 @@ func (sm *SessionManager) GetSessionStatus(ctx context.Context, id string) (*api
 		rs.streaming.Unlock()
 	}
 
+	title := sess.TitleSnapshot()
+	inputTokens, outputTokens := sess.Usage()
 	return &api.SessionStatusResponse{
 		ID:           sess.ID,
-		Title:        sess.Title,
+		Title:        title,
 		Streaming:    streaming,
 		Agent:        rs.runtime.CurrentAgentName(ctx),
-		InputTokens:  sess.InputTokens,
-		OutputTokens: sess.OutputTokens,
+		InputTokens:  inputTokens,
+		OutputTokens: outputTokens,
 		NumMessages:  len(sess.GetAllMessages()),
 	}, nil
 }
@@ -343,16 +493,19 @@ func (sm *SessionManager) GetSessionSnapshot(ctx context.Context, id string) (*a
 
 	lastSeq, _ := sm.LastEventSeq(id)
 
+	title := sess.TitleSnapshot()
+	inputTokens, outputTokens := sess.Usage()
 	return &api.SessionSnapshotResponse{
 		ID:            sess.ID,
-		Title:         sess.Title,
+		Title:         title,
 		CreatedAt:     sess.CreatedAt,
 		WorkingDir:    sess.WorkingDir,
 		Messages:      sess.GetAllMessages(),
 		ToolsApproved: sess.ToolsApproved,
+		SafetyPolicy:  sess.SafetyPolicy,
 		Permissions:   sess.Permissions,
-		InputTokens:   sess.InputTokens,
-		OutputTokens:  sess.OutputTokens,
+		InputTokens:   inputTokens,
+		OutputTokens:  outputTokens,
 		Streaming:     streaming,
 		Agent:         agent,
 		LastEventSeq:  lastSeq,
@@ -370,6 +523,9 @@ func (sm *SessionManager) CreateSession(ctx context.Context, sessionTemplate *se
 		session.WithMaxToolResultTokens(sessionTemplate.MaxToolResultTokens),
 		session.WithToolsApproved(sessionTemplate.ToolsApproved),
 	)
+	if sessionTemplate.SafetyPolicy != "" {
+		opts = append(opts, session.WithSafetyPolicy(sessionTemplate.SafetyPolicy))
+	}
 
 	// Carry a caller-supplied title (from the POST /api/sessions request body)
 	// into the new session. When set, RunSession's needsTitle check skips the
@@ -458,9 +614,9 @@ func (sm *SessionManager) ForkSession(ctx context.Context, sessionID string, use
 	}
 	siblingTitles := make([]string, 0, len(siblings))
 	for _, s := range siblings {
-		siblingTitles = append(siblingTitles, s.Title)
+		siblingTitles = append(siblingTitles, s.TitleSnapshot())
 	}
-	forked.Title = session.NextForkTitle(parent.Title, siblingTitles)
+	forked.SetTitle(session.NextForkTitle(parent.TitleSnapshot(), siblingTitles))
 
 	if err := sm.sessionStore.AddSession(ctx, forked); err != nil {
 		return nil, err
@@ -542,6 +698,16 @@ func (sm *SessionManager) DeleteSession(ctx context.Context, sessionID string) e
 	}
 
 	if sessionRuntime, ok := sm.runtimeSessions.Load(sess.ID); ok {
+		// Server-owned runtimes (done == nil) carry the manager's own
+		// elicitation sink (see runtimeForSession); clear it so a detached
+		// background job that elicits after this point hits the runtime's
+		// headless fast-decline path ("no sink means no UI") and terminates,
+		// instead of parking a waiter forever on a request nobody can answer
+		// or route anymore. Attached runtimes' sinks belong to their embedder
+		// (pkg/app) and outlive this session, so they are left alone.
+		if sessionRuntime.done == nil {
+			sessionRuntime.runtime.OnElicitationRequest(nil)
+		}
 		if sessionRuntime.cancel != nil {
 			sessionRuntime.cancel()
 		}
@@ -572,10 +738,7 @@ func (sm *SessionManager) DeleteSession(ctx context.Context, sessionID string) e
 			}
 		}()
 	}
-	if pe, ok := sm.eventLogs.Load(sess.ID); ok {
-		pe.cancel()
-		sm.eventLogs.Delete(sess.ID)
-	}
+	sm.dropEventLog(sess.ID)
 	sm.followUpInjectors.Delete(sess.ID)
 	sm.followUpKeys.Delete(sess.ID)
 
@@ -705,10 +868,10 @@ func (sm *SessionManager) RunSession(ctx context.Context, sessionID, agentFilena
 
 	streamChan := make(chan runtime.Event)
 
-	// Snapshot the title under sm.mux before launching the goroutine to
-	// avoid a data race with UpdateSessionTitle, which takes sm.mux and
-	// writes to sess.Title concurrently with the goroutine's read.
-	titleToEmit := sess.Title
+	// Snapshot the title under sess.mu before launching the goroutine: both
+	// UpdateSessionTitle and a previous run's still-in-flight generateTitle
+	// write sess.Title via SetTitle, concurrently with this read.
+	titleToEmit := sess.TitleSnapshot()
 	needsTitle := titleToEmit == "" && len(userMessages) > 0 && titleGen != nil
 
 	go func() {
@@ -903,11 +1066,19 @@ func (sm *SessionManager) recallSession(ctx context.Context, sessionID string, m
 	}
 	sm.mux.Unlock()
 
+	_, skipMirroredElicitation := rt.runtime.(elicitationSinkMirror)
 	go func() {
 		defer rt.streaming.Unlock()
 		defer runCancel()
 		stream := rt.runtime.RunStream(runCtx, sess)
 		for event := range stream {
+			// Already appended exactly once via the OnElicitationRequest
+			// sink (see runtimeForSession); skip the best-effort RunStream
+			// mirror copy so the event log doesn't carry the same request
+			// twice (#3584).
+			if _, isElicitation := event.(*runtime.ElicitationRequestEvent); isElicitation && skipMirroredElicitation {
+				continue
+			}
 			if pe, ok := sm.eventLogs.Load(sessionID); ok {
 				pe.log.append(event)
 			}
@@ -925,8 +1096,9 @@ func (sm *SessionManager) recallSession(ctx context.Context, sessionID string, m
 	return nil
 }
 
-// ResumeElicitation resumes an elicitation request.
-func (sm *SessionManager) ResumeElicitation(ctx context.Context, sessionID, action string, content map[string]any) error {
+// ResumeElicitation resumes an elicitation request. elicitationID is
+// additive: pass "" to fall back to resolving the sole pending request.
+func (sm *SessionManager) ResumeElicitation(ctx context.Context, sessionID, action string, content map[string]any, elicitationID string) error {
 	sm.mux.Lock()
 	defer sm.mux.Unlock()
 	rt, exists := sm.runtimeSessions.Load(sessionID)
@@ -934,7 +1106,7 @@ func (sm *SessionManager) ResumeElicitation(ctx context.Context, sessionID, acti
 		return errors.New("session not found")
 	}
 
-	return rt.runtime.ResumeElicitation(ctx, tools.ElicitationAction(action), content)
+	return rt.runtime.ResumeElicitation(ctx, tools.ElicitationAction(action), content, elicitationID)
 }
 
 // ToggleToolApproval toggles the tool approval mode for a session.
@@ -948,6 +1120,21 @@ func (sm *SessionManager) ToggleToolApproval(ctx context.Context, sessionID stri
 
 	sess.ToolsApproved = !sess.ToolsApproved
 
+	return sm.sessionStore.UpdateSession(ctx, sess)
+}
+
+// SetSessionSafetyPolicy updates the SafetyPolicy for a session.
+func (sm *SessionManager) SetSessionSafetyPolicy(ctx context.Context, sessionID string, policy session.SafetyPolicy) error {
+	if !policy.IsValid() {
+		return fmt.Errorf("invalid safety_policy: %q", policy)
+	}
+	sm.mux.Lock()
+	defer sm.mux.Unlock()
+	sess, err := sm.sessionStore.GetSession(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	sess.SetSafetyPolicy(policy)
 	return sm.sessionStore.UpdateSession(ctx, sess)
 }
 
@@ -975,7 +1162,7 @@ func (sm *SessionManager) UpdateSessionTitle(ctx context.Context, sessionID, tit
 	// If session is actively running, update the in-memory session object directly.
 	// This ensures the runtime's saveSession won't overwrite our manual edit.
 	if rt, ok := sm.runtimeSessions.Load(sessionID); ok && rt.session != nil {
-		rt.session.Title = title
+		rt.session.SetTitle(title)
 		slog.DebugContext(ctx, "Updated title for active session", "session_id", sessionID, "title", title)
 		return sm.sessionStore.UpdateSession(ctx, rt.session)
 	}
@@ -986,7 +1173,7 @@ func (sm *SessionManager) UpdateSessionTitle(ctx context.Context, sessionID, tit
 		return err
 	}
 
-	sess.Title = title
+	sess.SetTitle(title)
 	return sm.sessionStore.UpdateSession(ctx, sess)
 }
 
@@ -1009,7 +1196,7 @@ func (sm *SessionManager) generateTitle(ctx context.Context, sess *session.Sessi
 	}
 
 	// Update the in-memory session
-	sess.Title = title
+	sess.SetTitle(title)
 
 	// Persist the title
 	if err := sm.sessionStore.UpdateSession(ctx, sess); err != nil {
@@ -1098,6 +1285,20 @@ func (sm *SessionManager) runtimeForSession(ctx context.Context, sess *session.S
 	if err != nil {
 		return nil, nil, err
 	}
+
+	// Give this session an out-of-band, session-scoped route for
+	// elicitations raised while nobody is synchronously reading this
+	// specific RunSession call's stream — most notably background jobs
+	// (run_background_agent) that outlive the request that started them.
+	// Without a sink, elicitationHandler's headless fast-decline path ("no
+	// sink means no UI") fires for every background elicitation raised
+	// through the API even though an HTTP client CAN answer it via POST
+	// /api/sessions/:id/elicitation. Appending to this session's event log
+	// makes the request replayable via GET /api/sessions/:id/events (lazily
+	// creating the log if this session was never attached with
+	// RegisterEventSource) and answerable through the existing elicitation
+	// route (#3584).
+	run.OnElicitationRequest(sm.sessionElicitationSink(sess.ID))
 
 	// Apply any stored per-agent model overrides so that a session
 	// resumed (or freshly created with overrides via CreateSession) uses
@@ -1345,11 +1546,11 @@ func (sm *SessionManager) UpdateMessage(ctx context.Context, sessionID, msgID st
 }
 
 // AddSummary adds a summary to a session.
-func (sm *SessionManager) AddSummary(ctx context.Context, sessionID, summary string, tokens int) error {
+func (sm *SessionManager) AddSummary(ctx context.Context, sessionID, summary string, tokens int, cost float64) error {
 	sm.mux.Lock()
 	defer sm.mux.Unlock()
 
-	return sm.sessionStore.AddSummary(ctx, sessionID, summary, tokens)
+	return sm.sessionStore.AddSummary(ctx, sessionID, summary, tokens, cost)
 }
 
 // UpdateSessionTokens updates the token counts for a session.
@@ -1482,9 +1683,13 @@ func (sm *SessionManager) SetSessionAgentModel(ctx context.Context, sessionID, m
 	// Clone the session for the store write. We'll apply mutations to the
 	// clone, persist it, and only then update the live session. This ensures
 	// concurrent readers never observe a not-yet-persisted state.
+	// Title and the token/cost triple are taken through the locked accessors
+	// because the runtime stream goroutine writes them concurrently.
+	title := sess.TitleSnapshot()
+	inputTokens, outputTokens, cost := sess.TokensAndCost()
 	updatedSess := &session.Session{
 		ID:                      sess.ID,
-		Title:                   sess.Title,
+		Title:                   title,
 		CreatedAt:               sess.CreatedAt,
 		WorkingDir:              sess.WorkingDir,
 		ToolsApproved:           sess.ToolsApproved,
@@ -1493,9 +1698,9 @@ func (sm *SessionManager) SetSessionAgentModel(ctx context.Context, sessionID, m
 		MaxConsecutiveToolCalls: sess.MaxConsecutiveToolCalls,
 		MaxOldToolCallTokens:    sess.MaxOldToolCallTokens,
 		MaxToolResultTokens:     sess.MaxToolResultTokens,
-		InputTokens:             sess.InputTokens,
-		OutputTokens:            sess.OutputTokens,
-		Cost:                    sess.Cost,
+		InputTokens:             inputTokens,
+		OutputTokens:            outputTokens,
+		Cost:                    cost,
 		Starred:                 sess.Starred,
 	}
 
@@ -1575,13 +1780,18 @@ func (sm *SessionManager) BatchDeleteSessions(ctx context.Context, sessionIDs []
 		} else {
 			deleted++
 			if sessionRuntime, ok := sm.runtimeSessions.Load(sessionID); ok {
-				sessionRuntime.cancel()
+				// Same as DeleteSession: silence the manager-registered
+				// elicitation sink on server-owned runtimes so post-delete
+				// background elicitations fast-decline instead of parking.
+				if sessionRuntime.done == nil {
+					sessionRuntime.runtime.OnElicitationRequest(nil)
+				}
+				if sessionRuntime.cancel != nil {
+					sessionRuntime.cancel()
+				}
 				sm.runtimeSessions.Delete(sessionID)
 			}
-			if pe, ok := sm.eventLogs.Load(sessionID); ok {
-				pe.cancel()
-				sm.eventLogs.Delete(sessionID)
-			}
+			sm.dropEventLog(sessionID)
 			sm.followUpInjectors.Delete(sessionID)
 			sm.followUpKeys.Delete(sessionID)
 		}
@@ -1606,13 +1816,14 @@ func (sm *SessionManager) BatchExportSessions(ctx context.Context, sessionIDs []
 			continue // Skip sessions that can't be retrieved
 		}
 
+		inputTokens, outputTokens := sess.Usage()
 		sessData := map[string]any{
 			"id":             sess.ID,
-			"title":          sess.Title,
+			"title":          sess.TitleSnapshot(),
 			"created_at":     sess.CreatedAt,
 			"messages":       sess.GetAllMessages(),
-			"input_tokens":   sess.InputTokens,
-			"output_tokens":  sess.OutputTokens,
+			"input_tokens":   inputTokens,
+			"output_tokens":  outputTokens,
 			"working_dir":    sess.WorkingDir,
 			"tools_approved": sess.ToolsApproved,
 		}
@@ -1635,13 +1846,14 @@ func (sm *SessionManager) ExportSessionForRecovery(ctx context.Context, sessionI
 		return nil, err
 	}
 
+	inputTokens, outputTokens := sess.Usage()
 	return map[string]any{
 		"id":             sess.ID,
-		"title":          sess.Title,
+		"title":          sess.TitleSnapshot(),
 		"created_at":     sess.CreatedAt,
 		"messages":       sess.GetAllMessages(),
-		"input_tokens":   sess.InputTokens,
-		"output_tokens":  sess.OutputTokens,
+		"input_tokens":   inputTokens,
+		"output_tokens":  outputTokens,
 		"working_dir":    sess.WorkingDir,
 		"tools_approved": sess.ToolsApproved,
 		"permissions":    sess.Permissions,

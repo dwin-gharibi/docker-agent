@@ -236,8 +236,7 @@ func (p *chatPage) handleTokenUsage(msg *runtime.TokenUsageEvent) {
 			// values into the parent would overwrite the parent's own
 			// context-tracking counters.
 			if msg.SessionID == "" || msg.SessionID == sess.ID {
-				sess.InputTokens = msg.Usage.InputTokens
-				sess.OutputTokens = msg.Usage.OutputTokens
+				sess.SetUsage(msg.Usage.InputTokens, msg.Usage.OutputTokens)
 			}
 
 			// Track per-message usage for /cost dialog
@@ -450,7 +449,7 @@ func (p *chatPage) handleElicitationRequest(msg *runtime.ElicitationRequestEvent
 				serverURL = url
 			}
 			dialogCmd := core.CmdHandler(dialog.OpenDialogMsg{
-				Model:            dialog.NewOAuthAuthorizationDialog(p.ctx(), serverURL, p.app),
+				Model:            dialog.NewOAuthAuthorizationDialog(p.ctx(), serverURL, p.app, msg.ElicitationID),
 				OriginatingEvent: msg,
 			})
 			return tea.Batch(spinnerCmd, dialogCmd)
@@ -462,7 +461,7 @@ func (p *chatPage) handleElicitationRequest(msg *runtime.ElicitationRequestEvent
 	case "url":
 		// URL-based elicitation - show URL dialog
 		dialogCmd := core.CmdHandler(dialog.OpenDialogMsg{
-			Model:            dialog.NewURLElicitationDialog(p.ctx(), msg.Message, msg.URL),
+			Model:            dialog.NewURLElicitationDialog(p.ctx(), msg.Message, msg.URL, msg.ElicitationID),
 			OriginatingEvent: msg,
 		})
 		return tea.Batch(spinnerCmd, dialogCmd)
@@ -470,7 +469,7 @@ func (p *chatPage) handleElicitationRequest(msg *runtime.ElicitationRequestEvent
 	default:
 		// Form-based elicitation (default) - show form dialog
 		dialogCmd := core.CmdHandler(dialog.OpenDialogMsg{
-			Model:            dialog.NewElicitationDialog(msg.Message, msg.Schema, msg.Meta),
+			Model:            dialog.NewElicitationDialog(msg.Message, msg.Schema, msg.Meta, msg.ElicitationID),
 			OriginatingEvent: msg,
 		})
 		return tea.Batch(spinnerCmd, dialogCmd)

@@ -55,7 +55,7 @@ settings:
   lean: true
 ```
 
-Omit `lean` or set it to `false` to keep the full TUI as the default. You can still use `--lean` for a single run, or `--lean=false` to use the full TUI when `settings.lean` is enabled.
+Omit `lean` or set it to `false` to keep the full TUI as the default. You can still use `--lean` for a single run, or `--lean=false` to use the full TUI when `settings.lean` is enabled. See [User Settings](../../configuration/user-settings/index.md) for the full precedence rules between flags and user config.
 
 The lean TUI supports **steering**: messages submitted while the agent is running are queued and delivered to the active session. Pending steering messages appear with muted styling at the end of the live stream so you can see what will be sent next.
 
@@ -77,8 +77,7 @@ Type `/` during a session to see available commands, or press <kbd>Ctrl</kbd>+<k
 | `/sessions`        | Browse and load past sessions                                                        |
 | `/model`           | Change the model for the current agent                                               |
 | `/effort`          | Set the current model's reasoning-effort level (`/effort <none\|minimal\|low\|medium\|high\|xhigh\|max>`, or `/effort` alone to pick from the supported levels; reasoning models only) |
-| `/settings`        | Open the settings dialog: layout visuals and message send behavior                  |
-| `/theme`           | Change the color theme                                                               |
+| `/settings`        | Manage appearance, behavior, and notification preferences                           |
 | `/yolo`            | Toggle automatic tool call approval                                                  |
 | `/title`           | Set or regenerate session title                                                      |
 | `/attach`          | Attach a file to your message                                                        |
@@ -93,11 +92,12 @@ Type `/` during a session to see available commands, or press <kbd>Ctrl</kbd>+<k
 | `/skills`          | List skills available to the current agent                                           |
 | `/toolset-restart` | Force a supervisor-driven reconnect of the named toolset (`/toolset-restart <name>`) |
 | `/permissions`     | Inspect and edit tool permission rules                                               |
-| `/split-diff`      | Toggle split-diff view for file edits                                                |
 | `/speak`           | Voice input via system speech-to-text (macOS only)                                   |
 | `/exit`            | Exit the application (aliases: `/quit`, `/q`)                                        |
 
 Slash commands (both built-in and named) execute immediately when entered. Regular chat messages sent while the agent is working are steered into the ongoing stream by default: the agent picks them up mid-turn (they appear in the transcript at the point the agent sees them) without breaking the stream. Prefer the previous end-of-turn behavior? Switch **While agent is working** to `Queue` on the **Behavior** tab of `/settings`; queued messages are processed in order once the stream stops.
+
+Agent-defined commands (prompts, URL links, agent-switching shortcuts) are configured under `commands:` in the agent YAML — see [Custom Commands](../../configuration/commands/index.md) for the full reference, including how to hide commands with `--disable-commands`.
 
 ### Agents Panel
 
@@ -199,7 +199,7 @@ settings:
   expand_thinking: true
 ```
 
-Set it to `false` or omit it to keep the default collapsed behavior.
+Set it to `false` or omit it to keep the default collapsed behavior. See [User Settings](../../configuration/user-settings/index.md) for the full settings reference.
 
 ### Snapshots, `/undo`, and `/snapshots`
 
@@ -328,7 +328,7 @@ Press <kbd>Ctrl</kbd>+<kbd>H</kbd> to view the complete list of all available ke
 
 ### Custom Keybindings
 
-You can remap the shortcuts above by adding a `keybindings` list to the `settings` block of your `~/.config/cagent/config.yaml`. Each entry maps an action to one or more key combinations in [Bubbles key format](https://github.com/charmbracelet/bubbles) (for example `ctrl+q`, `alt+enter`, `f2`). Unlisted actions keep their defaults.
+You can remap the shortcuts above by adding a `keybindings` list to the `settings` block of your `~/.config/cagent/config.yaml` (see [User Settings](../../configuration/user-settings/index.md#settings-reference) for the field reference). Each entry maps an action to one or more key combinations in [Bubbles key format](https://github.com/charmbracelet/bubbles) (for example `ctrl+q`, `alt+enter`, `f2`). Unlisted actions keep their defaults.
 
 This is the recommended way to replace the `Ctrl+J` newline fallback, which conflicts with common editor/terminal shortcuts (for example inside VS Code).
 
@@ -376,17 +376,24 @@ Press <kbd>Ctrl</kbd>+<kbd>R</kbd> to enter incremental history search mode. Sta
 
 ## Settings
 
-Run `/settings` to open the settings dialog. Use <kbd>Tab</kbd> to switch between its two tabs, **Visuals** and **Behavior**.
+Run `/settings` to open the settings dialog. Use <kbd>Tab</kbd> to switch between **Appearance**, **Behavior**, and **Notifications**.
 
-The **Visuals** tab customizes the layout. It shows a live schematic preview of the resulting layout and applies every change immediately to the UI behind the dialog:
+> [!TIP]
+> **Full settings reference**
+>
+> This section covers the `/settings` dialog. For the complete list of `settings:` fields (including ones with no dialog UI, like `permissions`, `hooks`, and `keybindings`) and how they interact with CLI flags and aliases, see [User Settings](../../configuration/user-settings/index.md).
+
+The **Appearance** tab selects the theme and customizes the layout. Layout changes show a live schematic preview and apply immediately to the UI behind the dialog:
 
 - **Sidebar position**: `Right` (default), `Left`, `Top`, or `Bottom`. Left/right keep the full vertical sidebar next to the chat; top/bottom render it as a compact horizontal band above or below the chat (session title, working directory, usage, plus a one-line summary of the current agent, tools, and todos).
 - **Section spacing**: `Compact`, `Normal` (default), or `Relaxed`, the number of blank lines between the sidebar sections (1, 2, or 3).
 - **Sidebar sections**: toggle the visibility of the **Session path** (the working directory line, including its git branch) and the **Token usage**, **Agents**, **Tools**, and **Todos** sections. The session title is always shown.
 
-The **Behavior** tab controls how messages are handled:
+Appearance also controls split-diff rendering, expanded thinking, and whether tool results are hidden by default. Select **Theme** to open the theme picker.
 
-- **While agent is working**: `Steer` (default) attaches new messages to the ongoing stream so the agent picks them up mid-turn; `Queue` holds them until the current turn ends, processing them in order once the stream stops.
+The **Behavior** tab controls busy-message handling, the auto-approve default, tab restoration, automatic snapshots, lean UI, and the maximum tab-title length. Restore-tabs and lean-UI changes take effect on the next launch. Enabling auto-approve requires confirmation.
+
+The **Notifications** tab enables completion sounds and sets the minimum task duration before a sound plays.
 
 Press <kbd>Enter</kbd> to apply and persist, or <kbd>Escape</kbd> to cancel and restore the previous layout. The settings are saved globally in `~/.config/cagent/config.yaml`:
 
@@ -409,8 +416,8 @@ settings:
 Customize the TUI appearance with built-in or custom themes:
 
 ```bash
-# Switch themes interactively
-/theme
+# Open Settings and select Theme under Appearance
+/settings
 ```
 
 ### Built-in Themes
@@ -419,7 +426,7 @@ Customize the TUI appearance with built-in or custom themes:
 
 ### Auto Theme (match the terminal)
 
-The special theme `auto` follows the terminal's light/dark background instead of naming a fixed theme. Select **Auto (match terminal)** in the `/theme` picker, pass `--theme auto`, or set it in your user config:
+The special theme `auto` follows the terminal's light/dark background instead of naming a fixed theme. Select **Auto (match terminal)** from **Settings → Appearance → Theme**, pass `--theme auto`, or set it in your user config:
 
 ```yaml
 settings:
@@ -474,7 +481,7 @@ markdown:
 
 ### Applying Themes
 
-**In user config** (`~/.config/cagent/config.yaml`):
+**In user config** (`~/.config/cagent/config.yaml`, see [User Settings](../../configuration/user-settings/index.md) for the full reference):
 
 ```yaml
 settings:
@@ -483,7 +490,7 @@ settings:
 
 **At launch:** Pass `--theme <name>` to `docker agent run` to preselect a theme for that session. This overrides `settings.theme` in your config but is not saved. Invalid theme names print an error at startup listing the available options. Has no effect in `--exec` mode. `--theme auto` enables the [auto theme](#auto-theme-match-the-terminal) for the session.
 
-**At runtime:** Use the `/theme` command to open the theme picker and select from available themes. Your selection is saved globally in `~/.config/cagent/config.yaml` under `settings.theme` and persists across sessions.
+**At runtime:** Open `/settings`, select **Theme** on the Appearance tab, and choose from the available themes. Your selection is saved globally in `~/.config/cagent/config.yaml` under `settings.theme` and persists across sessions.
 
 > [!TIP]
 > **Hot Reload**

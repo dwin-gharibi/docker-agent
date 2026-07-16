@@ -1049,6 +1049,81 @@ func TestAddError_NotFound(t *testing.T) {
 	require.ErrorIs(t, err, ErrNotFound)
 }
 
+// TestAddSubSession_InMemoryChildIsEmbedded pins sub-session cost provenance
+// in the in-memory store: AddSubSession records store history, not a live
+// runtime attachment, so a parent fetched via GetSession must report the
+// child's cost through EmbeddedSubSessionCost — the component live usage
+// reporting folds into the parent's own cost. A live-attached child would be
+// skipped there, leaving the fetched parent's usage ($0.10) short of its
+// TotalCost ($0.15).
+func TestAddSubSession_InMemoryChildIsEmbedded(t *testing.T) {
+	t.Parallel()
+
+	store := NewInMemorySessionStore()
+
+	root := New(WithID("cost-root"))
+	root.AddMessage(&Message{Message: chat.Message{Role: chat.MessageRoleAssistant, Content: "done", Cost: 0.10}})
+	require.NoError(t, store.AddSession(t.Context(), root))
+
+	child := New()
+	child.AddMessage(&Message{Message: chat.Message{Role: chat.MessageRoleAssistant, Content: "done", Cost: 0.05}})
+	require.NoError(t, store.AddSubSession(t.Context(), root.ID, child))
+
+	got, err := store.GetSession(t.Context(), root.ID)
+	require.NoError(t, err)
+	assert.InDelta(t, 0.05, got.EmbeddedSubSessionCost(), 1e-9,
+		"a store-attached child is embedded history, not a live attachment")
+	assert.InDelta(t, 0.15, got.TotalCost(), 1e-9)
+	assert.InDelta(t, got.TotalCost(), got.OwnCost()+got.EmbeddedSubSessionCost(), 1e-9,
+		"own + embedded — what live usage reporting emits — must equal the total")
+}
+
+// TestSQLiteStore_CostsSurviveReload proves the full cost surface of a
+// session round-trips through the on-disk schema: a normal message cost, a
+// compaction summary cost written through the real AddSummary route, and an
+// embedded sub-session's costs (persisted via addItemTx, including its own
+// summary item). TotalCost must be identical before and after closing and
+// reopening the store.
+func TestSQLiteStore_CostsSurviveReload(t *testing.T) {
+	t.Parallel()
+
+	tempDB := filepath.Join(t.TempDir(), "test_cost_roundtrip.db")
+
+	store, err := NewSQLiteSessionStore(t.Context(), tempDB)
+	require.NoError(t, err)
+
+	root := New(WithID("cost-roundtrip-root"))
+	root.AddMessage(&Message{Message: chat.Message{Role: chat.MessageRoleAssistant, Content: "done", Cost: 0.10}})
+
+	child := New(WithParentID(root.ID))
+	child.AddMessage(&Message{Message: chat.Message{Role: chat.MessageRoleAssistant, Content: "child done", Cost: 0.05}})
+	child.Messages = append(child.Messages, Item{Summary: "child summary", Cost: 0.02})
+	root.AddSubSession(child)
+
+	require.NoError(t, store.AddSession(t.Context(), root))
+	require.NoError(t, store.AddSummary(t.Context(), root.ID, "root summary", 1, 0.01))
+	// Mirror AddSummary in memory so the pre-reload total includes it.
+	root.Messages = append(root.Messages, Item{Summary: "root summary", FirstKeptEntry: 1, Cost: 0.01})
+
+	want := root.TotalCost()
+	require.InDelta(t, 0.18, want, 1e-9)
+	require.NoError(t, store.(*SQLiteSessionStore).Close())
+
+	reopened, err := NewSQLiteSessionStore(t.Context(), tempDB)
+	require.NoError(t, err)
+	defer reopened.(*SQLiteSessionStore).Close()
+
+	got, err := reopened.GetSession(t.Context(), root.ID)
+	require.NoError(t, err)
+
+	last := got.Messages[len(got.Messages)-1]
+	require.Equal(t, "root summary", last.Summary)
+	assert.Equal(t, 1, last.FirstKeptEntry)
+	assert.InDelta(t, 0.01, last.Cost, 1e-9, "the summary item's cost must survive persistence")
+	assert.InDelta(t, want, got.TotalCost(), 1e-9,
+		"TotalCost must be identical after closing and reopening the store")
+}
+
 func TestIsRelativeSessionRef(t *testing.T) {
 	t.Parallel()
 

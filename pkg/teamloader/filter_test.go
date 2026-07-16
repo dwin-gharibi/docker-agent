@@ -178,3 +178,49 @@ func TestWithToolsFilter_NonInstructableInner(t *testing.T) {
 	instructions := tools.GetInstructions(wrapped)
 	assert.Empty(t, instructions)
 }
+
+func TestWithNoToolsFilter_HidesAllTools(t *testing.T) {
+	t.Parallel()
+	inner := &mockToolSet{
+		toolsFunc: func(context.Context) ([]tools.Tool, error) {
+			return []tools.Tool{{Name: "tool1"}, {Name: "tool2"}}, nil
+		},
+	}
+
+	wrapped := WithNoToolsFilter(inner)
+
+	result, err := wrapped.Tools(t.Context())
+	require.NoError(t, err)
+	assert.Empty(t, result)
+}
+
+func TestWithNoToolsFilter_PreservesInstructions(t *testing.T) {
+	t.Parallel()
+	inner := &instructableToolSet{
+		mockToolSet: mockToolSet{
+			toolsFunc: func(context.Context) ([]tools.Tool, error) {
+				return []tools.Tool{{Name: "tool1"}}, nil
+			},
+		},
+		instructions: "Test instructions for the toolset",
+	}
+
+	wrapped := WithNoToolsFilter(inner)
+
+	instructions := tools.GetInstructions(wrapped)
+	assert.Equal(t, "Test instructions for the toolset", instructions)
+}
+
+func TestWithNoToolsFilter_NonInstructableInner(t *testing.T) {
+	t.Parallel()
+	inner := &mockToolSet{
+		toolsFunc: func(context.Context) ([]tools.Tool, error) {
+			return []tools.Tool{{Name: "tool1"}}, nil
+		},
+	}
+
+	wrapped := WithNoToolsFilter(inner)
+
+	instructions := tools.GetInstructions(wrapped)
+	assert.Empty(t, instructions)
+}

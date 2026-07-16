@@ -340,7 +340,7 @@ func TestNewElicitationDialog(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			dialog := NewElicitationDialog(tt.message, tt.schema, tt.meta)
+			dialog := NewElicitationDialog(tt.message, tt.schema, tt.meta, "")
 			require.NotNil(t, dialog)
 
 			ed, ok := dialog.(*ElicitationDialog)
@@ -560,7 +560,7 @@ func TestElicitationDialog_collectAndValidate(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			dialog := NewElicitationDialog("test", tt.schema, nil).(*ElicitationDialog)
+			dialog := NewElicitationDialog("test", tt.schema, nil, "").(*ElicitationDialog)
 			if tt.setupInputs != nil {
 				tt.setupInputs(dialog)
 			}
@@ -588,7 +588,7 @@ func TestElicitationDialog_PasswordFieldMaskedAndUntrimmed(t *testing.T) {
 		},
 		"required": []any{"password"},
 	}
-	dialog := NewElicitationDialog("sudo", schema, nil).(*ElicitationDialog)
+	dialog := NewElicitationDialog("sudo", schema, nil, "").(*ElicitationDialog)
 
 	// The password input is masked, not echoed in clear text.
 	assert.Equal(t, textinput.EchoPassword, dialog.inputs[0].EchoMode)
@@ -616,7 +616,7 @@ func TestElicitationDialog_LongEnumScrolls(t *testing.T) {
 		"enum":  enumValues,
 	}
 
-	dialog := NewElicitationDialog("Choose an option:", schema, nil).(*ElicitationDialog)
+	dialog := NewElicitationDialog("Choose an option:", schema, nil, "").(*ElicitationDialog)
 	require.Len(t, dialog.fields, 1)
 	require.Len(t, dialog.fields[0].EnumValues, 30)
 
@@ -649,7 +649,7 @@ func TestElicitationDialog_FieldsBelowFold_AreReachable(t *testing.T) {
 	}
 	schema := map[string]any{"type": "object", "properties": props, "required": required}
 
-	dialog := NewElicitationDialog("Fill in the form", schema, nil).(*ElicitationDialog)
+	dialog := NewElicitationDialog("Fill in the form", schema, nil, "").(*ElicitationDialog)
 	_, _ = dialog.Update(tea.WindowSizeMsg{Width: 100, Height: 18})
 	_ = dialog.View()
 
@@ -681,7 +681,7 @@ func TestElicitationDialog_SmallContent_NoScrollbar(t *testing.T) {
 		"required": []any{"name"},
 	}
 
-	dialog := NewElicitationDialog("Enter your name", schema, nil).(*ElicitationDialog)
+	dialog := NewElicitationDialog("Enter your name", schema, nil, "").(*ElicitationDialog)
 	_, _ = dialog.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	_ = dialog.View()
 
@@ -708,7 +708,7 @@ func TestElicitationDialog_TypingRevealsBelowFoldField(t *testing.T) {
 		"required": []any{"name"},
 	}
 
-	dialog := NewElicitationDialog(longMessage, schema, nil).(*ElicitationDialog)
+	dialog := NewElicitationDialog(longMessage, schema, nil, "").(*ElicitationDialog)
 	_, _ = dialog.Update(tea.WindowSizeMsg{Width: 80, Height: 16})
 	_ = dialog.View()
 
@@ -748,7 +748,7 @@ func TestElicitationDialog_OpensScrolledToTop(t *testing.T) {
 		"enum":  enumValues,
 	}
 
-	dialog := NewElicitationDialog(longMessage, schema, nil).(*ElicitationDialog)
+	dialog := NewElicitationDialog(longMessage, schema, nil, "").(*ElicitationDialog)
 	_, _ = dialog.Update(tea.WindowSizeMsg{Width: 80, Height: 18})
 	_ = dialog.View()
 
@@ -770,7 +770,7 @@ func TestElicitationDialog_UserScrollUp_NotSnappedBack(t *testing.T) {
 	}
 	schema := map[string]any{"type": "string", "title": "Pick one", "enum": enumValues}
 
-	dialog := NewElicitationDialog(longMessage, schema, nil).(*ElicitationDialog)
+	dialog := NewElicitationDialog(longMessage, schema, nil, "").(*ElicitationDialog)
 	_, _ = dialog.Update(tea.WindowSizeMsg{Width: 80, Height: 16})
 	_ = dialog.View()
 

@@ -75,3 +75,43 @@ func TestNewSQLiteSessionStoreFromDB_RoundTripWithMessages(t *testing.T) {
 	assert.Equal(t, "hello", got.Messages[0].Message.Message.Content)
 	assert.Equal(t, "world", got.Messages[1].Message.Message.Content)
 }
+
+// TestMigration23_LegacySummaryRowsReadAsZeroCost simulates a database
+// created before migration 023 (no cost column on session_items, summary
+// rows written without one): opening the store applies the migration and
+// the legacy summary must hydrate with cost 0 — historical summary costs
+// cannot be reconstructed.
+func TestMigration23_LegacySummaryRowsReadAsZeroCost(t *testing.T) {
+	t.Parallel()
+
+	db, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	db.SetMaxOpenConns(1)
+	ctx := t.Context()
+
+	// Bootstrap schema plus migrations 1..22 only — the pre-cost layout.
+	_, err = db.ExecContext(ctx, `CREATE TABLE sessions (id TEXT PRIMARY KEY, messages TEXT, created_at TEXT)`)
+	require.NoError(t, err)
+	all := getAllMigrations()
+	require.NoError(t, NewMigrationManagerWithMigrations(db, all[:len(all)-1]).InitializeMigrations(ctx))
+
+	_, err = db.ExecContext(ctx,
+		`INSERT INTO sessions (id, created_at) VALUES ('legacy', '2024-01-01T00:00:00Z')`)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx,
+		`INSERT INTO session_items (session_id, position, item_type, summary_text, first_kept_entry)
+		 VALUES ('legacy', 0, 'summary', 'old summary', 2)`)
+	require.NoError(t, err)
+
+	store, err := NewSQLiteSessionStoreFromDB(ctx, db)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+
+	got, err := store.GetSession(ctx, "legacy")
+	require.NoError(t, err)
+	require.Len(t, got.Messages, 1)
+	assert.Equal(t, "old summary", got.Messages[0].Summary)
+	assert.Equal(t, 2, got.Messages[0].FirstKeptEntry)
+	assert.Zero(t, got.Messages[0].Cost, "legacy summary rows must read as cost 0")
+}

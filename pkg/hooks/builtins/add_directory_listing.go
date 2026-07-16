@@ -39,7 +39,9 @@ func addDirectoryListing(_ context.Context, in *hooks.Input, _ []string) (*hooks
 	entries, err := os.ReadDir(in.Cwd)
 	if err != nil {
 		slog.Debug("add_directory_listing: read dir failed; skipping", "cwd", in.Cwd, "error", err)
-		return nil, nil
+		return hooks.NewInstructionContextOutput(hooks.EventSessionStart, hooks.InstructionContext{
+			Key: "core/directory-listing", Unavailable: true,
+		}), nil
 	}
 
 	var names []string
@@ -54,7 +56,10 @@ func addDirectoryListing(_ context.Context, in *hooks.Input, _ []string) (*hooks
 		names = append(names, name)
 	}
 	if len(names) == 0 {
-		return nil, nil
+		return hooks.NewInstructionContextOutput(hooks.EventSessionStart, hooks.InstructionContext{
+			Key: "core/directory-listing", Removed: true,
+			RemovedContent: "The working directory no longer has visible top-level entries.",
+		}), nil
 	}
 	slices.Sort(names)
 
@@ -75,5 +80,12 @@ func addDirectoryListing(_ context.Context, in *hooks.Input, _ []string) (*hooks
 		fmt.Fprintf(&b, "... and %d more\n", truncated)
 	}
 
-	return hooks.NewAdditionalContextOutput(hooks.EventSessionStart, strings.TrimRight(b.String(), "\n")), nil
+	listing := strings.TrimRight(b.String(), "\n")
+	return hooks.NewInstructionContextOutput(hooks.EventSessionStart, hooks.InstructionContext{
+		Key:            "core/directory-listing",
+		Label:          "top-level directory entries",
+		Content:        listing,
+		ChangedContent: "The working-directory listing is now:\n\n" + listing,
+		RemovedContent: "The working directory no longer has visible top-level entries.",
+	}), nil
 }

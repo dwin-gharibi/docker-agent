@@ -114,7 +114,7 @@ type Model struct {
 	selected            bool
 	width               int
 	height              int
-	sessionState        *service.SessionState
+	sessionState        service.SessionStateReader
 	reasoningVersion    int          // increments when reasoning content changes
 	cache               *renderCache // cached rendering results
 	animationRegistered bool         // whether we're registered with animation coordinator
@@ -124,7 +124,7 @@ type Model struct {
 }
 
 // New creates a new reasoning block.
-func New(id, agentName string, sessionState *service.SessionState) *Model {
+func New(id, agentName string, sessionState service.SessionStateReader) *Model {
 	return &Model{
 		id:           id,
 		agentName:    agentName,

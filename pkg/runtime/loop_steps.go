@@ -163,11 +163,12 @@ func (r *LocalRuntime) handleStreamError(
 	// loop when compaction cannot reduce the context enough.
 	if _, ok := errors.AsType[*modelerrors.ContextOverflowError](err); ok && r.sessionCompactionEnabled(a) && *overflowCompactions < r.maxOverflowCompactions {
 		*overflowCompactions++
+		inputTokens, outputTokens := sess.Usage()
 		slog.WarnContext(ctx, "Context window overflow detected, attempting auto-compaction",
 			"agent", a.Name(),
 			"session_id", sess.ID,
-			"input_tokens", sess.InputTokens,
-			"output_tokens", sess.OutputTokens,
+			"input_tokens", inputTokens,
+			"output_tokens", outputTokens,
 			"context_limit", contextLimit,
 			"attempt", *overflowCompactions,
 		)

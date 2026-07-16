@@ -471,6 +471,29 @@ func NewAdditionalContextOutput(event EventType, content string) *Output {
 	}
 }
 
+// NewInstructionContextOutput returns context with a stable semantic identity,
+// allowing the runtime to diff it independently from other hook output.
+func NewInstructionContextOutput(event EventType, source InstructionContext) *Output {
+	return &Output{HookSpecificOutput: &HookSpecificOutput{
+		HookEventName:      event,
+		InstructionContext: []InstructionContext{source},
+	}}
+}
+
+// InstructionContext describes independently changing trusted context.
+type InstructionContext struct {
+	Key            string `json:"key"`
+	Group          string `json:"group,omitempty"`
+	Label          string `json:"label,omitempty"`
+	Content        string `json:"content,omitempty"`
+	ChangedContent string `json:"changed_content,omitempty"`
+	RemovedContent string `json:"removed_content,omitempty"`
+	Removed        bool   `json:"removed,omitempty"`
+	Unavailable    bool   `json:"unavailable,omitempty"`
+	CompleteGroup  bool   `json:"complete_group,omitempty"`
+	SetMarker      bool   `json:"set_marker,omitempty"`
+}
+
 // Output is the JSON-decoded output of a hook.
 type Output struct {
 	// Continue indicates whether to continue execution (default: true).
@@ -510,7 +533,8 @@ type HookSpecificOutput struct {
 	UpdatedInput             map[string]any `json:"updated_input,omitempty"`
 
 	// PostToolUse / SessionStart / TurnStart / Stop fields.
-	AdditionalContext string `json:"additional_context,omitempty"`
+	AdditionalContext  string               `json:"additional_context,omitempty"`
+	InstructionContext []InstructionContext `json:"instruction_context,omitempty"`
 
 	// BeforeCompaction: when non-empty, the runtime applies this string as
 	// the compaction summary verbatim and skips the LLM-based
@@ -564,7 +588,8 @@ type Result struct {
 	// ModifiedInput contains modifications to tool input (PreToolUse).
 	ModifiedInput map[string]any
 	// AdditionalContext is context added by the hooks.
-	AdditionalContext string
+	AdditionalContext  string
+	InstructionContext []InstructionContext
 	// SystemMessage is a warning to show the user.
 	SystemMessage string
 	// ExitCode is the worst exit code seen (0 = success, 2 = blocking error, -1 = exec failure).

@@ -67,6 +67,10 @@ module:
     # Site chrome, kept at their historical paths.
     - source: demo.gif
       target: static/demo.gif
+    - source: demo.mp4
+      target: static/demo.mp4
+    - source: demo-poster.png
+      target: static/demo-poster.png
     - source: assets
       target: static/assets
     - source: css

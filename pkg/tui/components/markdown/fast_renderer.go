@@ -19,6 +19,7 @@ import (
 
 	"github.com/docker/docker-agent/pkg/concurrent"
 	"github.com/docker/docker-agent/pkg/lrucache"
+	"github.com/docker/docker-agent/pkg/tui/components/mermaid"
 	"github.com/docker/docker-agent/pkg/tui/styles"
 )
 
@@ -1913,6 +1914,18 @@ func (p *parser) renderCodeBlock(code, lang string) {
 
 // renderCodeBlockWithIndent renders a fenced code block with indentation and width constraints.
 func (p *parser) renderCodeBlockWithIndent(code, lang, indent string, availableWidth int) {
+	if strings.EqualFold(strings.TrimSpace(lang), "mermaid") {
+		if diagram, ok := mermaid.Render(code, availableWidth); ok {
+			for line := range strings.SplitSeq(diagram, "\n") {
+				p.out.WriteString(indent)
+				p.styles.ansiText.renderTo(&p.out, line)
+				p.out.WriteByte('\n')
+			}
+			p.out.WriteByte('\n')
+			return
+		}
+	}
+
 	// Get syntax highlighting tokens
 	tokens := p.syntaxHighlight(code, lang)
 

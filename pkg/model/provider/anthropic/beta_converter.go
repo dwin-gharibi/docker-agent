@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/anthropics/anthropic-sdk-go/packages/param"
 
 	"github.com/docker/docker-agent/pkg/chat"
 	"github.com/docker/docker-agent/pkg/tools"
@@ -21,7 +22,12 @@ import (
 // Important: Anthropic API requires that all tool_result blocks corresponding to tool_use
 // blocks from the same assistant message MUST be grouped into a single user message.
 func (c *Client) convertBetaMessages(ctx context.Context, messages []chat.Message) ([]anthropic.BetaMessageParam, error) {
+	return c.convertBetaMessagesWithDeferred(ctx, messages, nil)
+}
+
+func (c *Client) convertBetaMessagesWithDeferred(ctx context.Context, messages []chat.Message, requestTools []tools.Tool) ([]anthropic.BetaMessageParam, error) {
 	var betaMessages []anthropic.BetaMessageParam
+	deferredByCallID := deferredToolNamesByCallID(requestTools)
 
 	for i := 0; i < len(messages); i++ {
 		msg := &messages[i]
@@ -102,7 +108,7 @@ func (c *Client) convertBetaMessages(ctx context.Context, messages []chat.Messag
 			// Collect consecutive tool messages and merge them into a single user message
 			// This is required by Anthropic API: all tool_result blocks for tool_use blocks
 			// from the same assistant message must be in the same user message
-			firstBlock, err := c.convertBetaToolResultBlock(ctx, msg)
+			firstBlock, err := c.convertBetaToolResultBlockWithDeferred(ctx, msg, deferredByCallID[msg.ToolCallID])
 			if err != nil {
 				return nil, err
 			}
@@ -111,7 +117,7 @@ func (c *Client) convertBetaMessages(ctx context.Context, messages []chat.Messag
 			// Look ahead for consecutive tool messages and merge them
 			j := i + 1
 			for j < len(messages) && messages[j].Role == chat.MessageRoleTool {
-				block, err := c.convertBetaToolResultBlock(ctx, &messages[j])
+				block, err := c.convertBetaToolResultBlockWithDeferred(ctx, &messages[j], deferredByCallID[messages[j].ToolCallID])
 				if err != nil {
 					return nil, err
 				}
@@ -141,7 +147,20 @@ func (c *Client) convertBetaMessages(ctx context.Context, messages []chat.Messag
 // It handles text, images (base64 and URL), and document attachments.
 // convertBetaToolResultBlock converts a tool message to a Beta API tool_result block,
 // including inline image and document content from MultiContent.
-func (c *Client) convertBetaToolResultBlock(ctx context.Context, msg *chat.Message) (anthropic.BetaContentBlockParamUnion, error) {
+func (c *Client) convertBetaToolResultBlockWithDeferred(ctx context.Context, msg *chat.Message, names []string) (anthropic.BetaContentBlockParamUnion, error) {
+	if len(names) > 0 {
+		content := make([]anthropic.BetaToolResultBlockParamContentUnion, 0, len(names))
+		for _, name := range names {
+			content = append(content, anthropic.BetaToolResultBlockParamContentUnion{
+				OfToolReference: &anthropic.BetaToolReferenceBlockParam{ToolName: name},
+			})
+		}
+		return anthropic.BetaContentBlockParamUnion{OfToolResult: &anthropic.BetaToolResultBlockParam{
+			ToolUseID: msg.ToolCallID,
+			IsError:   param.NewOpt(msg.IsError),
+			Content:   content,
+		}}, nil
+	}
 	if !hasRichToolResultMultiContent(msg.MultiContent) {
 		return anthropic.BetaContentBlockParamUnion{
 			OfToolResult: &anthropic.BetaToolResultBlockParam{
@@ -326,9 +345,11 @@ func extractBetaSystemBlocks(messages []chat.Message) []anthropic.BetaTextBlockP
 
 // convertBetaTools converts tools to Beta API format
 func convertBetaTools(t []tools.Tool) ([]anthropic.BetaToolUnionParam, error) {
-	betaTools := make([]anthropic.BetaToolUnionParam, len(t))
+	hasDeferredTools := containsDeferredTool(t)
+	t, immediateCount := orderToolsForDeferredLoading(t)
+	betaTools := make([]anthropic.BetaToolUnionParam, 0, len(t))
 
-	for i, tool := range t {
+	for _, tool := range t {
 		inputSchema, err := ConvertParametersToSchema(tool.Parameters)
 		if err != nil {
 			return nil, err
@@ -341,13 +362,18 @@ func convertBetaTools(t []tools.Tool) ([]anthropic.BetaToolUnionParam, error) {
 		}
 
 		// Create BetaToolParam and wrap it in BetaToolUnionParam
-		betaTools[i] = anthropic.BetaToolUnionParam{
-			OfTool: &anthropic.BetaToolParam{
-				Name:        tool.Name,
-				Description: anthropic.String(tool.Description),
-				InputSchema: betaInputSchema,
-			},
+		betaTool := &anthropic.BetaToolParam{
+			Name:        tool.Name,
+			Description: anthropic.String(tool.Description),
+			InputSchema: betaInputSchema,
 		}
+		if tool.Deferred {
+			betaTool.DeferLoading = param.NewOpt(true)
+		}
+		if hasDeferredTools && len(betaTools) == immediateCount-1 {
+			betaTool.CacheControl = anthropic.NewBetaCacheControlEphemeralParam()
+		}
+		betaTools = append(betaTools, anthropic.BetaToolUnionParam{OfTool: betaTool})
 	}
 
 	return betaTools, nil

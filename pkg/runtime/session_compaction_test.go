@@ -10,6 +10,7 @@ import (
 	"github.com/docker/docker-agent/pkg/agent"
 	"github.com/docker/docker-agent/pkg/chat"
 	"github.com/docker/docker-agent/pkg/config/latest"
+	"github.com/docker/docker-agent/pkg/modelsdev"
 	"github.com/docker/docker-agent/pkg/session"
 	"github.com/docker/docker-agent/pkg/team"
 )
@@ -222,6 +223,8 @@ func TestDoCompactBeforeHookSuppliesSummary(t *testing.T) {
 		"the session must record the hook-supplied summary as its last item")
 	assert.InDelta(t, 0.0, last.Cost, 0.0001,
 		"hook-supplied summaries cost nothing — no LLM was called")
+	assert.InDelta(t, 0.0, summaryEvent.Cost, 0.0001,
+		"the summary event carries the same zero cost")
 }
 
 // TestDoCompactAfterHookFires verifies that after_compaction fires
@@ -336,4 +339,49 @@ func TestDoCompactNoHooksMatchesPriorBehavior(t *testing.T) {
 	assert.Equal(t, 1, doneCount, "expected exactly one completed event")
 	require.NotNil(t, summaryEvent, "expected a SessionSummary event from the LLM path")
 	assert.Equal(t, "summary", summaryEvent.Summary)
+}
+
+// TestDoCompactSummaryEventCarriesCost pins the cost plumbing of the LLM
+// compaction path: the summarization stream's billed cost
+// (compactor.Result.Cost) must land on the applied summary item and on the
+// emitted SessionSummaryEvent — the value the persistence observer stores.
+// The compaction sub-runtime inherits the parent's model store, which is
+// what prices the summary call here.
+func TestDoCompactSummaryEventCarriesCost(t *testing.T) {
+	t.Parallel()
+
+	summaryStream := newStreamBuilder().AddContent("the summary").AddStopWithUsage(100, 50).Build()
+	prov := &queueProvider{id: "test/mock-model", streams: []chat.MessageStream{summaryStream}}
+	root := agent.New("root", "test", agent.WithModel(prov))
+
+	rt, err := NewLocalRuntime(t.Context(), team.New(team.WithAgents(root)),
+		WithSessionCompaction(false),
+		WithModelStore(mockModelStoreWithCostAndLimit{limit: 100_000, cost: modelsdev.Cost{Input: 10, Output: 20}}),
+	)
+	require.NoError(t, err)
+
+	sess := session.New(session.WithMessages([]session.Item{
+		session.NewMessageItem(&session.Message{Message: chat.Message{Role: chat.MessageRoleUser, Content: "hi"}}),
+		session.NewMessageItem(&session.Message{Message: chat.Message{Role: chat.MessageRoleAssistant, Content: "hello"}}),
+	}))
+
+	events := make(chan Event, 32)
+	rt.compactWithReason(t.Context(), sess, "", compactionReasonManual, NewChannelSink(events))
+	close(events)
+
+	var summaryEvent *SessionSummaryEvent
+	for ev := range events {
+		if e, ok := ev.(*SessionSummaryEvent); ok {
+			summaryEvent = e
+		}
+	}
+	require.NotNil(t, summaryEvent, "expected a SessionSummary event from the LLM path")
+
+	// The summary stream billed 100 input × $10/M + 50 output × $20/M = $0.002.
+	last := sess.Messages[len(sess.Messages)-1]
+	require.Equal(t, "the summary", last.Summary)
+	assert.InDelta(t, 0.002, last.Cost, 1e-9,
+		"the summary item records the summarization stream's cost")
+	assert.InDelta(t, last.Cost, summaryEvent.Cost, 1e-9,
+		"the emitted event must carry the same cost that was applied to the session")
 }

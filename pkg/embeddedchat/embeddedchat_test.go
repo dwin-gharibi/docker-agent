@@ -8,9 +8,15 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/docker/docker-agent/pkg/agent"
+	"github.com/docker/docker-agent/pkg/chat"
 	dagentcfg "github.com/docker/docker-agent/pkg/config"
+	"github.com/docker/docker-agent/pkg/embeddedchat/defaults"
+	"github.com/docker/docker-agent/pkg/model/provider/base"
+	"github.com/docker/docker-agent/pkg/modelsdev"
 	dagentruntime "github.com/docker/docker-agent/pkg/runtime"
 	"github.com/docker/docker-agent/pkg/session"
+	"github.com/docker/docker-agent/pkg/team"
 	"github.com/docker/docker-agent/pkg/tools"
 )
 
@@ -25,7 +31,10 @@ func TestNewLoadsAgentAndWelcomeMessage(t *testing.T) {
       type: claude-code
 `)
 
-	s, err := New(t.Context(), Config{AgentSource: dagentcfg.NewBytesSource("agent.yaml", cfg)})
+	s, err := New(t.Context(), Config{
+		AgentSource: dagentcfg.NewBytesSource("agent.yaml", cfg),
+		LoadOpts:    defaults.Opts(),
+	})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, s.Close()) })
 	require.Equal(t, "Hello from embedded chat.", s.WelcomeMessage())
@@ -38,6 +47,56 @@ func TestNewRequiresAgentSource(t *testing.T) {
 	s, err := New(t.Context(), Config{})
 	require.Nil(t, s)
 	require.ErrorIs(t, err, ErrAgentSourceRequired)
+}
+
+func TestNewRequiresRegistriesForAgentSource(t *testing.T) {
+	t.Parallel()
+	s, err := New(t.Context(), Config{AgentSource: dagentcfg.NewBytesSource("agent.yaml", []byte("agents:"))})
+	require.Nil(t, s)
+	require.ErrorIs(t, err, ErrRegistriesRequired)
+}
+
+// newCodeBuiltTeam assembles a minimal team in code, the way embedders that
+// avoid the YAML loader (and its full registries) do.
+func newCodeBuiltTeam() *team.Team {
+	root := agent.New("root", "Be helpful.",
+		agent.WithModel(stubProvider{}),
+		agent.WithWelcomeMessage("Hello from a code-built team."))
+	return team.New(team.WithAgents(root))
+}
+
+// stubProvider satisfies the model validation for code-built teams; these
+// tests never run a completion.
+type stubProvider struct{}
+
+func (stubProvider) ID() modelsdev.ID { return modelsdev.ParseIDOrZero("test/stub-model") }
+func (stubProvider) CreateChatCompletionStream(context.Context, []chat.Message, []tools.Tool) (chat.MessageStream, error) {
+	return nil, errors.New("stub provider cannot complete")
+}
+func (stubProvider) BaseConfig() base.Config { return base.Config{} }
+
+func TestNewFromCodeBuiltTeam(t *testing.T) {
+	t.Parallel()
+	s, err := New(t.Context(), Config{Team: newCodeBuiltTeam()})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, s.Close()) })
+	require.Equal(t, "Hello from a code-built team.", s.WelcomeMessage())
+	require.NotNil(t, s.Runtime())
+	require.NotNil(t, s.Conversation())
+}
+
+func TestInitialSessionResumesConversation(t *testing.T) {
+	t.Parallel()
+	restored := session.New()
+	restored.AddMessage(session.UserMessage("earlier prompt"))
+
+	s, err := New(t.Context(), Config{Team: newCodeBuiltTeam(), InitialSession: restored})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, s.Close()) })
+	require.Same(t, restored, s.Conversation(), "the first conversation must be the restored one")
+
+	require.NoError(t, s.Restart())
+	require.NotSame(t, restored, s.Conversation(), "Restart must start a fresh conversation")
 }
 
 type fakeRuntime struct {
@@ -62,7 +121,7 @@ func (f *fakeRuntime) Resume(_ context.Context, req dagentruntime.ResumeRequest)
 	f.resumes = append(f.resumes, req)
 }
 
-func (f *fakeRuntime) ResumeElicitation(_ context.Context, action tools.ElicitationAction, _ map[string]any) error {
+func (f *fakeRuntime) ResumeElicitation(_ context.Context, action tools.ElicitationAction, _ map[string]any, _ ...string) error {
 	f.elicitations = append(f.elicitations, action)
 	return nil
 }
@@ -166,7 +225,7 @@ func TestSessionSendDeclinesElicitationAndRejectsMaxIterations(t *testing.T) {
 
 	out, err := s.Send(t.Context(), "hi")
 	require.NoError(t, err)
-	rt.events <- dagentruntime.ElicitationRequest("authorize", "url", nil, "https://example.com", "id", nil, "agent")
+	rt.events <- dagentruntime.ElicitationRequest("authorize", "url", nil, "https://example.com", "id", "", "sess", nil, "agent")
 	rt.events <- dagentruntime.MaxIterationsReached(3)
 	close(rt.events)
 

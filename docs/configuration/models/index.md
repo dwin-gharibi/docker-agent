@@ -37,12 +37,17 @@ models:
     capabilities: # Optional: override attachment capabilities
       image: boolean # Optional: whether the model accepts image attachments
       pdf: boolean # Optional: whether the model accepts PDF attachments
+    cost: # Optional: explicit token pricing (USD per 1M tokens)
+      input: float # Optional: price per 1M input tokens
+      output: float # Optional: price per 1M output tokens
+      cache_read: float # Optional: price per 1M cached input tokens
+      cache_write: float # Optional: price per 1M cache-write tokens
     provider_opts: # Optional: provider-specific options
       key: value
     title_model: string # Optional: model used for session-title generation
     compaction_model: string # Optional: model used for session-compaction (summary generation)
     compaction_threshold: float # Optional: context-window fraction that triggers auto-compaction (0–1, default: 0.9)
-    bypass_models_gateway: boolean # Optional: skip the models gateway for this model
+    bypass_models_gateway: boolean # Optional: skip the models gateway for this model (implied by a custom base_url)
 ```
 
 ## Properties Reference
@@ -65,11 +70,12 @@ models:
 | `track_usage`         | boolean    | ✗        | Track and report token usage for this model                                           |
 | `routing`             | array      | ✗        | Rule-based routing to different models. See [Model Routing](../routing/index.md). |
 | `capabilities`        | object     | ✗        | Override attachment capabilities for this model. See [Attachment Capability Overrides](#attachment-capability-overrides). |
+| `cost`                | object     | ✗        | Explicit token pricing in USD per 1M tokens, overriding the built-in catalogue. See [Custom Token Pricing](#custom-token-pricing). |
 | `provider_opts`       | object     | ✗        | Provider-specific options (see provider pages)                                        |
 | `title_model`         | string     | ✗        | Model used for session-title generation. Can be a named model from the `models:` section or an inline `provider/model` string. When omitted, the agent's primary model generates titles. Cannot be combined with `first_available`. |
-| `compaction_model`    | string     | ✗        | Model used for session compaction (summary generation). Can be a named model or an inline `provider/model` string. When omitted, the primary model compacts. Cannot be combined with `first_available`. See [Delegating Session Compaction](#delegating-session-compaction). |
-| `compaction_threshold` | float     | ✗        | Fraction of the context window at which proactive auto-compaction triggers for agents running this model. Must be greater than `0` and at most `1`. Takes precedence over the agent-level `compaction_threshold`. Cannot be combined with `first_available`. Default: `0.9`. |
-| `bypass_models_gateway` | boolean  | ✗        | When `true`, this model connects directly to its provider even when a models gateway (`--models-gateway` / `CAGENT_MODELS_GATEWAY`) is configured. See [Gateway Bypass](#gateway-bypass). |
+| `compaction_model`    | string     | ✗        | Model used for session compaction (summary generation). Can be a named model or an inline `provider/model` string. When omitted, the primary model compacts. Cannot be combined with `first_available`. See the [Context & Compaction guide](../../guides/compaction/index.md). |
+| `compaction_threshold` | float     | ✗        | Fraction of the context window at which proactive auto-compaction triggers for agents running this model. Must be greater than `0` and at most `1`. Takes precedence over the agent-level `compaction_threshold`. Cannot be combined with `first_available`. Default: `0.9`. See the [Context & Compaction guide](../../guides/compaction/index.md). |
+| `bypass_models_gateway` | boolean  | ✗        | When `true`, this model connects directly to its provider even when a models gateway (`--models-gateway` / `CAGENT_MODELS_GATEWAY`) is configured. Implied by a custom `base_url`. See [Gateway Bypass](#gateway-bypass). |
 
 ## Attachment Capability Overrides
 
@@ -111,6 +117,53 @@ conservative text-only fallback).
 
 See [`examples/capability-overrides.yaml`](https://github.com/docker/docker-agent/blob/main/examples/capability-overrides.yaml) for a complete example.
 
+## Custom Token Pricing
+
+docker-agent prices each model call from the [models.dev](https://models.dev/)
+catalogue. Models the catalogue does not know — custom OpenAI-compatible
+providers, local models, private deployments — are "unpriced": every call is
+recorded at $0 despite consuming tokens, with only a log warning.
+
+Declare `cost` to price a model explicitly, in **USD per one million tokens**.
+When set, it takes precedence over the catalogue and makes an uncatalogued
+model priced:
+
+```yaml
+models:
+  internal-gpt:
+    provider: internal-llm
+    model: gpt-4o
+    cost:
+      input: 1.25 # USD per 1M input tokens
+      output: 5.00 # USD per 1M output tokens
+      cache_read: 0.125 # USD per 1M cached input tokens
+      cache_write: 1.5625 # USD per 1M cache-write tokens
+
+  # Also works for catalogued models, e.g. a negotiated enterprise discount:
+  discounted-sonnet:
+    provider: anthropic
+    model: claude-sonnet-4-5
+    cost:
+      input: 2.4
+      output: 12.0
+```
+
+| Field              | Type  | Description                             |
+| ------------------ | ----- | --------------------------------------- |
+| `cost.input`       | float | USD price per 1M input tokens           |
+| `cost.output`      | float | USD price per 1M output tokens          |
+| `cost.cache_read`  | float | USD price per 1M cached input tokens    |
+| `cost.cache_write` | float | USD price per 1M cache-write tokens     |
+
+The declared prices feed per-turn cost computation, session cost tracking, the
+`/model` picker, and the [`after_llm_call` hook](../hooks/index.md)'s `cost`
+field. Prices must not be negative; omitted fields default to `0`. An all-zero
+table means "priced, free" — distinct from omitting `cost` entirely
+(unpriced). Cannot be combined with `first_available` (set it on the candidate
+models instead).
+
+See [`examples/custom-pricing.yaml`](https://github.com/docker/docker-agent/blob/main/examples/custom-pricing.yaml) for a complete example.
+
 ## Delegating Session-Title Generation
 
 The `title_model` field lets a heavyweight primary model hand off the cheap
@@ -131,6 +184,11 @@ titles.
 > `title_model` cannot be combined with `first_available` model selection — the combination is rejected at validation time.
 
 ## Delegating Session Compaction
+
+> [!TIP]
+> **Full guide**
+>
+> For a task-oriented walkthrough of automatic vs. on-demand compaction, trimming tool results, and reading the context gauge, see [Managing Context & Compaction](../../guides/compaction/index.md). This section covers the `compaction_model` and `compaction_threshold` fields themselves.
 
 The `compaction_model` field lets a heavyweight primary model hand off the expensive
 compaction (summary generation) call to a smaller, faster model:
@@ -185,8 +243,9 @@ for complete examples.
 ## Gateway Bypass
 
 When a models gateway (`--models-gateway` / `CAGENT_MODELS_GATEWAY`) is configured,
-all models route through it by default. Set `bypass_models_gateway: true` on a
-specific model to make it connect directly to its provider instead:
+models without a custom `base_url` route through it by default. Set
+`bypass_models_gateway: true` on a specific model to make it connect directly
+to its provider instead:
 
 ```yaml
 models:

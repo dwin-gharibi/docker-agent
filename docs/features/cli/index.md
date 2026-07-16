@@ -28,7 +28,7 @@ $ docker agent run [config] [message...] [flags]
 | Flag                                    | Description                                                                                                                               |
 | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
 | `-a, --agent <name>`                    | Run a specific agent from the config                                                                                                      |
-| `--yolo`                                | Auto-approve all tool calls                                                                                                               |
+| `--yolo`                                | Auto-approve tool calls (unless explicitly denied)                                                                                        |
 | `--model <ref>`                         | Override model(s). Use `provider/model` for all agents, or `agent=provider/model` for specific agents. Comma-separate multiple overrides. |
 | `--session <id>`                        | Resume a previous session. Supports relative refs (`-1` = last, `-2` = second to last). An explicit ID that does not exist yet is created with that ID, so a supervisor can own the session ID upfront and reuse it across runs. |
 | `-s, --session-db <path>`               | Path to the SQLite session database (default: `<data-dir>/session.db`, so `~/.cagent/session.db` unless `--data-dir` is set)              |
@@ -497,7 +497,7 @@ $ docker agent run yolo-coder
 
 **Alias Options:** Aliases can include runtime options that apply automatically when used:
 
-- `--yolo` — Auto-approve all tool calls when running the alias
+- `--yolo` — Auto-approve tool calls (unless explicitly denied) when running the alias
 - `--model <ref>` — Override the model for the alias
 - `--hide-tool-results` — Hide tool call results in the TUI when running the alias
 - `--sandbox` — Always run the alias inside a [Docker sandbox](../../configuration/sandbox/index.md)

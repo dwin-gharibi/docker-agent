@@ -101,10 +101,10 @@ func ContentEndRow(dialogRow, dialogHeight int) int {
 }
 
 // CloseWithElicitationResponse returns a command that closes the dialog and sends an elicitation response.
-func CloseWithElicitationResponse(action tools.ElicitationAction, content map[string]any) tea.Cmd {
+func CloseWithElicitationResponse(action tools.ElicitationAction, content map[string]any, elicitationID string) tea.Cmd {
 	return tea.Sequence(
 		core.CmdHandler(CloseDialogMsg{}),
-		core.CmdHandler(messages.ElicitationResponseMsg{Action: action, Content: content}),
+		core.CmdHandler(messages.ElicitationResponseMsg{Action: action, Content: content, ElicitationID: elicitationID}),
 	)
 }
 

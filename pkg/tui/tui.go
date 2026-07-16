@@ -1309,7 +1309,7 @@ func (m *appModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// --- Elicitation ---
 
 	case messages.ElicitationResponseMsg:
-		return m.handleElicitationResponse(msg.Action, msg.Content)
+		return m.handleElicitationResponse(msg.Action, msg.Content, msg.ElicitationID)
 
 	// --- Errors ---
 
@@ -1902,7 +1902,7 @@ func (m *appModel) replayElicitationEvent(ev *runtime.ElicitationRequestEvent) t
 				serverURL = url
 			}
 			return core.CmdHandler(dialog.OpenDialogMsg{
-				Model:            dialog.NewOAuthAuthorizationDialog(m.ctx(), serverURL, m.application),
+				Model:            dialog.NewOAuthAuthorizationDialog(m.ctx(), serverURL, m.application, ev.ElicitationID),
 				OriginatingEvent: ev,
 			})
 		}
@@ -1911,12 +1911,12 @@ func (m *appModel) replayElicitationEvent(ev *runtime.ElicitationRequestEvent) t
 	switch ev.Mode {
 	case "url":
 		return core.CmdHandler(dialog.OpenDialogMsg{
-			Model:            dialog.NewURLElicitationDialog(m.ctx(), ev.Message, ev.URL),
+			Model:            dialog.NewURLElicitationDialog(m.ctx(), ev.Message, ev.URL, ev.ElicitationID),
 			OriginatingEvent: ev,
 		})
 	default:
 		return core.CmdHandler(dialog.OpenDialogMsg{
-			Model:            dialog.NewElicitationDialog(ev.Message, ev.Schema, ev.Meta),
+			Model:            dialog.NewElicitationDialog(ev.Message, ev.Schema, ev.Meta, ev.ElicitationID),
 			OriginatingEvent: ev,
 		})
 	}
@@ -3006,7 +3006,13 @@ func (m *appModel) openExternalEditor() (tea.Model, tea.Cmd) {
 	cmd := exec.Command(parts[0], args...) //nolint:noctx // owned by tea.ExecProcess
 
 	ed := m.editor
-	return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
+	return m, tea.ExecProcess(cmd, externalEditorCallback(ed, tmpPath))
+}
+
+// externalEditorCallback builds the tea.ExecProcess callback that reads the
+// edited temp file back into the editor once the external editor exits.
+func externalEditorCallback(ed editor.Editor, tmpPath string) func(error) tea.Msg {
+	return func(err error) tea.Msg {
 		if err != nil {
 			os.Remove(tmpPath)
 			return notification.ShowMsg{Text: fmt.Sprintf("Editor error: %v", err), Type: notification.TypeError}
@@ -3028,8 +3034,11 @@ func (m *appModel) openExternalEditor() (tea.Model, tea.Cmd) {
 			ed.SetValue(c)
 		}
 
-		return nil
-	})
+		// Ctrl+g works from any panel, so make sure the editor has focus:
+		// otherwise Enter goes to the content panel and the edited text is
+		// never sent (or queued while the agent is working).
+		return messages.RequestFocusMsg{Target: messages.PanelEditor}
+	}
 }
 
 func toFullscreenView(content, windowTitle string, working, leanMode bool) tea.View {

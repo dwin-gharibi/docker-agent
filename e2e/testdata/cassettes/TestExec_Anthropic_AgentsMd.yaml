@@ -8,7 +8,7 @@ interactions:
         proto_minor: 1
         content_length: 0
         host: api.anthropic.com
-        body: '{"max_tokens":64000,"messages":[{"content":[{"text":"What''s 2+2?","cache_control":{"type":"ephemeral"},"type":"text"}],"role":"user"}],"model":"claude-sonnet-4-0","system":[{"text":"You are a knowledgeable assistant that helps users with various tasks.\nBe helpful, accurate, and concise in your responses.","cache_control":{"type":"ephemeral"},"type":"text"},{"text":"This is a test agents.md file.","cache_control":{"type":"ephemeral"},"type":"text"}],"tools":[],"stream":true}'
+        body: '{"max_tokens":64000,"messages":[{"content":[{"text":"What''s 2+2?","cache_control":{"type":"ephemeral"},"type":"text"}],"role":"user"}],"model":"claude-sonnet-4-0","system":[{"text":"You are a knowledgeable assistant that helps users with various tasks.\nBe helpful, accurate, and concise in your responses.","cache_control":{"type":"ephemeral"},"type":"text"},{"text":"Instructions from: FILE\nThis is a test agents.md file.","cache_control":{"type":"ephemeral"},"type":"text"}],"tools":[],"stream":true}'
         url: https://api.anthropic.com/v1/messages
         method: POST
       response:

@@ -11,14 +11,28 @@ const $searchModal   = document.getElementById('search-modal-input');
 const $searchResults = document.getElementById('search-results');
 
 // ---------- Theme ----------
+function updateThemeToggleState() {
+  const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+  const toggle = document.getElementById('theme-toggle');
+  if (!toggle) return;
+  toggle.setAttribute('aria-pressed', String(isLight));
+  toggle.setAttribute('aria-label', isLight ? 'Switch to dark theme' : 'Switch to light theme');
+}
+
 function initTheme() {
-  const saved = localStorage.getItem('docker-agent-docs-theme');
+  // ?theme=light|dark deterministically forces a theme, bypassing both
+  // localStorage and the OS preference — used by the pa11y-ci both-theme
+  // gate so CI doesn't depend on the headless browser's default color
+  // scheme (see docs/.pa11yci.json).
+  const forced = new URLSearchParams(location.search).get('theme');
+  const saved = forced === 'light' || forced === 'dark' ? forced : localStorage.getItem('docker-agent-docs-theme');
   if (saved === 'light') {
     document.documentElement.setAttribute('data-theme', 'light');
   } else if (!saved && window.matchMedia?.('(prefers-color-scheme: light)').matches) {
     document.documentElement.setAttribute('data-theme', 'light');
   }
   // Dark is the default — no attribute needed (CSS :root is dark)
+  updateThemeToggleState();
 }
 
 function toggleTheme() {
@@ -30,6 +44,7 @@ function toggleTheme() {
     document.documentElement.setAttribute('data-theme', 'light');
     localStorage.setItem('docker-agent-docs-theme', 'light');
   }
+  updateThemeToggleState();
 }
 
 // ---------- Table of Contents ----------
@@ -92,7 +107,7 @@ function buildTOC() {
 
   // "Table of contents" + nav — only when there are enough headings.
   if (headings.length >= 2) {
-    const heading = document.createElement('div');
+    const heading = document.createElement('h2');
     heading.className = 'toc-heading';
     heading.textContent = 'Table of contents';
     inner.appendChild(heading);
@@ -115,7 +130,8 @@ function buildTOC() {
       if (!a) return;
       e.preventDefault();
       const target = document.getElementById(a.dataset.id);
-      if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+      target?.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
     });
 
     setupScrollSpy(headings, aside);
@@ -216,17 +232,64 @@ function buildSearchIndex() {
   }
 }
 
+// WAI-ARIA dialog pattern: keep Tab/Shift-Tab cycling inside the modal
+// instead of leaking focus into the page behind the overlay, and
+// restore focus to whatever opened it on close.
+let previouslyFocused = null;
+
 function openSearch() {
+  previouslyFocused = document.activeElement;
   $searchOverlay?.classList.add('active');
   if ($searchModal) {
     $searchModal.value = '';
     $searchModal.focus();
   }
   renderSearchResults('');
+  document.addEventListener('keydown', trapSearchFocus);
 }
 
 function closeSearch() {
   $searchOverlay?.classList.remove('active');
+  document.removeEventListener('keydown', trapSearchFocus);
+  previouslyFocused?.focus();
+  previouslyFocused = null;
+}
+
+function searchFocusables() {
+  const results = $searchResults ? Array.from($searchResults.querySelectorAll('.search-result')) : [];
+  return $searchModal ? [$searchModal, ...results] : results;
+}
+
+function trapSearchFocus(e) {
+  if (e.key !== 'Tab') return;
+  const focusables = searchFocusables();
+  if (focusables.length === 0) return;
+  const first = focusables[0];
+  const last = focusables[focusables.length - 1];
+  if (e.shiftKey && document.activeElement === first) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && document.activeElement === last) {
+    e.preventDefault();
+    first.focus();
+  }
+}
+
+// Arrow-key navigation: move real DOM focus between the query input and
+// the result links (avoids needing an aria-activedescendant wiring).
+function navigateSearchResults(e) {
+  if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+  const results = $searchResults ? Array.from($searchResults.querySelectorAll('.search-result')) : [];
+  if (results.length === 0) return;
+  const idx = results.indexOf(document.activeElement);
+  e.preventDefault();
+  if (e.key === 'ArrowDown') {
+    results[idx + 1] ? results[idx + 1].focus() : results[0].focus();
+  } else if (idx <= 0) {
+    $searchModal?.focus();
+  } else {
+    results[idx - 1].focus();
+  }
 }
 
 function renderSearchResults(query) {
@@ -262,7 +325,7 @@ function renderSearchResults(query) {
       html += `<div class="search-result-group">${r.section}</div>`;
       lastSection = r.section;
     }
-    html += `<a class="search-result" href="${r.url}" tabindex="0" role="option">
+    html += `<a class="search-result" href="${r.url}" tabindex="0">
       <div class="search-result-title">${r.title}</div>
     </a>`;
   }
@@ -275,8 +338,9 @@ function renderSearchResults(query) {
 
 // ---------- Event listeners ----------
 $searchInput?.addEventListener('click', openSearch);
-$searchInput?.addEventListener('focus', openSearch);
 $searchModal?.addEventListener('input', (e) => renderSearchResults(e.target.value));
+$searchModal?.addEventListener('keydown', navigateSearchResults);
+$searchResults?.addEventListener('keydown', navigateSearchResults);
 $searchOverlay?.addEventListener('click', (e) => { if (e.target === $searchOverlay) closeSearch(); });
 
 document.addEventListener('keydown', (e) => {
@@ -304,11 +368,36 @@ function restoreSidebarScroll() {
   });
 }
 
+// ---------- Demo video runtime fallback ----------
+// The nested <img> inside <video> is native fallback CONTENT: browsers
+// only render it when they don't recognize the <video> element at all,
+// never on a decode/network failure of a supported element. That GIF
+// is exactly the auto-playing, unpausable, infinitely-looping motion
+// (WCAG 2.2.2) the video swap was meant to remove, so a decode/fetch
+// failure must NOT fall back to it. Show the static poster frame
+// instead — a still image carries no motion, so it needs no pause
+// control — and leave the genuine no-<video>-support case to the
+// browser's native fallback-content behavior above.
+function handleVideoFallback() {
+  document.querySelectorAll('.demo-container video').forEach(video => {
+    video.addEventListener('error', () => {
+      const poster = video.getAttribute('poster');
+      if (!poster) return;
+      const img = document.createElement('img');
+      img.src = poster;
+      img.alt = video.getAttribute('aria-label') || '';
+      video.replaceWith(img);
+    });
+  });
+}
+
 // ---------- Bind buttons (no inline handlers) ----------
 function bindButtons() {
   document.getElementById('theme-toggle')?.addEventListener('click', toggleTheme);
-  document.querySelector('.sidebar-toggle')?.addEventListener('click', () => {
-    document.getElementById('sidebar')?.classList.toggle('open');
+  document.querySelector('.sidebar-toggle')?.addEventListener('click', (e) => {
+    const sidebar = document.getElementById('sidebar');
+    const isOpen = sidebar?.classList.toggle('open');
+    e.currentTarget.setAttribute('aria-expanded', String(!!isOpen));
   });
 }
 
@@ -319,3 +408,4 @@ buildSearchIndex();
 buildTOC();
 addCopyButtons();
 bindButtons();
+handleVideoFallback();
