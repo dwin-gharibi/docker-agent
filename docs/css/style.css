@@ -978,6 +978,21 @@ details.sidebar-section[open] > summary.sidebar-heading::after {
 }
 [data-theme="light"] .callout-warning p { color: #92400E; }
 
+/* Links inside a callout sit on a variant-colored panel (warning/info/tip),
+ * not the page background, so the shared .content a:not(.btn) color can
+ * fail there even where it's fine elsewhere: --accent-hover (dark) reads
+ * only 3.95:1 on the dark warning background (#643700). --blue-200 clears
+ * AA on all three dark callout backgrounds (6.46:1 warning / 11.50:1 info /
+ * 8.51:1 tip); light already passes with --accent (4.60-4.83:1) so it's
+ * restored explicitly rather than left to inherit a dark-only value. Both
+ * rules match .content a:not(.btn)'s own specificity (0,2,1) plus one, so
+ * they win regardless of source order; an explicit :hover variant is
+ * needed too or these same-specificity rules would flatten the shared
+ * hover color (--link-hover, already AA on every callout background). */
+.content .callout a:not(.btn) { color: var(--blue-200); }
+.content .callout a:not(.btn):hover { color: var(--link-hover); }
+[data-theme="light"] .content .callout a:not(.btn) { color: var(--accent); }
+
 /* ===== Cards Grid ===== */
 .cards {
   display: grid;
