@@ -378,17 +378,17 @@ func (s *VectorStore) Initialize(ctx context.Context, docPaths []string, chunkin
 
 // Query searches for relevant documents using vector similarity
 func (s *VectorStore) Query(ctx context.Context, query string, numResults int, threshold float64) ([]database.SearchResult, types.Usage, error) {
-	queryEmbedding, tokens, _, err := s.embedder.Embed(ctx, query)
-	if err != nil {
-		return nil, types.Usage{}, fmt.Errorf("failed to generate query embedding: %w", err)
-	}
-
+	queryEmbedding, tokens, err := s.embedder.Embed(ctx, query)
 	cost := s.calculateCost(ctx, tokens)
-	usage := types.Usage{TotalTokens: tokens, Cost: cost}
+	usage := types.Usage{TotalTokens: tokens, Cost: cost, ModelID: s.modelID.String()}
+
+	if err != nil {
+		return nil, usage, fmt.Errorf("failed to generate query embedding: %w", err)
+	}
 
 	results, err := s.db.SearchSimilarVectors(ctx, queryEmbedding, numResults)
 	if err != nil {
-		return nil, types.Usage{}, fmt.Errorf("failed to search: %w", err)
+		return nil, usage, fmt.Errorf("failed to search: %w", err)
 	}
 
 	// Convert internal result type to public SearchResult type
@@ -602,13 +602,15 @@ func (s *VectorStore) indexFile(ctx context.Context, filePath string) error {
 		"path", filePath,
 		"chunk_count", len(validChunks))
 
-	embeddings, batchTokens, _, err := s.embedder.EmbedBatch(ctx, chunkContents)
+	embeddings, batchTokens, err := s.embedder.EmbedBatch(ctx, chunkContents)
+	
+	// Record usage even on partial failure (tokens consumed before error)
+	batchCost := s.calculateCost(ctx, batchTokens)
+	s.recordUsage(batchTokens, batchCost)
+
 	if err != nil {
 		return fmt.Errorf("failed to generate embeddings: %w", classifyModelCallError(err))
 	}
-
-	batchCost := s.calculateCost(ctx, batchTokens)
-	s.recordUsage(batchTokens, batchCost)
 
 	if len(embeddings) != len(validChunks) {
 		return fmt.Errorf("embedding count mismatch: got %d embeddings for %d chunks", len(embeddings), len(validChunks))

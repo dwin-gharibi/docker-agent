@@ -421,9 +421,6 @@ func (m *Manager) Query(ctx context.Context, query string) (results []database.S
 			"num_results", len(fusedResults))
 	}
 
-	// TODO: Track and emit query embedding usage
-	// For queries during agent execution, usage should be added to agent's session
-	// This requires passing session context through the RAG tool
 
 	return fusedResults, usage, nil
 }

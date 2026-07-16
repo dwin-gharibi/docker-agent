@@ -179,7 +179,11 @@ func (t *ToolSet) handleQueryRAG(ctx context.Context, args queryRAGArgs) (*tools
 	}
 
 	if usage.TotalTokens > 0 || usage.Cost > 0 {
-		telemetry.RecordTokenUsage(ctx, t.toolName, usage.TotalTokens, 0, usage.Cost)
+		model := usage.ModelID
+		if model == "" {
+			model = t.toolName // Fallback to tool name for strategies that do not specify a model ID (e.g. BM25)
+		}
+		telemetry.RecordTokenUsage(ctx, model, usage.TotalTokens, 0, usage.Cost)
 	}
 
 	out := make([]queryResult, 0, len(results))

@@ -9,16 +9,22 @@ type Document struct {
 	ChunkIndex int               // Position of this chunk within the source document (0-based)
 }
 
-// Usage tracks token usage and cost for RAG operations.
 type Usage struct {
 	TotalTokens int64
 	Cost        float64
+	ModelID     string
 }
 
 // Add combines two usage structs.
 func (u *Usage) Add(other Usage) {
 	u.TotalTokens += other.TotalTokens
 	u.Cost += other.Cost
+	if u.ModelID == "" {
+		u.ModelID = other.ModelID
+	} else if other.ModelID != "" && u.ModelID != other.ModelID {
+		// Just take the first if there are multiple, or concatenate
+		u.ModelID = u.ModelID + "," + other.ModelID
+	}
 }
 
 type EventTye string
