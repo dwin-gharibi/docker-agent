@@ -1217,8 +1217,8 @@ func (m *appModel) closeTranscriptCh() {
 	}
 }
 
-func (m *appModel) handleElicitationResponse(action tools.ElicitationAction, content map[string]any) (tea.Model, tea.Cmd) {
-	if err := m.application.ResumeElicitation(m.ctx(), action, content); err != nil {
+func (m *appModel) handleElicitationResponse(action tools.ElicitationAction, content map[string]any, elicitationID string) (tea.Model, tea.Cmd) {
+	if err := m.application.ResumeElicitation(m.ctx(), action, content, elicitationID); err != nil {
 		slog.Error("Failed to resume elicitation", "action", action, "error", err)
 		return m, notification.ErrorCmd("Failed to complete server request: " + err.Error())
 	}

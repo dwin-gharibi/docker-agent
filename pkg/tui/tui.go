@@ -1309,7 +1309,7 @@ func (m *appModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// --- Elicitation ---
 
 	case messages.ElicitationResponseMsg:
-		return m.handleElicitationResponse(msg.Action, msg.Content)
+		return m.handleElicitationResponse(msg.Action, msg.Content, msg.ElicitationID)
 
 	// --- Errors ---
 
@@ -1902,7 +1902,7 @@ func (m *appModel) replayElicitationEvent(ev *runtime.ElicitationRequestEvent) t
 				serverURL = url
 			}
 			return core.CmdHandler(dialog.OpenDialogMsg{
-				Model:            dialog.NewOAuthAuthorizationDialog(m.ctx(), serverURL, m.application),
+				Model:            dialog.NewOAuthAuthorizationDialog(m.ctx(), serverURL, m.application, ev.ElicitationID),
 				OriginatingEvent: ev,
 			})
 		}
@@ -1911,12 +1911,12 @@ func (m *appModel) replayElicitationEvent(ev *runtime.ElicitationRequestEvent) t
 	switch ev.Mode {
 	case "url":
 		return core.CmdHandler(dialog.OpenDialogMsg{
-			Model:            dialog.NewURLElicitationDialog(m.ctx(), ev.Message, ev.URL),
+			Model:            dialog.NewURLElicitationDialog(m.ctx(), ev.Message, ev.URL, ev.ElicitationID),
 			OriginatingEvent: ev,
 		})
 	default:
 		return core.CmdHandler(dialog.OpenDialogMsg{
-			Model:            dialog.NewElicitationDialog(ev.Message, ev.Schema, ev.Meta),
+			Model:            dialog.NewElicitationDialog(ev.Message, ev.Schema, ev.Meta, ev.ElicitationID),
 			OriginatingEvent: ev,
 		})
 	}

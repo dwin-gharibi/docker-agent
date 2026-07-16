@@ -324,3 +324,86 @@ func TestStreamStarted_EmptySessionID_TreatedAsTopLevel(t *testing.T) {
 		"empty SessionID must be treated as top-level and supersede stale pending event")
 	assert.True(t, s.runners["sess-A"].IsRunning)
 }
+
+// --- #3584 review item 4: foreground stream stop must not discard a
+// still-live detached background job's elicitation ---
+
+// TestStreamStopped_TopLevel_PreservesDetachedBackgroundElicitation is the
+// regression test for review item 4: a background job started via
+// run_background_agent outlives its parent's top-level stream
+// (context.WithoutCancel), so its own live, unanswered elicitation can still
+// be queued on this runner when the FOREGROUND stream stops. The old
+// unconditional `PendingEvents = nil` wiped it out from under the background
+// job's still-blocked waiter goroutine. Only the runner's OWN top-level
+// attention events (here, none) are moot; the background elicitation
+// (SessionID "bg-child", distinct from the runner's own "sess-A") must
+// survive.
+func TestStreamStopped_TopLevel_PreservesDetachedBackgroundElicitation(t *testing.T) {
+	t.Parallel()
+	s := newTestSupervisor([]string{"sess-A"}, "sess-B") // sess-A inactive
+
+	bgElicitation := runtime.ElicitationRequest("bg needs input", "form", nil, "", "eid-bg", "", "bg-child", nil, "agent")
+	s.runners["sess-A"].PendingEvents = []tea.Msg{bgElicitation}
+	s.runners["sess-A"].NeedsAttn = true
+	s.runners["sess-A"].IsRunning = true
+
+	// The foreground (top-level) stream for sess-A stops.
+	s.handleRuntimeEvent("sess-A", &runtime.StreamStoppedEvent{
+		Type:      "stream_stopped",
+		SessionID: "sess-A",
+	})
+
+	assert.False(t, s.runners["sess-A"].IsRunning, "the foreground stream itself must still be marked stopped")
+	require.Equal(t, []tea.Msg{bgElicitation}, s.runners["sess-A"].PendingEvents,
+		"a detached background job's live elicitation must survive the foreground stream's stop")
+	assert.True(t, s.runners["sess-A"].NeedsAttn,
+		"NeedsAttn must stay true while a background elicitation is still queued")
+}
+
+// TestStreamStopped_TopLevel_MixedPending_OnlyForegroundEventsCleared covers
+// the more realistic mixed case: a foreground-owned tool confirmation and a
+// background job's elicitation are both queued. Stopping the foreground
+// stream must clear only the foreground-scoped entry.
+func TestStreamStopped_TopLevel_MixedPending_OnlyForegroundEventsCleared(t *testing.T) {
+	t.Parallel()
+	s := newTestSupervisor([]string{"sess-A"}, "sess-B")
+
+	foregroundConfirmation := runtime.ToolCallConfirmation(tools.ToolCall{}, tools.Tool{}, "agent", nil)
+	bgElicitation := runtime.ElicitationRequest("bg needs input", "form", nil, "", "eid-bg", "", "bg-child", nil, "agent")
+	s.runners["sess-A"].PendingEvents = []tea.Msg{foregroundConfirmation, bgElicitation}
+	s.runners["sess-A"].NeedsAttn = true
+	s.runners["sess-A"].IsRunning = true
+
+	s.handleRuntimeEvent("sess-A", &runtime.StreamStoppedEvent{
+		Type:      "stream_stopped",
+		SessionID: "sess-A",
+	})
+
+	require.Equal(t, []tea.Msg{bgElicitation}, s.runners["sess-A"].PendingEvents,
+		"only the foreground-scoped tool confirmation must be dropped; the background elicitation stays queued")
+	assert.True(t, s.runners["sess-A"].NeedsAttn)
+}
+
+// TestStreamStarted_TopLevel_PreservesDetachedBackgroundElicitation mirrors
+// the StreamStopped case for a NEW top-level turn starting on the same tab
+// while a background job from a previous turn is still live: starting a new
+// foreground turn must not orphan the background job's queued elicitation
+// either.
+func TestStreamStarted_TopLevel_PreservesDetachedBackgroundElicitation(t *testing.T) {
+	t.Parallel()
+	s := newTestSupervisor([]string{"sess-A"}, "sess-B")
+
+	bgElicitation := runtime.ElicitationRequest("bg needs input", "form", nil, "", "eid-bg2", "", "bg-child-2", nil, "agent")
+	s.runners["sess-A"].PendingEvents = []tea.Msg{bgElicitation}
+	s.runners["sess-A"].NeedsAttn = true
+
+	s.handleRuntimeEvent("sess-A", &runtime.StreamStartedEvent{
+		Type:      "stream_started",
+		SessionID: "sess-A",
+	})
+
+	assert.True(t, s.runners["sess-A"].IsRunning)
+	require.Equal(t, []tea.Msg{bgElicitation}, s.runners["sess-A"].PendingEvents,
+		"a new top-level turn must not discard a still-live detached background elicitation")
+	assert.True(t, s.runners["sess-A"].NeedsAttn)
+}

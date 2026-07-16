@@ -449,7 +449,7 @@ func (p *chatPage) handleElicitationRequest(msg *runtime.ElicitationRequestEvent
 				serverURL = url
 			}
 			dialogCmd := core.CmdHandler(dialog.OpenDialogMsg{
-				Model:            dialog.NewOAuthAuthorizationDialog(p.ctx(), serverURL, p.app),
+				Model:            dialog.NewOAuthAuthorizationDialog(p.ctx(), serverURL, p.app, msg.ElicitationID),
 				OriginatingEvent: msg,
 			})
 			return tea.Batch(spinnerCmd, dialogCmd)
@@ -461,7 +461,7 @@ func (p *chatPage) handleElicitationRequest(msg *runtime.ElicitationRequestEvent
 	case "url":
 		// URL-based elicitation - show URL dialog
 		dialogCmd := core.CmdHandler(dialog.OpenDialogMsg{
-			Model:            dialog.NewURLElicitationDialog(p.ctx(), msg.Message, msg.URL),
+			Model:            dialog.NewURLElicitationDialog(p.ctx(), msg.Message, msg.URL, msg.ElicitationID),
 			OriginatingEvent: msg,
 		})
 		return tea.Batch(spinnerCmd, dialogCmd)
@@ -469,7 +469,7 @@ func (p *chatPage) handleElicitationRequest(msg *runtime.ElicitationRequestEvent
 	default:
 		// Form-based elicitation (default) - show form dialog
 		dialogCmd := core.CmdHandler(dialog.OpenDialogMsg{
-			Model:            dialog.NewElicitationDialog(msg.Message, msg.Schema, msg.Meta),
+			Model:            dialog.NewElicitationDialog(msg.Message, msg.Schema, msg.Meta, msg.ElicitationID),
 			OriginatingEvent: msg,
 		})
 		return tea.Batch(spinnerCmd, dialogCmd)

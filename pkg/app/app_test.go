@@ -293,6 +293,113 @@ func TestApp_Start_ForwardsBackgroundEvents(t *testing.T) {
 	}
 }
 
+// elicitationRequestMockRuntime captures the handler App.Start registers via
+// OnElicitationRequest and records every ResumeElicitation call, so tests can
+// drive the sink and assert on what App forwards back to the runtime.
+type elicitationRequestMockRuntime struct {
+	mockRuntime
+
+	handler func(runtime.Event)
+
+	mu             sync.Mutex
+	resumedIDs     []string
+	resumedActions []tools.ElicitationAction
+}
+
+// firstOrEmpty returns the first element of ids, or "" when empty. Mirrors
+// runtime.firstElicitationID for tests that record a variadic call's ID.
+func firstOrEmpty(ids []string) string {
+	if len(ids) == 0 {
+		return ""
+	}
+	return ids[0]
+}
+
+func (m *elicitationRequestMockRuntime) OnElicitationRequest(handler func(runtime.Event)) {
+	m.handler = handler
+}
+
+func (m *elicitationRequestMockRuntime) ResumeElicitation(_ context.Context, action tools.ElicitationAction, _ map[string]any, elicitationID ...string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.resumedIDs = append(m.resumedIDs, firstOrEmpty(elicitationID))
+	m.resumedActions = append(m.resumedActions, action)
+	return nil
+}
+
+// TestApp_Start_ForwardsElicitationRequests verifies Start wires the
+// runtime's OnElicitationRequest sink into the app's event stream, so
+// background-job elicitations (which have no live channel of their own
+// reaching the TUI) are surfaced (#3584).
+func TestApp_Start_ForwardsElicitationRequests(t *testing.T) {
+	t.Parallel()
+
+	rt := &elicitationRequestMockRuntime{}
+	events := make(chan tea.Msg, 16)
+	app := &App{
+		runtime: rt,
+		session: session.New(),
+		events:  events,
+	}
+
+	app.Start(t.Context())
+	require.NotNil(t, rt.handler, "Start must register the OnElicitationRequest handler")
+
+	ev := runtime.ElicitationRequest("need input", "form", nil, "", "eid-1", "", "sess-1", nil, "worker")
+	rt.handler(ev)
+
+	select {
+	case msg := <-events:
+		assert.Equal(t, ev, msg, "the elicitation request must reach the app's event stream unchanged")
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the forwarded elicitation request")
+	}
+}
+
+// TestApp_SendEvent_DeliversElicitationWithoutDedupe pins the #3584 fix that
+// removed the App-side ElicitationID dedupe: the runtime's
+// OnElicitationRequest sink is now the single, exactly-once delivery point
+// (elicitationHandler calls it directly, synchronously, and unconditionally,
+// and runCollecting no longer re-forwards a bridge-observed copy), so
+// sendEvent must forward every event unconditionally — including two
+// distinct events that happen to share an ElicitationID, which a stateful
+// dedupe would have incorrectly collapsed.
+func TestApp_SendEvent_DeliversElicitationWithoutDedupe(t *testing.T) {
+	t.Parallel()
+
+	events := make(chan tea.Msg, 16)
+	app := &App{events: events}
+	ctx := t.Context()
+
+	ev := runtime.ElicitationRequest("need input", "form", nil, "", "eid-dup", "", "sess-1", nil, "worker")
+	app.sendEvent(ctx, ev)
+	require.Len(t, events, 1, "the sink's single delivery must reach the app's event stream")
+	<-events
+
+	// A second event that happens to carry the same ElicitationID (e.g. a
+	// canceled request's ID reused later) must still go through: nothing in
+	// the App layer keys off ElicitationID any more.
+	app.sendEvent(ctx, ev)
+	require.Len(t, events, 1, "sendEvent must not drop a delivery based on ElicitationID")
+}
+
+// TestApp_ResumeElicitation_ForwardsID verifies ResumeElicitation passes the
+// elicitation ID through to the runtime unchanged. There is no dedupe state
+// to clear any more (#3584): the runtime's per-request waiter registry is
+// the sole source of truth for whether an ID is still answerable.
+func TestApp_ResumeElicitation_ForwardsID(t *testing.T) {
+	t.Parallel()
+
+	rt := &elicitationRequestMockRuntime{}
+	app := &App{runtime: rt, events: make(chan tea.Msg, 16)}
+
+	require.NoError(t, app.ResumeElicitation(t.Context(), tools.ElicitationActionAccept, nil, "eid-clear"))
+
+	require.Len(t, rt.resumedIDs, 1)
+	assert.Equal(t, "eid-clear", rt.resumedIDs[0])
+	assert.Equal(t, tools.ElicitationActionAccept, rt.resumedActions[0])
+}
+
 // stubSnapshotController is a tiny SnapshotController used by the app
 // tests to drive /undo without spinning up a real shadow-git
 // repository. enabled gates SnapshotsEnabled(), and the (files, ok,
@@ -809,4 +916,238 @@ func TestApp_CompactLiveSession_ForwardsRuntimeError(t *testing.T) {
 
 	err := app.CompactLiveSession(t.Context(), "x", "")
 	require.ErrorContains(t, err, "not live")
+}
+
+// composedElicitationMockRuntime reproduces the production wiring that
+// exists once both the OnElicitationRequest sink (registered by App.Start)
+// and a live RunStream (read directly by App.Run/Retry/RunWithMessage) are
+// present for the same foreground request. LocalRuntime.elicitationHandler
+// delivers a request to the sink synchronously and exactly once, then
+// separately best-effort-sends the same event on the elicitation bridge —
+// which, for a foreground stream, is the very channel RunStream returns.
+// This mock drives both paths the same way so tests can assert on the
+// combined result App actually observes (#3584).
+type composedElicitationMockRuntime struct {
+	mockRuntime
+
+	handler func(runtime.Event)
+}
+
+func (m *composedElicitationMockRuntime) OnElicitationRequest(handler func(runtime.Event)) {
+	m.handler = handler
+}
+
+// MirrorsElicitationOnRunStream marks this mock as reproducing LocalRuntime's
+// mirrored-delivery contract (runtime.LocalRuntime.MirrorsElicitationOnRunStream),
+// so App's RunStream-forwarding loops must skip the duplicate copy this mock
+// also pushes onto RunStream below.
+func (m *composedElicitationMockRuntime) MirrorsElicitationOnRunStream() {}
+
+func (m *composedElicitationMockRuntime) RunStream(_ context.Context, sess *session.Session) <-chan runtime.Event {
+	ch := make(chan runtime.Event, 8)
+	go func() {
+		defer close(ch)
+		ch <- runtime.StreamStarted(sess.ID, "mock")
+
+		ev := runtime.ElicitationRequest("need input", "form", nil, "", "eid-1", "", sess.ID, nil, "mock")
+		if m.handler != nil {
+			m.handler(ev) // reliable sink delivery (elicitationHandler, #3584)
+		}
+		ch <- ev // best-effort bridge delivery on the same RunStream channel
+
+		ch <- runtime.StreamStopped(sess.ID, "mock", "normal")
+	}()
+	return ch
+}
+
+// remoteLikeMockRuntime mirrors RemoteRuntime's elicitation contract: its
+// OnElicitationRequest sink is a no-op (mockRuntime's default; see
+// pkg/runtime/remote_runtime.go's OnElicitationRequest) and every
+// elicitation request arrives ONLY as a *runtime.ElicitationRequestEvent on
+// the RunStream channel, exactly like remote_runtime.go's RunStream
+// forwarding loop. It deliberately does NOT implement
+// elicitationSinkMirror, so App must not skip this event for it.
+type remoteLikeMockRuntime struct {
+	mockRuntime
+}
+
+func (m *remoteLikeMockRuntime) RunStream(_ context.Context, sess *session.Session) <-chan runtime.Event {
+	ch := make(chan runtime.Event, 8)
+	go func() {
+		defer close(ch)
+		ch <- runtime.StreamStarted(sess.ID, "mock")
+		ch <- runtime.ElicitationRequest("need input", "form", nil, "", "eid-1", "", sess.ID, nil, "mock")
+		ch <- runtime.StreamStopped(sess.ID, "mock", "normal")
+	}()
+	return ch
+}
+
+// countElicitationDeliveries drains events until a *runtime.StreamStoppedEvent
+// (or a 2s timeout) and returns how many *runtime.ElicitationRequestEvent
+// values were observed along the way. Shared by every regression test below
+// so the drain/timeout logic isn't re-authored (and potentially
+// mis-authored) per entry point.
+func countElicitationDeliveries(t *testing.T, events <-chan tea.Msg) int {
+	t.Helper()
+
+	n := 0
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case msg := <-events:
+			if _, ok := msg.(*runtime.ElicitationRequestEvent); ok {
+				n++
+			}
+			if _, ok := msg.(*runtime.StreamStoppedEvent); ok {
+				return n
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for the stream to stop")
+			return n
+		}
+	}
+}
+
+// TestReview_RemoteRuntimeElicitationIsStillDelivered is the regression probe
+// for the over-broad fix to the #3584 double-delivery bug: commit 2ad095ae0
+// made App.Run/Retry/RunWithMessage skip every
+// *runtime.ElicitationRequestEvent read off RunStream UNCONDITIONALLY, which
+// also silently dropped elicitations for runtimes whose OnElicitationRequest
+// sink is a no-op and that deliver ONLY via RunStream (RemoteRuntime) — a
+// remote-backed session showed zero dialogs instead of one. A runtime that
+// does not mirror sink deliveries onto RunStream must have that event pass
+// through to a.events untouched.
+func TestReview_RemoteRuntimeElicitationIsStillDelivered(t *testing.T) {
+	t.Parallel()
+
+	rt := &remoteLikeMockRuntime{}
+	events := make(chan tea.Msg, 16)
+	app := &App{runtime: rt, session: session.New(), events: events}
+
+	app.Start(t.Context())
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	app.Run(ctx, cancel, "hello", nil)
+
+	assert.Equal(t, 1, countElicitationDeliveries(t, events), "a remote/no-sink runtime's elicitation must still reach the app via RunStream")
+}
+
+// TestReview_ForegroundElicitationIsNotDeliveredTwice is the reviewer's
+// regression probe for the #3584 double-delivery bug: a foreground
+// LocalRuntime elicitation request reached a.events via BOTH the
+// OnElicitationRequest sink (Start) and the RunStream forwarding loop
+// (Run), producing two dialogs for one request. Exactly one
+// ElicitationRequestEvent must reach the app's event stream per request.
+func TestReview_ForegroundElicitationIsNotDeliveredTwice(t *testing.T) {
+	t.Parallel()
+
+	rt := &composedElicitationMockRuntime{}
+	events := make(chan tea.Msg, 16)
+	app := &App{runtime: rt, session: session.New(), events: events}
+
+	app.Start(t.Context())
+	require.NotNil(t, rt.handler, "Start must register the OnElicitationRequest handler")
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	app.Run(ctx, cancel, "hello", nil)
+
+	assert.Equal(t, 1, countElicitationDeliveries(t, events), "a single foreground elicitation must open exactly one dialog")
+}
+
+// TestMustSkipMirroredElicitation_ConcreteRuntimeClassification pins
+// mustSkipMirroredElicitation's classification of the two CONCRETE
+// production runtimes, not just marker-shaped mocks. The composed/remote
+// regression tests above exercise independent mock types that each
+// hand-declare whether they implement elicitationSinkMirror; they never
+// touch runtime.LocalRuntime or runtime.RemoteRuntime, so an inverted
+// production mapping (marker removed from LocalRuntime, or added to
+// RemoteRuntime) would leave every other test in this file green (#3584
+// review — mutation testing proof). *runtime.LocalRuntime and
+// *runtime.RemoteRuntime are asserted directly here; a nil pointer of each
+// concrete type is enough since mustSkipMirroredElicitation only performs a
+// type assertion and never calls a method on rt.
+func TestMustSkipMirroredElicitation_ConcreteRuntimeClassification(t *testing.T) {
+	t.Parallel()
+
+	assert.True(t, mustSkipMirroredElicitation((*runtime.LocalRuntime)(nil)),
+		"LocalRuntime mirrors OnElicitationRequest sink deliveries onto RunStream; App must skip the duplicate RunStream copy")
+	assert.False(t, mustSkipMirroredElicitation((*runtime.RemoteRuntime)(nil)),
+		"RemoteRuntime delivers elicitations ONLY via RunStream (its OnElicitationRequest sink is a no-op); App must not skip that copy")
+}
+
+// elicitationEntryPoint names one of App's three RunStream-forwarding entry
+// points and how to invoke it, so the delivery coverage below can drive all
+// three through one table instead of duplicating the drive/drain logic.
+type elicitationEntryPoint struct {
+	name   string
+	invoke func(app *App, ctx context.Context, cancel context.CancelFunc)
+}
+
+var elicitationEntryPoints = []elicitationEntryPoint{
+	{"Run", func(app *App, ctx context.Context, cancel context.CancelFunc) {
+		app.Run(ctx, cancel, "hello", nil)
+	}},
+	{"Retry", func(app *App, ctx context.Context, cancel context.CancelFunc) {
+		app.Retry(ctx, cancel)
+	}},
+	{"RunWithMessage", func(app *App, ctx context.Context, cancel context.CancelFunc) {
+		app.RunWithMessage(ctx, cancel, session.UserMessage("hello"))
+	}},
+}
+
+// TestElicitationDeliveryAcrossEntryPoints is the mutation-hardened
+// regression coverage for the #3584 double-delivery fix across ALL THREE
+// RunStream-forwarding entry points. Before forwardRunStreamEvents
+// centralized the gating logic, Run, Retry, and RunWithMessage each carried
+// their own independent copy of it — only Run was ever driven through a
+// mirrored and an unmirrored runtime, so breaking delivery in Retry (e.g.
+// dropping the remote/unmirrored copy) or RunWithMessage (e.g. failing to
+// dedupe the mirrored copy) left `go test ./pkg/app` green (#3584 review,
+// mutation-testing proof). Every entry point must deliver exactly one
+// dialog for both a mirrored/local-shaped runtime (sink AND RunStream both
+// fire; the RunStream copy must be skipped) and an unmirrored/remote-shaped
+// runtime (RunStream is the only delivery; it must pass through).
+func TestElicitationDeliveryAcrossEntryPoints(t *testing.T) {
+	t.Parallel()
+
+	for _, ep := range elicitationEntryPoints {
+		t.Run(ep.name, func(t *testing.T) {
+			t.Parallel()
+
+			t.Run("mirrored runtime delivers exactly once", func(t *testing.T) {
+				t.Parallel()
+
+				rt := &composedElicitationMockRuntime{}
+				events := make(chan tea.Msg, 16)
+				app := &App{runtime: rt, session: session.New(), events: events}
+				app.Start(t.Context())
+				require.NotNil(t, rt.handler, "Start must register the OnElicitationRequest handler")
+
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				ep.invoke(app, ctx, cancel)
+
+				assert.Equal(t, 1, countElicitationDeliveries(t, events),
+					"a mirrored/local-shaped runtime's foreground elicitation must open exactly one dialog")
+			})
+
+			t.Run("unmirrored runtime still delivers once", func(t *testing.T) {
+				t.Parallel()
+
+				rt := &remoteLikeMockRuntime{}
+				events := make(chan tea.Msg, 16)
+				app := &App{runtime: rt, session: session.New(), events: events}
+				app.Start(t.Context())
+
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				ep.invoke(app, ctx, cancel)
+
+				assert.Equal(t, 1, countElicitationDeliveries(t, events),
+					"an unmirrored/remote-shaped runtime's elicitation must still reach the app via RunStream")
+			})
+		})
+	}
 }

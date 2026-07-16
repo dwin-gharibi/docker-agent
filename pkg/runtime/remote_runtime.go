@@ -711,6 +711,12 @@ func (r *RemoteRuntime) OnBackgroundEvent(func(Event)) {}
 // (including from server-side background jobs) arrive as ElicitationRequestEvent
 // values on the RunStream channel itself (see the RunStream forwarding loop
 // above), so there is no separate out-of-band sink to register.
+//
+// RemoteRuntime deliberately does NOT implement
+// LocalRuntime.MirrorsElicitationOnRunStream: embedders that forward
+// RunStream events verbatim (e.g. pkg/app.App) rely on that capability check
+// to tell that this runtime's RunStream copy is its ONLY delivery and must
+// reach them unfiltered (#3584 review).
 func (r *RemoteRuntime) OnElicitationRequest(func(Event)) {}
 
 // Close is a no-op for remote runtimes.

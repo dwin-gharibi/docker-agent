@@ -20,5 +20,9 @@ type (
 	ElicitationResponseMsg struct {
 		Action  tools.ElicitationAction
 		Content map[string]any
+		// ElicitationID correlates this response with the specific request it
+		// answers; empty for dialogs built before the ID was plumbed through
+		// (falls back to the runtime's sole-pending-request behavior).
+		ElicitationID string
 	}
 )
