@@ -177,6 +177,40 @@ contents are loaded as the agent's instruction when the config is loaded. Notes:
 
 A runnable example lives in [`examples/instruction_file.yaml`](https://github.com/docker/docker-agent/blob/main/examples/instruction_file.yaml).
 
+## Prompt Files
+
+`add_prompt_files` injects the contents of one or more files into the agent's
+context at the start of every turn — handy for repo-wide conventions like
+`AGENTS.md` or `CLAUDE.md` that should stay available without being pasted
+into `instruction`:
+
+```yaml
+agents:
+  root:
+    model: anthropic/claude-sonnet-4-5
+    description: A helpful coding assistant
+    instruction: You are an expert software developer.
+    add_prompt_files:
+      - AGENTS.md
+```
+
+For each name, the agent loads the closest match found by walking up from the
+current working directory, plus (if it's a different file) a copy at that
+name directly under the user's home directory — so a personal `~/AGENTS.md`
+can layer on top of a repo-local one. Missing files are skipped rather than
+erroring. Because resolution and the read happen on every turn, edits to the
+file are picked up without restarting the agent.
+
+Use `--prompt-file` to add files for a single run without editing the
+config. It's merged with any `add_prompt_files` already set on the agent,
+with duplicates dropped:
+
+```bash
+$ docker agent run agent.yaml --prompt-file CONTRIBUTING.md
+```
+
+Resolved prompt files show up as their own entries in the `/context` dialog — see [File Attachments](../../features/tui/index.md#file-attachments) in the Terminal UI guide.
+
 ## Response Cache
 
 The response cache short-circuits the model when the same user question is asked again. The first time a question is asked, the agent calls the model normally and stores the assistant's reply. Subsequent identical questions skip the model entirely and replay the stored reply verbatim.
