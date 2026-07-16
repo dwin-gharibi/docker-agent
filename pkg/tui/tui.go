@@ -3006,7 +3006,13 @@ func (m *appModel) openExternalEditor() (tea.Model, tea.Cmd) {
 	cmd := exec.Command(parts[0], args...) //nolint:noctx // owned by tea.ExecProcess
 
 	ed := m.editor
-	return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
+	return m, tea.ExecProcess(cmd, externalEditorCallback(ed, tmpPath))
+}
+
+// externalEditorCallback builds the tea.ExecProcess callback that reads the
+// edited temp file back into the editor once the external editor exits.
+func externalEditorCallback(ed editor.Editor, tmpPath string) func(error) tea.Msg {
+	return func(err error) tea.Msg {
 		if err != nil {
 			os.Remove(tmpPath)
 			return notification.ShowMsg{Text: fmt.Sprintf("Editor error: %v", err), Type: notification.TypeError}
@@ -3028,8 +3034,11 @@ func (m *appModel) openExternalEditor() (tea.Model, tea.Cmd) {
 			ed.SetValue(c)
 		}
 
-		return nil
-	})
+		// Ctrl+g works from any panel, so make sure the editor has focus:
+		// otherwise Enter goes to the content panel and the edited text is
+		// never sent (or queued while the agent is working).
+		return messages.RequestFocusMsg{Target: messages.PanelEditor}
+	}
 }
 
 func toFullscreenView(content, windowTitle string, working, leanMode bool) tea.View {
