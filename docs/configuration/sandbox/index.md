@@ -151,7 +151,7 @@ create` / `docker sandbox create`) selects it.
 `--template` defaults to `docker/sandbox-templates:docker-agent`, the
 official Docker Agent sandbox template, maintained by the Docker Sandboxes
 team. See [What the default template includes](#what-the-default-template-includes)
-for what it ships with.
+for details.
 
 > [!NOTE]
 > There's currently no automated process that syncs this repository's own
@@ -240,14 +240,16 @@ docker agent run --sandbox agent.yaml
 
 ### What the default template includes
 
-The default template (`docker/sandbox-templates:docker-agent`) is layered
-onto the same Docker Sandboxes `shell-docker` base as the
-[repo-published templates](#sandbox-templates) and ships:
+The default template (`docker/sandbox-templates:docker-agent`) is a
+separate image maintained by the Docker Sandboxes team. This repository
+does not control its base image or contents, so no claim is made here
+about what it ships with beyond being the image `docker agent run
+--sandbox` uses whenever `--template` is not overridden (see
+[Flags](#flags) for the exact default).
 
-- **`docker-mcp`** CLI plugin — installed at `~/.docker/cli-plugins/docker-mcp`, available out of the box so agents can invoke `docker mcp` commands inside the sandbox without any additional setup.
-
-See [Sandbox templates](#sandbox-templates) for how it compares with
-`docker/docker-agent-sbx-templates:latest` / `:edge`, and how to select one.
+For a template whose base image and contents are verified against this
+repository's own build — including the `docker-mcp` CLI plugin — see
+[the repo-published templates](#sandbox-templates).
 
 ## Auto-Kit
 
