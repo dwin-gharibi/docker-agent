@@ -695,6 +695,44 @@ func attachEffortCompletion(items []Item, ctx context.Context, source effortLeve
 	}
 }
 
+// attachedFilesSource is the minimal surface dropCandidates needs. *app.App
+// satisfies it; tests can supply a stub instead of constructing a full
+// application.
+type attachedFilesSource interface {
+	AttachedFiles() []string
+}
+
+// dropCandidates returns one ArgumentCandidate per file currently attached to
+// the session, in attachment order. Labels are the exact recorded (absolute)
+// paths: completing them hits the exact-match branch of resolveAttachedFile,
+// and paths containing spaces stay safe because the completion Value carries
+// the full command line, not just the label. Every attached file is
+// droppable, so Disabled never applies here.
+func dropCandidates(source attachedFilesSource) []ArgumentCandidate {
+	attached := source.AttachedFiles()
+	candidates := make([]ArgumentCandidate, 0, len(attached))
+	for _, path := range attached {
+		candidates = append(candidates, ArgumentCandidate{Label: path})
+	}
+	return candidates
+}
+
+// attachDropCompletion wires the attached-file argument completer onto the
+// /drop item. Attached post-hoc (rather than inline in
+// builtInSessionCommands) so that function stays free of any
+// attached-files-source dependency.
+func attachDropCompletion(items []Item, source attachedFilesSource) {
+	for i := range items {
+		if items[i].ID != "session.drop" {
+			continue
+		}
+		items[i].CompleteArgument = func() []ArgumentCandidate {
+			return dropCandidates(source)
+		}
+		return
+	}
+}
+
 // BuildCommandCategories builds the list of command categories for the command palette
 func BuildCommandCategories(ctx context.Context, application *app.App) []Category {
 	// Get session commands and filter based on model capabilities
@@ -704,6 +742,7 @@ func BuildCommandCategories(ctx context.Context, application *app.App) []Categor
 	}
 	attachToolsetRestartCompletion(sessionCommands, application)
 	attachEffortCompletion(sessionCommands, ctx, application)
+	attachDropCompletion(sessionCommands, application)
 
 	categories := []Category{
 		{
