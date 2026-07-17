@@ -2734,11 +2734,12 @@ func (m *appModel) renderLeanWorkingIndicator() string {
 
 // renderResizeHandle renders the draggable separator between content and bottom panel.
 func (m *appModel) renderResizeHandle(width int) string {
-	if width <= 0 {
+	// The terminal can report degenerate sizes (0x0, 1x1) where the padded
+	// inner width goes negative; there is nothing to draw a handle on.
+	innerWidth := width - appPaddingHorizontal
+	if innerWidth <= 0 {
 		return ""
 	}
-
-	innerWidth := width - appPaddingHorizontal
 
 	// Use brighter style when actively dragging
 	centerStyle := styles.ResizeHandleHoverStyle
