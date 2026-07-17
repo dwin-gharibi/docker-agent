@@ -420,8 +420,11 @@ func (c *manager) filterItems(query string) {
 		var score int
 
 		if c.matchMode == MatchPrefix {
-			// Prefix matching: label must start with query (case-insensitive)
-			if strings.HasPrefix(strings.ToLower(item.Label), lowerQuery) {
+			// Prefix matching: label or value (e.g. a slash command whose label
+			// doesn't share its prefix, like "/settings" -> "Preferences") must
+			// start with the query (case-insensitive).
+			if strings.HasPrefix(strings.ToLower(item.Label), lowerQuery) ||
+				strings.HasPrefix(strings.ToLower(strings.TrimPrefix(item.Value, "/")), lowerQuery) {
 				matched = true
 				score = 1000 - len(item.Label) // Shorter labels rank higher
 			}

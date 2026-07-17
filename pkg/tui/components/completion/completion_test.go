@@ -6,6 +6,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestCompletionManagerStaysOpenWithNoResults(t *testing.T) {
@@ -88,6 +89,68 @@ func TestCompletionManagerStaysOpenWithNoResults(t *testing.T) {
 
 		view := m.View()
 		assert.Contains(t, view, "No results", "should show no results message")
+	})
+}
+
+func TestCompletionManagerMatchPrefixMatchesValue(t *testing.T) {
+	t.Parallel()
+
+	settingsItem := Item{Label: "Preferences", Value: "/settings"}
+	exitItem := Item{Label: "exit", Value: "/exit"}
+
+	t.Run("query matching the slash command surfaces a mismatched label", func(t *testing.T) {
+		t.Parallel()
+
+		m := New().(*manager)
+		m.Update(OpenMsg{
+			Items:     []Item{settingsItem, exitItem},
+			MatchMode: MatchPrefix,
+		})
+
+		m.Update(QueryMsg{Query: "settings"})
+		require.Len(t, m.filteredItems, 1)
+		assert.Equal(t, "Preferences", m.filteredItems[0].Label)
+	})
+
+	t.Run("a prefix of the slash command still matches", func(t *testing.T) {
+		t.Parallel()
+
+		m := New().(*manager)
+		m.Update(OpenMsg{
+			Items:     []Item{settingsItem, exitItem},
+			MatchMode: MatchPrefix,
+		})
+
+		m.Update(QueryMsg{Query: "set"})
+		require.Len(t, m.filteredItems, 1)
+		assert.Equal(t, "Preferences", m.filteredItems[0].Label)
+	})
+
+	t.Run("label prefix matching still works", func(t *testing.T) {
+		t.Parallel()
+
+		m := New().(*manager)
+		m.Update(OpenMsg{
+			Items:     []Item{settingsItem, exitItem},
+			MatchMode: MatchPrefix,
+		})
+
+		m.Update(QueryMsg{Query: "exi"})
+		require.Len(t, m.filteredItems, 1)
+		assert.Equal(t, "exit", m.filteredItems[0].Label)
+	})
+
+	t.Run("query matching neither label nor value is filtered out", func(t *testing.T) {
+		t.Parallel()
+
+		m := New().(*manager)
+		m.Update(OpenMsg{
+			Items:     []Item{settingsItem, exitItem},
+			MatchMode: MatchPrefix,
+		})
+
+		m.Update(QueryMsg{Query: "zzz"})
+		assert.Empty(t, m.filteredItems)
 	})
 }
 
