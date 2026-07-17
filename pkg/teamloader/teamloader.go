@@ -121,6 +121,16 @@ type LoadResult struct {
 	ProviderRegistry *provider.Registry
 	// AgentDefaultModels maps agent names to their configured default model references
 	AgentDefaultModels map[string]string
+	// Budget is the manifest's run-wide budget, or nil when the manifest
+	// sets no run-wide ceiling. It is per-run rather than per-agent, so it
+	// lives on the load result next to the team rather than on any
+	// individual agent.
+	Budget *latest.BudgetConfig
+	// Budgets are the manifest's named budget definitions, and
+	// AgentBudgets maps each agent to the budget names it declared. A name
+	// referenced by several agents is one shared pot.
+	Budgets      map[string]latest.BudgetConfig
+	AgentBudgets map[string][]string
 }
 
 // Load loads an agent team from the given source
@@ -456,8 +466,12 @@ func LoadWithConfig(ctx context.Context, agentSource config.Source, runConfig *c
 	// Retain the resolved per-agent configs so inspection surfaces (the agent
 	// inspector modal) can show declared toolset allow-lists, limits and flags.
 	agentConfigs := make(map[string]latest.AgentConfig, len(cfg.Agents))
+	agentBudgets := make(map[string][]string, len(cfg.Agents))
 	for i := range cfg.Agents {
 		agentConfigs[cfg.Agents[i].Name] = cfg.Agents[i]
+		if len(cfg.Agents[i].Budgets) > 0 {
+			agentBudgets[cfg.Agents[i].Name] = cfg.Agents[i].Budgets
+		}
 	}
 
 	return &LoadResult{
@@ -470,6 +484,9 @@ func LoadWithConfig(ctx context.Context, agentSource config.Source, runConfig *c
 		Providers:          cfg.Providers,
 		ProviderRegistry:   loadOpts.providerRegistry,
 		AgentDefaultModels: agentDefaultModels,
+		Budget:             cfg.Budget,
+		Budgets:            cfg.Budgets,
+		AgentBudgets:       agentBudgets,
 	}, nil
 }
 
