@@ -59,6 +59,8 @@ Omit `lean` or set it to `false` to keep the full TUI as the default. You can st
 
 The lean TUI supports **steering**: messages submitted while the agent is running are queued and delivered to the active session. Pending steering messages appear with muted styling at the end of the live stream so you can see what will be sent next.
 
+The lean TUI supports a focused set of slash commands: `/new`, `/compact`, `/model`, `/effort`, `/clear`, `/help`, `/exit` (alias: `/quit`), plus any agent-defined commands. Type `/model` (or `/model <provider/model>`) to switch the active model inline — the command opens a fuzzy-searchable list of available models.
+
 ## Slash Commands
 
 Type `/` during a session to see available commands, or press <kbd>Ctrl</kbd>+<kbd>K</kbd> for the command palette:
@@ -201,6 +203,19 @@ settings:
 
 Set it to `false` or omit it to keep the default collapsed behavior. See [User Settings](../../configuration/user-settings/index.md) for the full settings reference.
 
+### Mermaid Diagrams
+
+The TUI renders Mermaid diagram blocks inline rather than displaying raw syntax. When an assistant message contains a fenced code block tagged ` ```mermaid `, the TUI parses the diagram and draws an ASCII representation directly in the conversation:
+
+| Diagram type                                   | Support                                           |
+| ---------------------------------------------- | ------------------------------------------------- |
+| `graph` / `flowchart`                          | ✅ Rendered inline                                 |
+| `sequenceDiagram`                              | ✅ Rendered inline                                 |
+| `stateDiagram` / `stateDiagram-v2`             | ✅ Rendered inline                                 |
+| Other types (`classDiagram`, `erDiagram`, …) | Falls back to a syntax-highlighted code block     |
+
+Mermaid rendering works in both the full TUI and the lean TUI. Unsupported or syntactically invalid diagram blocks are displayed as ordinary fenced code blocks — no configuration is required and there is no way to disable it.
+
 ### Snapshots, `/undo`, and `/snapshots`
 
 Enable shadow-git snapshots globally in `~/.config/cagent/config.yaml`:
@@ -244,9 +259,9 @@ Select a live session with <kbd>↑</kbd>/<kbd>↓</kbd> and press <kbd>Enter</k
 
 ## Runtime Model Switching
 
-Change the AI model during a session with `/model` or <kbd>Ctrl</kbd>+<kbd>M</kbd>:
+Change the AI model during a session with `/model` or <kbd>Ctrl</kbd>+<kbd>M</kbd>. Model switching works in both the full TUI and the lean TUI.
 
-1. Press <kbd>Ctrl</kbd>+<kbd>M</kbd> or type `/model`
+1. Press <kbd>Ctrl</kbd>+<kbd>M</kbd> (full TUI) or type `/model` (both TUIs)
 2. Select from config models or type a custom `provider/model`
 3. The model switch is saved with the session and restored on reload
 
