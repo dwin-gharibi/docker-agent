@@ -1,7 +1,10 @@
 package mermaid
 
 import (
+	"slices"
 	"strings"
+
+	"github.com/charmbracelet/x/ansi"
 
 	mermaidparser "github.com/docker/docker-agent/pkg/mermaid"
 )
@@ -11,11 +14,7 @@ func drawMermaidFlowchart(edges []mermaidparser.Edge, standalone []string, nodes
 	case "LR":
 		return drawMermaidGraphHorizontal(edges, standalone, nodes, width)
 	case "RL":
-		reversed := make([]mermaidparser.Edge, len(edges))
-		for i, edge := range edges {
-			reversed[i] = mermaidparser.Edge{From: edge.To, To: edge.From, Label: edge.Label}
-		}
-		return strings.ReplaceAll(drawMermaidGraphHorizontal(reversed, standalone, nodes, width), "▶", "◀")
+		return flipMermaidGraphHorizontal(drawMermaidGraphHorizontal(edges, standalone, nodes, width), width, mermaidGraphLabels(edges, nodes))
 	case "BT":
 		return flipMermaidGraphVertical(drawMermaidGraph(edges, standalone, nodes, width))
 	default: // Mermaid treats TD and TB as aliases; an omitted direction is also top-down.
@@ -163,6 +162,76 @@ func buildMermaidHorizontalLayout(id string, adjacency map[string][]mermaidparse
 		lines[i] = mermaidCanvasText(canvas[i])
 	}
 	return mermaidGraphLayout{lines: lines, width: layoutWidth, root: root}
+}
+
+func mermaidGraphLabels(edges []mermaidparser.Edge, nodes map[string]string) []string {
+	labels := make([]string, 0, len(nodes)+len(edges))
+	for _, label := range nodes {
+		labels = append(labels, label, "↩ "+label)
+	}
+	for _, edge := range edges {
+		if edge.Label != "" {
+			labels = append(labels, edge.Label)
+		}
+	}
+	slices.SortFunc(labels, func(a, b string) int {
+		return len(b) - len(a)
+	})
+	return labels
+}
+
+func flipMermaidGraphHorizontal(diagram string, width int, labels []string) string {
+	lines := strings.Split(diagram, "\n")
+	for i, line := range lines {
+		segments := make([]string, 0, len(line)+max(width-mermaidStringWidth(line), 0))
+		for line != "" {
+			label := mermaidLabelPrefix(line, labels)
+			if label != "" {
+				segments = append(segments, label)
+				line = line[len(label):]
+				continue
+			}
+			cluster, _ := ansi.FirstGraphemeCluster(line, ansi.GraphemeWidth)
+			line = line[len(cluster):]
+			segments = append(segments, flipMermaidHorizontalCluster(cluster))
+		}
+		for range max(width-mermaidStringWidth(lines[i]), 0) {
+			segments = append(segments, " ")
+		}
+		slices.Reverse(segments)
+		lines[i] = strings.TrimRight(strings.Join(segments, ""), " ")
+	}
+	return strings.Join(lines, "\n")
+}
+
+func mermaidLabelPrefix(line string, labels []string) string {
+	for _, label := range labels {
+		if strings.HasPrefix(line, label) {
+			return label
+		}
+	}
+	return ""
+}
+
+func flipMermaidHorizontalCluster(cluster string) string {
+	switch cluster {
+	case "╭":
+		return "╮"
+	case "╮":
+		return "╭"
+	case "╰":
+		return "╯"
+	case "╯":
+		return "╰"
+	case "├":
+		return "┤"
+	case "┤":
+		return "├"
+	case "▶":
+		return "◀"
+	default:
+		return cluster
+	}
 }
 
 func flipMermaidGraphVertical(diagram string) string {
