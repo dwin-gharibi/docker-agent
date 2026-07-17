@@ -148,6 +148,10 @@ var blockRules = map[string]blockRule{
 	// toolsets: { name: { ... } }. Distinct from the agent-level `toolset`
 	// (singular) block, which aggregates into a list under the same key.
 	"toolsets": {mode: modeMapByLabel, outKey: "toolsets"},
+	// Top-level named budget definitions: `budgets "tight" { ... }` becomes
+	// budgets: { tight: { ... } }. The run-wide `budget` block is a
+	// singleton and needs no rule — the 0-label default already covers it.
+	"budgets": {mode: modeMapByLabel, outKey: "budgets"},
 	// `shell "name" { ... }` is used inside script toolsets as a map of
 	// scripted shell commands.
 	"shell": {mode: modeMapByLabel, outKey: "shell"},
