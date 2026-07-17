@@ -14,9 +14,8 @@ import (
 // Embedder generates vector embeddings for text
 type Embedder struct {
 	provider       provider.Provider
-	usageHandler   func(ctx context.Context, tokens int64, cost float64) // Callback to emit usage events
-	batchSize      int                                                   // Batch size for API calls
-	maxConcurrency int                                                   // Maximum concurrent embedding batch requests
+	batchSize      int // Batch size for API calls
+	maxConcurrency int // Maximum concurrent embedding batch requests
 }
 
 // Option is a functional option for configuring the Embedder
@@ -51,24 +50,13 @@ func New(p provider.Provider, opts ...Option) *Embedder {
 	return e
 }
 
-// SetUsageHandler sets a callback to be called after each embedding with usage info
-func (e *Embedder) SetUsageHandler(handler func(ctx context.Context, tokens int64, cost float64)) {
-	e.usageHandler = handler
-}
-
 // Embed generates an embedding for a single text
-// Emits usage event immediately via handler if set
-func (e *Embedder) Embed(ctx context.Context, text string) ([]float64, error) {
+func (e *Embedder) Embed(ctx context.Context, text string) ([]float64, int64, error) {
 	// Try to use the provider's embedding API if it implements EmbeddingProvider.
 	if embeddingProvider, ok := e.provider.(provider.EmbeddingProvider); ok {
 		result, err := embeddingProvider.CreateEmbedding(ctx, text)
 		if err != nil {
-			return nil, err
-		}
-
-		// Emit usage event immediately
-		if e.usageHandler != nil {
-			e.usageHandler(ctx, result.TotalTokens, result.Cost)
+			return nil, 0, err
 		}
 
 		slog.DebugContext(ctx, "Embedding generated",
@@ -76,19 +64,19 @@ func (e *Embedder) Embed(ctx context.Context, text string) ([]float64, error) {
 			"tokens", result.TotalTokens,
 			"cost", result.Cost)
 
-		return result.Embedding, nil
+		return result.Embedding, result.TotalTokens, nil
 	}
 
 	// Provider does not support embeddings via the standard interface; fail fast.
-	return nil, fmt.Errorf("provider %s does not support embeddings", e.provider.ID())
+	return nil, 0, fmt.Errorf("provider %s does not support embeddings", e.provider.ID())
 }
 
 // EmbedBatch generates embeddings for multiple texts using intelligent batching
 // If the provider supports batch embeddings, it will use parallel batch API calls
 // Otherwise, it falls back to sequential processing
-func (e *Embedder) EmbedBatch(ctx context.Context, texts []string) ([][]float64, error) {
+func (e *Embedder) EmbedBatch(ctx context.Context, texts []string) ([][]float64, int64, error) {
 	if len(texts) == 0 {
-		return [][]float64{}, nil
+		return [][]float64{}, 0, nil
 	}
 
 	// Check if provider supports batch embeddings.
@@ -102,19 +90,21 @@ func (e *Embedder) EmbedBatch(ctx context.Context, texts []string) ([][]float64,
 		"text_count", len(texts))
 
 	embeddings := make([][]float64, len(texts))
+	var totalTokens int64
 	for i, text := range texts {
-		embedding, err := e.Embed(ctx, text)
+		embedding, tokens, err := e.Embed(ctx, text)
+		totalTokens += tokens
 		if err != nil {
-			return nil, fmt.Errorf("failed to embed text %d: %w", i, err)
+			return nil, totalTokens, fmt.Errorf("failed to embed text %d: %w", i, err)
 		}
 		embeddings[i] = embedding
 	}
 
-	return embeddings, nil
+	return embeddings, totalTokens, nil
 }
 
 // embedBatchOptimized processes texts in optimized batches with parallel API calls
-func (e *Embedder) embedBatchOptimized(ctx context.Context, batchProvider provider.BatchEmbeddingProvider, texts []string) ([][]float64, error) {
+func (e *Embedder) embedBatchOptimized(ctx context.Context, batchProvider provider.BatchEmbeddingProvider, texts []string) ([][]float64, int64, error) {
 	totalTexts := len(texts)
 	slog.DebugContext(ctx, "Starting optimized batch embedding",
 		"provider", e.provider.ID(),
@@ -125,6 +115,7 @@ func (e *Embedder) embedBatchOptimized(ctx context.Context, batchProvider provid
 	// Pre-allocate results
 	embeddings := make([][]float64, totalTexts)
 	var mu sync.Mutex
+	var totalTokens int64
 
 	// Create errgroup with concurrency limit
 	g, ctx := errgroup.WithContext(ctx)
@@ -154,12 +145,8 @@ func (e *Embedder) embedBatchOptimized(ctx context.Context, batchProvider provid
 			// Store results (mutex protects slice writes)
 			mu.Lock()
 			copy(embeddings[start:end], result.Embeddings)
+			totalTokens += result.TotalTokens
 			mu.Unlock()
-
-			// Emit usage event (handler should be thread-safe)
-			if e.usageHandler != nil {
-				e.usageHandler(ctx, result.TotalTokens, result.Cost)
-			}
 
 			slog.DebugContext(ctx, "Batch completed",
 				"batch", batchNum,
@@ -173,7 +160,7 @@ func (e *Embedder) embedBatchOptimized(ctx context.Context, batchProvider provid
 
 	// Wait for all batches and return first error if any
 	if err := g.Wait(); err != nil {
-		return nil, err
+		return nil, totalTokens, err
 	}
 
 	slog.DebugContext(ctx, "Batch embedding completed",
@@ -181,5 +168,5 @@ func (e *Embedder) embedBatchOptimized(ctx context.Context, batchProvider provid
 		"total_embeddings", len(embeddings),
 		"batches_processed", (totalTexts+e.batchSize-1)/e.batchSize)
 
-	return embeddings, nil
+	return embeddings, totalTokens, nil
 }

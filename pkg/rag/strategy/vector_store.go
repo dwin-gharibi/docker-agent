@@ -147,14 +147,6 @@ func NewVectorStore(cfg VectorStoreConfig) *VectorStore {
 		embeddingConcurrency:  cfg.EmbeddingConcurrency,
 		fileIndexConcurrency:  cfg.FileIndexConcurrency,
 	}
-
-	// Set usage handler to calculate cost from models.dev and emit events with CUMULATIVE totals
-	// This matches how chat completions calculate cost in runtime.go
-	cfg.Embedder.SetUsageHandler(func(ctx context.Context, tokens int64, _ float64) {
-		cost := s.calculateCost(ctx, tokens)
-		s.recordUsage(tokens, cost)
-	})
-
 	return s
 }
 
@@ -385,15 +377,18 @@ func (s *VectorStore) Initialize(ctx context.Context, docPaths []string, chunkin
 }
 
 // Query searches for relevant documents using vector similarity
-func (s *VectorStore) Query(ctx context.Context, query string, numResults int, threshold float64) ([]database.SearchResult, error) {
-	queryEmbedding, err := s.embedder.Embed(ctx, query)
+func (s *VectorStore) Query(ctx context.Context, query string, numResults int, threshold float64) ([]database.SearchResult, types.Usage, error) {
+	queryEmbedding, tokens, err := s.embedder.Embed(ctx, query)
+	cost := s.calculateCost(ctx, tokens)
+	usage := types.Usage{TotalTokens: tokens, Cost: cost, ModelID: s.modelID.String()}
+
 	if err != nil {
-		return nil, fmt.Errorf("failed to generate query embedding: %w", err)
+		return nil, usage, fmt.Errorf("failed to generate query embedding: %w", err)
 	}
 
 	results, err := s.db.SearchSimilarVectors(ctx, queryEmbedding, numResults)
 	if err != nil {
-		return nil, fmt.Errorf("failed to search: %w", err)
+		return nil, usage, fmt.Errorf("failed to search: %w", err)
 	}
 
 	// Convert internal result type to public SearchResult type
@@ -407,7 +402,7 @@ func (s *VectorStore) Query(ctx context.Context, query string, numResults int, t
 		}
 	}
 
-	return filtered, nil
+	return filtered, usage, nil
 }
 
 // CheckAndReindexChangedFiles checks for file changes and re-indexes if needed
@@ -607,7 +602,12 @@ func (s *VectorStore) indexFile(ctx context.Context, filePath string) error {
 		"path", filePath,
 		"chunk_count", len(validChunks))
 
-	embeddings, err := s.embedder.EmbedBatch(ctx, chunkContents)
+	embeddings, batchTokens, err := s.embedder.EmbedBatch(ctx, chunkContents)
+
+	// Record usage even on partial failure (tokens consumed before error)
+	batchCost := s.calculateCost(ctx, batchTokens)
+	s.recordUsage(batchTokens, batchCost)
+
 	if err != nil {
 		return fmt.Errorf("failed to generate embeddings: %w", classifyModelCallError(err))
 	}

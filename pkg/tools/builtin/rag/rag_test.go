@@ -2,11 +2,17 @@ package rag
 
 import (
 	"cmp"
+	"context"
 	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/docker/docker-agent/pkg/rag"
+	"github.com/docker/docker-agent/pkg/rag/database"
+	"github.com/docker/docker-agent/pkg/rag/strategy"
+	ragtypes "github.com/docker/docker-agent/pkg/rag/types"
 )
 
 func TestRAGTool_ToolName(t *testing.T) {
@@ -74,4 +80,66 @@ func TestRAGTool_SortResults(t *testing.T) {
 	assert.Equal(t, "d.txt", results[1].SourcePath)
 	assert.Equal(t, "a.txt", results[2].SourcePath)
 	assert.Equal(t, "c.txt", results[3].SourcePath)
+}
+
+type mockStrategy struct {
+	usage ragtypes.Usage
+}
+
+func (m *mockStrategy) Initialize(ctx context.Context, docPaths []string, chunking strategy.ChunkingConfig) error {
+	return nil
+}
+
+func (m *mockStrategy) Query(ctx context.Context, query string, numResults int, threshold float64) ([]database.SearchResult, ragtypes.Usage, error) {
+	return nil, m.usage, nil
+}
+
+func (m *mockStrategy) CheckAndReindexChangedFiles(ctx context.Context, docPaths []string, chunking strategy.ChunkingConfig) error {
+	return nil
+}
+
+func (m *mockStrategy) StartFileWatcher(ctx context.Context, docPaths []string, chunking strategy.ChunkingConfig) error {
+	return nil
+}
+
+func (m *mockStrategy) Close() error {
+	return nil
+}
+
+func TestRAGTool_HandleQuery_Telemetry(t *testing.T) {
+	// This test asserts handleQueryRAG runs and doesn't panic.
+	// Since telemetry is global, we can't easily assert on the emitted event here without
+	// exposing internal test utilities, but we can verify it doesn't crash on non-zero usage.
+
+	events := make(chan ragtypes.Event)
+	defer close(events)
+
+	stratA := &mockStrategy{
+		usage: ragtypes.Usage{
+			TotalTokens: 10,
+			Cost:        0.1,
+			ModelID:     "test-model",
+		},
+	}
+
+	cfg := rag.Config{
+		StrategyConfigs: []strategy.Config{
+			{Name: "stratA", Strategy: stratA},
+		},
+		Results: rag.ResultsConfig{
+			Limit: 10,
+		},
+	}
+
+	mgr, err := rag.New(t.Context(), "test-rag", cfg, events)
+	require.NoError(t, err)
+
+	tool := &ToolSet{
+		manager:  mgr,
+		toolName: "test-rag",
+	}
+
+	res, err := tool.handleQueryRAG(t.Context(), queryRAGArgs{Query: "test"})
+	require.NoError(t, err)
+	assert.NotNil(t, res)
 }
