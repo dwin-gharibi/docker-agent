@@ -30,6 +30,8 @@ var topLevelConfigKeys = map[string]bool{
 	"rag":         true,
 	"metadata":    true,
 	"permissions": true,
+	"budget":      true,
+	"budgets":     true,
 }
 
 // TestDocYAMLSnippetsAreValid extracts every ```yaml code block from docs/
