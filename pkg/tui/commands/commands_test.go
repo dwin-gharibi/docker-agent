@@ -258,3 +258,22 @@ func TestRemoveByIDsDropsSnapshotCommands(t *testing.T) {
 	assert.Nil(t, parser.Parse("/snapshots"))
 	require.NotNil(t, parser.Parse("/exit"))
 }
+
+// TestSettingsCommandLabel guards against the palette/completion UI labeling
+// /settings as "Preferences" again; the settings dialog is titled "Settings".
+func TestSettingsCommandLabel(t *testing.T) {
+	t.Parallel()
+
+	var settings Item
+	found := false
+	for _, item := range builtInSettingsCommands() {
+		if item.SlashCommand == "/settings" {
+			settings = item
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "expected a /settings built-in command")
+	assert.Equal(t, "settings.open", settings.ID)
+	assert.Equal(t, "Settings", settings.Label)
+}

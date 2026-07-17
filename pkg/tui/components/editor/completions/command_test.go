@@ -10,21 +10,17 @@ import (
 	"github.com/docker/docker-agent/pkg/tui/components/completion"
 )
 
-// categoriesWithSettings mirrors the real "Settings" category, whose
-// "Preferences" label doesn't share a prefix with its "/settings" slash
-// command — the case that exposed the inline-completion bug.
-func categoriesWithSettings() []commands.Category {
+// categoriesWithToolsetRestart mirrors the real "Session" category's
+// "Restart Toolset" command, whose label doesn't share a prefix with its
+// "/toolset-restart" slash command — the case that exposed the
+// inline-completion bug.
+func categoriesWithToolsetRestart() []commands.Category {
 	return []commands.Category{
 		{
 			Name: "Session",
 			Commands: []commands.Item{
 				{ID: "session.exit", Label: "Exit", SlashCommand: "/exit"},
-			},
-		},
-		{
-			Name: "Settings",
-			Commands: []commands.Item{
-				{ID: "settings.open", Label: "Preferences", SlashCommand: "/settings"},
+				{ID: "session.toolset.restart", Label: "Restart Toolset", SlashCommand: "/toolset-restart"},
 			},
 		},
 	}
@@ -33,29 +29,29 @@ func categoriesWithSettings() []commands.Category {
 func TestCommandCompletionItems(t *testing.T) {
 	t.Parallel()
 
-	items := NewCommandCompletion(categoriesWithSettings()).Items()
+	items := NewCommandCompletion(categoriesWithToolsetRestart()).Items()
 
 	require.Len(t, items, 2)
 	labels := map[string]string{}
 	for _, item := range items {
 		labels[item.Label] = item.Value
 	}
-	assert.Equal(t, "/settings", labels["Preferences"])
+	assert.Equal(t, "/toolset-restart", labels["Restart Toolset"])
 	assert.Equal(t, "/exit", labels["Exit"])
 }
 
-// TestCommandCompletionMatchesSettingsQuery exercises the full pipeline the
-// editor uses: items from commandCompletion.Items(), filtered by the
+// TestCommandCompletionMatchesToolsetRestartQuery exercises the full pipeline
+// the editor uses: items from commandCompletion.Items(), filtered by the
 // completion manager in the command completion's own MatchMode. It guards
-// against a regression where typing "/settings" (trigger stripped to
-// "settings") failed to surface the settings command because filtering only
-// looked at Label ("Preferences"), never at Value ("/settings").
-func TestCommandCompletionMatchesSettingsQuery(t *testing.T) {
+// against a regression where typing "/toolset-restart" (trigger stripped to
+// "toolset-restart") failed to surface the command because filtering only
+// looked at Label ("Restart Toolset"), never at Value ("/toolset-restart").
+func TestCommandCompletionMatchesToolsetRestartQuery(t *testing.T) {
 	t.Parallel()
 
-	cmdCompletion := NewCommandCompletion(categoriesWithSettings())
+	cmdCompletion := NewCommandCompletion(categoriesWithToolsetRestart())
 
-	for _, query := range []string{"settings", "set", "s"} {
+	for _, query := range []string{"toolset-restart", "tool", "t"} {
 		t.Run(query, func(t *testing.T) {
 			t.Parallel()
 
@@ -68,7 +64,7 @@ func TestCommandCompletionMatchesSettingsQuery(t *testing.T) {
 			require.NotNil(t, cmd)
 
 			view := m.View()
-			assert.Contains(t, view, "Preferences", "settings command should appear for query %q", query)
+			assert.Contains(t, view, "Restart Toolset", "toolset-restart command should appear for query %q", query)
 		})
 	}
 }

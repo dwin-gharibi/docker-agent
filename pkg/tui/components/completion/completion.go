@@ -421,8 +421,8 @@ func (c *manager) filterItems(query string) {
 
 		if c.matchMode == MatchPrefix {
 			// Prefix matching: label or value (e.g. a slash command whose label
-			// doesn't share its prefix, like "/settings" -> "Preferences") must
-			// start with the query (case-insensitive).
+			// doesn't share its prefix, like "/toolset-restart" -> "Restart
+			// Toolset") must start with the query (case-insensitive).
 			if strings.HasPrefix(strings.ToLower(item.Label), lowerQuery) ||
 				strings.HasPrefix(strings.ToLower(strings.TrimPrefix(item.Value, "/")), lowerQuery) {
 				matched = true
