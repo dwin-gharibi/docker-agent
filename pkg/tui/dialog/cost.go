@@ -175,6 +175,7 @@ type stat struct {
 
 type costData struct {
 	total             totalUsage
+	agents            []totalUsage
 	models            []totalUsage
 	messages          []totalUsage
 	hasPerMessageData bool
@@ -223,7 +224,22 @@ func (d *costDialog) gatherCostData() costData {
 	data.duration = d.session.Duration()
 	data.messageCount = d.session.MessageCount()
 	modelMap := make(map[string]*totalUsage)
+	agentMap := make(map[string]*totalUsage)
 	msgCounter := 0
+
+	// Aggregation is exact: it sums the per-message records themselves, so it
+	// is immune to the double-counting a sum of cumulative session snapshots
+	// would produce.
+	addAgentUsage := func(label string, cost float64, usage *chat.Usage) {
+		if agentMap[label] == nil {
+			agentMap[label] = &totalUsage{label: label}
+		}
+		if usage != nil {
+			agentMap[label].add(cost, usage)
+			return
+		}
+		agentMap[label].cost += cost
+	}
 
 	addRecord := func(agentName, model string, cost float64, usage *chat.Usage) {
 		data.hasPerMessageData = true
@@ -234,6 +250,10 @@ func (d *costDialog) gatherCostData() costData {
 			modelMap[model] = &totalUsage{label: model}
 		}
 		modelMap[model].add(cost, usage)
+
+		// Records without an agent name stay honestly unattributed instead of
+		// being assigned to some agent arbitrarily.
+		addAgentUsage(cmp.Or(agentName, "(unattributed)"), cost, usage)
 
 		msgCounter++
 		msgLabel := fmt.Sprintf("#%d", msgCounter)
@@ -251,6 +271,9 @@ func (d *costDialog) gatherCostData() costData {
 	addCompactionCost := func(cost float64) {
 		data.hasPerMessageData = true
 		data.total.cost += cost
+		// Summary items carry no agent attribution; keep compaction spend in
+		// its own By Agent bucket rather than crediting an agent for it.
+		addAgentUsage("compaction", cost, nil)
 		data.messages = append(data.messages, totalUsage{label: "compaction", cost: cost})
 	}
 
@@ -299,6 +322,13 @@ func (d *costDialog) gatherCostData() costData {
 	}
 	slices.SortFunc(data.models, func(a, b totalUsage) int {
 		return cmp.Compare(b.cost, a.cost)
+	})
+
+	for _, a := range agentMap {
+		data.agents = append(data.agents, *a)
+	}
+	slices.SortFunc(data.agents, func(a, b totalUsage) int {
+		return cmp.Or(cmp.Compare(b.cost, a.cost), cmp.Compare(a.label, b.label))
 	})
 
 	// Fall back to session-level totals (e.g. past sessions without per-message data).
@@ -369,6 +399,16 @@ func (d *costDialog) buildLines(contentWidth int) []string {
 		lines = append(lines, styledStat(s, labelWidth))
 	}
 	lines = append(lines, "")
+
+	// By Agent
+	if len(data.agents) > 0 {
+		lines = append(lines, sectionStyle().Render("By Agent"), "")
+		labelWidth := usageLabelWidth(data.agents)
+		for _, a := range data.agents {
+			lines = append(lines, d.renderUsageLine(a, data.total.cost, labelWidth, false))
+		}
+		lines = append(lines, "")
+	}
 
 	// By Model
 	if len(data.models) > 0 {
@@ -532,6 +572,15 @@ func (d *costDialog) renderPlainText() string {
 	}
 	lines = append(lines, "")
 
+	// By Agent
+	if len(data.agents) > 0 {
+		lines = append(lines, "By Agent")
+		for _, a := range data.agents {
+			lines = append(lines, a.plainTextLine(""))
+		}
+		lines = append(lines, "")
+	}
+
 	// By Model
 	if len(data.models) > 0 {
 		lines = append(lines, "By Model")
@@ -608,16 +657,7 @@ func accentStyle() lipgloss.Style {
 // ---------------------------------------------------------------------------
 
 func formatCost(cost float64) string {
-	if cost < 0 {
-		return "-" + formatCost(-cost)
-	}
-	if cost < 0.0001 {
-		return "$0.00"
-	}
-	if cost < 0.01 {
-		return fmt.Sprintf("$%.4f", cost)
-	}
-	return fmt.Sprintf("$%.2f", cost)
+	return toolcommon.FormatCostPrecise(cost)
 }
 
 func formatCostPadded(cost float64) string {

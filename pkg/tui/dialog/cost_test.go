@@ -71,11 +71,88 @@ func TestCostDialogView(t *testing.T) {
 	// The title may be split across lines due to narrow width
 	assert.Contains(t, view, "Session Cost")
 	assert.Contains(t, view, "Total")
+	assert.Contains(t, view, "By Agent")
 	assert.Contains(t, view, "By Model")
 	assert.Contains(t, view, "gpt-4o")
 	assert.Contains(t, view, "tokens:")           // total token count line
 	assert.Contains(t, view, "messages:")         // message count in header
 	assert.Contains(t, view, "avg cost/message:") // average cost per message
+}
+
+// TestCostDialogByAgentAggregation verifies the By Agent section aggregates
+// the exact per-message records by agent name, sorts descending by cost,
+// keeps records without an agent honestly unattributed, and books compaction
+// spend in its own bucket instead of crediting an agent for it.
+func TestCostDialogByAgentAggregation(t *testing.T) {
+	t.Parallel()
+
+	sess := session.New()
+	addMsg := func(agent string, cost float64, usage chat.Usage) {
+		sess.AddMessage(&session.Message{
+			AgentName: agent,
+			Message: chat.Message{
+				Role:    chat.MessageRoleAssistant,
+				Content: "msg",
+				Model:   "gpt-4o",
+				Usage:   &usage,
+				Cost:    cost,
+			},
+		})
+	}
+	addMsg("root", 0.02, chat.Usage{InputTokens: 1000, OutputTokens: 200})
+	addMsg("developer", 0.10, chat.Usage{InputTokens: 4000, OutputTokens: 800})
+	addMsg("root", 0.03, chat.Usage{InputTokens: 1500, OutputTokens: 300})
+	addMsg("", 0.01, chat.Usage{InputTokens: 500, OutputTokens: 100})
+	sess.Messages = append(sess.Messages, session.Item{Summary: "compacted", Cost: 0.004})
+
+	data := (&costDialog{session: sess}).gatherCostData()
+
+	require.Len(t, data.agents, 4)
+	assert.Equal(t, "developer", data.agents[0].label, "sorted descending by cost")
+	assert.InDelta(t, 0.10, data.agents[0].cost, 1e-9)
+	assert.Equal(t, "root", data.agents[1].label)
+	assert.InDelta(t, 0.05, data.agents[1].cost, 1e-9, "root's two messages add up")
+	assert.Equal(t, int64(2500), data.agents[1].InputTokens, "tokens aggregate per agent")
+	assert.Equal(t, "(unattributed)", data.agents[2].label, "agent-less records stay unattributed")
+	assert.InDelta(t, 0.01, data.agents[2].cost, 1e-9)
+	assert.Equal(t, "compaction", data.agents[3].label, "compaction spend keeps its own bucket")
+	assert.InDelta(t, 0.004, data.agents[3].cost, 1e-9)
+}
+
+// TestCostDialogByAgentRendersBeforeByModel verifies the styled view renders
+// the By Agent section between Total and By Model, and that the clipboard
+// plain text carries it too.
+func TestCostDialogByAgentRendersBeforeByModel(t *testing.T) {
+	t.Parallel()
+
+	sess := session.New()
+	sess.AddMessage(&session.Message{
+		AgentName: "root",
+		Message: chat.Message{
+			Role:    chat.MessageRoleAssistant,
+			Content: "Hello",
+			Model:   "gpt-4o",
+			Usage:   &chat.Usage{InputTokens: 1000, OutputTokens: 500},
+			Cost:    0.005,
+		},
+	})
+
+	d := NewCostDialog(sess)
+	d.SetSize(100, 50)
+	view := d.View()
+	byAgent := strings.Index(view, "By Agent")
+	byModel := strings.Index(view, "By Model")
+	require.Positive(t, byAgent, "By Agent renders")
+	require.Positive(t, byModel, "By Model renders")
+	assert.Less(t, byAgent, byModel, "By Agent renders before By Model")
+
+	plain := d.(*costDialog).renderPlainText()
+	assert.Contains(t, plain, "By Agent")
+	assert.Contains(t, plain, "root")
+	assert.Contains(t, plain, "By Model")
+	assert.Contains(t, plain, "By Message")
+	assert.Less(t, strings.Index(plain, "By Agent"), strings.Index(plain, "By Model"),
+		"clipboard output keeps the section order")
 }
 
 func TestCostDialogWithToolCalls(t *testing.T) {

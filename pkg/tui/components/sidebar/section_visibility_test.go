@@ -1,6 +1,7 @@
 package sidebar
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -239,10 +240,19 @@ func TestRenderSections_SectionGapKeepsAgentClickZones(t *testing.T) {
 	lines := s.renderSections(40)
 
 	require.NotEmpty(t, s.agentClickZones)
+	zonesByAgent := map[string][]int{}
 	for lineIdx, agentName := range s.agentClickZones {
 		require.Less(t, lineIdx, len(lines))
-		assert.Contains(t, ansi.Strip(lines[lineIdx-1])+ansi.Strip(lines[lineIdx]), agentName,
-			"click zone %d must map onto a line of agent %q", lineIdx, agentName)
+		zonesByAgent[agentName] = append(zonesByAgent[agentName], lineIdx)
+	}
+	for agentName, zone := range zonesByAgent {
+		slices.Sort(zone)
+		assert.Containsf(t, ansi.Strip(lines[zone[0]]), agentName,
+			"the first zone line of agent %q must carry its name", agentName)
+		for i := 1; i < len(zone); i++ {
+			assert.Equalf(t, zone[0]+i, zone[i],
+				"agent %q's card zones must be contiguous", agentName)
+		}
 	}
 }
 

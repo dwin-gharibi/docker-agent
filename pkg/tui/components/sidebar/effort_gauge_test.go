@@ -20,51 +20,53 @@ func gaugePattern(filled int) string {
 		strings.Repeat(styles.GaugeEmpty, toolcommon.EffortGaugeCells-filled)
 }
 
-// TestThinkingBadgeLevelUsesGauge verifies the level case of thinkingBadge
-// renders the shared six-cell gauge (no ✻ glyph) while the glyph-only
-// degradation step returns a single ramp-colored filled cell.
-func TestThinkingBadgeLevelUsesGauge(t *testing.T) {
+// TestEffortSegmentLevelUsesGauge verifies the level case of effortSegment
+// renders the labeled six-cell gauge with the level word (no ✻ glyph), and
+// that the minimal degradation drops only the word, never the gauge.
+func TestEffortSegmentLevelUsesGauge(t *testing.T) {
 	t.Parallel()
 
-	badge, compact := thinkingBadge("high")
-	assert.Equal(t, gaugePattern(4), ansi.Strip(badge), "high renders a 4/6-cell gauge")
-	assert.NotContains(t, ansi.Strip(badge), styles.ThinkingGlyph, "gauge carries no ✻ glyph")
-	assert.Equal(t, styles.GaugeFilled, ansi.Strip(compact), "glyph-only step is a single filled cell")
+	seg := effortSegment("high")
+	assert.Equal(t, "Effort "+gaugePattern(4)+" high", ansi.Strip(seg.full),
+		"high renders the labeled 4/6-cell gauge with its value")
+	assert.NotContains(t, ansi.Strip(seg.full), styles.ThinkingGlyph, "gauge carries no ✻ glyph")
+	assert.Equal(t, "Effort "+gaugePattern(4), ansi.Strip(seg.minimal),
+		"the minimal form keeps the full six-cell gauge and drops only the word")
 }
 
-// TestThinkingBadgeUnknownLevelFallsBackToText verifies an unparseable level
-// label keeps a plain text badge (no glyph) so unknown/future labels still
-// render.
-func TestThinkingBadgeUnknownLevelFallsBackToText(t *testing.T) {
+// TestEffortSegmentUnknownLevelFallsBackToText verifies an unparseable level
+// label keeps a plain labeled text segment (no glyph) so unknown/future labels
+// still render.
+func TestEffortSegmentUnknownLevelFallsBackToText(t *testing.T) {
 	t.Parallel()
 
-	badge, compact := thinkingBadge("on")
-	assert.Equal(t, "on", ansi.Strip(badge), "unknown label keeps a plain text badge")
-	assert.NotContains(t, ansi.Strip(badge), styles.ThinkingGlyph, "no ✻ glyph")
-	assert.Equal(t, "on", ansi.Strip(compact))
+	seg := effortSegment("on")
+	assert.Equal(t, "Effort on", ansi.Strip(seg.full), "unknown label keeps a plain text value")
+	assert.NotContains(t, ansi.Strip(seg.full), styles.ThinkingGlyph, "no ✻ glyph")
+	assert.Equal(t, "Effort on", ansi.Strip(seg.minimal))
 }
 
-// TestThinkingBadgeVocabulary verifies the full no-✻ badge vocabulary: none
-// renders nothing, off is an empty gauge, adaptive is "auto", and a token budget
-// keeps its token glyph.
-func TestThinkingBadgeVocabulary(t *testing.T) {
+// TestEffortSegmentVocabulary verifies the full no-✻ segment vocabulary: none
+// renders nothing, off is an empty gauge with the word "off", adaptive is
+// "auto", and a token budget keeps its token glyph with the count.
+func TestEffortSegmentVocabulary(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
 		label   string
-		badge   string
-		compact string
+		full    string
+		minimal string
 	}{
 		{"", "", ""},
-		{"off", strings.Repeat(styles.GaugeEmpty, toolcommon.EffortGaugeCells), styles.GaugeEmpty},
-		{"adaptive", "auto", "auto"},
-		{"8192", styles.TokenGlyph + " 8.2K", styles.TokenGlyph},
+		{"off", "Effort " + gaugePattern(0) + " off", "Effort " + gaugePattern(0)},
+		{"adaptive", "Effort auto", "Effort auto"},
+		{"8192", "Effort " + styles.TokenGlyph + " 8.2K", "Effort " + styles.TokenGlyph},
 	}
 	for _, c := range cases {
-		badge, compact := thinkingBadge(c.label)
-		assert.Equalf(t, c.badge, ansi.Strip(badge), "badge for %q", c.label)
-		assert.Equalf(t, c.compact, ansi.Strip(compact), "compact for %q", c.label)
-		assert.NotContainsf(t, ansi.Strip(badge), styles.ThinkingGlyph, "badge for %q must carry no ✻", c.label)
+		seg := effortSegment(c.label)
+		assert.Equalf(t, c.full, ansi.Strip(seg.full), "full segment for %q", c.label)
+		assert.Equalf(t, c.minimal, ansi.Strip(seg.minimal), "minimal segment for %q", c.label)
+		assert.NotContainsf(t, ansi.Strip(seg.full), styles.ThinkingGlyph, "segment for %q must carry no ✻", c.label)
 	}
 }
 
@@ -86,10 +88,10 @@ func TestThinkingGaugeValueShowsGaugeAndWord(t *testing.T) {
 	assert.Empty(t, ansi.Strip(toolcommon.ThinkingGaugeValue("")))
 }
 
-// TestRowGaugeColumnAlignment verifies a roster of effort-level agents renders
-// fixed-width six-cell gauges on their name line, and that the gauges all end
-// at the same right-aligned column (just before the shared shortcut column).
-func TestRowGaugeColumnAlignment(t *testing.T) {
+// TestCardGaugeColumnAlignment verifies a roster of effort-level agents renders
+// fixed-width six-cell gauges on their labeled effort line, and that the gauges
+// all start at the same column (right after the shared "Effort " label).
+func TestCardGaugeColumnAlignment(t *testing.T) {
 	t.Parallel()
 
 	m := newAgentPanelSidebar(t, 40,
@@ -104,21 +106,19 @@ func TestRowGaugeColumnAlignment(t *testing.T) {
 		"beta":  gaugePattern(3),
 		"gamma": gaugePattern(6),
 	}
-	gaugeEnd := -1
+	gaugeStart := -1
 	for name, gauge := range wantGauge {
-		line1, _ := agentLines(m, name)
-		require.NotEmptyf(t, line1, "row for %q should render", name)
-		assert.Containsf(t, line1, gauge, "row %q should contain gauge %q", name, gauge)
+		metrics := agentMetrics(m, name)
+		require.NotEmptyf(t, metrics, "card for %q should render metrics", name)
+		assert.Containsf(t, metrics, "Effort "+gauge, "card %q should contain labeled gauge %q", name, gauge)
 
-		// The gauge column ends where the gauge substring ends; all rows must
-		// share that column so the badges line up.
-		idx := strings.Index(line1, gauge)
-		require.GreaterOrEqualf(t, idx, 0, "gauge %q must appear in row %q", gauge, line1)
-		end := len([]rune(line1[:idx])) + len([]rune(gauge))
-		if gaugeEnd == -1 {
-			gaugeEnd = end
+		idx := strings.Index(metrics, gauge)
+		require.GreaterOrEqualf(t, idx, 0, "gauge %q must appear in card %q", gauge, metrics)
+		start := len([]rune(metrics[:idx]))
+		if gaugeStart == -1 {
+			gaugeStart = start
 		} else {
-			assert.Equalf(t, gaugeEnd, end, "gauge for %q must end in the shared badge column", name)
+			assert.Equalf(t, gaugeStart, start, "gauge for %q must start in the shared column", name)
 		}
 	}
 }

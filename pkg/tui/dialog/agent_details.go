@@ -26,6 +26,7 @@ type agentDetailsDialog struct {
 	agent runtime.AgentDetails
 	cfg   runtime.AgentConfigInfo
 	usage *runtime.Usage
+	cost  *float64
 }
 
 // NewAgentDetailsDialog creates the read-only Agent Inspector: an agent's
@@ -39,9 +40,11 @@ type agentDetailsDialog struct {
 // zero value to omit those sections, e.g. for remote runtimes); usage carries
 // the agent's latest token-usage snapshot (pass nil when the agent has not
 // run). The dialog is opened by right-clicking (or Ctrl+clicking) an agent in
-// the sidebar.
-func NewAgentDetailsDialog(a runtime.AgentDetails, cfg runtime.AgentConfigInfo, usage *runtime.Usage) Dialog {
-	d := &agentDetailsDialog{agent: a, cfg: cfg, usage: usage}
+// the sidebar. cost carries the agent's cumulative attributed cost with the
+// same semantics as the sidebar roster (see service.SessionState AgentCost);
+// pass nil when no cost is attributable.
+func NewAgentDetailsDialog(a runtime.AgentDetails, cfg runtime.AgentConfigInfo, usage *runtime.Usage, cost *float64) Dialog {
+	d := &agentDetailsDialog{agent: a, cfg: cfg, usage: usage, cost: cost}
 	d.readOnlyScrollDialog = newReadOnlyScrollDialog(
 		readOnlyScrollDialogSize{widthPercent: 70, minWidth: 50, maxWidth: 100, heightPercent: 80, heightMax: 40},
 		d.renderLines,
@@ -80,6 +83,9 @@ func (d *agentDetailsDialog) renderLines(contentWidth, _ int) []string {
 	}
 	if l := d.contextLine(); l != "" {
 		lines = append(lines, l)
+	}
+	if d.cost != nil {
+		lines = append(lines, detailField("Cost", toolcommon.FormatCostPrecise(*d.cost)))
 	}
 
 	lines = append(lines, d.inlineList(contentWidth, "Sub-agents", d.cfg.SubAgents)...)

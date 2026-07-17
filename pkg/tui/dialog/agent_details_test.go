@@ -24,7 +24,13 @@ func renderAgentDetails(a runtime.AgentDetails, cfg runtime.AgentConfigInfo) str
 // renderAgentDetailsUsage is renderAgentDetails with a token-usage snapshot
 // for the context-usage line.
 func renderAgentDetailsUsage(a runtime.AgentDetails, cfg runtime.AgentConfigInfo, usage *runtime.Usage) string {
-	d := NewAgentDetailsDialog(a, cfg, usage).(*agentDetailsDialog)
+	return renderAgentDetailsCost(a, cfg, usage, nil)
+}
+
+// renderAgentDetailsCost is renderAgentDetailsUsage with the agent's
+// cumulative attributed cost for the cost line (nil when unattributable).
+func renderAgentDetailsCost(a runtime.AgentDetails, cfg runtime.AgentConfigInfo, usage *runtime.Usage, cost *float64) string {
+	d := NewAgentDetailsDialog(a, cfg, usage, cost).(*agentDetailsDialog)
 	return ansi.Strip(strings.Join(d.renderLines(80, 24), "\n"))
 }
 
@@ -110,7 +116,7 @@ func TestAgentDetailsDialog_TitleUsesAgentAccentColor(t *testing.T) {
 	t.Cleanup(func() { styles.SetAgentOrder(nil) })
 
 	titleOf := func(name string) string {
-		d := NewAgentDetailsDialog(runtime.AgentDetails{Name: name, Model: "gpt"}, runtime.AgentConfigInfo{}, nil).(*agentDetailsDialog)
+		d := NewAgentDetailsDialog(runtime.AgentDetails{Name: name, Model: "gpt"}, runtime.AgentConfigInfo{}, nil, nil).(*agentDetailsDialog)
 		return d.renderLines(80, 24)[0] // raw title line, with ANSI styling
 	}
 
@@ -249,6 +255,29 @@ func TestAgentDetailsDialog_ContextUsage(t *testing.T) {
 
 	emptyUsage := renderAgentDetailsUsage(agent, runtime.AgentConfigInfo{}, &runtime.Usage{})
 	assert.NotContains(t, emptyUsage, "Context:", "no context line for an empty snapshot")
+}
+
+// TestAgentDetailsDialog_Cost covers the per-agent cost line: the precise
+// shared formatting (four decimals below one cent, two at or above), the
+// explicit $0.00 for an agent that ran at zero cost, and omission when no
+// cost is attributable to the agent.
+func TestAgentDetailsDialog_Cost(t *testing.T) {
+	t.Parallel()
+
+	agent := runtime.AgentDetails{Name: "root", Provider: "openai", Model: "gpt-5.4"}
+	costOf := func(c float64) *float64 { return &c }
+
+	cents := renderAgentDetailsCost(agent, runtime.AgentConfigInfo{}, nil, costOf(0.1284))
+	assert.Contains(t, cents, "Cost: $0.13", "amounts at or above one cent use two decimals")
+
+	subCent := renderAgentDetailsCost(agent, runtime.AgentConfigInfo{}, nil, costOf(0.0042))
+	assert.Contains(t, subCent, "Cost: $0.0042", "non-zero amounts below one cent keep four decimals")
+
+	zero := renderAgentDetailsCost(agent, runtime.AgentConfigInfo{}, nil, costOf(0))
+	assert.Contains(t, zero, "Cost: $0.00", "an agent that ran at zero cost reads $0.00")
+
+	noCost := renderAgentDetailsCost(agent, runtime.AgentConfigInfo{}, nil, nil)
+	assert.NotContains(t, noCost, "Cost:", "no cost line when no cost is attributable")
 }
 
 // TestInlineList_NarrowWidth_NoLabelDuplication verifies that when contentWidth

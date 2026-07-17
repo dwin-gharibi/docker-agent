@@ -25,9 +25,9 @@ func recordAgentUsage(m *model, sessionID, agentName string, contextLen, context
 	})
 }
 
-// TestAgentRosterShowsPerAgentContextPercent verifies line 2 of each roster
-// entry carries the agent's own context percentage, right-aligned, once that
-// agent has emitted usage — and stays bare for agents that have not run.
+// TestAgentRosterShowsPerAgentContextPercent verifies each card's metric line
+// carries the agent's own labeled context percentage once that agent has
+// emitted usage — and an explicit "—" for agents that have not run.
 func TestAgentRosterShowsPerAgentContextPercent(t *testing.T) {
 	t.Parallel()
 
@@ -40,17 +40,17 @@ func TestAgentRosterShowsPerAgentContextPercent(t *testing.T) {
 	recordAgentUsage(m, "session-root", "root", 30_000, 100_000)
 	recordAgentUsage(m, "session-child", "developer", 42_000, 100_000)
 
+	assert.Contains(t, agentMetrics(m, "root"), "Context 30%",
+		"root's card shows its own labeled context percent")
 	_, rootLine2 := agentLines(m, "root")
-	assert.True(t, strings.HasSuffix(strings.TrimRight(rootLine2, " "), "30%"),
-		"root's line 2 ends with its context percent, got %q", rootLine2)
 	assert.Contains(t, rootLine2, "anthropic/opus", "model text stays on line 2")
 
-	_, devLine2 := agentLines(m, "developer")
-	assert.True(t, strings.HasSuffix(strings.TrimRight(devLine2, " "), "42%"),
-		"developer's line 2 ends with its context percent, got %q", devLine2)
+	assert.Contains(t, agentMetrics(m, "developer"), "Context 42%",
+		"developer's card shows its own labeled context percent")
 
-	_, idleLine2 := agentLines(m, "idle")
-	assert.NotContains(t, idleLine2, "%", "agents that never ran show no percent")
+	idleMetrics := agentMetrics(m, "idle")
+	assert.Contains(t, idleMetrics, "Context —", "agents that never ran show an explicit —")
+	assert.NotContains(t, idleMetrics, "%", "agents that never ran show no percent")
 }
 
 // TestAgentContextPercent_LatestSnapshotWins verifies a fresh delegation to the
@@ -71,7 +71,7 @@ func TestAgentContextPercent_LatestSnapshotWins(t *testing.T) {
 
 // TestAgentContextPercent_UnknownLimit verifies no percent is shown when the
 // context limit is unknown (e.g. harness-backed agents) or nothing was
-// recorded for the agent.
+// recorded for the agent — the card shows an explicit "—" instead.
 func TestAgentContextPercent_UnknownLimit(t *testing.T) {
 	t.Parallel()
 
@@ -84,8 +84,9 @@ func TestAgentContextPercent_UnknownLimit(t *testing.T) {
 	recordAgentUsage(m, "session-1", "root", 30_000, 0)
 	assert.Empty(t, m.agentContextPercent("root"), "no percent without a context limit")
 
-	_, line2 := agentLines(m, "root")
-	assert.NotContains(t, line2, "%")
+	metrics := agentMetrics(m, "root")
+	assert.Contains(t, metrics, "Context —", "unknown context reads —, not a blank")
+	assert.NotContains(t, metrics, "%")
 }
 
 // TestAgentContextPercent_BackgroundAgentUsage verifies a usage event from a
@@ -106,29 +107,33 @@ func TestAgentContextPercent_BackgroundAgentUsage(t *testing.T) {
 	recordAgentUsage(m, "session-root", "root", 20_000, 100_000)
 	recordAgentUsage(m, "bg-session", "worker", 55_000, 100_000)
 
-	_, workerLine2 := agentLines(m, "worker")
-	assert.True(t, strings.HasSuffix(strings.TrimRight(workerLine2, " "), "55%"),
-		"background worker's line 2 ends with its context percent, got %q", workerLine2)
+	assert.Contains(t, agentMetrics(m, "worker"), "Context 55%",
+		"background worker's card shows its own context percent")
 
 	assert.Equal(t, "20%", m.contextPercent(),
 		"the main context gauge keeps tracking the active session, not the background one")
 }
 
-// TestAgentRosterLine2ReservesRoomForPercent verifies the model text yields
-// space to the percent instead of colliding with it at narrow widths.
-func TestAgentRosterLine2ReservesRoomForPercent(t *testing.T) {
+// TestAgentCardMetricLinesFitNarrowWidth verifies the labeled metrics wrap
+// into lines that never exceed the content width at the minimum sidebar
+// width, instead of colliding with or truncating one another.
+func TestAgentCardMetricLinesFitNarrowWidth(t *testing.T) {
 	t.Parallel()
 
-	m := newAgentPanelSidebar(t, 28,
-		runtime.AgentDetails{Name: "root", Provider: "anthropic", Model: "claude-sonnet-4-6"},
+	m := newAgentPanelSidebar(t, MinWidth,
+		runtime.AgentDetails{Name: "root", Provider: "anthropic", Model: "claude-sonnet-4-6", Thinking: "high"},
 	)
 	recordAgentUsage(m, "session-1", "root", 100_000, 100_000)
 
-	_, line2 := agentLines(m, "root")
-	require.NotEmpty(t, line2)
-	trimmed := strings.TrimRight(line2, " ")
-	assert.True(t, strings.HasSuffix(trimmed, " 100%"),
-		"percent stays separated from the truncated model, got %q", line2)
-	assert.Contains(t, line2, "…", "overflowing model is still left-truncated")
-	assert.Contains(t, line2, "-4-6", "informative model tail survives")
+	contentWidth := m.contentWidth(false)
+	card := agentCard(m, "root")
+	require.NotEmpty(t, card)
+	for _, line := range card {
+		assert.LessOrEqualf(t, len([]rune(line)), contentWidth,
+			"card line must fit the content width: %q", line)
+	}
+
+	metrics := strings.Join(card[2:], "\n")
+	assert.Contains(t, metrics, gaugePattern(4), "the full six-cell gauge survives the minimum width")
+	assert.Contains(t, metrics, "Ctx 100%", "the compact context label keeps its percent")
 }

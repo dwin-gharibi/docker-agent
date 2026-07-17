@@ -51,19 +51,40 @@ func agentBody(m *model) (body []string) {
 	return lines[tabHeaderLines : tabHeaderLines+len(m.agentLineOwners)]
 }
 
-// agentLines returns the two ANSI-stripped content lines owned by the named
-// agent: line1 (name + thinking + shortcut) and line2 (provider/model).
-func agentLines(m *model, name string) (line1, line2 string) {
+// agentCard returns all ANSI-stripped content lines owned by the named agent:
+// the name line, the model line, and its labeled metric line(s).
+func agentCard(m *model, name string) []string {
 	body := agentBody(m)
+	var lines []string
 	for j, owner := range m.agentLineOwners {
 		if owner == name {
-			if j+1 < len(body) {
-				return body[j], body[j+1]
-			}
-			return body[j], ""
+			lines = append(lines, body[j])
 		}
 	}
-	return "", ""
+	return lines
+}
+
+// agentLines returns the first two ANSI-stripped content lines owned by the
+// named agent: line1 (name + shortcut) and line2 (provider/model).
+func agentLines(m *model, name string) (line1, line2 string) {
+	card := agentCard(m, name)
+	switch len(card) {
+	case 0:
+		return "", ""
+	case 1:
+		return card[0], ""
+	}
+	return card[0], card[1]
+}
+
+// agentMetrics returns the joined ANSI-stripped metric line(s) of the named
+// agent's card (everything after the name and model lines).
+func agentMetrics(m *model, name string) string {
+	card := agentCard(m, name)
+	if len(card) <= 2 {
+		return ""
+	}
+	return strings.Join(card[2:], "\n")
 }
 
 func TestClassifyThinking(t *testing.T) {
@@ -88,9 +109,10 @@ func TestClassifyThinking(t *testing.T) {
 	}
 }
 
-// TestAgentEntryLayout verifies an agent renders as two lines: line 1 carries
-// the name, thinking badge and "^N" shortcut (no description), and line 2 the
-// provider/model.
+// TestAgentEntryLayout verifies an agent renders as a labeled mini-card:
+// line 1 carries the name and "^N" shortcut (no description), line 2 the
+// provider/model, and the metric lines the labeled effort gauge, context and
+// cost.
 func TestAgentEntryLayout(t *testing.T) {
 	t.Parallel()
 
@@ -102,17 +124,21 @@ func TestAgentEntryLayout(t *testing.T) {
 	require.NotEmpty(t, line1)
 	assert.Contains(t, line1, "root", "line 1 shows the agent name")
 	assert.Contains(t, line1, "^1", "line 1 shows the switch shortcut")
-	assert.Contains(t, line1, gaugePattern(4), "line 1 shows the thinking gauge")
 	assert.NotContains(t, line1, "Executive assistant", "description is not shown")
+	assert.Contains(t, line2, "anthropic/claude-opus-4-8", "line 2 shows the provider/model")
+
+	metrics := agentMetrics(m, "root")
+	assert.Contains(t, metrics, "Effort "+gaugePattern(4)+" high", "metrics carry the labeled full effort gauge with its value")
+	assert.Contains(t, metrics, "Context —", "metrics carry the labeled context (unknown before any run)")
+	assert.Contains(t, metrics, "Cost —", "metrics carry the labeled cost (unknown before any run)")
 
 	body := strings.Join(agentBody(m), "\n")
 	assert.NotContains(t, body, "Executive assistant", "description is not shown anywhere")
-	assert.Contains(t, line2, "anthropic/claude-opus-4-8", "line 2 shows the provider/model")
 }
 
 // TestCurrentAgentMarker verifies the current agent is marked with ▶ while the
-// other agents are not, and that each agent owns exactly its two content lines
-// (separators are unowned).
+// other agents are not, and that each agent owns exactly its card's content
+// lines (separators are unowned).
 func TestCurrentAgentMarker(t *testing.T) {
 	t.Parallel()
 
@@ -129,7 +155,7 @@ func TestCurrentAgentMarker(t *testing.T) {
 	assert.Contains(t, rootLine1, "▶", "current agent is marked with ▶")
 	assert.NotContains(t, firstLine1, "▶", "non-current agents have no marker")
 
-	// Each agent owns exactly its two content lines; separators are unowned.
+	// Each agent owns exactly its card's content lines; separators are unowned.
 	counts := map[string]int{}
 	blanks := 0
 	for _, owner := range m.agentLineOwners {
@@ -139,9 +165,10 @@ func TestCurrentAgentMarker(t *testing.T) {
 		}
 		counts[owner]++
 	}
-	assert.Equal(t, 2, counts["first"])
-	assert.Equal(t, 2, counts["root"])
-	assert.Equal(t, 2, counts["last"])
+	for _, name := range []string{"first", "root", "last"} {
+		assert.Equalf(t, len(agentCard(m, name)), counts[name], "agent %q owns exactly its card lines", name)
+		assert.GreaterOrEqualf(t, counts[name], 3, "agent %q renders at least name, model and one metric line", name)
+	}
 	assert.Positive(t, blanks, "entries are separated by blank, unowned lines")
 }
 
@@ -188,11 +215,11 @@ func TestShortcutColumnAlignment(t *testing.T) {
 	}
 }
 
-// TestThinkingBadgeVocabularyOnLine verifies the thinking badge vocabulary
-// renders on the agent's name line: effort levels become the gauge, token
-// budgets keep the token glyph, adaptive becomes "auto", and off becomes an
-// empty gauge.
-func TestThinkingBadgeVocabularyOnLine(t *testing.T) {
+// TestEffortVocabularyOnCard verifies the effort vocabulary renders on the
+// card's labeled metric line: effort levels keep the full six-cell gauge with
+// the level word, token budgets keep the token glyph with the budget,
+// adaptive reads "auto", and off shows an empty gauge with the word "off".
+func TestEffortVocabularyOnCard(t *testing.T) {
 	t.Parallel()
 
 	m := newAgentPanelSidebar(t, 40,
@@ -201,19 +228,23 @@ func TestThinkingBadgeVocabularyOnLine(t *testing.T) {
 		runtime.AgentDetails{Name: "beta", Provider: "openai", Model: "gpt-5.4", Thinking: "high"},
 		runtime.AgentDetails{Name: "gamma", Provider: "openai", Model: "gpt-4o", Thinking: "8192"},
 		runtime.AgentDetails{Name: "delta", Provider: "google", Model: "gemini", Thinking: "adaptive"},
+		runtime.AgentDetails{Name: "plain", Provider: "openai", Model: "gpt-4o"},
 	)
 
 	want := map[string]string{
-		"alpha": gaugePattern(0),
-		"beta":  gaugePattern(4),
-		"gamma": styles.TokenGlyph + " 8.2K",
-		"delta": "auto",
+		"alpha": "Effort " + gaugePattern(0) + " off",
+		"beta":  "Effort " + gaugePattern(4) + " high",
+		"gamma": "Effort " + styles.TokenGlyph + " 8.2K",
+		"delta": "Effort auto",
 	}
-	for name, badge := range want {
-		line1, _ := agentLines(m, name)
-		require.NotEmptyf(t, line1, "row for %q should render", name)
-		assert.Containsf(t, line1, badge, "row %q should show badge %q", name, badge)
+	for name, effortText := range want {
+		metrics := agentMetrics(m, name)
+		require.NotEmptyf(t, metrics, "card for %q should render metrics", name)
+		assert.Containsf(t, metrics, effortText, "card %q should show %q", name, effortText)
 	}
+
+	assert.NotContains(t, agentMetrics(m, "plain"), "Effort",
+		"a model with no thinking configuration has no effort metric")
 }
 
 // TestModelLineLeftTruncated verifies the provider/model on line 2 keeps its
@@ -255,9 +286,11 @@ func TestMoreThanNineAgentsNoShortcutBeyond9(t *testing.T) {
 	assert.NotContains(t, body, "^10", "agents beyond the 9th have no shortcut")
 }
 
-// TestNameTruncatesNearMinWidth verifies that at a narrow width the gauge
-// collapses to a single cell while the model still occupies line 2.
-func TestNameTruncatesNearMinWidth(t *testing.T) {
+// TestNarrowWidthKeepsFullGauge verifies that at a narrow width the effort
+// gauge keeps its full six cells on a dedicated metric line (dropping only
+// the value word when it does not fit), the context label compacts to "Ctx",
+// and the model still occupies line 2.
+func TestNarrowWidthKeepsFullGauge(t *testing.T) {
 	t.Parallel()
 
 	m := newAgentPanelSidebar(t, 21,
@@ -265,12 +298,17 @@ func TestNameTruncatesNearMinWidth(t *testing.T) {
 		runtime.AgentDetails{Name: "agent2", Provider: "anthropic", Model: "claude-sonnet-4-6", Thinking: "high"},
 	)
 
-	line1, line2 := agentLines(m, "agent2")
-	require.NotEmpty(t, line1)
-	// glyph-only step keeps a single filled gauge cell, not the full six-cell gauge.
-	assert.NotContains(t, line1, gaugePattern(4), "narrow layout collapses the full gauge")
-	assert.Contains(t, line1, styles.GaugeFilled, "narrow layout keeps a single gauge cell")
+	_, line2 := agentLines(m, "agent2")
+	metrics := agentMetrics(m, "agent2")
+	assert.Contains(t, metrics, gaugePattern(4), "narrow layout keeps the full six-cell gauge")
+	assert.Contains(t, metrics, "Ctx ", "narrow layout compacts the context label")
+	assert.NotContains(t, metrics, "Context", "narrow layout does not use the full context label")
 	assert.Contains(t, line2, "…", "narrow layout left-truncates the model on line 2")
+
+	contentWidth := m.contentWidth(false)
+	for _, line := range agentCard(m, "agent2") {
+		assert.LessOrEqual(t, len([]rune(line)), contentWidth, "no card line exceeds the content width: %q", line)
+	}
 }
 
 // TestClickZonesEveryLine verifies that clicking any rendered agent line (either
@@ -316,8 +354,9 @@ func TestClickZonesEveryLine(t *testing.T) {
 }
 
 // TestRosterSeparatesAgentsWithBlankLine verifies a blank separator line is
-// inserted between agent entries and that the separator carries an empty owner,
-// so each agent owns exactly its two content lines and click zones stay aligned.
+// inserted between agent cards and that the separator carries an empty owner,
+// so each agent owns exactly its card's content lines and click zones stay
+// aligned.
 func TestRosterSeparatesAgentsWithBlankLine(t *testing.T) {
 	t.Parallel()
 
@@ -338,9 +377,10 @@ func TestRosterSeparatesAgentsWithBlankLine(t *testing.T) {
 		}
 		counts[owner]++
 	}
-	assert.Equal(t, 2, counts["root"], "an agent owns exactly its two content lines, not the separator")
-	assert.Equal(t, 2, counts["alpha"])
-	assert.Equal(t, 2, counts["beta"])
+	for _, name := range []string{"root", "alpha", "beta"} {
+		assert.Equalf(t, len(agentCard(m, name)), counts[name],
+			"agent %q owns exactly its card lines, not the separator", name)
+	}
 	assert.Positive(t, blanks, "agents are separated by blank, unowned lines")
 
 	// The panel does not start with a separator, and a blank separator precedes

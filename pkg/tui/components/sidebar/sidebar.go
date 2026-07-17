@@ -416,11 +416,12 @@ func (m *model) SetTokenUsage(event *runtime.TokenUsageEvent) {
 	usage := *event.Usage
 	m.sessionUsage[event.SessionID] = &usage
 
-	// Record the per-agent snapshot in the shared session state so the
-	// agent roster and the agent-details dialog can show per-agent context
-	// usage. Background agent tasks reach this path too: their usage
-	// events are forwarded out-of-band by the runtime.
-	m.sessionState.SetAgentUsage(event.AgentName, usage)
+	// Record the per-agent snapshot and the session→agent cost attribution
+	// in the shared session state so the agent roster and the agent-details
+	// dialog can show per-agent context usage and cumulative cost.
+	// Background agent tasks reach this path too: their usage events are
+	// forwarded out-of-band by the runtime.
+	m.sessionState.SetAgentUsage(event.SessionID, event.AgentName, usage)
 
 	// Mark session as having content once we receive token usage
 	m.sessionHasContent = true
@@ -827,6 +828,16 @@ func (m *model) LoadFromSession(sess *session.Session) {
 	if sess == nil {
 		return
 	}
+
+	// A loaded session replaces whatever was displayed: drop the usage
+	// entries of any previously shown session so repeated loads and session
+	// switches cannot leave stale or doubled totals behind.
+	clear(m.sessionUsage)
+
+	// Reseed the per-agent cost state from the restored tree so each agent's
+	// historical spend shows on its card immediately (see SeedRestoredCosts).
+	// Per-agent context stays unknown until the agent runs again.
+	m.sessionState.SeedRestoredCosts(sess)
 
 	// Use TotalCost to include sub-session costs (handles older sessions
 	// where the parent's Cost field did not include sub-session costs).
@@ -1785,20 +1796,21 @@ func (m *model) queueSection(contentWidth int) string {
 	return m.renderTab(title, strings.Join(lines, "\n"), contentWidth)
 }
 
-// agentInfo renders the Agents panel: every agent as a two-line entry, with a
-// blank separator line between entries. Line 1 shows the agent's name (in its
-// accent color), the thinking badge right-aligned, and the "^N" switch shortcut
-// flush against the right edge; line 2 shows the indented provider/model with
-// the agent's latest context usage percentage right-aligned once known. The
-// current agent is marked with ▶ (or the spinner while it works); the other
-// agents pad that marker column so their names stay aligned. Descriptions are
-// deliberately omitted. While a transfer_task runs, the innermost hop renders
-// as a compact box below the whole roster — after a blank breathing line — so
-// the roster itself stays uninterrupted (see renderTransferPanel). Each
-// content line is owned by its agent (agentLineOwners) so click zones can be
-// registered explicitly (see buildAgentClickZones) and a click on either line
-// switches to that agent; separators and the transfer box carry an empty owner
-// so they stay unclickable.
+// agentInfo renders the Agents panel: every agent as a compact, borderless
+// mini-card, with a blank separator line between cards. Line 1 shows the
+// agent's name (in its accent color) with the "^N" switch shortcut flush
+// against the right edge; line 2 the indented provider/model; the remaining
+// line(s) carry the labeled Effort / Context / Cost metrics (see
+// renderAgentCard). The current agent is marked with ▶ (or the spinner while
+// it works); the other agents pad that marker column so their names stay
+// aligned. Descriptions are deliberately omitted. While a transfer_task runs,
+// the innermost hop renders as a compact box below the whole roster — after a
+// blank breathing line — so the roster itself stays uninterrupted (see
+// renderTransferPanel). Each content line is owned by its agent
+// (agentLineOwners) so click zones can be registered explicitly (see
+// buildAgentClickZones) and a click on any card line switches to that agent;
+// separators and the transfer box carry an empty owner so they stay
+// unclickable.
 func (m *model) agentInfo(contentWidth int) string {
 	// Read current agent from session state so sidebar updates when agent is switched
 	currentAgent := m.sessionState.CurrentAgentName()
@@ -1814,11 +1826,8 @@ func (m *model) agentInfo(contentWidth int) string {
 		agentTitle += " ↔"
 	}
 
-	// Compute the shared column widths once so every entry aligns and the badge
-	// width is not recomputed per agent.
-	glyphOnly := contentWidth < rowGlyphOnlyMinWidth
-	badgeWidth := m.badgeColumnWidth(glyphOnly)
-	nameWidth := max(1, contentWidth-agentMarkerWidth-minGap-badgeWidth-1-agentShortcutWidth)
+	narrow := contentWidth < cardNarrowMinWidth
+	nameWidth := max(1, contentWidth-agentMarkerWidth-minGap-agentShortcutWidth)
 
 	var bodyLines, owners []string
 	add := func(line, owner string) {
@@ -1826,14 +1835,13 @@ func (m *model) agentInfo(contentWidth int) string {
 		owners = append(owners, owner)
 	}
 	for i, agent := range m.availableAgents {
-		// Separate entries with a blank, unowned line so the two-line entries stay
-		// visually distinct without being attributed to (or made clickable for)
-		// any agent.
+		// Separate cards with a blank, unowned line so they stay visually
+		// distinct without being attributed to (or made clickable for) any agent.
 		if len(bodyLines) > 0 {
 			add("", "")
 		}
 		current := agent.Name == currentAgent
-		for _, line := range m.renderAgentLine(agent, i, contentWidth, nameWidth, badgeWidth, glyphOnly, current) {
+		for _, line := range m.renderAgentCard(agent, i, contentWidth, nameWidth, narrow, current) {
 			add(line, agent.Name)
 		}
 	}
@@ -1893,52 +1901,79 @@ func isAllDigits(s string) bool {
 	return true
 }
 
-// thinkingBadge returns the styled right-aligned badge for an agent's thinking
-// label and the compact single-cell form used in the glyph-only degradation
-// step. Both are empty when the agent has no thinking configuration. The
-// vocabulary carries no ✻ glyph: the effort gauge is the only visual language
-// for thinking.
-func thinkingBadge(label string) (badge, compact string) {
+// effortSegment builds the labeled effort metric for an agent's thinking
+// label: the full form ("Effort <gauge> <value>") and a minimal fallback
+// ("Effort <gauge>") for widths where the value word does not fit. Both are
+// empty when the agent has no thinking configuration. Effort levels and "off"
+// always carry the full six-cell gauge; adaptive reads "auto" and a token
+// budget keeps the token glyph with its count.
+func effortSegment(label string) metricSegment {
+	prefix := styles.MutedStyle.Render("Effort ")
 	kind, tokens := classifyThinking(label)
 	switch kind {
 	case thinkingNone:
-		return "", ""
+		return metricSegment{}
 	case thinkingOff:
 		// Capable but disabled: a dim empty gauge, distinct from a non-capable
-		// model (which renders nothing). The compact form is a single empty cell.
-		cell := lipgloss.NewStyle().Foreground(styles.TextMuted).Faint(true).Render(styles.GaugeEmpty)
-		return toolcommon.EffortGaugeEmpty(), cell
+		// model (which renders no effort segment at all).
+		gauge := toolcommon.EffortGaugeEmpty()
+		return metricSegment{
+			full:    prefix + gauge + " " + styles.MutedStyle.Faint(true).Render("off"),
+			minimal: prefix + gauge,
+		}
 	case thinkingAdaptive:
-		auto := styles.ThinkingBadgeStyle.Render("auto")
-		return auto, auto
+		auto := prefix + styles.ThinkingBadgeStyle.Render("auto")
+		return metricSegment{full: auto, minimal: auto}
 	case thinkingTokens:
-		return styles.ThinkingBadgeStyle.Render(styles.TokenGlyph + " " + toolcommon.FormatTokenCount(tokens)),
-			styles.ThinkingBadgeStyle.Render(styles.TokenGlyph)
+		return metricSegment{
+			full:    prefix + styles.ThinkingBadgeStyle.Render(styles.TokenGlyph+" "+toolcommon.FormatTokenCount(tokens)),
+			minimal: prefix + styles.ThinkingBadgeStyle.Render(styles.TokenGlyph),
+		}
 	default: // thinkingLevel
 		level, ok := effort.Parse(label)
 		if !ok {
-			// Unknown/future level word: a plain text badge so it still renders.
-			b := styles.ThinkingBadgeStyle.Render(label)
-			return b, b
+			// Unknown/future level word: plain text so it still renders.
+			word := prefix + styles.ThinkingBadgeStyle.Render(label)
+			return metricSegment{full: word, minimal: word}
 		}
-		return toolcommon.EffortGauge(level), toolcommon.EffortFillStyle(level).Render(styles.GaugeFilled)
+		gauge := toolcommon.EffortGauge(level)
+		return metricSegment{
+			full:    prefix + gauge + " " + styles.MutedStyle.Render(label),
+			minimal: prefix + gauge,
+		}
 	}
 }
 
-// badgeColumnWidth returns the widest thinking badge across the roster so every
-// agent line reserves the same badge column and the badges stay aligned.
-// glyphOnly selects the single-cell compact form used near MinWidth.
-func (m *model) badgeColumnWidth(glyphOnly bool) int {
-	w := 0
-	for _, a := range m.availableAgents {
-		full, compact := thinkingBadge(a.Thinking)
-		b := full
-		if glyphOnly {
-			b = compact
-		}
-		w = max(w, lipgloss.Width(b))
+// contextSegment builds the labeled context metric for an agent: the latest
+// known context-fill percentage in the shared warning/critical coloring, or a
+// muted "—" when the agent has not run or its context limit is unknown. The
+// label compacts to "Ctx" at the narrowest breakpoint.
+func (m *model) contextSegment(agentName string, narrow bool) metricSegment {
+	label := "Context"
+	if narrow {
+		label = "Ctx"
 	}
-	return w
+	value := m.agentContextPercent(agentName)
+	if value == "" {
+		s := styles.MutedStyle.Render(label + " " + metricUnknown)
+		return metricSegment{full: s, minimal: s}
+	}
+	style := contextGaugeStyle(m.agentContextGaugeLevel(agentName), styles.MutedStyle)
+	s := styles.MutedStyle.Render(label+" ") + style.Render(value)
+	return metricSegment{full: s, minimal: s}
+}
+
+// costSegment builds the labeled cost metric for an agent: the cumulative
+// cost across every session attributed to it (see service.SessionState
+// AgentCost), or a muted "—" when no cost is attributable. An agent that ran
+// at zero cost reads "$0.00", distinct from the never-ran "—".
+func (m *model) costSegment(agentName string) metricSegment {
+	value := metricUnknown
+	if cost, ok := m.sessionState.AgentCost(agentName); ok {
+		value = toolcommon.FormatCostPrecise(cost)
+	}
+	s := styles.MutedStyle.Render("Cost " + value)
+	return metricSegment{full: s, minimal: s}
 }
 
 // padRight pads a (possibly styled) string with trailing spaces to width.
@@ -1952,21 +1987,23 @@ func padLeft(s string, width int) string {
 	return strings.Repeat(" ", max(0, width-lipgloss.Width(s))) + s
 }
 
-// renderAgentLine renders a single agent as two lines:
+// renderAgentCard renders a single agent as a compact, borderless mini-card:
 //
-//	▶ name            <thinking> ^N
-//	  provider/model         <ctx%>
+//	▶ name                             ^N
+//	  provider/model
+//	  Effort ▰▰▰▰▱▱ high · Context 30% · Cost $0.13
 //
-// Line 1: the name is left-aligned in its accent color, the thinking badge is
-// right-aligned in a shared column, and the "^N" switch shortcut sits flush
-// against the right edge. The current agent is marked with ▶ (or the spinner
-// while it — or any agent — is working); other agents pad the marker column so
-// the names stay aligned. Line 2: the indented provider/model, left-truncated
-// so its informative tail survives, with the agent's latest known context
-// usage percentage right-aligned once the agent has run (background agent
-// tasks included). The description is omitted. Agents past the 9th have no
-// shortcut.
-func (m *model) renderAgentLine(agent runtime.AgentDetails, index, contentWidth, nameWidth, badgeWidth int, glyphOnly, current bool) []string {
+// Line 1: the name is left-aligned in its accent color and the "^N" switch
+// shortcut sits flush against the right edge. The current agent is marked
+// with ▶ (or the spinner while it — or any agent — is working); other agents
+// pad the marker column so the names stay aligned. Line 2: the indented
+// provider/model, left-truncated so its informative tail survives. The
+// remaining line(s) carry the labeled metrics, flowed to the width (see
+// flowMetricLines): effort keeps the full six-cell gauge at every width,
+// context keeps the warning/critical coloring, and cost is the agent's
+// cumulative attributed cost. The description is omitted. Agents past the 9th
+// have no shortcut.
+func (m *model) renderAgentCard(agent runtime.AgentDetails, index, contentWidth, nameWidth int, narrow, current bool) []string {
 	agentStyle := styles.AgentAccentStyleFor(agent.Name)
 
 	var marker string
@@ -1978,17 +2015,11 @@ func (m *model) renderAgentLine(agent runtime.AgentDetails, index, contentWidth,
 	}
 	left := padRight(marker, agentMarkerWidth) + agentStyle.Render(toolcommon.TruncateText(agent.Name, nameWidth))
 
-	badge, compact := thinkingBadge(agent.Thinking)
-	if glyphOnly {
-		badge = compact
-	}
-
 	var shortcut string
 	if index >= 0 && index < 9 {
 		shortcut = styles.MutedStyle.Render(fmt.Sprintf("^%d", index+1))
 	}
-
-	right := padLeft(badge, badgeWidth) + " " + padLeft(shortcut, agentShortcutWidth)
+	right := padLeft(shortcut, agentShortcutWidth)
 	gap := max(1, contentWidth-lipgloss.Width(left)-lipgloss.Width(right))
 	line1 := left + strings.Repeat(" ", gap) + right
 
@@ -1996,20 +2027,93 @@ func (m *model) renderAgentLine(agent runtime.AgentDetails, index, contentWidth,
 	if agent.Provider != "" {
 		modelText = agent.Provider + "/" + agent.Model
 	}
-	ctxPercent := m.agentContextPercent(agent.Name)
-	ctxStyle := contextGaugeStyle(m.agentContextGaugeLevel(agent.Name), styles.MutedStyle)
-	modelWidth := contentWidth - agentMarkerWidth
-	if ctxPercent != "" {
-		modelWidth -= lipgloss.Width(ctxPercent) + 1
-	}
-	model := toolcommon.TruncateTextLeft(modelText, max(1, modelWidth))
+	model := toolcommon.TruncateTextLeft(modelText, max(1, contentWidth-agentMarkerWidth))
 	line2 := strings.Repeat(" ", agentMarkerWidth) + styles.MutedStyle.Render(model)
-	if ctxPercent != "" {
-		gap := max(1, contentWidth-lipgloss.Width(line2)-lipgloss.Width(ctxPercent))
-		line2 += strings.Repeat(" ", gap) + ctxStyle.Render(ctxPercent)
+
+	lines := []string{line1, line2}
+	indent := strings.Repeat(" ", agentMarkerWidth)
+	for _, metricLine := range m.metricLines(agent, contentWidth-agentMarkerWidth, narrow) {
+		lines = append(lines, indent+metricLine)
+	}
+	return lines
+}
+
+// metricUnknown marks a metric whose value cannot be known yet (an agent that
+// never ran, or a context limit the backend does not report) — explicit
+// rather than an unexplained blank, and distinct from a real zero.
+const metricUnknown = "—"
+
+// metricSeparator joins metric segments that share a line. A function so it
+// picks up theme changes dynamically.
+func metricSeparator() string {
+	return styles.MutedStyle.Render(" · ")
+}
+
+// metricSegment is one labeled metric of an agent card. full is the preferred
+// rendering; minimal is the degraded form used when full alone overflows the
+// line (only the effort segment degrades — it drops the value word but never
+// the six-cell gauge). Both empty means the segment is omitted entirely.
+type metricSegment struct {
+	full    string
+	minimal string
+}
+
+// metricLines builds the flowed metric lines of an agent card, fitted to
+// width columns.
+func (m *model) metricLines(agent runtime.AgentDetails, width int, narrow bool) []string {
+	segments := make([]metricSegment, 0, 3)
+	if s := effortSegment(agent.Thinking); s.full != "" {
+		segments = append(segments, s)
+	}
+	segments = append(segments, m.contextSegment(agent.Name, narrow), m.costSegment(agent.Name))
+	return flowMetricLines(segments, width)
+}
+
+// flowMetricLines lays the metric segments out into lines of at most width
+// columns. All segments share one line when they fit — the ideal single
+// metrics line at wide sidebars. Otherwise the first segment (effort, when
+// present) takes a dedicated line, degrading to its minimal form if even
+// alone it overflows, and the remaining segments flow greedily. Segments are
+// never truncated: at the sidebar's minimum width every minimal form fits,
+// and narrower widths auto-collapse the sidebar before this matters.
+func flowMetricLines(segments []metricSegment, width int) []string {
+	if len(segments) == 0 {
+		return nil
+	}
+	if all := joinSegments(segments); lipgloss.Width(all) <= width {
+		return []string{all}
 	}
 
-	return []string{line1, line2}
+	first := segments[0].full
+	if lipgloss.Width(first) > width && segments[0].minimal != "" {
+		first = segments[0].minimal
+	}
+	lines := []string{first}
+
+	current := ""
+	for _, seg := range segments[1:] {
+		switch {
+		case current == "":
+			current = seg.full
+		case lipgloss.Width(current+metricSeparator()+seg.full) <= width:
+			current += metricSeparator() + seg.full
+		default:
+			lines = append(lines, current)
+			current = seg.full
+		}
+	}
+	if current != "" {
+		lines = append(lines, current)
+	}
+	return lines
+}
+
+func joinSegments(segments []metricSegment) string {
+	parts := make([]string, len(segments))
+	for i, seg := range segments {
+		parts[i] = seg.full
+	}
+	return strings.Join(parts, metricSeparator())
 }
 
 // Transfer-box vocabulary: the arrow head matches the handoff tool's

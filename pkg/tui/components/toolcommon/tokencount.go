@@ -24,3 +24,22 @@ func FormatTokenCount(count int64) string {
 func FormatCostUSD(cost float64) string {
 	return fmt.Sprintf("$%.2f", cost)
 }
+
+// FormatCostPrecise formats a USD amount for cost readouts: two decimals at
+// or above one cent, four decimals for smaller non-zero amounts so sub-cent
+// costs stay visible, and "$0.00" for amounts that round to nothing.
+// Negative amounts keep a leading minus. This is the canonical precise
+// formatter shared by the sidebar roster, the agent inspector and the cost
+// dialog.
+func FormatCostPrecise(cost float64) string {
+	if cost < 0 {
+		return "-" + FormatCostPrecise(-cost)
+	}
+	if cost < 0.0001 {
+		return "$0.00"
+	}
+	if cost < 0.01 {
+		return fmt.Sprintf("$%.4f", cost)
+	}
+	return fmt.Sprintf("$%.2f", cost)
+}
