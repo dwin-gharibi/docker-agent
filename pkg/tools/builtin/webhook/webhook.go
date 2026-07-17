@@ -28,10 +28,8 @@ import (
 
 const (
 	ToolNameSendWebhook = "send_webhook"
-
 	category    = "webhook"
 	maxRespRead = 64 << 10
-
 	defaultMaxAttempts = 4
 	defaultDedupeWindow = 30 * time.Second
 	defaultMinInterval = time.Second
