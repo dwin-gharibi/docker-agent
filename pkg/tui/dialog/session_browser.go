@@ -317,6 +317,8 @@ func (d *sessionBrowserDialog) Update(msg tea.Msg) (layout.Model, tea.Cmd) {
 
 func (d *sessionBrowserDialog) filterSessions() {
 	query := strings.ToLower(strings.TrimSpace(d.textInput.Value()))
+	// IDs are matched with dashes stripped so partial UUIDs paste-match.
+	idQuery := strings.ReplaceAll(query, "-", "")
 
 	var workspace, elsewhere []session.Summary
 	for _, sess := range d.sessions {
@@ -348,7 +350,7 @@ func (d *sessionBrowserDialog) filterSessions() {
 			if title == "" {
 				title = "Untitled"
 			}
-			if !strings.Contains(strings.ToLower(title), query) {
+			if !strings.Contains(strings.ToLower(title), query) && !matchesSessionID(sess.ID, idQuery) {
 				continue
 			}
 		}
@@ -373,6 +375,16 @@ func (d *sessionBrowserDialog) filterSessions() {
 	// scrollbar clamp correctly even before View() runs.
 	d.scrollview.SetContent(nil, len(d.rows))
 	d.scrollview.SetScrollOffset(0)
+}
+
+// matchesSessionID reports whether the session ID contains the query,
+// case-insensitively and ignoring "-" characters on both sides.
+func matchesSessionID(id, idQuery string) bool {
+	if idQuery == "" {
+		return false
+	}
+	id = strings.ReplaceAll(strings.ToLower(id), "-", "")
+	return strings.Contains(id, idQuery)
 }
 
 // rebuildRows lays out the filtered sessions as visual rows. Section headers
