@@ -32,7 +32,7 @@ require (
 	github.com/docker/aijson v0.1.0
 	github.com/docker/cli v29.6.2+incompatible
 	github.com/docker/go-units v0.5.0
-	github.com/docker/portcullis v0.0.0-20260708112053-4399abc601ee
+	github.com/docker/portcullis v0.0.0-20260716075131-3d4d8c21f0db
 	github.com/dop251/goja v0.0.0-20260701091749-b07b74453ea9
 	github.com/expr-lang/expr v1.17.8
 	github.com/fatih/color v1.19.0

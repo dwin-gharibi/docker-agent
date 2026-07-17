@@ -175,8 +175,8 @@ github.com/docker/go-metrics v0.0.1 h1:AgB/0SvBxihN0X8OR4SjsblXkbMvalQ8cjmtKQ2rQ
 github.com/docker/go-metrics v0.0.1/go.mod h1:cG1hvH2utMXtqgqqYE9plW6lDxS3/5ayHzueweSI3Vw=
 github.com/docker/go-units v0.5.0 h1:69rxXcBk27SvSaaxTtLh/8llcHD8vYHT7WSdRZ/jvr4=
 github.com/docker/go-units v0.5.0/go.mod h1:fgPhTUdO+D/Jk86RDLlptpiXQzgHJF7gydDDbaIK4Dk=
-github.com/docker/portcullis v0.0.0-20260708112053-4399abc601ee h1:I72SglEGb8mC9VSEA2TyQ2YFVAOj1ml16gQztovroms=
-github.com/docker/portcullis v0.0.0-20260708112053-4399abc601ee/go.mod h1:Fqozd7Xl9v8M3SmCBHMHHd6+MRthduC6xVr4jnU1QAg=
+github.com/docker/portcullis v0.0.0-20260716075131-3d4d8c21f0db h1:DE7T6IqwqfOFme7T1oW6SZtUXp3WBKhBZHCG8V/Nh5w=
+github.com/docker/portcullis v0.0.0-20260716075131-3d4d8c21f0db/go.mod h1:Fqozd7Xl9v8M3SmCBHMHHd6+MRthduC6xVr4jnU1QAg=
 github.com/dop251/goja v0.0.0-20260701091749-b07b74453ea9 h1:q33zakIx+wEp1Ko5NpDyDBICuXL4JeHUaHbhPowcMEk=
 github.com/dop251/goja v0.0.0-20260701091749-b07b74453ea9/go.mod h1:Sc+QOu1WruvaaeT/cxFez/pXHpI9ZDjg/E8QNfSVveI=
 github.com/dustin/go-humanize v1.0.1 h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkpeCY=
