@@ -94,12 +94,15 @@ func findMermaidTextBounds(lines []string, text string) mermaidBounds {
 		return mermaidBounds{}
 	}
 	for y, line := range lines {
-		before, _, found := strings.Cut(line, text)
-		if !found {
-			continue
+		for _, rightBorder := range []string{" │", " ├", " ┤"} {
+			box := "│ " + text + rightBorder
+			before, _, found := strings.Cut(line, box)
+			if !found {
+				continue
+			}
+			x := mermaidStringWidth(before) + 2
+			return mermaidBounds{left: max(x-2, 0), top: max(y-1, 0), right: x + mermaidStringWidth(text) + 1, bottom: min(y+1, len(lines)-1), ok: true}
 		}
-		x := mermaidStringWidth(before)
-		return mermaidBounds{left: max(x-2, 0), top: max(y-1, 0), right: x + mermaidStringWidth(text) + 1, bottom: min(y+1, len(lines)-1), ok: true}
 	}
 	return mermaidBounds{}
 }

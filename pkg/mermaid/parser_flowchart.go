@@ -1,9 +1,6 @@
 package mermaid
 
-import (
-	"slices"
-	"strings"
-)
+import "strings"
 
 func parseFlowchart(doc *Document, statements []string) {
 	var subgraphStack []int
@@ -77,11 +74,6 @@ func parseMermaidSubgraph(statement string) (string, string, bool) {
 func addMermaidSubgraphNode(doc *Document, stack []int, id string) {
 	if len(stack) == 0 {
 		return
-	}
-	for _, subgraph := range doc.Subgraphs {
-		if slices.Contains(subgraph.Nodes, id) {
-			return
-		}
 	}
 	index := stack[len(stack)-1]
 	doc.Subgraphs[index].Nodes = appendUniqueMermaid(doc.Subgraphs[index].Nodes, id)

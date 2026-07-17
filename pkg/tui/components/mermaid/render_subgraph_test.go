@@ -26,6 +26,48 @@ end`, 100)
 	assert.Contains(t, diagram, "╭─ Backend ")
 }
 
+func TestRenderSubgraphMatchesWholeNodeLabel(t *testing.T) {
+	t.Parallel()
+
+	diagram, ok := Render(`flowchart LR
+long[DeployProd] --> short[Deploy]
+subgraph production[Production]
+  short
+end`, 80)
+	require.True(t, ok)
+	lines := strings.Split(diagram, "\n")
+	var top string
+	for _, line := range lines {
+		if strings.Contains(line, "Production") {
+			top = line
+			break
+		}
+	}
+	require.NotEmpty(t, top)
+	deployProdLine := ""
+	for _, line := range lines {
+		if strings.Contains(line, "DeployProd") {
+			deployProdLine = line
+			break
+		}
+	}
+	require.NotEmpty(t, deployProdLine)
+	assert.Greater(t, strings.Index(top, "Production"), strings.Index(deployProdLine, "DeployProd"))
+}
+
+func TestFindMermaidTextBoundsMatchesWholeNodeLabel(t *testing.T) {
+	t.Parallel()
+
+	lines := []string{
+		"╭────────────╮     ╭────────╮",
+		"│ DeployProd │────▶│ Deploy │",
+		"╰────────────╯     ╰────────╯",
+	}
+	bounds := findMermaidTextBounds(lines, "Deploy")
+	require.True(t, bounds.ok)
+	assert.Equal(t, mermaidStringWidth("│ DeployProd │────▶│ "), bounds.left+2)
+}
+
 func TestRenderFlowchartSubgraphPadsRightmostNode(t *testing.T) {
 	t.Parallel()
 
