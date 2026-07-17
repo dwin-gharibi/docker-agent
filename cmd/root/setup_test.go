@@ -141,6 +141,16 @@ func TestSetupWizard_CloudPathSingleStoreFailureIsFatal(t *testing.T) {
 	assert.Contains(t, err.Error(), "disk full")
 }
 
+func TestSetupWizard_CloudPathNoStoresIsFatal(t *testing.T) {
+	t.Parallel()
+
+	wizard, _, _ := newTestWizard("1\n1\n", []string{"sk-key"}, nil, nil, nil)
+
+	_, err := wizard.run(t.Context())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no secret store is available")
+}
+
 func TestSetupWizard_CloudPathReasksOnEmptyKey(t *testing.T) {
 	t.Parallel()
 

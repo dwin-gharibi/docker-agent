@@ -54,7 +54,9 @@ $ echo 'ANTHROPIC_API_KEY=sk-ant-...' > .env
 $ docker agent run --env-from-file .env
 
 # Docker Agent env file, read automatically on every run
+# (`docker agent setup` writes it for you with owner-only permissions)
 $ echo 'ANTHROPIC_API_KEY=sk-ant-...' >> ~/.config/cagent/.env
+$ chmod 600 ~/.config/cagent/.env
 ```
 
 The entry name must match the environment variable the provider expects. [Managing Secrets](../../guides/secrets/index.md) covers every source (Docker Compose secrets, credential helpers, 1Password references) and the order they are checked in.

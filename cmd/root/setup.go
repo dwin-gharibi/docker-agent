@@ -250,6 +250,9 @@ func (w *setupWizard) promptSecret(ctx context.Context, prompt string) (string, 
 // available it asks which one to use, re-asking when a store fails so the
 // pasted key is not lost to a storage hiccup.
 func (w *setupWizard) storeSecret(ctx context.Context, envVar, key string) error {
+	if len(w.stores) == 0 {
+		return errors.New("no secret store is available to save the key")
+	}
 	for {
 		store := w.stores[0]
 		if len(w.stores) > 1 {
