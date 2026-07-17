@@ -9,6 +9,36 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestBoxPartsAccountsForEmojiGraphemeWidth(t *testing.T) {
+	t.Parallel()
+
+	parts := boxParts("⚙️ Runtime", mermaidStringWidth("⚙️ Runtime")+4)
+	assert.Equal(t, mermaidStringWidth(parts[0]), mermaidStringWidth(parts[1]))
+	assert.Equal(t, mermaidStringWidth(parts[1]), mermaidStringWidth(parts[2]))
+	assert.Equal(t, "│ ⚙️ Runtime │", parts[1])
+}
+
+func TestWriteMermaidCanvasKeepsEmojiGraphemeClustersTogether(t *testing.T) {
+	t.Parallel()
+
+	canvas := mermaidCanvas(8)
+	writeMermaidCanvas(canvas, 1, "⚙️X")
+	writeMermaidCanvas(canvas, 7, ".")
+	line := mermaidCanvasText(canvas)
+	assert.Contains(t, line, "⚙️X")
+	assert.Equal(t, 8, mermaidStringWidth(line))
+}
+
+func TestBoxPartsUsesRoundedCorners(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, []string{
+		"╭──────╮",
+		"│ Node │",
+		"╰──────╯",
+	}, boxParts("Node", 8))
+}
+
 func TestWriteMermaidCanvasAccountsForWideAndCombiningRunes(t *testing.T) {
 	t.Parallel()
 

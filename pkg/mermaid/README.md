@@ -34,7 +34,7 @@ Mermaid blocks remain syntax-highlighted code blocks.
 | Feature | Parse | Render | Notes |
 |---|:---:|:---:|---|
 | `graph` and `flowchart` headers | ✅ | ✅ | Both are accepted |
-| `TD`, `TB`, `BT`, `LR`, `RL` direction | ✅ | ⚠️ | Retained in the parsed document; terminal rendering is currently top-down |
+| `TD`, `TB`, `BT`, `LR`, `RL` direction | ✅ | ✅ | Rendered in the declared direction |
 | Node declarations and references | ✅ | ✅ | Explicit and implicit nodes |
 | Quoted labels | ✅ | ✅ | Includes semicolons inside labels |
 | Chained edges | ✅ | ✅ | For example, `A --> B --> C` |

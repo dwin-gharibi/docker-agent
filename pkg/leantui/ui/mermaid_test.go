@@ -15,7 +15,7 @@ func TestRenderAssistantLinesRendersMermaidInline(t *testing.T) {
 	plain := ansi.Strip(strings.Join(lines, "\n"))
 	assert.Contains(t, plain, "Plan")
 	assert.Contains(t, plain, "Execute")
-	assert.Contains(t, plain, "▼")
+	assert.Contains(t, plain, "▶")
 	assert.NotContains(t, plain, "flowchart LR")
 	assert.Contains(t, plain, "Before")
 	assert.Contains(t, plain, "After")

@@ -3,8 +3,6 @@ package mermaid
 import (
 	"strings"
 
-	"github.com/mattn/go-runewidth"
-
 	mermaidparser "github.com/docker/docker-agent/pkg/mermaid"
 )
 
@@ -46,7 +44,7 @@ func drawMermaidSequence(
 		canvas := mermaidCanvas(width)
 		for _, id := range order {
 			label := nodes[id]
-			boxWidth := min(max(runewidth.StringWidth(label)+4, 8), cellWidth-2)
+			boxWidth := min(max(mermaidStringWidth(label)+4, 8), cellWidth-2)
 			parts := boxParts(label, boxWidth)
 			writeMermaidCanvas(canvas, centers[id]-boxWidth/2, parts[row])
 		}
@@ -117,7 +115,7 @@ func renderSequenceMessage(event mermaidparser.SequenceEvent, order []string, ce
 			canvas[x] = "─"
 		}
 		label := truncateMermaid(event.Label, max(right-left-4, 1))
-		labelStart := left + (right-left-runewidth.StringWidth(label))/2
+		labelStart := left + (right-left-mermaidStringWidth(label))/2
 		writeMermaidCanvas(canvas, labelStart, " "+label+" ")
 		if from < to {
 			canvas[from], canvas[to] = "├", "▶"
@@ -134,7 +132,7 @@ func renderSequenceNote(event mermaidparser.SequenceEvent, order []string, cente
 	if !fromOK || !toOK {
 		return nil
 	}
-	labelWidth := runewidth.StringWidth(event.Label)
+	labelWidth := mermaidStringWidth(event.Label)
 	boxWidth := min(max(labelWidth+4, 10), width)
 	start := 0
 	switch event.Placement {
