@@ -96,9 +96,9 @@ type Message struct {
 	// Only set for assistant messages.
 	FinishReason FinishReason `json:"finish_reason,omitempty"`
 
-	// CacheControl marks this message as a prompt-cache checkpoint
-	// boundary (currently honored by the Anthropic provider, which caps
-	// excess marks against the API's breakpoint limit).
+	// CacheControl marks this message as a stable prompt-cache checkpoint
+	// boundary honored by providers such as Anthropic and OpenAI. Providers
+	// enforce their own model-specific breakpoint limits and capabilities.
 	//
 	// Contract: this is request-assembly state, not conversation state.
 	// The session sets it on assembled prompt copies; transcripts never

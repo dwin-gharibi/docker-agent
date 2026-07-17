@@ -362,6 +362,40 @@ func TestOpenAISupportsNoneEffort(t *testing.T) {
 	}
 }
 
+func TestOpenAISupportsExplicitPromptCache(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		modelID string
+		want    bool
+	}{
+		{"gpt-5", false},
+		{"gpt-5.2", false},
+		{"gpt-5.5", false},
+		{"gpt-5.6", true},
+		{"gpt-5.6-sol", true},
+		{"gpt-5.6-terra", true},
+		{"gpt-5.7", true},
+		{"o3", false},
+		{"claude-opus-4-7", false},
+		// Valid hyphen-delimited snapshot form.
+		{"gpt-5.6-2026-07-09", true},
+		// Vercel-style "openai/" qualified id.
+		{"openai/gpt-5.6-sol", true},
+		{"openai/gpt-5.2", false},
+		// Malformed/date-shaped minors must not be treated as gpt-5.6+.
+		{"gpt-5.6foo", false},
+		{"gpt-5.20260709", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.modelID, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, OpenAISupportsExplicitPromptCache(tt.modelID))
+		})
+	}
+}
+
 func TestAnthropicTopEfforts(t *testing.T) {
 	t.Parallel()
 

@@ -214,7 +214,18 @@ func (c *Client) Close() {
 // convertMessages converts chat.Message to openai.ChatCompletionMessageParamUnion
 // using the shared oaistream implementation.
 func (c *Client) convertMessages(ctx context.Context, messages []chat.Message) []openai.ChatCompletionMessageParamUnion {
-	converted := oaistream.ConvertMessages(ctx, messages, c.ID(), c.ModelOptions.ModelsDevStore(), c.CapsOverride())
+	// Explicit prompt-cache breakpoints take priority over the consecutive-
+	// message merge below. [sendsExplicitCacheBreakpoints] only admits genuine
+	// OpenAI vendor endpoints — including a trusted named custom OpenAI
+	// provider, whose pinned api_type=openai_chatcompletions would otherwise
+	// route it into the merge path — and such endpoints tolerate multiple
+	// system messages, so skipping the merge is safe. It must be skipped:
+	// merging rewrites the stable message boundaries the markers pin. The
+	// self-hosted case the merge exists for (openai provider + custom
+	// base_url) is already excluded by the gate and still merges below.
+	if sendsExplicitCacheBreakpoints(&c.ModelConfig, c.ModelOptions.OpenAIVendor()) {
+		return c.convertMessagesWithCacheBreakpoints(ctx, messages)
+	}
 	// Coalesce consecutive same-role (system/user) messages into one for generic
 	// OpenAI-compatible endpoints. docker-agent emits a separate system message
 	// per source (the agent instruction plus each toolset's instructions), but
@@ -224,10 +235,16 @@ func (c *Client) convertMessages(ctx context.Context, messages []chat.Message) [
 	// "HTTP 400: System message must be at the beginning" (#2327, #3344) because
 	// the model's Jinja chat template only allows a system message at index 0.
 	// The DMR client already applies this merge for the same reason.
+	//
+	// Merging identifies a third-party/self-hosted backend, so explicit
+	// prompt-cache breakpoints never reach this path: such backends don't
+	// accept the OpenAI-only field, and the merge rewrites message boundaries
+	// the markers would pin.
 	if shouldMergeConsecutiveMessages(&c.ModelConfig) {
+		converted := oaistream.ConvertMessages(ctx, messages, c.ID(), c.ModelOptions.ModelsDevStore(), c.CapsOverride())
 		return oaistream.MergeConsecutiveMessages(converted)
 	}
-	return converted
+	return oaistream.ConvertMessages(ctx, messages, c.ID(), c.ModelOptions.ModelsDevStore(), c.CapsOverride())
 }
 
 // openModelHostProviders are built-in OpenAI-compatible aliases that front
@@ -839,6 +856,7 @@ func getTransport(cfg *latest.ModelConfig) string {
 }
 
 func (c *Client) convertMessagesToResponseInput(ctx context.Context, messages []chat.Message) []responses.ResponseInputItemUnionParam {
+	markBreakpoints := sendsExplicitCacheBreakpoints(&c.ModelConfig, c.ModelOptions.OpenAIVendor())
 	var input []responses.ResponseInputItemUnionParam
 	for _, msg := range messages {
 		// Skip invalid messages
@@ -846,6 +864,7 @@ func (c *Client) convertMessagesToResponseInput(ctx context.Context, messages []
 			continue
 		}
 
+		start := len(input)
 		var item responses.ResponseInputItemUnionParam
 
 		switch msg.Role {
@@ -935,7 +954,8 @@ func (c *Client) convertMessagesToResponseInput(ctx context.Context, messages []
 						})
 					}
 				}
-				continue
+				// item stays unset: everything was appended above, so the
+				// common tail below appends nothing more for this message.
 			}
 
 		case chat.MessageRoleSystem:
@@ -1029,6 +1049,14 @@ func (c *Client) convertMessagesToResponseInput(ctx context.Context, messages []
 					},
 				})
 			}
+		}
+
+		// Translate the CacheControl marker into an explicit prompt-cache
+		// breakpoint on the last supported content block converted from this
+		// message. input[start:] restricts the scan to this message's items so
+		// a filtered or content-less message never marks an unrelated one.
+		if markBreakpoints && msg.CacheControl {
+			markResponseCacheBreakpoint(input[start:])
 		}
 	}
 	// Safety net: ensure every function_call has a matching function_call_output.

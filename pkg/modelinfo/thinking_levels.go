@@ -222,6 +222,16 @@ func OpenAISupportsNoneEffort(modelID string) bool {
 	return ok && minor >= 6
 }
 
+// OpenAISupportsExplicitPromptCache reports whether an OpenAI model accepts
+// explicit prompt-cache breakpoints (`prompt_cache_breakpoint` content
+// markers). gpt-5.6 (Sol/Terra/Luna) is the first OpenAI family to support
+// them; older models reject the field with HTTP 400, so the OpenAI client
+// gates on this before putting breakpoints on the wire.
+func OpenAISupportsExplicitPromptCache(modelID string) bool {
+	minor, ok := gptFiveMinor(modelID)
+	return ok && minor >= 6
+}
+
 // leadingInt parses the run of decimal digits at the start of s, returning
 // its value and width. A zero width means s does not start with a digit.
 func leadingInt(s string) (value, width int) {
