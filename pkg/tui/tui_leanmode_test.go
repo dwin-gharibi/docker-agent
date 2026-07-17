@@ -29,7 +29,7 @@ func leanModeTestCategories(context.Context, tea.Model) []commands.Category {
 		{
 			Name: "Settings",
 			Commands: []commands.Item{
-				{ID: "settings.open", Label: "Preferences", SlashCommand: "/settings", Immediate: true, Execute: noop},
+				{ID: "settings.open", Label: "Settings", SlashCommand: "/settings", Immediate: true, Execute: noop},
 			},
 		},
 	}

@@ -95,7 +95,7 @@ func TestCompletionManagerStaysOpenWithNoResults(t *testing.T) {
 func TestCompletionManagerMatchPrefixMatchesValue(t *testing.T) {
 	t.Parallel()
 
-	settingsItem := Item{Label: "Preferences", Value: "/settings"}
+	toolsetItem := Item{Label: "Restart Toolset", Value: "/toolset-restart"}
 	exitItem := Item{Label: "exit", Value: "/exit"}
 
 	t.Run("query matching the slash command surfaces a mismatched label", func(t *testing.T) {
@@ -103,13 +103,13 @@ func TestCompletionManagerMatchPrefixMatchesValue(t *testing.T) {
 
 		m := New().(*manager)
 		m.Update(OpenMsg{
-			Items:     []Item{settingsItem, exitItem},
+			Items:     []Item{toolsetItem, exitItem},
 			MatchMode: MatchPrefix,
 		})
 
-		m.Update(QueryMsg{Query: "settings"})
+		m.Update(QueryMsg{Query: "toolset-restart"})
 		require.Len(t, m.filteredItems, 1)
-		assert.Equal(t, "Preferences", m.filteredItems[0].Label)
+		assert.Equal(t, "Restart Toolset", m.filteredItems[0].Label)
 	})
 
 	t.Run("a prefix of the slash command still matches", func(t *testing.T) {
@@ -117,13 +117,13 @@ func TestCompletionManagerMatchPrefixMatchesValue(t *testing.T) {
 
 		m := New().(*manager)
 		m.Update(OpenMsg{
-			Items:     []Item{settingsItem, exitItem},
+			Items:     []Item{toolsetItem, exitItem},
 			MatchMode: MatchPrefix,
 		})
 
-		m.Update(QueryMsg{Query: "set"})
+		m.Update(QueryMsg{Query: "tool"})
 		require.Len(t, m.filteredItems, 1)
-		assert.Equal(t, "Preferences", m.filteredItems[0].Label)
+		assert.Equal(t, "Restart Toolset", m.filteredItems[0].Label)
 	})
 
 	t.Run("label prefix matching still works", func(t *testing.T) {
@@ -131,7 +131,7 @@ func TestCompletionManagerMatchPrefixMatchesValue(t *testing.T) {
 
 		m := New().(*manager)
 		m.Update(OpenMsg{
-			Items:     []Item{settingsItem, exitItem},
+			Items:     []Item{toolsetItem, exitItem},
 			MatchMode: MatchPrefix,
 		})
 
@@ -145,7 +145,7 @@ func TestCompletionManagerMatchPrefixMatchesValue(t *testing.T) {
 
 		m := New().(*manager)
 		m.Update(OpenMsg{
-			Items:     []Item{settingsItem, exitItem},
+			Items:     []Item{toolsetItem, exitItem},
 			MatchMode: MatchPrefix,
 		})
 

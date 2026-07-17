@@ -389,7 +389,7 @@ func builtInSettingsCommands() []Item {
 	return []Item{
 		{
 			ID:           "settings.open",
-			Label:        "Preferences",
+			Label:        "Settings",
 			SlashCommand: "/settings",
 			Description:  "Manage appearance, behavior, and notification preferences",
 			Category:     "Settings",
