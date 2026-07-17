@@ -8,9 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
-	"reflect"
 	goruntime "runtime"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -290,21 +288,7 @@ type Option func(*appModel)
 func WithLeanMode() Option {
 	return func(m *appModel) {
 		m.leanMode = true
-		m.addDisabledCommands(leanModeDisabledSlashCommands)
 	}
-}
-
-// leanModeDisabledSlashCommands lists the built-in slash commands that are
-// no-ops in lean mode: their Execute produces a message type that
-// leanModeDroppedMessageTypes (see appModel.update) silently drops there, so
-// running the command would do nothing. WithLeanMode seeds disabledCommands
-// from this list so they are also hidden from completion and the palette.
-//
-// TestLeanModeDisabledSlashCommandsMatchDroppedMessages cross-checks this
-// list against leanModeDroppedMessageTypes so the two can't silently drift
-// apart.
-var leanModeDisabledSlashCommands = []string{
-	"/settings", // OpenSettingsDialogMsg
 }
 
 // WithHideSidebar hides the chat sidebar. Unlike lean mode, the rest of
@@ -376,28 +360,22 @@ func WithVersion(v string) Option {
 // command names (so "/Cost" and "/cost" are equivalent).
 func WithDisabledCommands(slashCommands []string) Option {
 	return func(m *appModel) {
-		m.addDisabledCommands(slashCommands)
-	}
-}
-
-// addDisabledCommands normalizes slashCommands (lower-cased, "/"-prefixed)
-// and merges them into m.disabledCommands.
-func (m *appModel) addDisabledCommands(slashCommands []string) {
-	if len(slashCommands) == 0 {
-		return
-	}
-	if m.disabledCommands == nil {
-		m.disabledCommands = make(map[string]bool, len(slashCommands))
-	}
-	for _, c := range slashCommands {
-		c = strings.ToLower(strings.TrimSpace(c))
-		if c == "" {
-			continue
+		if len(slashCommands) == 0 {
+			return
 		}
-		if !strings.HasPrefix(c, "/") {
-			c = "/" + c
+		if m.disabledCommands == nil {
+			m.disabledCommands = make(map[string]bool, len(slashCommands))
 		}
-		m.disabledCommands[c] = true
+		for _, c := range slashCommands {
+			c = strings.ToLower(strings.TrimSpace(c))
+			if c == "" {
+				continue
+			}
+			if !strings.HasPrefix(c, "/") {
+				c = "/" + c
+			}
+			m.disabledCommands[c] = true
+		}
 	}
 }
 
@@ -800,33 +778,15 @@ func (m *appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return model, cmd
 }
 
-// leanModeDroppedMessageTypes lists the message types that appModel.update
-// silently drops when leanMode is set, because the corresponding feature
-// (multi-tab sessions, sidebar, settings dialog) doesn't exist in lean mode.
-// It is the single source of truth for isLeanModeNoOp below, which in turn
-// TestLeanModeDisabledSlashCommandsMatchDroppedMessages uses to keep
-// leanModeDisabledSlashCommands (see WithLeanMode) from drifting out of sync.
-var leanModeDroppedMessageTypes = []reflect.Type{
-	reflect.TypeFor[messages.SpawnSessionMsg](),
-	reflect.TypeFor[messages.SwitchTabMsg](),
-	reflect.TypeFor[messages.CloseTabMsg](),
-	reflect.TypeFor[messages.ReorderTabMsg](),
-	reflect.TypeFor[messages.ToggleSidebarMsg](),
-	reflect.TypeFor[messages.OpenSettingsDialogMsg](),
-}
-
-// isLeanModeNoOp reports whether msg is one of leanModeDroppedMessageTypes.
-func isLeanModeNoOp(msg tea.Msg) bool {
-	return slices.Contains(leanModeDroppedMessageTypes, reflect.TypeOf(msg))
-}
-
 func (m *appModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// In lean mode, silently drop messages for features that don't exist.
-	// leanModeDroppedMessageTypes is the single source of truth for what's
-	// dropped here; leanModeDisabledSlashCommands (see WithLeanMode) hides
-	// the built-in slash commands that would otherwise do nothing.
-	if m.leanMode && isLeanModeNoOp(msg) {
-		return m, nil
+	if m.leanMode {
+		switch msg.(type) {
+		case messages.SpawnSessionMsg, messages.SwitchTabMsg,
+			messages.CloseTabMsg, messages.ReorderTabMsg,
+			messages.ToggleSidebarMsg, messages.OpenSettingsDialogMsg:
+			return m, nil
+		}
 	}
 
 	switch msg := msg.(type) {
