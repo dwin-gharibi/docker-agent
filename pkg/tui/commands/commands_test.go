@@ -6,6 +6,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/docker/docker-agent/pkg/tools"
+	"github.com/docker/docker-agent/pkg/tools/lifecycle"
 	"github.com/docker/docker-agent/pkg/tui/messages"
 )
 
@@ -276,4 +278,123 @@ func TestSettingsCommandLabel(t *testing.T) {
 	require.True(t, found, "expected a /settings built-in command")
 	assert.Equal(t, "settings.open", settings.ID)
 	assert.Equal(t, "Settings", settings.Label)
+}
+
+// stubToolsetStatusSource is a minimal toolsetStatusSource for exercising
+// toolsetRestartCandidates without a real *app.App.
+type stubToolsetStatusSource struct {
+	statuses []tools.ToolsetStatus
+}
+
+func (s stubToolsetStatusSource) CurrentAgentToolsetStatuses() []tools.ToolsetStatus {
+	return s.statuses
+}
+
+func TestToolsetRestartCandidates_AllShownWithDisabledFlag(t *testing.T) {
+	t.Parallel()
+
+	source := stubToolsetStatusSource{statuses: []tools.ToolsetStatus{
+		{Name: "github", Kind: "MCP", State: lifecycle.StateReady, Restartable: true},
+		{Name: "filesystem", State: lifecycle.StateReady, Restartable: false},
+	}}
+
+	candidates := toolsetRestartCandidates(source)
+	require.Len(t, candidates, 2)
+
+	assert.Equal(t, "github", candidates[0].Label)
+	assert.False(t, candidates[0].Disabled)
+	assert.Contains(t, candidates[0].Description, "MCP")
+
+	assert.Equal(t, "filesystem", candidates[1].Label)
+	assert.True(t, candidates[1].Disabled, "non-restartable toolsets must be shown, not hidden")
+	assert.Contains(t, candidates[1].Description, "Built-in")
+}
+
+func TestToolsetRestartCandidates_DedupePrefersRestartable(t *testing.T) {
+	t.Parallel()
+
+	source := stubToolsetStatusSource{statuses: []tools.ToolsetStatus{
+		{Name: "dup", State: lifecycle.StateStopped, Restartable: false},
+		{Name: "dup", State: lifecycle.StateReady, Restartable: true},
+	}}
+
+	candidates := toolsetRestartCandidates(source)
+	require.Len(t, candidates, 1, "duplicate names must be deduplicated")
+	assert.False(t, candidates[0].Disabled, "the restartable entry must win over the non-restartable duplicate")
+}
+
+func TestToolsetRestartCandidates_EmptyNameSkipped(t *testing.T) {
+	t.Parallel()
+
+	source := stubToolsetStatusSource{statuses: []tools.ToolsetStatus{{Name: "", Restartable: true}}}
+	assert.Empty(t, toolsetRestartCandidates(source))
+}
+
+func TestAttachToolsetRestartCompletion(t *testing.T) {
+	t.Parallel()
+
+	items := builtInSessionCommands()
+	source := stubToolsetStatusSource{statuses: []tools.ToolsetStatus{
+		{Name: "github", Restartable: true},
+	}}
+	attachToolsetRestartCompletion(items, source)
+
+	var restart, other *Item
+	for i := range items {
+		switch items[i].ID {
+		case "session.toolset.restart":
+			restart = &items[i]
+		case "session.exit":
+			other = &items[i]
+		}
+	}
+	require.NotNil(t, restart)
+	require.NotNil(t, restart.CompleteArgument, "the restart item must get a completer")
+	candidates := restart.CompleteArgument()
+	require.Len(t, candidates, 1)
+	assert.Equal(t, "github", candidates[0].Label)
+
+	require.NotNil(t, other)
+	assert.Nil(t, other.CompleteArgument, "commands without a provider keep a nil CompleteArgument")
+}
+
+// TestAttachToolsetRestartCompletion_QueriesFreshOnEachCall is a regression
+// test for bug 2 (PR #3728): the attached CompleteArgument closure must query
+// the toolset status source live on every call, not capture a snapshot at
+// attach time. Otherwise the first Tab after "/toolset-restart " shows
+// whatever toolsets existed when the command list was built, not the
+// current ones.
+func TestAttachToolsetRestartCompletion_QueriesFreshOnEachCall(t *testing.T) {
+	t.Parallel()
+
+	items := builtInSessionCommands()
+	source := &stubToolsetStatusSource{statuses: []tools.ToolsetStatus{
+		{Name: "github", State: lifecycle.StateReady, Restartable: true},
+	}}
+	attachToolsetRestartCompletion(items, source)
+
+	var restart *Item
+	for i := range items {
+		if items[i].ID == "session.toolset.restart" {
+			restart = &items[i]
+		}
+	}
+	require.NotNil(t, restart)
+
+	first := restart.CompleteArgument()
+	require.Len(t, first, 1)
+	assert.Equal(t, "github", first[0].Label)
+
+	// The toolset status source changes after the completer was attached
+	// (e.g. the agent restarted with a different toolset set). A second call
+	// must reflect that change rather than replaying the first snapshot.
+	source.statuses = []tools.ToolsetStatus{
+		{Name: "filesystem", State: lifecycle.StateReady, Restartable: true},
+		{Name: "github", State: lifecycle.StateReady, Restartable: true},
+	}
+
+	second := restart.CompleteArgument()
+	require.Len(t, second, 2, "must reflect the current toolset set, not the one captured at attach time")
+	assert.Equal(t, "filesystem", second[0].Label)
+	assert.Equal(t, "github", second[1].Label)
 }

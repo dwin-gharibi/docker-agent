@@ -1391,6 +1391,9 @@ func rebuildStyles() {
 	CompletionDescStyle = BaseStyle.Foreground(TextSecondary)
 	CompletionSelectedDescStyle = CompletionDescStyle.Foreground(White).Background(MobyBlue)
 	CompletionNoResultsStyle = BaseStyle.Foreground(TextMuted).Italic(true).Align(lipgloss.Center)
+	CompletionDisabledStyle = BaseStyle.Foreground(TextMuted).Italic(true)
+	CompletionDisabledSelectedStyle = CompletionDisabledStyle.Underline(true)
+	CompletionDisabledDescStyle = CompletionDisabledStyle
 
 	// Agent badge styles
 	AgentBadgeStyle = BaseStyle.

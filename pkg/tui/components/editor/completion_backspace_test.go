@@ -1,6 +1,7 @@
 package editor
 
 import (
+	"reflect"
 	"testing"
 
 	"charm.land/bubbles/v2/textarea"
@@ -128,7 +129,7 @@ func TestBackspaceUpdatesCompletionQuery(t *testing.T) {
 	})
 }
 
-// collectMsgs executes a command (or batch of commands) and collects all returned messages
+// collectMsgs executes a command (or batch/sequence of commands) and collects all returned messages
 func collectMsgs(cmd tea.Cmd) []tea.Msg {
 	if cmd == nil {
 		return nil
@@ -144,6 +145,25 @@ func collectMsgs(cmd tea.Cmd) []tea.Msg {
 		}
 		return msgs
 	}
+
+	// tea.Sequence returns an unexported slice-of-Cmd type; reflection is the
+	// only way to unpack it from outside the tea package.
+	msgValue := reflect.ValueOf(msg)
+	if msg != nil && msgValue.Kind() == reflect.Slice {
+		var msgs []tea.Msg
+		for i := range msgValue.Len() {
+			elem := msgValue.Index(i)
+			if elem.CanInterface() {
+				if innerCmd, ok := elem.Interface().(tea.Cmd); ok && innerCmd != nil {
+					msgs = append(msgs, collectMsgs(innerCmd)...)
+				}
+			}
+		}
+		if len(msgs) > 0 {
+			return msgs
+		}
+	}
+
 	if msg != nil {
 		return []tea.Msg{msg}
 	}

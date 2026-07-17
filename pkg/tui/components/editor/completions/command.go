@@ -52,3 +52,39 @@ func sortItemsByLabel(items []completion.Item) []completion.Item {
 func (c *commandCompletion) MatchMode() completion.MatchMode {
 	return completion.MatchPrefix
 }
+
+// ArgumentItems implements ArgumentCompleter: it looks up the command whose
+// SlashCommand is the first token of line and, if it exposes a
+// CompleteArgument provider, maps its candidates to completion items. The
+// full command line ("/cmd label") is used as Value so selecting an item
+// replaces the editor content wholesale — this tolerates argument values
+// containing spaces, which a word-based splice would not.
+func (c *commandCompletion) ArgumentItems(line string) ([]completion.Item, bool) {
+	slashCommand, _, _ := strings.Cut(line, " ")
+
+	for _, cat := range c.categories {
+		for _, cmd := range cat.Commands {
+			if cmd.SlashCommand != slashCommand || cmd.CompleteArgument == nil {
+				continue
+			}
+
+			candidates := cmd.CompleteArgument()
+			items := make([]completion.Item, 0, len(candidates))
+			for _, candidate := range candidates {
+				description := candidate.Description
+				if candidate.Disabled {
+					description = strings.TrimSpace(description + " (not restartable)")
+				}
+				items = append(items, completion.Item{
+					Label:       candidate.Label,
+					Description: description,
+					Value:       cmd.SlashCommand + " " + candidate.Label,
+					Disabled:    candidate.Disabled,
+				})
+			}
+			return items, true
+		}
+	}
+
+	return nil, false
+}

@@ -34,6 +34,11 @@ type Item struct {
 	Value       string
 	Execute     func() tea.Cmd
 	Pinned      bool // Pinned items always appear at the top, in original order
+	// Disabled marks an item that is shown for context but cannot be
+	// submitted (e.g. a non-restartable toolset for /toolset-restart).
+	// Enter/Tab are a no-op on it and it never drives the ghost-suggestion
+	// preview; cursor movement over it is still allowed.
+	Disabled bool
 }
 
 type OpenMsg struct {
@@ -262,11 +267,17 @@ func (c *manager) Update(msg tea.Msg) (layout.Model, tea.Cmd) {
 			return c, cmd
 
 		case key.Matches(msg, c.keyMap.Enter):
-			c.visible = false
 			if len(c.filteredItems) == 0 || c.selected >= len(c.filteredItems) {
+				c.visible = false
 				return c, core.CmdHandler(ClosedMsg{})
 			}
 			selectedItem := c.filteredItems[c.selected]
+			if selectedItem.Disabled {
+				// No-op: the dimmed style already signals why this entry
+				// can't be submitted. Keep the popup open.
+				return c, nil
+			}
+			c.visible = false
 			return c, tea.Sequence(
 				core.CmdHandler(SelectedMsg{
 					Value:      selectedItem.Value,
@@ -276,11 +287,15 @@ func (c *manager) Update(msg tea.Msg) (layout.Model, tea.Cmd) {
 				core.CmdHandler(ClosedMsg{}),
 			)
 		case key.Matches(msg, c.keyMap.Tab):
-			c.visible = false
 			if len(c.filteredItems) == 0 || c.selected >= len(c.filteredItems) {
+				c.visible = false
 				return c, core.CmdHandler(ClosedMsg{})
 			}
 			selectedItem := c.filteredItems[c.selected]
+			if selectedItem.Disabled {
+				return c, nil
+			}
+			c.visible = false
 			return c, tea.Sequence(
 				core.CmdHandler(SelectedMsg{
 					Value:      selectedItem.Value,
@@ -339,19 +354,34 @@ func (c *manager) View() string {
 
 			itemStyle := styles.CompletionNormalStyle
 			descStyle := styles.CompletionDescStyle
-			if isSelected {
+			switch {
+			case item.Disabled && isSelected:
+				itemStyle = styles.CompletionDisabledSelectedStyle
+				descStyle = styles.CompletionDisabledDescStyle
+			case item.Disabled:
+				itemStyle = styles.CompletionDisabledStyle
+				descStyle = styles.CompletionDisabledDescStyle
+			case isSelected:
 				itemStyle = styles.CompletionSelectedStyle
 				descStyle = styles.CompletionSelectedDescStyle
 			}
 
 			// Pad label to maxLabelLen so descriptions align
 			paddedLabel := item.Label + strings.Repeat(" ", maxLabelLen+1-lipgloss.Width(item.Label))
-			text := paddedLabel
+			// Render the label and description as separate segments and join them
+			// rather than re-Render()-ing the whole line through itemStyle: that
+			// outer re-wrap mangles the ANSI reset already embedded by descStyle's
+			// inner Render (most visibly with CompletionDisabledSelectedStyle's
+			// Underline, which leaks the raw escape code as literal text).
+			line := itemStyle.Render(paddedLabel)
 			if item.Description != "" {
-				text += " " + descStyle.Render(item.Description)
+				line = lipgloss.JoinHorizontal(lipgloss.Top, line, " ", descStyle.Render(item.Description))
+			}
+			if pad := (c.width - 6) - lipgloss.Width(line); pad > 0 {
+				line += itemStyle.Render(strings.Repeat(" ", pad))
 			}
 
-			lines = append(lines, itemStyle.Width(c.width-6).Render(text))
+			lines = append(lines, line)
 		}
 	}
 
@@ -376,12 +406,18 @@ func (c *manager) GetLayers() []*lipgloss.Layer {
 	}
 }
 
-// notifySelectionChanged sends a SelectionChangedMsg with the currently selected item's value
+// notifySelectionChanged sends a SelectionChangedMsg with the currently selected item's value.
+// Disabled items report an empty value so the editor's ghost-suggestion
+// preview shows nothing for entries that can't be submitted.
 func (c *manager) notifySelectionChanged() tea.Cmd {
 	if len(c.filteredItems) == 0 || c.selected >= len(c.filteredItems) {
 		return core.CmdHandler(SelectionChangedMsg{Value: ""})
 	}
-	return core.CmdHandler(SelectionChangedMsg{Value: c.filteredItems[c.selected].Value})
+	selectedItem := c.filteredItems[c.selected]
+	if selectedItem.Disabled {
+		return core.CmdHandler(SelectionChangedMsg{Value: ""})
+	}
+	return core.CmdHandler(SelectionChangedMsg{Value: selectedItem.Value})
 }
 
 func (c *manager) filterItems(query string) {

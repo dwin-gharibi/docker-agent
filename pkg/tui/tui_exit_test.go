@@ -65,6 +65,13 @@ func (m *mockChatPage) Help() help.KeyMap             { return nil }
 // mockEditor implements editor.Editor for testing.
 type mockEditor struct {
 	cleanupCalled bool
+	// argumentCompletionCmd is returned by TryStartArgumentCompletion, letting
+	// tests simulate an open (or not-applicable) argument-completion popup.
+	argumentCompletionCmd tea.Cmd
+	// acceptSuggestionCmd is returned by AcceptSuggestion, letting tests
+	// simulate a pending ghost suggestion (e.g. a history match) that would
+	// otherwise compete with argument completion for the same Tab press.
+	acceptSuggestionCmd tea.Cmd
 }
 
 func (m *mockEditor) Init() tea.Cmd                          { return nil }
@@ -74,7 +81,8 @@ func (m *mockEditor) SetSize(int, int) tea.Cmd               { return nil }
 func (m *mockEditor) Focus() tea.Cmd                         { return nil }
 func (m *mockEditor) Blur() tea.Cmd                          { return nil }
 func (m *mockEditor) SetWorking(bool) tea.Cmd                { return nil }
-func (m *mockEditor) AcceptSuggestion() tea.Cmd              { return nil }
+func (m *mockEditor) AcceptSuggestion() tea.Cmd              { return m.acceptSuggestionCmd }
+func (m *mockEditor) TryStartArgumentCompletion() tea.Cmd    { return m.argumentCompletionCmd }
 func (m *mockEditor) ScrollByWheel(int)                      {}
 func (m *mockEditor) Value() string                          { return "" }
 func (m *mockEditor) SetValue(string)                        {}

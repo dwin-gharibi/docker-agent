@@ -25,3 +25,16 @@ type AsyncLoader interface {
 	// It returns a channel that receives the items when loading is complete.
 	LoadItemsAsync(ctx context.Context) <-chan []completion.Item
 }
+
+// ArgumentCompleter is an optional interface for a Completion source that can
+// also complete a command's ARGUMENT (as opposed to the command name
+// itself). It is command-agnostic: it works for any commands.Item exposing a
+// CompleteArgument provider, not just /toolset-restart.
+type ArgumentCompleter interface {
+	// ArgumentItems returns the completion items for the argument of the
+	// command found at the start of line (e.g. "/toolset-restart git"), and
+	// whether line matched a command with argument candidates at all. A
+	// false second value means the caller should not open a popup (unknown
+	// command, or a command without an argument provider).
+	ArgumentItems(line string) ([]completion.Item, bool)
+}
