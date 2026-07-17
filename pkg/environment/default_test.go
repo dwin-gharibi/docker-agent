@@ -11,9 +11,8 @@ import (
 )
 
 func TestDefaultSources(t *testing.T) {
-	// Not parallel: DefaultSources reads the real user config and probes the
-	// local system for optional binaries (pass, security), which is cheap but
-	// environment-dependent.
+	// Not parallel: DefaultSources reads the real user config, which is cheap
+	// but environment-dependent.
 	sources := DefaultSources()
 
 	names := make([]string, 0, len(sources))
@@ -71,7 +70,7 @@ func TestDefaultSources_ReadsConfigEnvFile(t *testing.T) {
 	require.GreaterOrEqual(t, configIdx, 0)
 
 	// The file sits below explicit sources (OS env, run secrets) and above
-	// the OS-level secret managers in lookup precedence.
+	// Docker Desktop in lookup precedence.
 	assert.Greater(t, configIdx, slices.Index(names, "run-secrets"))
 	assert.Less(t, configIdx, slices.Index(names, "docker-desktop"))
 

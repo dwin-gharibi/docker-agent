@@ -20,8 +20,7 @@ func TestRequiredEnvError_NamesSecretSources(t *testing.T) {
 	// first missing variable.
 	assert.Contains(t, msg, "export ANTHROPIC_API_KEY=<value>")
 	assert.Contains(t, msg, "--env-from-file")
-	assert.Contains(t, msg, `security add-generic-password -a "$USER" -s ANTHROPIC_API_KEY -w`)
-	assert.Contains(t, msg, "pass insert ANTHROPIC_API_KEY")
+	assert.Contains(t, msg, "docker agent setup")
 	assert.Contains(t, msg, SecretsDocsURL)
 
 	// Docker Desktop and the credential helper only ever resolve fixed

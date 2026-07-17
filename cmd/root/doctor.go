@@ -98,8 +98,8 @@ type doctorFlags struct {
 
 	// Test seams: sourcesForTests replaces the env-file + default secret-source
 	// chain, dmrLister replaces dmr.ListModels, and loadUserConfig replaces
-	// userconfig.Load so tests never exec `pass`/`security`/`docker model` or
-	// read the developer's real configuration.
+	// userconfig.Load so tests never exec `docker model` or credential helpers,
+	// and never read the developer's real configuration.
 	sourcesForTests []environment.Source
 	dmrLister       config.DMRModelLister
 	loadUserConfig  userConfigLoader
