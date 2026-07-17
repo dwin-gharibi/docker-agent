@@ -87,8 +87,9 @@ type messageModel struct {
 }
 
 type markdownImagesLoadedMsg struct {
-	target *messageModel
-	images map[string]tuiimage.Inline
+	target    *messageModel
+	requested []tuiimage.MarkdownReference
+	images    map[string]tuiimage.Inline
 }
 
 type markdownImageRenderedMsg struct{}
@@ -187,7 +188,7 @@ func (mv *messageModel) loadMarkdownImages(msg *types.Message) tea.Cmd {
 				loaded[ref.Source] = image
 			}
 		}
-		return markdownImagesLoadedMsg{target: mv, images: loaded}
+		return markdownImagesLoadedMsg{target: mv, requested: pending, images: loaded}
 	}
 }
 
@@ -208,6 +209,12 @@ func (mv *messageModel) SetHovered(hovered bool) {
 // Update handles messages and updates the message view state
 func (mv *messageModel) Update(msg tea.Msg) (layout.Model, tea.Cmd) {
 	if loaded, ok := msg.(markdownImagesLoadedMsg); ok && loaded.target == mv {
+		// Unmark failed URLs so a later SetMessage can retry them.
+		for _, ref := range loaded.requested {
+			if _, success := loaded.images[ref.Source]; !success {
+				delete(mv.loadingImages, ref.Source)
+			}
+		}
 		if len(loaded.images) > 0 {
 			if mv.markdownImages == nil {
 				mv.markdownImages = make(map[string]tuiimage.Inline)
@@ -532,8 +539,11 @@ func replaceMarkdownImagePlaceholders(rendered string, codeBlocks []markdown.Cod
 		shifts = append(shifts, lineShift{line: lineIndex, delta: len(replacement) - 1})
 	}
 	for i := range codeBlocks {
+		// Compare against the pre-replacement line so later shifts don't
+		// re-match against already-adjusted positions.
+		orig := codeBlocks[i].Line
 		for _, shift := range shifts {
-			if shift.line < codeBlocks[i].Line {
+			if shift.line < orig {
 				codeBlocks[i].Line += shift.delta
 			}
 		}

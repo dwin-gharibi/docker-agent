@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/docker/docker-agent/pkg/tui/components/markdown"
 	"github.com/docker/docker-agent/pkg/tui/components/spinner"
 	tuiimage "github.com/docker/docker-agent/pkg/tui/image"
 	"github.com/docker/docker-agent/pkg/tui/types"
@@ -48,6 +49,42 @@ func TestAssistantMarkdownImageRendersInline(t *testing.T) {
 	assert.NotContains(t, ansi.Strip(view), "🖼", "image label must not include an icon")
 	assert.NotContains(t, ansi.Strip(view), "![chart]", "rendered image tag must not remain separate from the image")
 	assert.Less(t, strings.Index(view, "chart"), strings.Index(view, "cagent-image"), "alt label must immediately precede the image")
+}
+
+func TestFailedMarkdownImageLoadCanRetry(t *testing.T) {
+	t.Parallel()
+
+	source := "https://example.com/missing.png"
+	msg := types.Agent(types.MessageTypeAssistant, "assistant", "![img]("+source+")")
+	mv := New(msg, nil)
+	mv.loadingImages = map[string]bool{source: true}
+
+	_, _ = mv.Update(markdownImagesLoadedMsg{
+		target:    mv,
+		requested: []tuiimage.MarkdownReference{{Source: source}},
+		images:    map[string]tuiimage.Inline{},
+	})
+
+	assert.Empty(t, mv.loadingImages, "failed sources must be cleared so SetMessage can retry")
+	assert.NotNil(t, mv.loadMarkdownImages(msg), "a retry fetch must be scheduled")
+}
+
+func TestReplaceMarkdownImagePlaceholdersShiftsCodeBlocksByOriginalLine(t *testing.T) {
+	t.Parallel()
+
+	lines := make([]string, 13)
+	lines[3] = "TOKENA"
+	lines[12] = "TOKENB"
+	placeholders := []markdownImagePlaceholder{
+		{token: "TOKENA", lines: []string{"a1", "a2", "a3", "a4", "a5", "a6"}}, // delta +5
+		{token: "TOKENB", lines: []string{"b1", "b2", "b3"}},                   // delta +2, after the code block
+	}
+
+	_, adjusted := replaceMarkdownImagePlaceholders(strings.Join(lines, "\n"), []markdown.CodeBlock{{Line: 10}}, placeholders)
+
+	// Only the placeholder before the code block's original line shifts it.
+	require.Len(t, adjusted, 1)
+	assert.Equal(t, 15, adjusted[0].Line)
 }
 
 func TestErrorMessageWrapping(t *testing.T) {

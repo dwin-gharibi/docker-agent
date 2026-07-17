@@ -224,15 +224,13 @@ func LoadMarkdownReference(ctx context.Context, ref MarkdownReference) (Inline, 
 			return Inline{}, false
 		}
 	} else {
-		path := ref.Source
-		switch {
-		case parsed == nil || parsed.Scheme == "":
-		case parsed.Scheme == "file", parsed.Scheme == "sandbox":
-			path = parsed.Path
-		default:
+		// Sources come from LLM-generated markdown, so local schemes like
+		// file:// and sandbox:// would let a prompt-injected response read
+		// arbitrary local files (confused deputy). Only bare paths pass.
+		if parsed != nil && parsed.Scheme != "" {
 			return Inline{}, false
 		}
-		file, err := os.Open(path)
+		file, err := os.Open(ref.Source)
 		if err != nil {
 			return Inline{}, false
 		}

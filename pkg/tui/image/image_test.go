@@ -7,6 +7,8 @@ import (
 	stdimage "image"
 	"image/color"
 	"image/png"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -48,6 +50,26 @@ func TestLoadMarkdownReferenceDataURI(t *testing.T) {
 	assert.Equal(t, 2, inline.Width)
 	assert.Equal(t, 1, inline.Height)
 	assert.NotEmpty(t, inline.PNGData)
+}
+
+func TestLoadMarkdownReferenceRejectsLocalSchemes(t *testing.T) {
+	t.Parallel()
+
+	img := stdimage.NewRGBA(stdimage.Rect(0, 0, 2, 1))
+	var encoded bytes.Buffer
+	require.NoError(t, png.Encode(&encoded, img))
+	path := filepath.Join(t.TempDir(), "chart.png")
+	require.NoError(t, os.WriteFile(path, encoded.Bytes(), 0o600))
+
+	for _, source := range []string{"file://" + path, "sandbox://" + path} {
+		_, ok := LoadMarkdownReference(t.Context(), MarkdownReference{Alt: "chart", Source: source})
+		assert.False(t, ok, source)
+	}
+
+	// Bare paths remain supported for agent-generated local images.
+	inline, ok := LoadMarkdownReference(t.Context(), MarkdownReference{Alt: "chart", Source: path})
+	require.True(t, ok)
+	assert.Equal(t, "chart", inline.Name)
 }
 
 func TestInlineRegistryIsBounded(t *testing.T) {
