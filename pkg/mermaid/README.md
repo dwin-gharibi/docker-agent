@@ -50,7 +50,7 @@ Mermaid blocks remain syntax-highlighted code blocks.
 | Decision nodes `{text}` | ✅ | ✅ | Marked distinctly with `◇` |
 | Hexagon nodes `{{text}}` | ✅ | ⚠️ | Parsed; currently rendered as a box |
 | Edge line and arrow styles | ⚠️ | ❌ | Accepted operators are normalized to terminal connectors |
-| `subgraph` | ⚠️ | ❌ | Directive is skipped; contained nodes may still render |
+| `subgraph` | ✅ | ✅ | Labeled and nested groups are rendered as containers |
 | `classDef`, `class`, `style` | ⚠️ | ❌ | Skipped |
 | `click` links | ⚠️ | ❌ | Skipped |
 | `linkStyle` | ⚠️ | ❌ | Skipped |

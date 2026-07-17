@@ -71,6 +71,14 @@ type SequenceEvent struct {
 	Placement NotePlacement
 }
 
+// Subgraph groups flowchart nodes and nested subgraphs under a labeled container.
+type Subgraph struct {
+	ID       string
+	Label    string
+	ParentID string
+	Nodes    []string
+}
+
 // Document is the syntax model produced by Parse.
 type Document struct {
 	Kind           DiagramKind
@@ -78,6 +86,7 @@ type Document struct {
 	Nodes          map[string]Node
 	NodeOrder      []string
 	Edges          []Edge
+	Subgraphs      []Subgraph
 	Participants   []string
 	SequenceEvents []SequenceEvent
 }
