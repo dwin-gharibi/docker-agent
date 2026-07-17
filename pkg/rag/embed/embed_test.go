@@ -28,7 +28,6 @@ func (m *mockEmbeddingProvider) BaseConfig() base.Config {
 	return base.Config{}
 }
 
-
 func (m *mockEmbeddingProvider) CreateEmbedding(ctx context.Context, text string) (*base.EmbeddingResult, error) {
 	m.callCount++
 	if m.callCount == 3 {
@@ -56,10 +55,10 @@ func TestEmbedBatch_PartialUsageOnError(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "simulated failure")
-	
+
 	// EmbedBatch should return nil for embeddings since it failed
 	assert.Nil(t, embeddings)
-	
+
 	// Tokens should be 20 (10 from text1 + 10 from text2)
 	assert.Equal(t, int64(20), tokens)
 }

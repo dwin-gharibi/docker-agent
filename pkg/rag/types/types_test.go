@@ -53,16 +53,16 @@ func TestUsage_Add(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			u := tt.base
 			u.Add(tt.other)
-			
+
 			if u.TotalTokens != tt.expected.TotalTokens {
 				t.Errorf("expected TotalTokens %d, got %d", tt.expected.TotalTokens, u.TotalTokens)
 			}
-			
+
 			// Float comparison with small epsilon since we're just adding constants
 			if u.Cost != tt.expected.Cost {
 				t.Errorf("expected Cost %f, got %f", tt.expected.Cost, u.Cost)
 			}
-			
+
 			if u.ModelID != tt.expected.ModelID {
 				t.Errorf("expected ModelID %q, got %q", tt.expected.ModelID, u.ModelID)
 			}

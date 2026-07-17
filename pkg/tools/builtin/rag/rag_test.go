@@ -6,12 +6,13 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/docker/docker-agent/pkg/rag"
 	"github.com/docker/docker-agent/pkg/rag/database"
 	"github.com/docker/docker-agent/pkg/rag/strategy"
 	ragtypes "github.com/docker/docker-agent/pkg/rag/types"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestRAGTool_ToolName(t *testing.T) {
@@ -107,7 +108,7 @@ func (m *mockStrategy) Close() error {
 
 func TestRAGTool_HandleQuery_Telemetry(t *testing.T) {
 	// This test asserts handleQueryRAG runs and doesn't panic.
-	// Since telemetry is global, we can't easily assert on the emitted event here without 
+	// Since telemetry is global, we can't easily assert on the emitted event here without
 	// exposing internal test utilities, but we can verify it doesn't crash on non-zero usage.
 
 	events := make(chan ragtypes.Event)
@@ -130,7 +131,7 @@ func TestRAGTool_HandleQuery_Telemetry(t *testing.T) {
 		},
 	}
 
-	mgr, err := rag.New(context.Background(), "test-rag", cfg, events)
+	mgr, err := rag.New(t.Context(), "test-rag", cfg, events)
 	require.NoError(t, err)
 
 	tool := &ToolSet{
@@ -138,7 +139,7 @@ func TestRAGTool_HandleQuery_Telemetry(t *testing.T) {
 		toolName: "test-rag",
 	}
 
-	res, err := tool.handleQueryRAG(context.Background(), queryRAGArgs{Query: "test"})
+	res, err := tool.handleQueryRAG(t.Context(), queryRAGArgs{Query: "test"})
 	require.NoError(t, err)
 	assert.NotNil(t, res)
 }

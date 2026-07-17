@@ -603,7 +603,7 @@ func (s *VectorStore) indexFile(ctx context.Context, filePath string) error {
 		"chunk_count", len(validChunks))
 
 	embeddings, batchTokens, err := s.embedder.EmbedBatch(ctx, chunkContents)
-	
+
 	// Record usage even on partial failure (tokens consumed before error)
 	batchCost := s.calculateCost(ctx, batchTokens)
 	s.recordUsage(batchTokens, batchCost)
