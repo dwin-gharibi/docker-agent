@@ -3,15 +3,15 @@ package mcp
 import (
 	"os"
 	"testing"
-	"time"
-
-	"github.com/docker/docker-agent/pkg/httpclient"
 )
 
 // TestMain swaps the OAuth helpers' SSRF-safe HTTP client for the
 // loopback-allowing variant so tests can hit httptest.NewServer (which
-// binds to 127.0.0.1). Production code keeps the safe client.
+// binds to 127.0.0.1). Production code keeps the safe client. The variant
+// carries its own connection pool, so parallel tests closing httptest
+// servers (which prunes http.DefaultTransport's pool) can't break its
+// in-flight requests.
 func TestMain(m *testing.M) {
-	oauthHTTPClient = httpclient.NewSafeClient(30*time.Second, true)
+	oauthHTTPClient = oauthHTTPClientForAllowPrivateIPs(true)
 	os.Exit(m.Run())
 }
