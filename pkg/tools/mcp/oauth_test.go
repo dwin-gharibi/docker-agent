@@ -22,6 +22,17 @@ import (
 	"github.com/docker/docker-agent/pkg/tools"
 )
 
+// newTestTransport returns a transport private to the test. Parallel tests
+// must not share http.DefaultTransport: httptest.Server.Close calls
+// http.DefaultTransport.CloseIdleConnections, which can break another
+// test's in-flight request ("transport connection broken").
+func newTestTransport(t *testing.T) *http.Transport {
+	t.Helper()
+	tr := &http.Transport{}
+	t.Cleanup(tr.CloseIdleConnections)
+	return tr
+}
+
 // TestExchangeCodeForToken_PreservesClientCredentials verifies that
 // ExchangeCodeForToken stores the client_id and client_secret on the
 // returned OAuthToken so they are available for subsequent refresh calls.
@@ -159,7 +170,7 @@ func TestGetValidToken_UsesStoredCredentialsForRefresh(t *testing.T) {
 	}
 
 	transport := &oauthTransport{
-		base:       http.DefaultTransport,
+		base:       newTestTransport(t),
 		tokenStore: store,
 		baseURL:    srv.URL,
 	}
@@ -245,7 +256,7 @@ func TestGetValidToken_UsesStoredAuthServerForRefresh(t *testing.T) {
 	}
 
 	transport := &oauthTransport{
-		base:       http.DefaultTransport,
+		base:       newTestTransport(t),
 		tokenStore: store,
 		baseURL:    mcpSrv.URL,
 	}
@@ -384,7 +395,8 @@ func TestCallbackServer_RejectsCallbackBeforeStateSet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	client := &http.Client{Transport: newTestTransport(t)}
+	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -525,7 +537,7 @@ func TestOAuthTransport_RetryFailureExposesResponseBody(t *testing.T) {
 	}
 
 	transport := &oauthTransport{
-		base:       http.DefaultTransport,
+		base:       newTestTransport(t),
 		tokenStore: store,
 		baseURL:    srv.URL,
 	}
@@ -590,7 +602,7 @@ func TestOAuthTransport_NonRetryFailureExposesResponseBody(t *testing.T) {
 	}
 
 	transport := &oauthTransport{
-		base:       http.DefaultTransport,
+		base:       newTestTransport(t),
 		tokenStore: store,
 		baseURL:    srv.URL,
 	}
@@ -638,7 +650,7 @@ func TestGetValidToken_DiscardsTokenWhenScopesNoLongerCovered(t *testing.T) {
 	}
 
 	transport := &oauthTransport{
-		base:       http.DefaultTransport,
+		base:       newTestTransport(t),
 		tokenStore: store,
 		baseURL:    "https://mcp.example.com",
 		oauthConfig: &latest.RemoteOAuthConfig{
@@ -672,7 +684,7 @@ func TestGetValidToken_ReturnsTokenWhenScopesSatisfied(t *testing.T) {
 	}
 
 	transport := &oauthTransport{
-		base:       http.DefaultTransport,
+		base:       newTestTransport(t),
 		tokenStore: store,
 		baseURL:    "https://mcp.example.com",
 		oauthConfig: &latest.RemoteOAuthConfig{
@@ -703,7 +715,7 @@ func TestGetValidToken_LeavesLegacyTokenAlone(t *testing.T) {
 	}
 
 	transport := &oauthTransport{
-		base:       http.DefaultTransport,
+		base:       newTestTransport(t),
 		tokenStore: store,
 		baseURL:    "https://mcp.example.com",
 		oauthConfig: &latest.RemoteOAuthConfig{
@@ -743,7 +755,7 @@ func TestOAuthTransport_NonInteractiveCtxSkipsElicitation(t *testing.T) {
 	defer srv.Close()
 
 	transport := &oauthTransport{
-		base:       http.DefaultTransport,
+		base:       newTestTransport(t),
 		tokenStore: NewInMemoryTokenStore(),
 		baseURL:    srv.URL,
 		// client intentionally left nil — see test comment above.
@@ -892,7 +904,7 @@ func TestOAuthTransportAllowPrivateIPsControlsOAuthClient(t *testing.T) {
 			t.Fatal(err)
 		}
 		return &oauthTransport{
-			base:            http.DefaultTransport,
+			base:            newTestTransport(t),
 			tokenStore:      store,
 			baseURL:         mcpSrv.URL,
 			oauthHTTPClient: client,
@@ -1451,7 +1463,7 @@ func newUnmanagedTestTransport(t *testing.T, baseURL, redirectURI string, captur
 	// aren't blocked by the SSRF guard the production OAuth helper uses.
 	client.allowPrivateIPs = true
 	transport := &oauthTransport{
-		base:                      http.DefaultTransport,
+		base:                      newTestTransport(t),
 		requestElicitation:        client.requestElicitation,
 		onOAuthSuccess:            client.oauthSuccess,
 		tokenStore:                client.tokenStore,
@@ -2229,7 +2241,7 @@ func newTransportWithStaleToken(t *testing.T, baseURL string) *oauthTransport {
 	})
 	require.NoError(t, err)
 	return &oauthTransport{
-		base:       http.DefaultTransport,
+		base:       newTestTransport(t),
 		tokenStore: store,
 		baseURL:    baseURL,
 		// Allow private IPs so the httptest 127.0.0.1 server is reachable.
@@ -2374,7 +2386,7 @@ func TestRoundTrip_ServerInvalidToken_NoRefreshToken_NonInteractive(t *testing.T
 	require.NoError(t, err)
 
 	transport := &oauthTransport{
-		base:            http.DefaultTransport,
+		base:            newTestTransport(t),
 		tokenStore:      store,
 		baseURL:         srv.URL,
 		oauthHTTPClient: oauthHTTPClientForAllowPrivateIPs(true),
@@ -2509,7 +2521,7 @@ func TestRoundTrip_Bare401WithAttachedTokenUnchanged(t *testing.T) {
 	}))
 
 	transport := &oauthTransport{
-		base:            http.DefaultTransport,
+		base:            newTestTransport(t),
 		tokenStore:      store,
 		baseURL:         srv.URL,
 		oauthHTTPClient: oauthHTTPClientForAllowPrivateIPs(true),
@@ -2603,7 +2615,7 @@ func TestRoundTrip_ConcurrentInvalidToken_NoRefresh_StickyDecline(t *testing.T) 
 	client.allowPrivateIPs = true
 
 	transport := &oauthTransport{
-		base:               http.DefaultTransport,
+		base:               newTestTransport(t),
 		requestElicitation: client.requestElicitation,
 		tokenStore:         store,
 		baseURL:            srv.URL,
@@ -3048,7 +3060,7 @@ func TestManagedOAuthFlow_NoDCR_PromptsForCredentialsThenHonorsConsentDecline(t 
 
 	store := NewInMemoryTokenStore()
 	transport := &oauthTransport{
-		base:               http.DefaultTransport,
+		base:               newTestTransport(t),
 		requestElicitation: capture.handler,
 		tokenStore:         store,
 		baseURL:            srv.URL,
