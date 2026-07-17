@@ -146,8 +146,17 @@ func (a *StreamAdapter) Recv() (chat.MessageStreamResponse, error) {
 				OutputTokens: usage.CompletionTokens,
 			}
 			if usage.JSON.PromptTokensDetails.Valid() {
-				response.Usage.CachedInputTokens = usage.PromptTokensDetails.CachedTokens
-				response.Usage.InputTokens -= usage.PromptTokensDetails.CachedTokens
+				// chat.Usage treats InputTokens, CachedInputTokens and
+				// CacheWriteTokens as mutually exclusive buckets, while the
+				// provider's prompt_tokens_details is a breakdown of
+				// prompt_tokens. Subtract both detail counts so InputTokens is
+				// only the fresh remainder and the three buckets sum back to
+				// prompt_tokens. Absent detail fields decode as zero, so
+				// providers that don't report cache writes are unaffected.
+				details := usage.PromptTokensDetails
+				response.Usage.CachedInputTokens = details.CachedTokens
+				response.Usage.CacheWriteTokens = details.CacheWriteTokens
+				response.Usage.InputTokens -= details.CachedTokens + details.CacheWriteTokens
 			}
 			if usage.JSON.CompletionTokensDetails.Valid() {
 				response.Usage.ReasoningTokens = usage.CompletionTokensDetails.ReasoningTokens

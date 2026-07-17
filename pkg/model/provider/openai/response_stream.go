@@ -240,10 +240,16 @@ func (a *ResponseStreamAdapter) Recv() (chat.MessageStreamResponse, error) {
 		// Extract usage
 		u := event.Response.Usage
 		if u.TotalTokens > 0 {
+			// chat.Usage treats InputTokens, CachedInputTokens and
+			// CacheWriteTokens as mutually exclusive buckets, while the
+			// provider's input_tokens_details is a breakdown of input_tokens.
+			// Subtract both detail counts so InputTokens is only the fresh
+			// remainder and the three buckets sum back to input_tokens.
 			response.Usage = &chat.Usage{
-				InputTokens:       u.InputTokens - u.InputTokensDetails.CachedTokens,
+				InputTokens:       u.InputTokens - u.InputTokensDetails.CachedTokens - u.InputTokensDetails.CacheWriteTokens,
 				OutputTokens:      u.OutputTokens,
 				CachedInputTokens: u.InputTokensDetails.CachedTokens,
+				CacheWriteTokens:  u.InputTokensDetails.CacheWriteTokens,
 				ReasoningTokens:   u.OutputTokensDetails.ReasoningTokens,
 			}
 		}

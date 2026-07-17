@@ -96,7 +96,9 @@ type Message struct {
 	// Only set for assistant messages.
 	FinishReason FinishReason `json:"finish_reason,omitempty"`
 
-	// CacheControl indicates whether this message is a cached message (only used by anthropic)
+	// CacheControl marks this message as a stable prompt-prefix boundary for
+	// provider-side prompt caching (Anthropic cache_control breakpoints, OpenAI
+	// explicit prompt_cache_breakpoint markers on gpt-5.6+).
 	CacheControl bool `json:"cache_control,omitempty"`
 }
 

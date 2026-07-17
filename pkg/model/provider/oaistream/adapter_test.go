@@ -161,6 +161,43 @@ data: [DONE]
 	assert.Equal(t, "stop", string(resp.Choices[0].FinishReason))
 }
 
+func TestStreamAdapter_UsagePromptCacheBuckets(t *testing.T) {
+	t.Parallel()
+
+	// OpenAI reports prompt_tokens_details as a breakdown of prompt_tokens
+	// (SDK v3.43.0 exposes both cached_tokens and cache_write_tokens). The
+	// adapter must keep chat.Usage's three input buckets mutually exclusive:
+	// fresh InputTokens excludes both cached and cache-write tokens, so the
+	// buckets sum back to prompt_tokens.
+	sseData := `data: {"id":"c1","object":"chat.completion.chunk","created":1,"model":"test","choices":[{"index":0,"delta":{"role":"assistant","content":"Hi"},"finish_reason":null}]}
+
+data: {"id":"c1","object":"chat.completion.chunk","created":1,"model":"test","choices":[],"usage":{"prompt_tokens":100,"completion_tokens":7,"total_tokens":107,"prompt_tokens_details":{"cached_tokens":20,"cache_write_tokens":30},"completion_tokens_details":{"reasoning_tokens":3}}}
+
+data: [DONE]
+
+`
+
+	stream := newTestStream(t, sseData)
+	adapter := NewStreamAdapter(stream, true)
+	defer adapter.Close()
+
+	resp, err := adapter.Recv()
+	require.NoError(t, err)
+	require.Len(t, resp.Choices, 1)
+	assert.Equal(t, "Hi", resp.Choices[0].Delta.Content)
+
+	resp, err = adapter.Recv()
+	require.NoError(t, err)
+	require.NotNil(t, resp.Usage)
+	assert.Equal(t, int64(50), resp.Usage.InputTokens, "fresh input must exclude both cached and cache-write tokens")
+	assert.Equal(t, int64(20), resp.Usage.CachedInputTokens)
+	assert.Equal(t, int64(30), resp.Usage.CacheWriteTokens)
+	assert.Equal(t, int64(7), resp.Usage.OutputTokens)
+	assert.Equal(t, int64(3), resp.Usage.ReasoningTokens)
+	assert.Equal(t, int64(100), resp.Usage.InputTokens+resp.Usage.CachedInputTokens+resp.Usage.CacheWriteTokens,
+		"the three input buckets must sum back to prompt_tokens")
+}
+
 func TestStreamAdapter_NoReasoningContent(t *testing.T) {
 	t.Parallel()
 
