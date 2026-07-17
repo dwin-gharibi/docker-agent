@@ -1,0 +1,9 @@
+[ Start ]
+│
+▼
+[ AwaitingInput ]
+│ submit
+▼
+[ ProcessingLongRunni…
+├─ retry ─▶ ↩ [ Await…
+╰─ complete ─▶ [ End ]
