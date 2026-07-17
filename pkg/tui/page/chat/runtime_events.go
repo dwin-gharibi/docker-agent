@@ -42,6 +42,10 @@ import (
 //
 // Sidebar Updates (forwarded):
 //   - TokenUsageEvent, AgentInfoEvent, TeamInfoEvent, etc.
+//   - BudgetUsageEvent          → Live run-budget reading
+//
+// Warnings:
+//   - BudgetExceededEvent       → Run stopped by its budget
 //
 // Dialogs:
 //   - MaxIterationsReachedEvent → Show max iterations dialog
@@ -171,6 +175,17 @@ func (p *chatPage) handleRuntimeEvent(msg tea.Msg) (bool, tea.Cmd) {
 		*runtime.RAGIndexingProgressEvent,
 		*runtime.RAGIndexingCompletedEvent:
 		return true, p.forwardToSidebar(msg)
+
+	// ===== Budget Events =====
+	// budget_usage feeds the sidebar's live spend reading. budget_exceeded
+	// is rendered as a warning rather than a dialog: the run is already
+	// stopping and there is nothing to ask the user, unlike the iteration
+	// cap, which offers to continue.
+	case *runtime.BudgetUsageEvent:
+		return true, p.forwardToSidebar(msg)
+
+	case *runtime.BudgetExceededEvent:
+		return true, p.handleBudgetExceeded(msg)
 
 	// ===== Dialog Events =====
 	case *runtime.MaxIterationsReachedEvent:
@@ -425,6 +440,21 @@ func (p *chatPage) handleToolCallResponse(msg *runtime.ToolCallResponseEvent) te
 	}
 
 	return tea.Batch(toolCmd, p.messages.ScrollToBottom(), spinnerCmd, sidebarCmd)
+}
+
+// handleBudgetExceeded reports a run stopped by its budget. It stops the
+// spinner and raises a warning naming the limit that tripped, alongside
+// the assistant stop message the runtime already appended.
+//
+// Deliberately not a dialog: unlike the iteration cap there is nothing to
+// ask. A budget is a ceiling the operator set on purpose, so raising it
+// means editing the config rather than answering a prompt.
+func (p *chatPage) handleBudgetExceeded(msg *runtime.BudgetExceededEvent) tea.Cmd {
+	spinnerCmd := p.setWorking(false)
+	warnCmd := notification.WarningCmd(fmt.Sprintf(
+		"Run stopped by budget.%s — used %s of %s.", msg.Limit, msg.Used, msg.Max,
+	))
+	return tea.Batch(spinnerCmd, warnCmd)
 }
 
 func (p *chatPage) handleMaxIterationsReached(msg *runtime.MaxIterationsReachedEvent) tea.Cmd {
