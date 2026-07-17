@@ -1,6 +1,6 @@
 ---
 title: "Managing Secrets"
-description: "How to securely provide API keys and credentials to Docker Agent using environment variables, env files, Docker Compose secrets, macOS Keychain, pass, and 1Password references."
+description: "How to securely provide API keys and credentials to Docker Agent using environment variables, env files, Docker Compose secrets, and 1Password references."
 keywords: docker agent, ai agents, guides, managing secrets
 weight: 30
 canonical: https://docs.docker.com/ai/docker-agent/guides/secrets/
@@ -19,10 +19,8 @@ Docker Agent needs API keys to talk to model providers (OpenAI, Anthropic, etc.)
 | 3 | [Docker Agent env file](#docker-agent-env-file) | `~/.config/cagent/.env`, written by `docker agent setup` |
 | 4 | [Credential helper](#credential-helper) | Custom command declared in `~/.config/cagent/config.yaml` under `credential_helper:` |
 | 5 | [Docker Desktop](#docker-desktop) | Secrets stored by the Docker Desktop backend (no setup on a Desktop install) |
-| 6 | [`pass` password manager](#pass-password-manager) | `pass insert OPENAI_API_KEY` |
-| 7 | [macOS Keychain](#macos-keychain) | `security add-generic-password` |
 
-The first provider that has a value wins. You can mix and match — for example, use environment variables for one key and Keychain for another.
+The first provider that has a value wins. You can mix and match — for example, use environment variables for one key and the Docker Agent env file for another.
 
 Whatever provider returns the value, if that value looks like a [1Password secret reference](#1password-references) (it starts with `op://`), Docker Agent resolves it through the `op` CLI before handing it to a model provider or tool.
 
@@ -94,7 +92,7 @@ A `.env` file (same format as above) at `~/.config/cagent/.env` is read automati
 OPENAI_API_KEY=sk-...
 ```
 
-The file is created with owner-only permissions (`0600`), but the values are stored in plain text: prefer the OS keychain or `pass` when available.
+The file is created with owner-only permissions (`0600`), but the values are stored in plain text.
 
 ## Docker Compose Secrets
 
@@ -183,52 +181,6 @@ The command is invoked with the variable name appended as the final argument, an
 
 On machines where Docker Desktop is installed, Docker Agent queries Docker Desktop's backend for secrets stored against your signed-in Docker account. This is transparent — no extra configuration — and it is how signed-in Docker users get provider API keys without setting any environment variables.
 
-## `pass` Password Manager
-
-Docker Agent integrates with [`pass`](https://www.passwordstore.org/), the standard Unix password manager. Secrets are stored as GPG-encrypted files in `~/.password-store/`.
-
-### Store a secret
-
-```bash
-pass insert ANTHROPIC_API_KEY
-```
-
-The entry name must match the environment variable name that Docker Agent expects.
-
-### Verify it works
-
-```bash
-pass show ANTHROPIC_API_KEY
-```
-
-Once `pass` is set up, Docker Agent resolves secrets from it automatically.
-
-## macOS Keychain
-
-On macOS, Docker Agent can read secrets from the system Keychain. This is useful for local development — you store the key once and it's available across all your projects.
-
-### Store a secret
-
-```bash
-security add-generic-password -a "$USER" -s ANTHROPIC_API_KEY -w "sk-ant-your-key-here"
-```
-
-The `-s` (service name) must match the environment variable name that Docker Agent expects.
-
-### Verify it works
-
-```bash
-security find-generic-password -s ANTHROPIC_API_KEY -w
-```
-
-### Delete a secret
-
-```bash
-security delete-generic-password -s ANTHROPIC_API_KEY
-```
-
-Once stored, Docker Agent finds the secret automatically — no flags or config needed.
-
 ## 1Password References
 
 Any secret value resolved through the chain above can be a **1Password secret reference** instead of the literal secret. If the value starts with `op://`, Docker Agent resolves it by invoking the [1Password CLI](https://developer.1password.com/docs/cli/) (`op read <reference>`) and uses the result.
@@ -255,11 +207,10 @@ References follow the `op://<vault>/<item>/<field>` format. Make sure the `op` C
 | Env files | Team projects, multiple keys | Low |
 | Docker Agent env file | Keys used across all projects, written by `docker agent setup` | Low |
 | Docker Compose secrets | Containerized deployments, CI/CD | Medium |
-| `pass` | Linux/macOS, GPG-based workflows | Medium |
-| macOS Keychain | macOS local development | Low |
+| Credential helper | Reusing an existing secrets daemon (Vault, 1Password CLI, ...) | Medium |
 | 1Password references (`op://`) | Teams already using 1Password | Low |
 
-You can combine methods. For example, store long-lived provider keys in macOS Keychain and pass project-specific MCP tokens via env files.
+You can combine methods. For example, store long-lived provider keys in the Docker Agent env file and pass project-specific MCP tokens via env files.
 
 ## Preventing Secret Leaks
 

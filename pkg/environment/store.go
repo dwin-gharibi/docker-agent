@@ -1,14 +1,10 @@
 package environment
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
-	"os/user"
 	"path/filepath"
-	"runtime"
 	"strings"
 
 	"github.com/docker/docker-agent/pkg/atomicfile"
@@ -20,7 +16,7 @@ import (
 // write-side counterparts of the read-side providers: a value stored under a
 // name must be returned by the matching provider's Get for that same name.
 type SecretStore interface {
-	// Name identifies the matching read-side source (e.g. "keychain").
+	// Name identifies the matching read-side source (e.g. "config-env-file").
 	Name() string
 	// Description is a short human-readable label for interactive pickers.
 	Description() string
@@ -29,112 +25,10 @@ type SecretStore interface {
 }
 
 // SecretStores returns the secret stores usable on this machine, most
-// preferred first: the OS-native store when its tooling is available
-// (macOS Keychain, pass elsewhere), then the docker agent env file, which is
-// always available as a plain-file fallback.
+// preferred first. Currently the only store is the docker agent env file,
+// which is always available as a plain-file store.
 func SecretStores() []SecretStore {
-	var stores []SecretStore
-
-	if runtime.GOOS == "darwin" {
-		if keychain, err := NewKeychainStore(); err == nil {
-			stores = append(stores, keychain)
-		}
-	}
-	if pass, err := NewPassStore(); err == nil {
-		stores = append(stores, pass)
-	}
-
-	return append(stores, NewConfigEnvFileStore())
-}
-
-// KeychainStore stores secrets as generic passwords in the macOS keychain,
-// where [KeychainProvider] resolves them.
-type KeychainStore struct {
-	binaryPath string
-}
-
-// NewKeychainStore creates a KeychainStore. It verifies that the `security`
-// command is available and stores the resolved absolute path.
-func NewKeychainStore() (*KeychainStore, error) {
-	path, err := lookupBinary("security", KeychainNotAvailableError{})
-	if err != nil {
-		return nil, err
-	}
-	return &KeychainStore{binaryPath: path}, nil
-}
-
-func (s *KeychainStore) Name() string { return "keychain" }
-
-func (s *KeychainStore) Description() string { return "macOS Keychain" }
-
-// Store writes the secret with `security -i` so the value travels over stdin
-// and never appears in the process argument list. The fixed account name
-// keeps -U updating the same item on re-runs (a different account would
-// create a duplicate item instead); [KeychainProvider] looks up by service
-// name only, so the account value never affects reads.
-func (s *KeychainStore) Store(ctx context.Context, name, value string) error {
-	command := fmt.Sprintf("add-generic-password -U -a %s -s %s -w %s\n",
-		securityQuote(keychainAccountName()), securityQuote(name), securityQuote(value))
-
-	cmd := exec.CommandContext(ctx, s.binaryPath, "-i")
-	cmd.Stdin = strings.NewReader(command)
-	var stderr bytes.Buffer
-	cmd.Stdout = &stderr
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("storing %s in the macOS Keychain: %w: %s", name, err, strings.TrimSpace(stderr.String()))
-	}
-	return nil
-}
-
-func keychainAccountName() string {
-	if u, err := user.Current(); err == nil && u.Username != "" {
-		return u.Username
-	}
-	return "docker-agent"
-}
-
-// securityQuote quotes a token for the `security -i` command parser, which
-// splits on whitespace and honours double quotes with backslash escapes.
-func securityQuote(s string) string {
-	s = strings.ReplaceAll(s, `\`, `\\`)
-	s = strings.ReplaceAll(s, `"`, `\"`)
-	return `"` + s + `"`
-}
-
-// PassStore stores secrets in the `pass` password manager, where
-// [PassProvider] resolves them.
-type PassStore struct {
-	binaryPath string
-}
-
-// NewPassStore creates a PassStore. It verifies that `pass` is available and
-// stores the resolved absolute path.
-func NewPassStore() (*PassStore, error) {
-	path, err := lookupBinary("pass", PassNotAvailableError{})
-	if err != nil {
-		return nil, err
-	}
-	return &PassStore{binaryPath: path}, nil
-}
-
-func (s *PassStore) Name() string { return "pass" }
-
-func (s *PassStore) Description() string { return "pass (password manager)" }
-
-// Store inserts the secret with `pass insert -e -f`, feeding the value over
-// stdin (echo mode reads a single line) so it never appears in the process
-// argument list. -f replaces any existing entry without prompting.
-func (s *PassStore) Store(ctx context.Context, name, value string) error {
-	cmd := exec.CommandContext(ctx, s.binaryPath, "insert", "-e", "-f", name)
-	cmd.Stdin = strings.NewReader(value + "\n")
-	var stderr bytes.Buffer
-	cmd.Stdout = &stderr
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("storing %s in pass: %w: %s", name, err, strings.TrimSpace(stderr.String()))
-	}
-	return nil
+	return []SecretStore{NewConfigEnvFileStore()}
 }
 
 // EnvFileStore stores secrets as KEY=value lines in an env file. The file at

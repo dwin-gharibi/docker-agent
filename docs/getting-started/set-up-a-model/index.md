@@ -53,11 +53,8 @@ That lasts for the current shell session. To set a key up once, use any other bu
 $ echo 'ANTHROPIC_API_KEY=sk-ant-...' > .env
 $ docker agent run --env-from-file .env
 
-# pass password manager (Linux, macOS)
-$ pass insert ANTHROPIC_API_KEY
-
-# macOS Keychain
-$ security add-generic-password -a "$USER" -s ANTHROPIC_API_KEY -w
+# Docker Agent env file, read automatically on every run
+$ echo 'ANTHROPIC_API_KEY=sk-ant-...' >> ~/.config/cagent/.env
 ```
 
 The entry name must match the environment variable the provider expects. [Managing Secrets](../../guides/secrets/index.md) covers every source (Docker Compose secrets, credential helpers, 1Password references) and the order they are checked in.

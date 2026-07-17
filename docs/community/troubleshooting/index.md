@@ -60,10 +60,9 @@ The following environment variables must be set:
  - ANTHROPIC_API_KEY
 
 Provide them using any of these sources:
- - Shell environment:  export ANTHROPIC_API_KEY=<value>
- - Env file:           docker agent run --env-from-file <file> ...
- - pass:               pass insert ANTHROPIC_API_KEY
- - macOS Keychain:     security add-generic-password -a "$USER" -s ANTHROPIC_API_KEY -w
+ - Shell environment:      export ANTHROPIC_API_KEY=<value>
+ - Env file:               docker agent run --env-from-file <file> ...
+ - Docker Agent env file:  docker agent setup (stores the key in ~/.config/cagent/.env)
 
 See https://docs.docker.com/ai/docker-agent/guides/secrets/ for details.
 ```

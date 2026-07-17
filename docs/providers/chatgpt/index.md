@@ -104,7 +104,7 @@ The effort picker exposes Low/Medium/High/XHigh/Max on the GPT-5.6 family
 ## Setting the Token Explicitly
 
 `CHATGPT_OAUTH_TOKEN` can also be set like any other credential (shell
-environment, `--env-from-file`, keychain, ...). An explicitly set value takes
+environment, `--env-from-file`, ...). An explicitly set value takes
 precedence over the stored sign-in. This is useful for short-lived CI runs
 with a pre-minted access token, but note that such a token expires and is not
 refreshed.

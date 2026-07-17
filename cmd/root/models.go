@@ -58,7 +58,7 @@ type modelRow struct {
 // modelsCmdOption pre-seeds the RuntimeConfig backing the models command
 // before its flags are wired. It is the seam tests use to inject a hermetic
 // env provider and an in-memory models.dev store, so listing models never
-// shells out to the OS keychain or reaches the network. Production calls
+// shells out to secret helper CLIs or reaches the network. Production calls
 // newModelsCmd with no options, leaving behavior unchanged.
 type modelsCmdOption func(*config.RuntimeConfig)
 

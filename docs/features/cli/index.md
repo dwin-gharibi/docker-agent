@@ -229,7 +229,7 @@ $ docker agent toolsets --format json | jq             # machine-readable (type,
 
 ### `docker agent setup`
 
-Set up a model interactively. Three paths: pick a cloud provider, paste its API key, and choose where to store it (macOS Keychain, `pass`, or the Docker Agent env file `~/.config/cagent/.env`); check Docker Model Runner and pull a local model (no API key needed); or register a custom OpenAI-compatible provider (endpoint URL, API format, and API key variable) saved to your [user configuration](../../providers/custom/index.md#global-providers-user-configuration) so its models work everywhere via `--model <name>/<model>`. Ends with the exact command to start chatting. Secret values are never printed.
+Set up a model interactively. Three paths: pick a cloud provider, paste its API key, and store it in the Docker Agent env file `~/.config/cagent/.env`; check Docker Model Runner and pull a local model (no API key needed); or register a custom OpenAI-compatible provider (endpoint URL, API format, and API key variable) saved to your [user configuration](../../providers/custom/index.md#global-providers-user-configuration) so its models work everywhere via `--model <name>/<model>`. Ends with the exact command to start chatting. Secret values are never printed.
 
 The wizard is also offered automatically when an interactive run finds no usable model (decline-able; set `DOCKER_AGENT_NO_SETUP=1` to suppress the offer).
 
@@ -239,7 +239,7 @@ $ docker agent setup
 
 ### `docker agent doctor`
 
-Diagnose the model and credential setup. Reports which model providers have credentials and where each credential comes from (shell environment, env file, pass, keychain, …), whether Docker Model Runner is reachable and which models are pulled, and which model the `auto` selection would pick. Secret values are never printed. Exits with a non-zero status when an issue would prevent an agent from running, which makes it usable in scripts and CI.
+Diagnose the model and credential setup. Reports which model providers have credentials and where each credential comes from (shell environment, env file, Docker Desktop, …), whether Docker Model Runner is reachable and which models are pulled, and which model the `auto` selection would pick. Secret values are never printed. Exits with a non-zero status when an issue would prevent an agent from running, which makes it usable in scripts and CI.
 
 ```bash
 $ docker agent doctor [agent-file|registry-ref] [flags]

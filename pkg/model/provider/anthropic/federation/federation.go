@@ -132,7 +132,7 @@ func fileSource(path string) option.IdentityTokenFunc {
 
 // envSource reads the token through the runtime [environment.Provider], so
 // docker-agent's secret-provider chain (run secrets, credential helpers,
-// keychain, ...) all work out of the box.
+// Docker Desktop, ...) all work out of the box.
 func envSource(name string, env environment.Provider) option.IdentityTokenFunc {
 	return func(ctx context.Context) (string, error) {
 		v, _ := env.Get(ctx, name)

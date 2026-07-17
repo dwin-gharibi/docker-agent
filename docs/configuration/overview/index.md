@@ -129,7 +129,7 @@ Models can be referenced inline or defined in the `models` section:
 
 ## Environment Variables
 
-API keys and secrets are read from environment variables — never stored in config files. See [Managing Secrets](../../guides/secrets/index.md) for all the ways to provide credentials (env files, Docker Compose secrets, macOS Keychain, `pass`):
+API keys and secrets are read from environment variables — never stored in config files. See [Managing Secrets](../../guides/secrets/index.md) for all the ways to provide credentials (env files, Docker Compose secrets, the Docker Agent env file):
 
 | Variable                   | Provider                                            |
 | -------------------------- | --------------------------------------------------- |

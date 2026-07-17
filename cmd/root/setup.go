@@ -53,7 +53,7 @@ type setupResult struct {
 }
 
 // setupWizard drives the interactive model setup. The function fields are
-// seams: production wiring talks to the terminal, the OS secret stores, and
+// seams: production wiring talks to the terminal, the secret stores, and
 // Docker Model Runner, while tests inject scripted answers and fakes.
 //
 // in is buffered once at construction: a fresh bufio.Reader per prompt would
@@ -78,18 +78,17 @@ func newSetupCmd() *cobra.Command {
 		Long: `Set up a model for docker agent, interactively.
 
 Three paths:
-  - Cloud provider: pick a provider, paste its API key, and choose where to
-    store it (OS keychain, pass, or the docker agent env file). Picking
-    chatgpt signs in with your ChatGPT account in the browser instead of
-    asking for an API key.
+  - Cloud provider: pick a provider, paste its API key, and store it in the
+    docker agent env file (~/.config/cagent/.env). Picking chatgpt signs in
+    with your ChatGPT account in the browser instead of asking for an API key.
   - Local model: check Docker Model Runner and pull a model. No API key needed.
   - OpenAI-compatible provider: register a custom endpoint (vLLM, LiteLLM,
     a corporate gateway, ...) with its API format and API key variable. The
     provider is saved to your user configuration and its models become
     usable everywhere via --model <name>/<model>.
 
-Ends with the exact command to start chatting. Secret values are stored where
-you choose and never printed. Check the result anytime with 'docker agent doctor'.`,
+Ends with the exact command to start chatting. Secret values are never
+printed. Check the result anytime with 'docker agent doctor'.`,
 		Example:      `  docker-agent setup`,
 		GroupID:      "core",
 		Args:         cobra.NoArgs,
@@ -181,7 +180,7 @@ func (w *setupWizard) run(ctx context.Context) (*setupResult, error) {
 }
 
 // setupCloudProvider walks the cloud path: pick a provider, paste its key,
-// pick a store, and persist the key there.
+// and persist it in a secret store.
 func (w *setupWizard) setupCloudProvider(ctx context.Context) (*setupResult, error) {
 	providers := config.CloudProviderEnvVars()
 
@@ -247,24 +246,30 @@ func (w *setupWizard) promptSecret(ctx context.Context, prompt string) (string, 
 	}
 }
 
-// storeSecret asks where to store the key and persists it, re-asking when a
-// store fails (e.g. an uninitialized pass store) so the pasted key is not
-// lost to a storage hiccup.
+// storeSecret persists the key in a secret store. When several stores are
+// available it asks which one to use, re-asking when a store fails so the
+// pasted key is not lost to a storage hiccup.
 func (w *setupWizard) storeSecret(ctx context.Context, envVar, key string) error {
 	for {
-		fmt.Fprintln(w.out)
-		fmt.Fprintf(w.out, "Where should %s be stored?\n", envVar)
-		for i, store := range w.stores {
-			fmt.Fprintf(w.out, "  %d. %s\n", i+1, store.Description())
-		}
+		store := w.stores[0]
+		if len(w.stores) > 1 {
+			fmt.Fprintln(w.out)
+			fmt.Fprintf(w.out, "Where should %s be stored?\n", envVar)
+			for i, s := range w.stores {
+				fmt.Fprintf(w.out, "  %d. %s\n", i+1, s.Description())
+			}
 
-		choice, err := w.promptChoice(ctx, len(w.stores), 1)
-		if err != nil {
-			return err
+			choice, err := w.promptChoice(ctx, len(w.stores), 1)
+			if err != nil {
+				return err
+			}
+			store = w.stores[choice-1]
 		}
-		store := w.stores[choice-1]
 
 		if err := store.Store(ctx, envVar, key); err != nil {
+			if len(w.stores) == 1 {
+				return fmt.Errorf("storing the key: %w", err)
+			}
 			fmt.Fprintf(w.out, "Could not store the key: %v\nPick another location, or press Ctrl+C to cancel.\n", err)
 			continue
 		}
@@ -654,9 +659,8 @@ func (f *runExecFlags) offerSetupOnNoModel(ctx context.Context, cmd *cobra.Comma
 	}
 
 	// The run's env provider chain was built before the wizard stored the key,
-	// so bridge it into the process environment for the retry. Keychain and
-	// pass lookups are live either way; the config env file is not, when it
-	// did not exist at chain construction.
+	// so bridge it into the process environment for the retry: the config env
+	// file is not live when it did not exist at chain construction.
 	if result.EnvVar != "" {
 		if err := os.Setenv(result.EnvVar, result.Value); err != nil {
 			slog.WarnContext(ctx, "Failed to export the stored key for the retry", "env_var", result.EnvVar, "error", err)
