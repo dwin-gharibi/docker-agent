@@ -32,7 +32,7 @@ agents:
     add_prompt_files: [list] # Optional: include additional prompt files
     add_description_parameter: bool # Optional: add description to tool schema
     redact_secrets: boolean # Optional: scrub detected secrets out of tool args, outgoing chat messages, and tool output
-    code_mode_tools: boolean # Optional: enable code mode tool format
+    code_mode_tools: boolean # Optional: let the agent write JavaScript to orchestrate tool calls (see Code Mode)
     max_iterations: int # Optional: max tool-calling loops
     max_consecutive_tool_calls: int # Optional: max identical consecutive tool calls
     max_old_tool_call_tokens: int # Optional: token budget for old tool call content (disabled unless positive)
@@ -96,7 +96,7 @@ agents:
 | `add_prompt_files`          | array   | ✗        | List of file paths whose contents are appended to the system prompt. Useful for including coding standards, guidelines, or additional context.                                |
 | `add_description_parameter` | boolean | ✗        | When `true`, adds agent descriptions as a parameter in tool schemas. Helps with tool selection in multi-agent scenarios.                                                      |
 | `redact_secrets`            | boolean | ✗        | When `true`, scrubs detected secrets (API keys, tokens, private keys, etc.) out of tool-call arguments, outgoing chat messages, and tool output before they reach a tool, the model, or downstream consumers. See [Redacting Secrets](#redacting-secrets) below.   |
-| `code_mode_tools`           | boolean | ✗        | When `true`, formats tool responses in a code-optimized format with structured output schemas. Useful for MCP gateway and programmatic access.                                |
+| `code_mode_tools`           | boolean | ✗        | When `true`, replaces the agent's individual tools with a single tool that runs a JavaScript script calling as many of them as needed in one turn. See [Code Mode](../../features/code-mode/index.md). |
 | `max_iterations`            | int     | ✗        | Maximum number of tool-calling loops. Default: unlimited (0). Set this to prevent infinite loops.                                                                             |
 | `max_consecutive_tool_calls` | int     | ✗        | Maximum consecutive identical tool calls before the agent is terminated, preventing degenerate loops. Default: `5`.                                                          |
 | `max_old_tool_call_tokens`  | int     | ✗        | Maximum number of tokens to keep from old tool call arguments and results. Older tool calls beyond this budget have their content replaced with a placeholder, saving context space. Tokens are approximated as `len/4`. Truncation is disabled by default; set a positive value to enable it. Set to `-1` to disable truncation (unlimited). |
