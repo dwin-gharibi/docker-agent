@@ -125,16 +125,17 @@ type Model interface {
 
 // renderedItem represents a cached rendered message with position information
 type renderedItem struct {
-	view   string   // Cached rendered content
-	lines  []string // Pre-split lines (avoids re-splitting on every rebuild)
+	lines  []string // Pre-split rendered lines (shared with the joined renderedLines slice)
 	height int      // Height in lines
 }
 
-// renderedItemsCacheSize bounds the number of message renderings cached in
-// memory. Each entry can hold large strings (e.g. big tool results), so an
-// unbounded cache grows linearly with session length and message size. When
-// the cap is exceeded, the least recently rendered entry is evicted and will
-// be re-rendered on demand.
+// renderedItemsCacheSize is the initial bound on the number of message
+// renderings cached in memory. The cache is grown to cover every item in the
+// session before each full rebuild (see ensureAllItemsRendered): a cache
+// smaller than the item count would miss on every entry of the sequential
+// rebuild scan, re-parsing all markdown from scratch on each invalidation.
+// Entry lines are shared with renderedLines, which already retains the whole
+// rendered session, so growing the cache adds no meaningful memory.
 const renderedItemsCacheSize = 500
 
 // blockIDCounter generates unique IDs for reasoning blocks.
@@ -1120,7 +1121,13 @@ func (m *model) shouldCacheMessage(index int) bool {
 	case types.MessageTypeAssistant:
 		return strings.Trim(msg.Content, "\r\n\t ") != ""
 	case types.MessageTypeAssistantReasoningBlock:
-		// Don't cache reasoning blocks - they can have spinners for in-progress tools
+		// Cacheable once spinners/fades have settled. Content mutations go
+		// through invalidateItem, which drops any stale entry.
+		if index < len(m.views) {
+			if block, ok := m.views[index].(*reasoningblock.Model); ok {
+				return !block.NeedsTick()
+			}
+		}
 		return false
 	case types.MessageTypeUser:
 		return true
@@ -1137,7 +1144,7 @@ func (m *model) renderItem(index int, view layout.Model) renderedItem {
 		if rendered != "" {
 			lines = strings.Split(strings.TrimSuffix(rendered, "\n"), "\n")
 		}
-		return renderedItem{view: rendered, lines: lines, height: len(lines)}
+		return renderedItem{lines: lines, height: len(lines)}
 	}
 
 	isSelected := m.focused && index == m.selectedMessageIndex
@@ -1164,7 +1171,7 @@ func (m *model) renderItem(index int, view layout.Model) renderedItem {
 		lines = strings.Split(strings.TrimSuffix(rendered, "\n"), "\n")
 	}
 
-	item := renderedItem{view: rendered, lines: lines, height: len(lines)}
+	item := renderedItem{lines: lines, height: len(lines)}
 
 	if shouldCache {
 		m.renderedItems.Put(index, item)
@@ -1236,6 +1243,10 @@ func (m *model) ensureAllItemsRendered() {
 		return
 	}
 
+	// A cache smaller than the item count would evict every entry during the
+	// sequential scan below, making each rebuild a full re-render.
+	m.renderedItems.EnsureCapacity(len(m.views))
+
 	if len(m.views) == 0 {
 		m.renderedLines = nil
 		m.totalHeight = 0
@@ -1269,9 +1280,10 @@ func (m *model) ensureAllItemsRendered() {
 }
 
 func (m *model) invalidateItem(index int) {
-	if m.shouldCacheMessage(index) {
-		m.renderedItems.Delete(index)
-	}
+	// Delete unconditionally: cacheability is state-dependent (e.g. a settled
+	// reasoning block becomes animated again), so gating the delete on
+	// shouldCacheMessage could leave a stale entry behind.
+	m.renderedItems.Delete(index)
 	m.renderDirty = true
 }
 
