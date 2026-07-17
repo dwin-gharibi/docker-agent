@@ -38,7 +38,7 @@ func TestScenario_SecondRoundCompaction_PartitionIsExact(t *testing.T) {
 	}
 	sess := session.New(session.WithMessages(items))
 
-	messages, sessIndices, _ := gatherCompactionInput(sess)
+	messages, sessIndices, _ := sess.CompactionInput()
 	// synthetic summary(->4), m2(->2), m3(->3), m5..m8(->5..8)
 	require.Equal(t, []int{4, 2, 3, 5, 6, 7, 8}, sessIndices)
 	require.Contains(t, messages[0].Content, "Session Summary: old summary")
@@ -54,7 +54,7 @@ func TestScenario_SecondRoundCompaction_PartitionIsExact(t *testing.T) {
 
 	// Reconstruct what the next prompt will contain via a third
 	// CompactionInput round (mirrors buildSessionSummaryMessages).
-	after, afterIdx, _ := gatherCompactionInput(sess)
+	after, afterIdx, _ := sess.CompactionInput()
 	require.Contains(t, after[0].Content, "Session Summary: new summary")
 
 	// Every original message must be either folded (index < firstKept in
@@ -112,7 +112,7 @@ func TestScenario_MessagesAppendedDuringCompactionAreKept(t *testing.T) {
 	sess.AddMessage(&session.Message{Message: chat.Message{Role: chat.MessageRoleUser, Content: "raced steer"}})
 	sess.ApplyCompaction(10, 0, session.Item{Summary: "sum", FirstKeptEntry: firstKept})
 
-	msgs, _, _ := gatherCompactionInput(sess)
+	msgs, _, _ := sess.CompactionInput()
 	require.Len(t, msgs, 2, "summary + raced message")
 	assert.Contains(t, msgs[0].Content, "Session Summary: sum")
 	assert.Equal(t, "raced steer", msgs[1].Content, "the raced message must be preserved verbatim")

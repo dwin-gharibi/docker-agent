@@ -439,14 +439,7 @@ func (c *Client) convertMessagesWithDeferred(ctx context.Context, messages []cha
 		}
 	}
 
-	// Anthropic allows at most 4 cache_control breakpoints per request.
-	// Deferred tools consume one on the tool list, so keep a single message
-	// breakpoint in that case.
-	breakpoints := 2
-	if containsDeferredTool(requestTools) {
-		breakpoints = 1
-	}
-	applyMessageCacheControl(anthropicMessages, breakpoints)
+	applyMessageCacheControl(anthropicMessages, messageCacheBreakpoints(requestTools))
 
 	return anthropicMessages, nil
 }
@@ -627,66 +620,6 @@ func (c *Client) convertUserMultiContent(ctx context.Context, parts []chat.Messa
 	}
 
 	return contentBlocks, nil
-}
-
-// applyMessageCacheControl adds ephemeral cache control to the last content block
-// of the last `breakpoints` messages for prompt caching.
-func applyMessageCacheControl(messages []anthropic.MessageParam, breakpoints int) {
-	for i := len(messages) - 1; i >= 0 && i >= len(messages)-breakpoints; i-- {
-		msg := &messages[i]
-		if len(msg.Content) == 0 {
-			continue
-		}
-		lastIdx := len(msg.Content) - 1
-		block := &msg.Content[lastIdx]
-		cacheCtrl := anthropic.NewCacheControlEphemeralParam()
-		switch {
-		case block.OfText != nil:
-			block.OfText.CacheControl = cacheCtrl
-		case block.OfToolUse != nil:
-			block.OfToolUse.CacheControl = cacheCtrl
-		case block.OfToolResult != nil:
-			block.OfToolResult.CacheControl = cacheCtrl
-		case block.OfImage != nil:
-			block.OfImage.CacheControl = cacheCtrl
-		case block.OfDocument != nil:
-			block.OfDocument.CacheControl = cacheCtrl
-		}
-	}
-}
-
-// extractSystemBlocks converts any system-role messages into Anthropic system text blocks
-// to be set on the top-level MessageNewParams.System field.
-func extractSystemBlocks(messages []chat.Message) []anthropic.TextBlockParam {
-	var systemBlocks []anthropic.TextBlockParam
-	for i := range messages {
-		msg := &messages[i]
-		if msg.Role != chat.MessageRoleSystem {
-			continue
-		}
-
-		if len(msg.MultiContent) > 0 {
-			for _, part := range msg.MultiContent {
-				if part.Type == chat.MessagePartTypeText {
-					if txt := strings.TrimSpace(part.Text); txt != "" {
-						systemBlocks = append(systemBlocks, anthropic.TextBlockParam{Text: txt})
-					}
-				}
-			}
-		} else if txt := strings.TrimSpace(msg.Content); txt != "" {
-			// Trim system-message content: YAML literal blocks (instruction: |) always
-			// append a trailing newline, and we don't want that in API payloads.
-			systemBlocks = append(systemBlocks, anthropic.TextBlockParam{
-				Text: txt,
-			})
-		}
-
-		if msg.CacheControl && len(systemBlocks) > 0 {
-			systemBlocks[len(systemBlocks)-1].CacheControl = anthropic.NewCacheControlEphemeralParam()
-		}
-	}
-
-	return systemBlocks
 }
 
 func (c *Client) supportsDeferredTools() bool {

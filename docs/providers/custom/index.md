@@ -156,7 +156,7 @@ Only applicable for OpenAI-compatible providers (when `provider` is `openai` or 
 - **`openai_chatcompletions`** — Standard OpenAI Chat Completions API. Works with most OpenAI-compatible endpoints.
 - **`openai_responses`** — OpenAI Responses API. For newer models that require the Responses API format.
 
-> If `api_type` is not set, docker-agent automatically selects the API type based on the model name. You only need to set `api_type` explicitly to override the detected default.
+> If `api_type` is not set, Docker Agent automatically selects the API type based on the model name. You only need to set `api_type` explicitly to override the detected default.
 
 ## Examples
 

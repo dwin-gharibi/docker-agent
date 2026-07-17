@@ -21,7 +21,7 @@ import (
 
 // withDoctorTestEnv wires a hermetic doctor command: a map-backed secret
 // source chain, a stubbed DMR lister, and an empty user config, so tests
-// never exec `pass`/`security`/`docker model` and never read the developer's
+// never exec `docker model` or credential helpers and never read the developer's
 // real configuration.
 func withDoctorTestEnv(env map[string]string, dmrModels []string, dmrErr error) doctorCmdOption {
 	return func(f *doctorFlags) {

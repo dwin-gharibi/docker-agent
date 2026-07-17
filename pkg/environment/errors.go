@@ -65,10 +65,9 @@ func (e *RequiredEnvError) Error() string {
 func SecretSourcesHelp(exampleVar string) string {
 	var b strings.Builder
 	b.WriteString("Provide them using any of these sources:\n")
-	fmt.Fprintf(&b, " - Shell environment:  export %s=<value>\n", exampleVar)
-	b.WriteString(" - Env file:           docker agent run --env-from-file <file> ...\n")
-	fmt.Fprintf(&b, " - pass:               pass insert %s\n", exampleVar)
-	fmt.Fprintf(&b, " - macOS Keychain:     security add-generic-password -a \"$USER\" -s %s -w\n", exampleVar)
+	fmt.Fprintf(&b, " - Shell environment:      export %s=<value>\n", exampleVar)
+	b.WriteString(" - Env file:               docker agent run --env-from-file <file> ...\n")
+	b.WriteString(" - Docker Agent env file:  docker agent setup (stores the key in ~/.config/cagent/.env)\n")
 	fmt.Fprintf(&b, "\nSee %s for details.\n", SecretsDocsURL)
 	return b.String()
 }

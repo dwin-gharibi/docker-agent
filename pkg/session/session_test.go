@@ -224,6 +224,22 @@ func TestGetMessages_Instructions(t *testing.T) {
 	assert.True(t, messages[0].CacheControl)
 }
 
+func TestAddMessage_StripsCacheControl(t *testing.T) {
+	t.Parallel()
+
+	// CacheControl is request-assembly state; transcripts must never
+	// carry it (e.g. a mark echoed back by an API client), or it would
+	// resurface on every future prompt assembly.
+	s := New()
+	s.AddMessage(&Message{Message: chat.Message{
+		Role:         chat.MessageRoleUser,
+		Content:      "hello",
+		CacheControl: true,
+	}})
+
+	assert.False(t, s.Messages[0].Message.Message.CacheControl)
+}
+
 func TestGetMessages_CacheControl(t *testing.T) {
 	t.Parallel()
 

@@ -9,7 +9,7 @@ import (
 )
 
 // Source is a labeled secret source in the default provider chain. The name
-// identifies where a value comes from (e.g. "environment", "keychain") so
+// identifies where a value comes from (e.g. "environment", "docker-desktop") so
 // diagnostic commands like `docker agent doctor` can report it.
 type Source struct {
 	Name     string
@@ -19,7 +19,7 @@ type Source struct {
 // DefaultSources returns the ordered, labeled secret sources that make up the
 // default provider chain: OS env, run secrets, the docker agent env file
 // (<config dir>/.env, when present), credential helper (if configured),
-// Docker Desktop, pass, and keychain. Lookup precedence is the slice order.
+// and Docker Desktop. Lookup precedence is the slice order.
 //
 // When running inside a Docker sandbox (detected via SANDBOX_VM_ID), a
 // [SandboxTokenProvider] is prepended so that DOCKER_TOKEN is read from the
@@ -72,16 +72,6 @@ func DefaultSources() []Source {
 
 	// Docker Desktop provider comes after credential helper
 	sources = append(sources, Source{Name: "docker-desktop", Provider: NewDockerDesktopProvider()})
-
-	// Append pass provider at the end if available
-	if passProvider, err := NewPassProvider(); err == nil {
-		sources = append(sources, Source{Name: "pass", Provider: passProvider})
-	}
-
-	// Append keychain provider if available
-	if keychainProvider, err := NewKeychainProvider(); err == nil {
-		sources = append(sources, Source{Name: "keychain", Provider: keychainProvider})
-	}
 
 	return sources
 }

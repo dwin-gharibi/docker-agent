@@ -13,7 +13,7 @@ _Complete reference for configuring built-in tools, MCP tools, and Docker-based 
 
 ## Built-in Tools
 
-Built-in tools are included with docker-agent and require no external dependencies. Add them to your agent's `toolsets` list by `type`. Each tool's dedicated page covers its full configuration options, available operations, and examples.
+Built-in tools are included with Docker Agent and require no external dependencies. Add them to your agent's `toolsets` list by `type`. Each tool's dedicated page covers its full configuration options, available operations, and examples.
 
 | Type | Description | Page |
 | --- | --- | --- |
@@ -133,17 +133,17 @@ toolsets:
 | ----------------------- | ------- | --------------------------------------------------------------------------------------------------------------------- |
 | `remote.url`            | string  | URL of the MCP server. Accepts `https://`, `http://`, and `unix://` (Unix domain socket) schemes.                     |
 | `remote.transport_type` | string  | `streamable` or `sse`                                                                                                 |
-| `remote.headers`        | object  | HTTP headers sent on every request. Values support `${env.VAR}` and `${headers.NAME}` placeholders, resolved per request. `${env.VAR}` reads an environment variable; `${headers.NAME}` forwards a header from the caller's incoming request (useful when docker-agent runs as an API server). |
+| `remote.headers`        | object  | HTTP headers sent on every request. Values support `${env.VAR}` and `${headers.NAME}` placeholders, resolved per request. `${env.VAR}` reads an environment variable; `${headers.NAME}` forwards a header from the caller's incoming request (useful when Docker Agent runs as an API server). |
 | `allow_private_ips`     | boolean | Permit remote MCP OAuth helper requests to dial non-public IP addresses. Use only for trusted internal servers.        |
 
 ## Auto-Installing Tools
 
-When configuring MCP or LSP tools that require a binary command, docker agent can **automatically download and install** the command if it's not already available on your system. This uses the [aqua registry](https://github.com/aquaproj/aqua-registry) — a curated index of CLI tool packages.
+When configuring MCP or LSP tools that require a binary command, Docker Agent can **automatically download and install** the command if it's not already available on your system. This uses the [aqua registry](https://github.com/aquaproj/aqua-registry) — a curated index of CLI tool packages.
 
 ### How It Works
 
-1. When a toolset with a `command` is loaded, docker agent checks if the command is available in your `PATH`
-2. If not found, it checks the docker agent tools directory (`~/.cagent/tools/bin/`)
+1. When a toolset with a `command` is loaded, Docker Agent checks if the command is available in your `PATH`
+2. If not found, it checks the Docker Agent tools directory (`~/.cagent/tools/bin/`)
 3. If still not found, it looks up the command in the aqua registry and installs it automatically
 
 ### Explicit Package Reference
@@ -166,7 +166,7 @@ The format is `owner/repo` or `owner/repo@version`. When a version is omitted, t
 
 ### Automatic Detection
 
-If the `version` property is not set, docker agent tries to auto-detect the package from the command name by searching the aqua registry:
+If the `version` property is not set, Docker Agent tries to auto-detect the package from the command name by searching the aqua registry:
 
 ```yaml
 toolsets:
@@ -225,7 +225,7 @@ The simplest knob is `profile`, which picks a preset:
 
 | Profile | Auto-restart | Use case |
 | --- | --- | --- |
-| `resilient` | Yes | Default. Exponential backoff on disconnect; the agent keeps running if the toolset is unavailable. Matches the historical docker-agent behaviour. |
+| `resilient` | Yes | Default. Exponential backoff on disconnect; the agent keeps running if the toolset is unavailable. Matches the historical Docker Agent behaviour. |
 | `strict` | No | Fail-fast. Marks the toolset as required. Intended for CI / headless runs where a missing dependency should be a hard error. |
 | `best-effort` | No | Single attempt, no retries. Good for experimental MCPs whose flakiness should not amplify into a restart loop. |
 

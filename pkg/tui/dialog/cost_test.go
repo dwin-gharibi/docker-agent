@@ -697,3 +697,40 @@ func TestFormatDuration(t *testing.T) {
 		assert.Equal(t, tt.expected, result, "formatDuration(%v)", tt.d)
 	}
 }
+
+func TestCostDialogRefreshesOnLiveSessionUpdates(t *testing.T) {
+	t.Parallel()
+
+	sess := session.New()
+	sess.AddMessage(&session.Message{
+		AgentName: "root",
+		Message: chat.Message{
+			Role:    chat.MessageRoleAssistant,
+			Content: "Hello",
+			Model:   "gpt-4o",
+			Usage:   &chat.Usage{InputTokens: 1000, OutputTokens: 500},
+			Cost:    0.005,
+		},
+	})
+
+	dialog := NewCostDialog(sess)
+	dialog.SetSize(100, 50)
+	view := dialog.View()
+	assert.Contains(t, view, "#1")
+	assert.NotContains(t, view, "#2")
+
+	// A message streamed in while the dialog is open must show up.
+	sess.AddMessage(&session.Message{
+		AgentName: "root",
+		Message: chat.Message{
+			Role:    chat.MessageRoleAssistant,
+			Content: "World",
+			Model:   "gpt-4o",
+			Usage:   &chat.Usage{InputTokens: 800, OutputTokens: 300},
+			Cost:    0.003,
+		},
+	})
+
+	view = dialog.View()
+	assert.Contains(t, view, "#2")
+}

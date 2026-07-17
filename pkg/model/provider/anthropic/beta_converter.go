@@ -137,14 +137,7 @@ func (c *Client) convertBetaMessagesWithDeferred(ctx context.Context, messages [
 		}
 	}
 
-	// Anthropic allows at most 4 cache_control breakpoints per request.
-	// Deferred tools consume one on the tool list, so keep a single message
-	// breakpoint in that case.
-	breakpoints := 2
-	if containsDeferredTool(requestTools) {
-		breakpoints = 1
-	}
-	applyBetaMessageCacheControl(betaMessages, breakpoints)
+	applyBetaMessageCacheControl(betaMessages, messageCacheBreakpoints(requestTools))
 
 	return betaMessages, nil
 }
@@ -329,26 +322,6 @@ func (c *Client) convertBetaUserMultiContent(ctx context.Context, parts []chat.M
 	return contentBlocks, nil
 }
 
-// extractBetaSystemBlocks extracts system messages for Beta API format
-func extractBetaSystemBlocks(messages []chat.Message) []anthropic.BetaTextBlockParam {
-	regularBlocks := extractSystemBlocks(messages)
-
-	betaBlocks := make([]anthropic.BetaTextBlockParam, len(regularBlocks))
-	for i, block := range regularBlocks {
-		betaBlocks[i] = anthropic.BetaTextBlockParam{Text: block.Text}
-
-		// Copy over cache control from regular blocks (already set on first 2)
-		if block.CacheControl.Type != "" {
-			betaBlocks[i].CacheControl = anthropic.BetaCacheControlEphemeralParam{
-				Type: block.CacheControl.Type,
-				TTL:  anthropic.BetaCacheControlEphemeralTTL(block.CacheControl.TTL),
-			}
-		}
-	}
-
-	return betaBlocks
-}
-
 // convertBetaTools converts tools to Beta API format
 func convertBetaTools(t []tools.Tool) ([]anthropic.BetaToolUnionParam, error) {
 	hasDeferredTools := containsDeferredTool(t)
@@ -383,32 +356,6 @@ func convertBetaTools(t []tools.Tool) ([]anthropic.BetaToolUnionParam, error) {
 	}
 
 	return betaTools, nil
-}
-
-// applyBetaMessageCacheControl adds ephemeral cache control to the last content block
-// of the last `breakpoints` messages for prompt caching.
-func applyBetaMessageCacheControl(messages []anthropic.BetaMessageParam, breakpoints int) {
-	for i := len(messages) - 1; i >= 0 && i >= len(messages)-breakpoints; i-- {
-		msg := &messages[i]
-		if len(msg.Content) == 0 {
-			continue
-		}
-		lastIdx := len(msg.Content) - 1
-		block := &msg.Content[lastIdx]
-		cacheCtrl := anthropic.NewBetaCacheControlEphemeralParam()
-		switch {
-		case block.OfText != nil:
-			block.OfText.CacheControl = cacheCtrl
-		case block.OfToolUse != nil:
-			block.OfToolUse.CacheControl = cacheCtrl
-		case block.OfToolResult != nil:
-			block.OfToolResult.CacheControl = cacheCtrl
-		case block.OfImage != nil:
-			block.OfImage.CacheControl = cacheCtrl
-		case block.OfDocument != nil:
-			block.OfDocument.CacheControl = cacheCtrl
-		}
-	}
 }
 
 // stdBlocksToBeta converts standard Anthropic SDK content blocks to their Beta

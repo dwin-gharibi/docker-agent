@@ -20,9 +20,9 @@ func TestFastRendererRendersMermaidFlowchartInline(t *testing.T) {
 	assert.Contains(t, plain, "Build image")
 	assert.Contains(t, plain, "Publish")
 	assert.Contains(t, plain, "success")
-	assert.Contains(t, plain, "│ success")
-	assert.Contains(t, plain, "▼")
-	assert.Contains(t, plain, "│ Build image │")
+	assert.Contains(t, plain, "▶")
+	assert.Contains(t, plain, "Build image")
+	assert.Contains(t, plain, "◇ Publish ◇")
 	assert.NotContains(t, plain, "flowchart LR")
 	assert.Empty(t, blocks, "rendered diagrams are not source-code copy targets")
 }
@@ -37,7 +37,7 @@ func TestFastRendererKeepsDeclaredNodeLabelsAndUsesCompactBoxes(t *testing.T) {
 	assert.NotContains(t, plain, "│ B │")
 	for line := range strings.SplitSeq(plain, "\n") {
 		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "┌") {
+		if strings.HasPrefix(trimmed, "╭") {
 			assert.Less(t, len([]rune(trimmed)), 60, "nodes should use their content width, not half the viewport")
 		}
 	}
@@ -74,7 +74,7 @@ func TestMermaidFlowchartCentersParentAndSplitsBranches(t *testing.T) {
 	right := strings.Index(lines[len(lines)-2], "Right branch")
 	assert.Less(t, left, root)
 	assert.Greater(t, right, root)
-	assert.Contains(t, diagram, "┌")
+	assert.Contains(t, diagram, "╭")
 	assert.Contains(t, diagram, "┴")
 	assert.Contains(t, diagram, "yes")
 	assert.Contains(t, diagram, "no")

@@ -103,7 +103,8 @@ func TestUpsertEnvLine(t *testing.T) {
 }
 
 func TestSecretStores_AlwaysEndsWithConfigEnvFile(t *testing.T) {
-	// Not parallel: probes the local system for optional binaries.
+	t.Parallel()
+
 	stores := SecretStores()
 
 	require.NotEmpty(t, stores)
@@ -121,12 +122,4 @@ func TestSecretStores_AlwaysEndsWithConfigEnvFile(t *testing.T) {
 	for _, store := range stores {
 		assert.True(t, sourceNames[store.Name()], "store %q has no matching default source", store.Name())
 	}
-}
-
-func TestSecurityQuote(t *testing.T) {
-	t.Parallel()
-
-	assert.Equal(t, `"plain"`, securityQuote("plain"))
-	assert.Equal(t, `"with space"`, securityQuote("with space"))
-	assert.Equal(t, `"va\"l\\ue"`, securityQuote(`va"l\ue`))
 }

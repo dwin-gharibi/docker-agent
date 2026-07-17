@@ -122,6 +122,8 @@
       url: /features/snapshots/
     - title: Kanban Board
       url: /features/board/
+    - title: Sessions
+      url: /features/sessions/
     - title: CLI Reference
       url: /features/cli/
     - title: MCP Mode
@@ -140,6 +142,8 @@
       url: /features/evaluation/
     - title: Skills
       url: /features/skills/
+    - title: Code Mode
+      url: /features/code-mode/
     - title: Remote MCP Servers
       url: /features/remote-mcp/
 
@@ -220,6 +224,8 @@
           url: /guides/go-sdk/
         - title: Managing Context & Compaction
           url: /guides/compaction/
+        - title: Running Agents Headless & in CI
+          url: /guides/headless/
     - label: Community
       items:
         - title: Contributing

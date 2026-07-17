@@ -19,6 +19,7 @@ import (
 	"github.com/docker/docker-agent/pkg/tui/components/toolcommon"
 	"github.com/docker/docker-agent/pkg/tui/core"
 	"github.com/docker/docker-agent/pkg/tui/core/layout"
+	"github.com/docker/docker-agent/pkg/tui/messages"
 	"github.com/docker/docker-agent/pkg/tui/styles"
 )
 
@@ -32,6 +33,24 @@ type costDialog struct {
 	session    *session.Session
 	keyMap     costDialogKeyMap
 	scrollview *scrollview.Model
+
+	// cachedLines holds the rendered content for cacheKey. Rebuilding it
+	// walks the whole session and restyles every line — far too slow to
+	// repeat every frame while scrolling large sessions. The key is a cheap
+	// fingerprint (width + item count + tokens/cost) so live updates from a
+	// running stream still refresh the view; theme changes clear the cache
+	// explicitly since they don't alter the fingerprint.
+	cachedLines []string
+	cachedKey   costCacheKey
+}
+
+// costCacheKey fingerprints the inputs of buildLines. Comparable so a
+// per-frame equality check can decide whether the cached lines are current.
+type costCacheKey struct {
+	width                     int
+	itemCount                 int
+	inputTokens, outputTokens int64
+	totalCost                 float64
 }
 
 type costDialogKeyMap struct {
@@ -62,6 +81,9 @@ func (d *costDialog) Update(msg tea.Msg) (layout.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		cmd := d.SetSize(msg.Width, msg.Height)
 		return d, cmd
+	case messages.ThemeChangedMsg:
+		d.cachedLines = nil // cached lines carry already-styled ANSI output
+		return d, nil
 	case tea.KeyPressMsg:
 		switch {
 		case key.Matches(msg, d.keyMap.Close):
@@ -299,6 +321,29 @@ func (d *costDialog) gatherCostData() costData {
 // ---------------------------------------------------------------------------
 
 func (d *costDialog) renderContent(contentWidth, maxHeight int) string {
+	if k := d.cacheKey(contentWidth); d.cachedLines == nil || d.cachedKey != k {
+		d.cachedLines = d.buildLines(contentWidth)
+		d.cachedKey = k
+	}
+	return d.applyScrolling(d.cachedLines, contentWidth, maxHeight)
+}
+
+// cacheKey snapshots the session state that buildLines depends on. TotalCost
+// walks all items (O(n) without rendering, a few µs even on huge sessions)
+// and catches cost changes that don't touch the parent's counters, e.g. a
+// live sub-session or a compaction item.
+func (d *costDialog) cacheKey(contentWidth int) costCacheKey {
+	input, output := d.session.Usage()
+	return costCacheKey{
+		width:        contentWidth,
+		itemCount:    d.session.ItemCount(),
+		inputTokens:  input,
+		outputTokens: output,
+		totalCost:    d.session.TotalCost(),
+	}
+}
+
+func (d *costDialog) buildLines(contentWidth int) []string {
 	data := d.gatherCostData()
 
 	// Header
@@ -351,7 +396,7 @@ func (d *costDialog) renderContent(contentWidth, maxHeight int) string {
 		lines = append(lines, styles.MutedStyle.Render("Per-message breakdown not available for this session."), "")
 	}
 
-	return d.applyScrolling(lines, contentWidth, maxHeight)
+	return lines
 }
 
 // headerMeta returns the duration/message-count line, or "" if empty.

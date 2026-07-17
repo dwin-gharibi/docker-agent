@@ -667,6 +667,11 @@ func (s *Session) AddMessage(msg *Message) int {
 	defer s.mu.Unlock()
 	if msg != nil {
 		capToolResultContent(&msg.Message, s.MaxToolResultTokens)
+		// Transcripts never carry cache checkpoint marks: CacheControl is
+		// request-assembly state (see chat.Message.CacheControl); a mark
+		// slipping in here (e.g. echoed back by an API client) would
+		// resurface on every future prompt assembly.
+		msg.Message.CacheControl = false
 	}
 	s.Messages = append(s.Messages, NewMessageItem(msg))
 	return len(s.Messages) - 1
@@ -1749,6 +1754,14 @@ func (s *Session) CompactionInput() ([]chat.Message, []int, int) {
 		if msg.Role == chat.MessageRoleSystem {
 			continue
 		}
+		// Clear per-request bookkeeping on the copy: callers feed these
+		// messages into a new LLM request, so per-message Cost (already
+		// folded into the session totals) would double-count, and
+		// CacheControl marks (request-assembly state that legacy persisted
+		// rows may still carry) would pin a provider cache checkpoint on
+		// the wrong request.
+		msg.Cost = 0
+		msg.CacheControl = false
 		messages = append(messages, msg)
 		sessIndices = append(sessIndices, i)
 	}

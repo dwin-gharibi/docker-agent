@@ -34,7 +34,7 @@ Mermaid blocks remain syntax-highlighted code blocks.
 | Feature | Parse | Render | Notes |
 |---|:---:|:---:|---|
 | `graph` and `flowchart` headers | ✅ | ✅ | Both are accepted |
-| `TD`, `TB`, `BT`, `LR`, `RL` direction | ✅ | ⚠️ | Retained in the parsed document; terminal rendering is currently top-down |
+| `TD`, `TB`, `BT`, `LR`, `RL` direction | ✅ | ✅ | Rendered in the declared direction |
 | Node declarations and references | ✅ | ✅ | Explicit and implicit nodes |
 | Quoted labels | ✅ | ✅ | Includes semicolons inside labels |
 | Chained edges | ✅ | ✅ | For example, `A --> B --> C` |
@@ -50,7 +50,7 @@ Mermaid blocks remain syntax-highlighted code blocks.
 | Decision nodes `{text}` | ✅ | ✅ | Marked distinctly with `◇` |
 | Hexagon nodes `{{text}}` | ✅ | ⚠️ | Parsed; currently rendered as a box |
 | Edge line and arrow styles | ⚠️ | ❌ | Accepted operators are normalized to terminal connectors |
-| `subgraph` | ⚠️ | ❌ | Directive is skipped; contained nodes may still render |
+| `subgraph` | ✅ | ✅ | Labeled and nested groups are rendered as containers |
 | `classDef`, `class`, `style` | ⚠️ | ❌ | Skipped |
 | `click` links | ⚠️ | ❌ | Skipped |
 | `linkStyle` | ⚠️ | ❌ | Skipped |

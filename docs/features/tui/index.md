@@ -1,15 +1,15 @@
 ---
 title: "Terminal UI (TUI)"
-description: "docker-agent's default interface is a rich, interactive terminal UI with file attachments, themes, session management, and more."
+description: "Docker Agent's default interface is a rich, interactive terminal UI with file attachments, themes, session management, and more."
 keywords: docker agent, ai agents, features, terminal ui (tui)
 linkTitle: "Terminal UI"
 weight: 10
 canonical: https://docs.docker.com/ai/docker-agent/features/tui/
 ---
 
-_docker-agent's default interface is a rich, interactive terminal UI with file attachments, themes, session management, and more._
+_Docker Agent's default interface is a rich, interactive terminal UI with file attachments, themes, session management, and more._
 
-![docker-agent TUI in action showing an interactive agent session](../../demo.gif)
+![Docker Agent TUI in action showing an interactive agent session](../../demo.gif)
 
 ## Launching the TUI
 
@@ -225,7 +225,7 @@ settings:
   snapshot: true
 ```
 
-When enabled, docker-agent records filesystem snapshots at turn boundaries. The TUI exposes two slash commands that operate on those snapshots:
+When enabled, Docker Agent records filesystem snapshots at turn boundaries. The TUI exposes two slash commands that operate on those snapshots:
 
 - **`/undo`** restores files from the most recent snapshot (one step back).
 - **`/snapshots`** opens a dialog showing how many snapshots have been captured and the number of files in each one. Use <kbd>↑</kbd>/<kbd>↓</kbd> (or <kbd>j</kbd>/<kbd>k</kbd>) to highlight an entry, then press <kbd>r</kbd> to reset the workspace to that point. Pick `<original>` to revert every snapshot and bring the workspace back to its pre-agent state. <kbd>Esc</kbd> closes the dialog without changing anything.
@@ -286,7 +286,7 @@ Each error message includes a clickable **↻ retry** button. Clicking it resume
 
 ## Session Management
 
-docker-agent automatically saves your sessions. Use `/sessions` to browse past conversations:
+Docker Agent automatically saves your sessions. Use `/sessions` to browse past conversations:
 
 - **Browse** past sessions with search and filtering
 - **Workspace grouping**: sessions started in the current directory are listed first under "This workspace", everything else under "Other locations" with its originating directory shown next to each entry; press <kbd>Ctrl</kbd>+<kbd>G</kbd> in the browser to cycle between all, current-directory only, and other-directory views. Restoring a session reopens it in its original directory, so the label always matches where a restore will land
@@ -297,7 +297,7 @@ docker-agent automatically saves your sessions. Use `/sessions` to browse past c
 
 ### Session Title Editing
 
-Customize session titles to make them more meaningful and easier to find. By default, docker-agent auto-generates titles based on your first message, but you can override or regenerate them at any time.
+Customize session titles to make them more meaningful and easier to find. By default, Docker Agent auto-generates titles based on your first message, but you can override or regenerate them at any time.
 
 **Using the `/title` command:**
 
@@ -450,7 +450,7 @@ settings:
   theme_light: default-light # optional, theme used on light backgrounds (default: default-light)
 ```
 
-At startup the terminal background is queried (OSC 11) to pick the dark or light theme of the pair; non-interactive runs (pipes, CI) fall back to the dark theme. In terminals that report appearance changes (DEC mode 2031 — Ghostty, kitty, contour, …), flipping the OS or terminal appearance while docker-agent is running switches the theme live. Terminals without that mode re-sync when the window regains focus.
+At startup the terminal background is queried (OSC 11) to pick the dark or light theme of the pair; non-interactive runs (pipes, CI) fall back to the dark theme. In terminals that report appearance changes (DEC mode 2031 — Ghostty, kitty, contour, …), flipping the OS or terminal appearance while Docker Agent is running switches the theme live. Terminals without that mode re-sync when the window regains focus.
 
 ### Custom Themes
 
@@ -519,7 +519,7 @@ settings:
 
 ## Tool Permissions
 
-When an agent calls a tool, docker-agent shows a confirmation dialog by default. You can:
+When an agent calls a tool, Docker Agent shows a confirmation dialog by default. You can:
 
 - **Approve once** — Allow this specific call
 - **Always allow** — Permanently approve this tool/command for the session

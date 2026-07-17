@@ -104,6 +104,13 @@ func (c *LRU[K, V]) Range(fn func(key K, value V) bool) {
 	}
 }
 
+// EnsureCapacity grows the cache to hold at least maxSize entries. Shrinking
+// is not supported: a smaller value than the current capacity is ignored.
+// Growing never evicts, so a cache sized to its working set cannot thrash.
+func (c *LRU[K, V]) EnsureCapacity(maxSize int) {
+	c.maxSize = max(c.maxSize, maxSize)
+}
+
 func entryOf[K comparable, V any](elem *list.Element) *entry[K, V] {
 	return elem.Value.(*entry[K, V])
 }

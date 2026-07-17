@@ -106,11 +106,14 @@ func TestDeferredToolsKeepSingleMessageCacheBreakpoint(t *testing.T) {
 }
 
 // Anthropic rejects requests with more than 4 cache_control blocks. Build the
-// worst-case request (2 system breakpoints from the session, deferred tools,
-// long conversation) and count breakpoints across system + tools + messages.
+// worst-case request (MORE system marks than the budget allows, deferred
+// tools, long conversation) and count breakpoints across system + tools +
+// messages. Without the provider-side cap, three session marks plus the
+// message-tail breakpoints would exceed the limit.
 func TestRequestStaysWithinCacheBreakpointLimit(t *testing.T) {
 	messages := []chat.Message{
 		{Role: chat.MessageRoleSystem, Content: "invariant instructions", CacheControl: true},
+		{Role: chat.MessageRoleSystem, Content: "instruction context", CacheControl: true},
 		{Role: chat.MessageRoleSystem, Content: "dynamic context", CacheControl: true},
 		{Role: chat.MessageRoleUser, Content: "first"},
 		{Role: chat.MessageRoleAssistant, Content: "second"},

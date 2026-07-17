@@ -552,6 +552,26 @@ func TestExtractSystemBlocksCacheControl(t *testing.T) {
 	assert.Empty(t, string(blocks[3].CacheControl.TTL))
 }
 
+func TestExtractSystemBlocks_CapsCacheBreakpoints(t *testing.T) {
+	t.Parallel()
+
+	// More upstream marks than the system-block budget: only the first
+	// maxSystemCacheBreakpoints are honored so the request can never
+	// exceed Anthropic's 4-breakpoint limit.
+	msgs := []chat.Message{
+		{Role: chat.MessageRoleSystem, Content: "invariant", CacheControl: true},
+		{Role: chat.MessageRoleSystem, Content: "instruction context", CacheControl: true},
+		{Role: chat.MessageRoleSystem, Content: "extras", CacheControl: true},
+	}
+
+	blocks := extractSystemBlocks(msgs)
+
+	require.Len(t, blocks, 3)
+	assert.Equal(t, "ephemeral", string(blocks[0].CacheControl.Type))
+	assert.Equal(t, "ephemeral", string(blocks[1].CacheControl.Type))
+	assert.Empty(t, string(blocks[2].CacheControl.Type))
+}
+
 func TestExtractSystemBlocks_EmptyContentWithCacheControl(t *testing.T) {
 	t.Parallel()
 

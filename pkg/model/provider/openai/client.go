@@ -92,7 +92,7 @@ func NewClient(ctx context.Context, cfg *latest.ModelConfig, env environment.Pro
 			// environment provider chain instead of letting the SDK read it
 			// from the OS environment. The chain resolves secret references
 			// (e.g. "op://..." via the 1Password CLI) and consults extra
-			// sources (keychain, Docker Desktop, ...); the SDK's os.Getenv
+			// sources (Docker Desktop, ...); the SDK's os.Getenv
 			// fallback would send the raw reference as the bearer token.
 			if authToken, _ := env.Get(ctx, "OPENAI_API_KEY"); authToken != "" {
 				clientOptions = append(clientOptions, option.WithAPIKey(authToken))

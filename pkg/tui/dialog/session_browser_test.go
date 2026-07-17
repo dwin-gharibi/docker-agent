@@ -462,6 +462,37 @@ func TestSessionBrowserWorkspaceFilterCombinesWithStarAndSearch(t *testing.T) {
 	require.NotEmpty(t, d.View())
 }
 
+func TestSessionBrowserSearchByID(t *testing.T) {
+	t.Parallel()
+	sessions := []session.Summary{
+		{ID: "abc-123-def", Title: "First session", CreatedAt: time.Now()},
+		{ID: "xyz-789", Title: "Second session", CreatedAt: time.Now()},
+	}
+
+	dialog := NewSessionBrowserDialog(sessions, "")
+	d := dialog.(*sessionBrowserDialog)
+	d.Init()
+	d.Update(tea.WindowSizeMsg{Width: 100, Height: 50})
+
+	tests := []struct {
+		query string
+		want  []string
+	}{
+		{"abc-123-def", []string{"abc-123-def"}},        // full ID
+		{"abc123def", []string{"abc-123-def"}},          // ID without dashes
+		{"c-123-d", []string{"abc-123-def"}},            // partial ID with dashes
+		{"c123d", []string{"abc-123-def"}},              // partial ID without dashes
+		{"ABC123", []string{"abc-123-def"}},             // case-insensitive
+		{"session", []string{"abc-123-def", "xyz-789"}}, // title match still works
+		{"nope", []string{}},
+	}
+	for _, tc := range tests {
+		d.textInput.SetValue(tc.query)
+		d.filterSessions()
+		require.Equal(t, tc.want, filteredIDs(d), "query %q", tc.query)
+	}
+}
+
 func TestSessionBrowserWorkspacePathNormalization(t *testing.T) {
 	t.Parallel()
 

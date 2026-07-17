@@ -53,7 +53,7 @@ func testCatalog() *modelsdev.Database {
 
 // withTestConfig injects a hermetic env provider and an in-memory models.dev
 // store into the models command. It keeps listing side-effect-free: without it
-// the real env provider chain shells out to the OS keychain / pass / 1Password
+// the real env provider chain consults Docker Desktop / 1Password
 // for every missing API key and the store fetches https://models.dev, making
 // the tests slow and non-parallelizable.
 func withTestConfig(env map[string]string) modelsCmdOption {

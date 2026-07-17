@@ -1,12 +1,273 @@
 package mermaid
 
 import (
+	"slices"
 	"strings"
 
-	"github.com/mattn/go-runewidth"
+	"github.com/charmbracelet/x/ansi"
 
 	mermaidparser "github.com/docker/docker-agent/pkg/mermaid"
 )
+
+func drawMermaidFlowchart(edges []mermaidparser.Edge, standalone []string, nodes map[string]string, direction string, width int, grouped ...bool) string {
+	groupGap := 0
+	if len(grouped) > 0 && grouped[0] {
+		groupGap = 4
+	}
+	switch strings.ToUpper(direction) {
+	case "LR":
+		return drawMermaidGraphHorizontal(edges, standalone, nodes, width, groupGap)
+	case "RL":
+		return flipMermaidGraphHorizontal(drawMermaidGraphHorizontal(edges, standalone, nodes, width, groupGap), width, mermaidGraphLabels(edges, nodes))
+	case "BT":
+		return flipMermaidGraphVertical(drawMermaidGraph(edges, standalone, nodes, width))
+	default: // Mermaid treats TD and TB as aliases; an omitted direction is also top-down.
+		return drawMermaidGraph(edges, standalone, nodes, width)
+	}
+}
+
+func drawMermaidGraphHorizontal(edges []mermaidparser.Edge, standalone []string, nodes map[string]string, width, groupGap int) string {
+	adjacency, roots, order := mermaidGraph(edges, standalone)
+	expanded := make(map[string]bool)
+	var layouts []mermaidGraphLayout
+	candidates := append(append(make([]string, 0, len(roots)+len(order)), roots...), order...)
+	for _, root := range candidates {
+		if !expanded[root] {
+			layouts = append(layouts, buildMermaidHorizontalLayout(root, adjacency, nodes, expanded, groupGap))
+		}
+	}
+
+	var out []string
+	for _, layout := range layouts {
+		if layout.width > width {
+			return drawMermaidGraphLinear(edges, standalone, nodes, width)
+		}
+		if len(out) > 0 {
+			out = append(out, "")
+		}
+		indent := max((width-layout.width)/2, 0)
+		for _, line := range layout.lines {
+			out = append(out, strings.Repeat(" ", indent)+strings.TrimRight(line, " "))
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
+func buildMermaidHorizontalLayout(id string, adjacency map[string][]mermaidparser.Edge, nodes map[string]string, expanded map[string]bool, groupGap int) mermaidGraphLayout {
+	expanded[id] = true
+	label := nodes[id]
+	nodeWidth := max(mermaidStringWidth(label)+4, 8)
+	node := boxParts(label, nodeWidth)
+	edges := adjacency[id]
+	if len(edges) == 0 {
+		return mermaidGraphLayout{lines: node, width: nodeWidth, root: 1}
+	}
+
+	children := make([]mermaidGraphLayout, 0, len(edges))
+	gap := 5 + groupGap
+	for _, edge := range edges {
+		gap = max(gap, mermaidStringWidth(edge.Label)+5)
+		if expanded[edge.To] {
+			ref := "↩ " + nodes[edge.To]
+			refWidth := max(mermaidStringWidth(ref)+4, 8)
+			children = append(children, mermaidGraphLayout{lines: boxParts(ref, refWidth), width: refWidth, root: 1})
+		} else {
+			children = append(children, buildMermaidHorizontalLayout(edge.To, adjacency, nodes, expanded, groupGap))
+		}
+	}
+
+	const verticalGap = 1
+	childY := make([]int, len(children))
+	height := 0
+	maxChildWidth := 0
+	for i, child := range children {
+		childY[i] = height
+		height += len(child.lines)
+		if i < len(children)-1 {
+			height += verticalGap
+		}
+		maxChildWidth = max(maxChildWidth, child.width)
+	}
+	firstCenter := childY[0] + children[0].root
+	last := len(children) - 1
+	lastCenter := childY[last] + children[last].root
+	root := (firstCenter + lastCenter) / 2
+	shift := max(1-root, 0)
+	root += shift
+	height += shift
+	for i := range childY {
+		childY[i] += shift
+	}
+	height = max(height, root+2)
+	layoutWidth := nodeWidth + gap + maxChildWidth
+	canvas := make([][]string, height)
+	for row := range canvas {
+		canvas[row] = mermaidCanvas(layoutWidth)
+	}
+	for row, line := range node {
+		writeMermaidCanvas(canvas[root-1+row], 0, line)
+	}
+	childX := nodeWidth + gap
+	for i, child := range children {
+		for row, line := range child.lines {
+			writeMermaidCanvas(canvas[childY[i]+row], childX, line)
+		}
+		center := childY[i] + child.root
+		for x := nodeWidth + 2; x < childX-1; x++ {
+			canvas[center][x] = "─"
+		}
+		canvas[center][childX-1] = "▶"
+		label := truncateMermaid(edges[i].Label, max(gap-3, 1))
+		writeMermaidCanvas(canvas[center], nodeWidth+2, label)
+	}
+	branchX := nodeWidth + 1
+	firstBranch := firstCenter + shift
+	lastBranch := lastCenter + shift
+	for y := min(root, firstBranch); y <= max(root, lastBranch); y++ {
+		canvas[y][branchX] = "│"
+	}
+	for i, child := range children {
+		center := childY[i] + child.root
+		switch {
+		case len(children) == 1:
+			canvas[center][branchX] = "─"
+		case i == 0:
+			canvas[center][branchX] = "╭"
+		case i == len(children)-1:
+			canvas[center][branchX] = "╰"
+		default:
+			canvas[center][branchX] = "├"
+		}
+	}
+	canvas[root][nodeWidth-1] = "├"
+	for x := nodeWidth; x < branchX; x++ {
+		canvas[root][x] = "─"
+	}
+	if len(children) > 1 {
+		switch root {
+		case firstBranch:
+			canvas[root][branchX] = "┬"
+		case lastBranch:
+			canvas[root][branchX] = "┴"
+		default:
+			junction := "┤"
+			for i, child := range children {
+				if childY[i]+child.root == root {
+					junction = "┼"
+					break
+				}
+			}
+			canvas[root][branchX] = junction
+		}
+	}
+
+	lines := make([]string, len(canvas))
+	for i := range canvas {
+		lines[i] = mermaidCanvasText(canvas[i])
+	}
+	return mermaidGraphLayout{lines: lines, width: layoutWidth, root: root}
+}
+
+func mermaidGraphLabels(edges []mermaidparser.Edge, nodes map[string]string) []string {
+	labels := make([]string, 0, len(nodes)+len(edges))
+	for _, label := range nodes {
+		labels = append(labels, label, "↩ "+label)
+	}
+	for _, edge := range edges {
+		if edge.Label != "" {
+			labels = append(labels, edge.Label)
+		}
+	}
+	slices.SortFunc(labels, func(a, b string) int {
+		return len(b) - len(a)
+	})
+	return labels
+}
+
+func flipMermaidGraphHorizontal(diagram string, width int, labels []string) string {
+	lines := strings.Split(diagram, "\n")
+	for i, line := range lines {
+		segments := make([]string, 0, len(line)+max(width-mermaidStringWidth(line), 0))
+		for line != "" {
+			label := mermaidLabelPrefix(line, labels)
+			if label != "" {
+				segments = append(segments, label)
+				line = line[len(label):]
+				continue
+			}
+			cluster, _ := ansi.FirstGraphemeCluster(line, ansi.GraphemeWidth)
+			line = line[len(cluster):]
+			segments = append(segments, flipMermaidHorizontalCluster(cluster))
+		}
+		for range max(width-mermaidStringWidth(lines[i]), 0) {
+			segments = append(segments, " ")
+		}
+		slices.Reverse(segments)
+		lines[i] = strings.TrimRight(strings.Join(segments, ""), " ")
+	}
+	return strings.Join(lines, "\n")
+}
+
+func mermaidLabelPrefix(line string, labels []string) string {
+	for _, label := range labels {
+		if strings.HasPrefix(line, label) {
+			return label
+		}
+	}
+	return ""
+}
+
+func flipMermaidHorizontalCluster(cluster string) string {
+	switch cluster {
+	case "╭":
+		return "╮"
+	case "╮":
+		return "╭"
+	case "╰":
+		return "╯"
+	case "╯":
+		return "╰"
+	case "├":
+		return "┤"
+	case "┤":
+		return "├"
+	case "▶":
+		return "◀"
+	default:
+		return cluster
+	}
+}
+
+func flipMermaidGraphVertical(diagram string) string {
+	lines := strings.Split(diagram, "\n")
+	for i, j := 0, len(lines)-1; i <= j; i, j = i+1, j-1 {
+		lines[i], lines[j] = flipMermaidVerticalLine(lines[j]), flipMermaidVerticalLine(lines[i])
+	}
+	return strings.Join(lines, "\n")
+}
+
+func flipMermaidVerticalLine(line string) string {
+	return strings.Map(func(r rune) rune {
+		switch r {
+		case '╭':
+			return '╰'
+		case '╮':
+			return '╯'
+		case '╰':
+			return '╭'
+		case '╯':
+			return '╮'
+		case '┬':
+			return '┴'
+		case '┴':
+			return '┬'
+		case '▼':
+			return '▲'
+		default:
+			return r
+		}
+	}, line)
+}
 
 func drawMermaidGraph(edges []mermaidparser.Edge, standalone []string, nodes map[string]string, width int) string {
 	adjacency, roots, order := mermaidGraph(edges, standalone)
@@ -79,7 +340,7 @@ func mermaidGraph(edges []mermaidparser.Edge, standalone []string) (map[string][
 func buildMermaidGraphLayout(id string, adjacency map[string][]mermaidparser.Edge, nodes map[string]string, expanded map[string]bool) mermaidGraphLayout {
 	expanded[id] = true
 	label := nodes[id]
-	nodeWidth := max(runewidth.StringWidth(label)+4, 8)
+	nodeWidth := max(mermaidStringWidth(label)+4, 8)
 	node := boxParts(label, nodeWidth)
 	nodeCenter := nodeWidth / 2
 
@@ -95,7 +356,7 @@ func buildMermaidGraphLayout(id string, adjacency map[string][]mermaidparser.Edg
 	for _, edge := range edges {
 		if expanded[edge.To] {
 			ref := "↩ " + nodes[edge.To]
-			refWidth := max(runewidth.StringWidth(ref)+4, 8)
+			refWidth := max(mermaidStringWidth(ref)+4, 8)
 			children = append(children, mermaidGraphLayout{lines: boxParts(ref, refWidth), width: refWidth, root: refWidth / 2})
 			continue
 		}
@@ -107,7 +368,7 @@ func buildMermaidGraphLayout(id string, adjacency map[string][]mermaidparser.Edg
 		root := max(nodeCenter, child.root)
 		layoutWidth := max(root+nodeWidth-nodeCenter, root+child.width-child.root)
 		if edges[0].Label != "" {
-			layoutWidth = max(layoutWidth, root+2+runewidth.StringWidth(edges[0].Label))
+			layoutWidth = max(layoutWidth, root+2+mermaidStringWidth(edges[0].Label))
 		}
 		nodeOffset, childOffset := root-nodeCenter, root-child.root
 		lines := placeMermaidLines(node, nodeOffset, layoutWidth)
@@ -156,7 +417,7 @@ func buildMermaidGraphLayout(id string, adjacency map[string][]mermaidparser.Edg
 	for x := firstCenter; x <= lastCenter; x++ {
 		junction[x] = "─"
 	}
-	junction[firstCenter], junction[lastCenter], junction[root] = "┌", "┐", "┴"
+	junction[firstCenter], junction[lastCenter], junction[root] = "╭", "╮", "┴"
 	lines = append(lines, mermaidCanvasText(junction))
 
 	labels := mermaidCanvas(layoutWidth)
@@ -164,7 +425,7 @@ func buildMermaidGraphLayout(id string, adjacency map[string][]mermaidparser.Edg
 	for i, edge := range edges {
 		center := childOffsets[i] + children[i].root
 		label := truncateMermaid(edge.Label, max(children[i].width-2, 1))
-		writeMermaidCanvas(labels, center-runewidth.StringWidth(label)/2, label)
+		writeMermaidCanvas(labels, center-mermaidStringWidth(label)/2, label)
 		arrows[center] = "▼"
 	}
 	lines = append(lines, mermaidCanvasText(labels), mermaidCanvasText(arrows))
@@ -240,7 +501,7 @@ func drawMermaidGraphLinear(edges []mermaidparser.Edge, standalone []string, nod
 			}
 			out = append(out, truncateMermaid(connector, width))
 			if visited[edge.To] {
-				out = append(out, truncateMermaid(prefix+"└──↩ "+mermaidNodeText(nodes[edge.To]), width))
+				out = append(out, truncateMermaid(prefix+"╰──↩ "+mermaidNodeText(nodes[edge.To]), width))
 				return
 			}
 			out = append(out, prefix+"▼")
@@ -254,7 +515,7 @@ func drawMermaidGraphLinear(edges []mermaidparser.Edge, standalone []string, nod
 			last := i == len(children)-1
 			branch, continuation := "├─", "│ "
 			if last {
-				branch, continuation = "└─", "  "
+				branch, continuation = "╰─", "  "
 			}
 			arrow := "──▶ "
 			if edge.Label != "" {

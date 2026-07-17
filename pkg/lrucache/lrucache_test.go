@@ -179,3 +179,41 @@ func assertGet[K comparable, V any](t *testing.T, c *LRU[K, V], key K, want V) {
 	assert.True(t, ok, "expected key to be present")
 	assert.Equal(t, want, got)
 }
+
+func TestLRU_EnsureCapacityGrows(t *testing.T) {
+	t.Parallel()
+	c := New[string, int](2)
+	c.Put("a", 1)
+	c.Put("b", 2)
+
+	c.EnsureCapacity(4)
+	c.Put("c", 3)
+	c.Put("d", 4)
+
+	assert.Equal(t, 4, c.Len())
+	for k, want := range map[string]int{"a": 1, "b": 2, "c": 3, "d": 4} {
+		assertGet(t, c, k, want)
+	}
+
+	c.Put("e", 5) // beyond grown capacity: evicts LRU again
+	assert.Equal(t, 4, c.Len())
+}
+
+func TestLRU_EnsureCapacityNeverShrinks(t *testing.T) {
+	t.Parallel()
+	c := New[string, int](3)
+	c.Put("a", 1)
+	c.Put("b", 2)
+	c.Put("c", 3)
+
+	c.EnsureCapacity(1)
+	c.EnsureCapacity(-1)
+
+	// No eviction happened and capacity is still 3.
+	assert.Equal(t, 3, c.Len())
+	c.Put("d", 4)
+	assert.Equal(t, 3, c.Len(), "capacity should remain 3")
+	for k, want := range map[string]int{"b": 2, "c": 3, "d": 4} {
+		assertGet(t, c, k, want)
+	}
+}

@@ -77,9 +77,9 @@ func newTestWizard(answers string, keys []string, stores []environment.SecretSto
 func TestSetupWizard_CloudPathStoresKey(t *testing.T) {
 	t.Parallel()
 
-	store := &fakeSecretStore{name: "keychain"}
-	// cloud -> provider 1 (anthropic) -> store 1
-	wizard, out, _ := newTestWizard("1\n1\n1\n", []string{"sk-cloud-key"}, []environment.SecretStore{store}, nil, nil)
+	store := &fakeSecretStore{name: "config-env-file"}
+	// cloud -> provider 1 (anthropic); a single store is used without a prompt
+	wizard, out, _ := newTestWizard("1\n1\n", []string{"sk-cloud-key"}, []environment.SecretStore{store}, nil, nil)
 
 	result, err := wizard.run(t.Context())
 	require.NoError(t, err)
@@ -90,7 +90,8 @@ func TestSetupWizard_CloudPathStoresKey(t *testing.T) {
 	assert.Equal(t, "anthropic/claude-sonnet-4-6", result.Model)
 
 	output := out.String()
-	assert.Contains(t, output, "Stored ANTHROPIC_API_KEY in the keychain (fake).")
+	assert.NotContains(t, output, "Where should", "a single store must not prompt for a location")
+	assert.Contains(t, output, "Stored ANTHROPIC_API_KEY in the config-env-file (fake).")
 	assert.Contains(t, output, "docker agent run")
 	assert.Contains(t, output, "--model anthropic/claude-sonnet-4-6")
 	assert.Contains(t, output, "docker agent doctor")
@@ -100,9 +101,9 @@ func TestSetupWizard_CloudPathStoresKey(t *testing.T) {
 func TestSetupWizard_DefaultsSelectCloudAndFirstEntries(t *testing.T) {
 	t.Parallel()
 
-	store := &fakeSecretStore{name: "keychain"}
-	// Empty answers take every default: cloud, first provider, first store.
-	wizard, _, _ := newTestWizard("\n\n\n", []string{"sk-key"}, []environment.SecretStore{store}, nil, nil)
+	store := &fakeSecretStore{name: "config-env-file"}
+	// Empty answers take every default: cloud, first provider.
+	wizard, _, _ := newTestWizard("\n\n", []string{"sk-key"}, []environment.SecretStore{store}, nil, nil)
 
 	result, err := wizard.run(t.Context())
 	require.NoError(t, err)
@@ -115,7 +116,7 @@ func TestSetupWizard_DefaultsSelectCloudAndFirstEntries(t *testing.T) {
 func TestSetupWizard_CloudPathRetriesFailedStore(t *testing.T) {
 	t.Parallel()
 
-	broken := &fakeSecretStore{name: "pass", err: errors.New("password store is empty")}
+	broken := &fakeSecretStore{name: "broken-store", err: errors.New("store is unavailable")}
 	working := &fakeSecretStore{name: "config-env-file"}
 	// cloud -> provider 1 -> store 1 (fails) -> store 2 (succeeds)
 	wizard, out, _ := newTestWizard("1\n1\n1\n2\n", []string{"sk-key"},
@@ -124,15 +125,37 @@ func TestSetupWizard_CloudPathRetriesFailedStore(t *testing.T) {
 	result, err := wizard.run(t.Context())
 	require.NoError(t, err)
 
-	assert.Contains(t, out.String(), "Could not store the key: password store is empty")
+	assert.Contains(t, out.String(), "Could not store the key: store is unavailable")
 	assert.Equal(t, "sk-key", working.stored[result.EnvVar])
+}
+
+func TestSetupWizard_CloudPathSingleStoreFailureIsFatal(t *testing.T) {
+	t.Parallel()
+
+	broken := &fakeSecretStore{name: "config-env-file", err: errors.New("disk full")}
+	wizard, _, _ := newTestWizard("1\n1\n", []string{"sk-key"}, []environment.SecretStore{broken}, nil, nil)
+
+	_, err := wizard.run(t.Context())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "storing the key")
+	assert.Contains(t, err.Error(), "disk full")
+}
+
+func TestSetupWizard_CloudPathNoStoresIsFatal(t *testing.T) {
+	t.Parallel()
+
+	wizard, _, _ := newTestWizard("1\n1\n", []string{"sk-key"}, nil, nil, nil)
+
+	_, err := wizard.run(t.Context())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no secret store is available")
 }
 
 func TestSetupWizard_CloudPathReasksOnEmptyKey(t *testing.T) {
 	t.Parallel()
 
-	store := &fakeSecretStore{name: "keychain"}
-	wizard, out, _ := newTestWizard("1\n1\n1\n", []string{"  ", "sk-key"}, []environment.SecretStore{store}, nil, nil)
+	store := &fakeSecretStore{name: "config-env-file"}
+	wizard, out, _ := newTestWizard("1\n1\n", []string{"  ", "sk-key"}, []environment.SecretStore{store}, nil, nil)
 
 	_, err := wizard.run(t.Context())
 	require.NoError(t, err)
@@ -148,8 +171,8 @@ func TestSetupWizard_ChatGPTPathRunsBrowserSignIn(t *testing.T) {
 	idx := slices.IndexFunc(providers, func(p config.ProviderEnvVars) bool { return p.Provider == "chatgpt" })
 	require.GreaterOrEqual(t, idx, 0, "chatgpt must be offered by the wizard")
 
-	store := &fakeSecretStore{name: "keychain"}
-	// cloud -> chatgpt: no key prompt, no store prompt.
+	store := &fakeSecretStore{name: "config-env-file"}
+	// cloud -> chatgpt: no key prompt, no store involved.
 	wizard, out, _ := newTestWizard(fmt.Sprintf("1\n%d\n", idx+1), nil, []environment.SecretStore{store}, nil, nil)
 	loginCalled := false
 	wizard.chatgptLogin = func(_ context.Context, _ io.Writer) (*chatgpt.LoginResult, error) {
@@ -274,10 +297,10 @@ func (r *customProviderRecorder) save(name string, provider latest.ProviderConfi
 func TestSetupWizard_CustomPathSavesProviderAndKey(t *testing.T) {
 	t.Parallel()
 
-	store := &fakeSecretStore{name: "keychain"}
+	store := &fakeSecretStore{name: "config-env-file"}
 	recorder := &customProviderRecorder{}
-	// custom -> name -> base URL -> format 2 (responses) -> env var -> store 1 -> model (default)
-	wizard, out, _ := newTestWizard("3\nmyprovider\nhttps://llm.corp.example.com/v1\n2\nMYPROVIDER_API_KEY\n1\n\n",
+	// custom -> name -> base URL -> format 2 (responses) -> env var -> model (default)
+	wizard, out, _ := newTestWizard("3\nmyprovider\nhttps://llm.corp.example.com/v1\n2\nMYPROVIDER_API_KEY\n\n",
 		[]string{"sk-custom-key"}, []environment.SecretStore{store}, nil, nil)
 	wizard.saveProvider = recorder.save
 	wizard.listModels = func(_ context.Context, baseURL, token string) []string {
@@ -362,9 +385,9 @@ func TestSetupWizard_CustomPathValidatesNameAndURL(t *testing.T) {
 func TestSetupWizard_CustomPathReasksOnInvalidEnvVarName(t *testing.T) {
 	t.Parallel()
 
-	store := &fakeSecretStore{name: "keychain"}
+	store := &fakeSecretStore{name: "config-env-file"}
 	recorder := &customProviderRecorder{}
-	wizard, out, _ := newTestWizard("3\nmyprovider\nhttps://ok.example.com/v1\n1\nMY BAD VAR\nMY_KEY\n1\nm1\n",
+	wizard, out, _ := newTestWizard("3\nmyprovider\nhttps://ok.example.com/v1\n1\nMY BAD VAR\nMY_KEY\nm1\n",
 		[]string{"sk-key"}, []environment.SecretStore{store}, nil, nil)
 	wizard.saveProvider = recorder.save
 
