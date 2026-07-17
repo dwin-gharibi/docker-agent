@@ -7,6 +7,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestParseFlowchartSubgraphs(t *testing.T) {
+	t.Parallel()
+
+	doc, err := Parse(`flowchart LR
+subgraph platform[Platform]
+  gateway[API Gateway]
+  subgraph services[Services]
+    api[API] --> db[(Database)]
+  end
+  gateway --> api
+end
+client[Client] --> gateway`)
+	require.NoError(t, err)
+	require.Len(t, doc.Subgraphs, 2)
+	assert.Equal(t, Subgraph{ID: "platform", Label: "Platform", Nodes: []string{"gateway"}}, doc.Subgraphs[0])
+	assert.Equal(t, Subgraph{ID: "services", Label: "Services", ParentID: "platform", Nodes: []string{"api", "db"}}, doc.Subgraphs[1])
+}
+
 func TestParseFlowchartBuildsGraph(t *testing.T) {
 	t.Parallel()
 

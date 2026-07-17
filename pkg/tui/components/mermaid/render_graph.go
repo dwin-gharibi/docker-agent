@@ -9,12 +9,16 @@ import (
 	mermaidparser "github.com/docker/docker-agent/pkg/mermaid"
 )
 
-func drawMermaidFlowchart(edges []mermaidparser.Edge, standalone []string, nodes map[string]string, direction string, width int) string {
+func drawMermaidFlowchart(edges []mermaidparser.Edge, standalone []string, nodes map[string]string, direction string, width int, grouped ...bool) string {
+	groupGap := 0
+	if len(grouped) > 0 && grouped[0] {
+		groupGap = 4
+	}
 	switch strings.ToUpper(direction) {
 	case "LR":
-		return drawMermaidGraphHorizontal(edges, standalone, nodes, width)
+		return drawMermaidGraphHorizontal(edges, standalone, nodes, width, groupGap)
 	case "RL":
-		return flipMermaidGraphHorizontal(drawMermaidGraphHorizontal(edges, standalone, nodes, width), width, mermaidGraphLabels(edges, nodes))
+		return flipMermaidGraphHorizontal(drawMermaidGraphHorizontal(edges, standalone, nodes, width, groupGap), width, mermaidGraphLabels(edges, nodes))
 	case "BT":
 		return flipMermaidGraphVertical(drawMermaidGraph(edges, standalone, nodes, width))
 	default: // Mermaid treats TD and TB as aliases; an omitted direction is also top-down.
@@ -22,14 +26,14 @@ func drawMermaidFlowchart(edges []mermaidparser.Edge, standalone []string, nodes
 	}
 }
 
-func drawMermaidGraphHorizontal(edges []mermaidparser.Edge, standalone []string, nodes map[string]string, width int) string {
+func drawMermaidGraphHorizontal(edges []mermaidparser.Edge, standalone []string, nodes map[string]string, width, groupGap int) string {
 	adjacency, roots, order := mermaidGraph(edges, standalone)
 	expanded := make(map[string]bool)
 	var layouts []mermaidGraphLayout
 	candidates := append(append(make([]string, 0, len(roots)+len(order)), roots...), order...)
 	for _, root := range candidates {
 		if !expanded[root] {
-			layouts = append(layouts, buildMermaidHorizontalLayout(root, adjacency, nodes, expanded))
+			layouts = append(layouts, buildMermaidHorizontalLayout(root, adjacency, nodes, expanded, groupGap))
 		}
 	}
 
@@ -49,7 +53,7 @@ func drawMermaidGraphHorizontal(edges []mermaidparser.Edge, standalone []string,
 	return strings.Join(out, "\n")
 }
 
-func buildMermaidHorizontalLayout(id string, adjacency map[string][]mermaidparser.Edge, nodes map[string]string, expanded map[string]bool) mermaidGraphLayout {
+func buildMermaidHorizontalLayout(id string, adjacency map[string][]mermaidparser.Edge, nodes map[string]string, expanded map[string]bool, groupGap int) mermaidGraphLayout {
 	expanded[id] = true
 	label := nodes[id]
 	nodeWidth := max(mermaidStringWidth(label)+4, 8)
@@ -60,7 +64,7 @@ func buildMermaidHorizontalLayout(id string, adjacency map[string][]mermaidparse
 	}
 
 	children := make([]mermaidGraphLayout, 0, len(edges))
-	gap := 5
+	gap := 5 + groupGap
 	for _, edge := range edges {
 		gap = max(gap, mermaidStringWidth(edge.Label)+5)
 		if expanded[edge.To] {
@@ -68,7 +72,7 @@ func buildMermaidHorizontalLayout(id string, adjacency map[string][]mermaidparse
 			refWidth := max(mermaidStringWidth(ref)+4, 8)
 			children = append(children, mermaidGraphLayout{lines: boxParts(ref, refWidth), width: refWidth, root: 1})
 		} else {
-			children = append(children, buildMermaidHorizontalLayout(edge.To, adjacency, nodes, expanded))
+			children = append(children, buildMermaidHorizontalLayout(edge.To, adjacency, nodes, expanded, groupGap))
 		}
 	}
 
