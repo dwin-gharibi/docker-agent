@@ -857,6 +857,37 @@ func (m *liveSessionsMockRuntime) CompactLiveSession(_ context.Context, sessionI
 	return nil
 }
 
+// thinkingLevelsMockRuntime is a minimal mockRuntime extension implementing
+// agentThinkingLevelsProvider, exercising the pass-through half of
+// App.CurrentAgentThinkingLevels (the type-assertion-miss half is covered by
+// plain *mockRuntime, which does not implement the interface).
+type thinkingLevelsMockRuntime struct {
+	mockRuntime
+
+	levels []effort.Level
+}
+
+func (m *thinkingLevelsMockRuntime) CurrentAgentThinkingLevels(context.Context) []effort.Level {
+	return m.levels
+}
+
+func TestApp_CurrentAgentThinkingLevels_UnsupportedRuntime(t *testing.T) {
+	t.Parallel()
+
+	app := New(t.Context(), &mockRuntime{}, session.New())
+	assert.Nil(t, app.CurrentAgentThinkingLevels(t.Context()),
+		"runtimes without a thinking-levels resolution degrade to no /effort candidates")
+}
+
+func TestApp_CurrentAgentThinkingLevels_PassesThroughRuntimeLevels(t *testing.T) {
+	t.Parallel()
+
+	rt := &thinkingLevelsMockRuntime{levels: []effort.Level{effort.Low, effort.Medium, effort.High}}
+	app := New(t.Context(), rt, session.New())
+
+	assert.Equal(t, []effort.Level{effort.Low, effort.Medium, effort.High}, app.CurrentAgentThinkingLevels(t.Context()))
+}
+
 func TestApp_LiveSessions_UnsupportedRuntime(t *testing.T) {
 	t.Parallel()
 

@@ -238,10 +238,78 @@ func levelNames(levels []effort.Level) string {
 	return strings.Join(names, ", ")
 }
 
+// resolveThinkingLevelsForModels returns the thinking-effort levels
+// supported by models[0] (the agent's primary effective model) plus its
+// currently active level. It is the pure resolution step shared by
+// resolveAgentThinkingLevels (the read-only getter path, which snapshots
+// EffectiveModels itself) and applyAgentThinkingLevel (the setter path,
+// which must reuse the exact same snapshot it later re-creates providers
+// from — see resolveAgentThinkingLevels for why that sharing matters).
+func (r *LocalRuntime) resolveThinkingLevelsForModels(ctx context.Context, models []provider.Provider) ([]effort.Level, effort.Level, error) {
+	if len(models) == 0 {
+		return nil, "", errors.New("agent has no model configured")
+	}
+
+	baseCfg := models[0].BaseConfig().ModelConfig
+	if !r.modelSupportsThinking(ctx, &baseCfg) {
+		return nil, "", fmt.Errorf("model %q does not support thinking levels: %w", baseCfg.DisplayOrModel(), ErrUnsupported)
+	}
+
+	return modelinfo.SupportedThinkingLevels(baseCfg.Provider, baseCfg.Model), currentThinkingLevel(&baseCfg), nil
+}
+
+// resolveAgentThinkingLevels resolves agentName's current effective model
+// and returns the thinking-effort levels it supports plus its currently
+// active level. This is the single source of truth shared by
+// applyAgentThinkingLevel (which validates a pick against it) and
+// CurrentAgentThinkingLevels (which exposes it read-only for /effort
+// argument completion), so a level offered by one can never be rejected by
+// the other (#3731).
+//
+// It is read-only, so a single EffectiveModels snapshot is correct here.
+// applyAgentThinkingLevel must NOT call this: it needs the same snapshot
+// for both resolution and provider recreation (a second, later
+// EffectiveModels() call could race a concurrent /model change or scoped
+// override and validate against one model while applying to another).
+func (r *LocalRuntime) resolveAgentThinkingLevels(ctx context.Context, agentName string) ([]effort.Level, effort.Level, error) {
+	if r.modelSwitcherCfg == nil {
+		return nil, "", ErrUnsupported
+	}
+
+	a, err := r.team.Agent(agentName)
+	if err != nil {
+		return nil, "", fmt.Errorf("agent not found: %w", err)
+	}
+
+	return r.resolveThinkingLevelsForModels(ctx, a.EffectiveModels())
+}
+
+// CurrentAgentThinkingLevels returns the thinking-effort levels the current
+// agent's active model supports, or nil when the runtime has no model
+// switcher configured, the agent/model can't be resolved, or the model does
+// not support thinking at all. Backs the /effort argument completer
+// (#3731): candidates must come from this resolution, not the static effort
+// vocabulary, because SetAgentThinkingLevel hard-rejects any level outside
+// it.
+func (r *LocalRuntime) CurrentAgentThinkingLevels(ctx context.Context) []effort.Level {
+	supported, _, err := r.resolveAgentThinkingLevels(ctx, r.currentAgentName())
+	if err != nil {
+		return nil
+	}
+	return supported
+}
+
 // applyAgentThinkingLevel resolves the agent's current model, asks pick to
 // choose the target level among the model's supported ones, re-creates the
 // effective provider(s) with that level, and installs them as a runtime
 // override.
+//
+// It snapshots EffectiveModels exactly once and reuses that same snapshot
+// for both capability resolution and provider recreation. Taking a second,
+// later snapshot would let a concurrent /model change or scoped override
+// land in between: the level would be validated against one model but
+// applied to another, and — if the second snapshot came back empty — the
+// override could be silently cleared while still reporting success.
 func (r *LocalRuntime) applyAgentThinkingLevel(ctx context.Context, agentName string, pick func(supported []effort.Level, current effort.Level) (effort.Level, error)) (effort.Level, error) {
 	if r.modelSwitcherCfg == nil {
 		return "", ErrUnsupported
@@ -253,17 +321,12 @@ func (r *LocalRuntime) applyAgentThinkingLevel(ctx context.Context, agentName st
 	}
 
 	models := a.EffectiveModels()
-	if len(models) == 0 {
-		return "", errors.New("agent has no model configured")
+	supported, current, err := r.resolveThinkingLevelsForModels(ctx, models)
+	if err != nil {
+		return "", err
 	}
 
-	baseCfg := models[0].BaseConfig().ModelConfig
-	if !r.modelSupportsThinking(ctx, &baseCfg) {
-		return "", fmt.Errorf("model %q does not support thinking levels: %w", baseCfg.DisplayOrModel(), ErrUnsupported)
-	}
-
-	supported := modelinfo.SupportedThinkingLevels(baseCfg.Provider, baseCfg.Model)
-	next, err := pick(supported, currentThinkingLevel(&baseCfg))
+	next, err := pick(supported, current)
 	if err != nil {
 		return "", err
 	}

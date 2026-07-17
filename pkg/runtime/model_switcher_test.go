@@ -300,6 +300,159 @@ func TestSetAgentThinkingLevel(t *testing.T) {
 	})
 }
 
+// TestSetAgentThinkingLevel_ConcurrentOverrideBetweenResolutionAndApply is
+// the regression test for the single-snapshot fix: applyAgentThinkingLevel
+// must resolve capabilities and re-create providers from the SAME
+// EffectiveModels snapshot. A second, later snapshot would let a
+// concurrent /model change or scoped override land between resolution and
+// application, validating the effort against one model but applying it to
+// another (see #3731 follow-up).
+func TestSetAgentThinkingLevel_ConcurrentOverrideBetweenResolutionAndApply(t *testing.T) {
+	t.Parallel()
+
+	t.Run("override swapped mid-flight does not leak into the applied provider", func(t *testing.T) {
+		t.Parallel()
+
+		// gpt-5 tops out at high; opus 4.7 accepts max. If applyAgentThinkingLevel
+		// re-read EffectiveModels after pick ran, it would recreate the override
+		// from opus instead of gpt-5, silently applying "high" to a model that was
+		// never validated against it.
+		modelA := newConfigProvider(latest.ModelConfig{Provider: "openai", Model: "gpt-5"})
+		modelB := newConfigProvider(latest.ModelConfig{Provider: "anthropic", Model: "claude-opus-4-7"})
+
+		root := agent.New("root", "test", agent.WithModel(modelA))
+		r := &LocalRuntime{
+			team: team.New(team.WithAgents(root)),
+			modelSwitcherCfg: &ModelSwitcherConfig{
+				ProviderRegistry: testProviderRegistry(),
+				EnvProvider: environment.NewMapEnvProvider(map[string]string{
+					"OPENAI_API_KEY":    "sk-test",
+					"ANTHROPIC_API_KEY": "sk-test",
+				}),
+			},
+		}
+
+		// pick runs after the snapshot is resolved but before providers are
+		// re-created; a concurrent /model change landing here is exactly the
+		// race the bug exposed.
+		level, err := r.applyAgentThinkingLevel(t.Context(), "root", func(supported []effort.Level, _ effort.Level) (effort.Level, error) {
+			require.NotContains(t, supported, effort.Max, "resolution must see model A (gpt-5), which tops out at high")
+			root.SetModelOverride(modelB)
+			return effort.High, nil
+		})
+		require.NoError(t, err)
+		assert.Equal(t, effort.High, level)
+
+		override := root.Model(t.Context())
+		require.NotNil(t, override)
+		assert.Equal(t, "openai", override.BaseConfig().ModelConfig.Provider,
+			"the applied provider must be re-created from the model validated against (A), not the one swapped in mid-flight (B)")
+		budget := override.BaseConfig().ModelConfig.ThinkingBudget
+		require.NotNil(t, budget)
+		assert.Equal(t, "high", budget.Effort)
+	})
+
+	t.Run("override cleared mid-flight does not install an empty override", func(t *testing.T) {
+		t.Parallel()
+
+		// No configured models: the agent's only model comes from the runtime
+		// override, so clearing it mid-flight reproduces the empty second-snapshot
+		// case the bug allowed through.
+		modelA := newConfigProvider(latest.ModelConfig{Provider: "openai", Model: "gpt-5"})
+		root := agent.New("root", "test")
+		root.SetModelOverride(modelA)
+
+		r := &LocalRuntime{
+			team: team.New(team.WithAgents(root)),
+			modelSwitcherCfg: &ModelSwitcherConfig{
+				ProviderRegistry: testProviderRegistry(),
+				EnvProvider:      environment.NewMapEnvProvider(map[string]string{"OPENAI_API_KEY": "sk-test"}),
+			},
+		}
+
+		level, err := r.applyAgentThinkingLevel(t.Context(), "root", func(_ []effort.Level, _ effort.Level) (effort.Level, error) {
+			// Simulate a concurrent override reset (e.g. /model default) landing
+			// between resolution and provider recreation.
+			root.SetModelOverride()
+			return effort.High, nil
+		})
+		require.NoError(t, err)
+		assert.Equal(t, effort.High, level)
+
+		override := root.Model(t.Context())
+		require.NotNil(t, override, "must not silently install an empty override while reporting success")
+		assert.Equal(t, "openai", override.BaseConfig().ModelConfig.Provider)
+	})
+}
+
+func TestCurrentAgentThinkingLevels(t *testing.T) {
+	t.Parallel()
+
+	newThinkingRuntimeWithRouter := func(cfg latest.ModelConfig, env map[string]string) *LocalRuntime {
+		root := agent.New("root", "test", agent.WithModel(newConfigProvider(cfg)))
+		tm := team.New(team.WithAgents(root))
+		return &LocalRuntime{
+			team:   tm,
+			agents: newAgentRouter(tm, "root"),
+			modelSwitcherCfg: &ModelSwitcherConfig{
+				ProviderRegistry: testProviderRegistry(),
+				EnvProvider:      environment.NewMapEnvProvider(env),
+			},
+		}
+	}
+
+	t.Run("reasoning model returns its supported levels", func(t *testing.T) {
+		t.Parallel()
+		r := newThinkingRuntimeWithRouter(
+			latest.ModelConfig{Provider: "openai", Model: "gpt-5"},
+			map[string]string{"OPENAI_API_KEY": "sk-test"},
+		)
+
+		levels := r.CurrentAgentThinkingLevels(t.Context())
+		assert.NotEmpty(t, levels)
+		assert.Contains(t, levels, effort.High)
+		assert.NotContains(t, levels, effort.Max, "gpt-5 tops out below max")
+	})
+
+	t.Run("non-reasoning model is nil", func(t *testing.T) {
+		t.Parallel()
+		r := newThinkingRuntimeWithRouter(
+			latest.ModelConfig{Provider: "openai", Model: "gpt-4o"},
+			map[string]string{"OPENAI_API_KEY": "sk-test"},
+		)
+
+		assert.Nil(t, r.CurrentAgentThinkingLevels(t.Context()))
+	})
+
+	t.Run("nil modelSwitcherCfg is nil", func(t *testing.T) {
+		t.Parallel()
+		root := agent.New("root", "test")
+		tm := team.New(team.WithAgents(root))
+		r := &LocalRuntime{team: tm, agents: newAgentRouter(tm, "root")}
+
+		assert.Nil(t, r.CurrentAgentThinkingLevels(t.Context()))
+	})
+
+	t.Run("matches the levels SetAgentThinkingLevel validates against", func(t *testing.T) {
+		t.Parallel()
+		r := newThinkingRuntimeWithRouter(
+			latest.ModelConfig{Provider: "anthropic", Model: "claude-opus-4-7"},
+			map[string]string{"ANTHROPIC_API_KEY": "sk-test"},
+		)
+
+		levels := r.CurrentAgentThinkingLevels(t.Context())
+		require.Contains(t, levels, effort.Max, "opus 4.7 top tier")
+
+		// Every level CurrentAgentThinkingLevels reports must be one
+		// SetAgentThinkingLevel actually accepts -- the single-source-of-truth
+		// guarantee #3731 depends on.
+		for _, level := range levels {
+			_, err := r.SetAgentThinkingLevel(t.Context(), "root", level)
+			assert.NoError(t, err, "level %q reported as supported but rejected", level)
+		}
+	})
+}
+
 // TestSetAgentThinkingLevel_NoneSurvivesOnGPT56 is the regression test for
 // the gpt-5.6+ "none" gating: cycling an agent's model to None on a model
 // with a real API-level none effort must produce a provider whose config
