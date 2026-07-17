@@ -334,6 +334,7 @@ While running in the TUI, press **Shift+Tab** to cycle the thinking effort level
 - This applies as a session override — it is **not** saved to the config file. The next session starts from the level defined in your YAML.
 - For models that don't support reasoning, and for remote runtimes, Shift+Tab is a no-op and an informational message is displayed.
 - `/effort` only accepts levels the current model supports; requesting an unsupported level shows the model's supported list. Like Shift+Tab, it is unavailable for non-reasoning models and remote runtimes.
+- Press <kbd>Tab</kbd> after `/effort` and a space to complete a level from the current model's supported range; it lists the same levels the picker shows (and, like the picker, offers no candidates for non-reasoning models or remote runtimes).
 
 ## Sharing Thinking Config Across Models
 

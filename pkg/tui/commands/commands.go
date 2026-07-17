@@ -11,6 +11,7 @@ import (
 
 	"github.com/docker/docker-agent/pkg/app"
 	"github.com/docker/docker-agent/pkg/config/types"
+	"github.com/docker/docker-agent/pkg/effort"
 	"github.com/docker/docker-agent/pkg/feedback"
 	"github.com/docker/docker-agent/pkg/tools"
 	mcptools "github.com/docker/docker-agent/pkg/tools/mcp"
@@ -654,6 +655,46 @@ func attachToolsetRestartCompletion(items []Item, source toolsetStatusSource) {
 	}
 }
 
+// effortLevelsSource is the minimal surface effortCandidates needs. *app.App
+// satisfies it; tests can supply a stub instead of constructing a full
+// application.
+type effortLevelsSource interface {
+	CurrentAgentThinkingLevels(ctx context.Context) []effort.Level
+}
+
+// effortCandidates returns one ArgumentCandidate per thinking-effort level
+// the current agent's active model supports, in the source's canonical
+// order. Unlike toolsetRestartCandidates, unsupported levels are never
+// listed (let alone Disabled): SetAgentThinkingLevel hard-rejects any level
+// outside this set, so offering it would complete-then-fail. A source with
+// no resolvable levels (remote runtime, non-reasoning model) yields no
+// candidates, and the popup simply doesn't open.
+func effortCandidates(ctx context.Context, source effortLevelsSource) []ArgumentCandidate {
+	levels := source.CurrentAgentThinkingLevels(ctx)
+	candidates := make([]ArgumentCandidate, 0, len(levels))
+	for _, level := range levels {
+		candidates = append(candidates, ArgumentCandidate{Label: string(level)})
+	}
+	return candidates
+}
+
+// attachEffortCompletion wires the effort-level argument completer onto the
+// /effort item. Attached post-hoc (rather than inline in
+// builtInSessionCommands) so that function stays free of any
+// effort-levels-source dependency. ctx is the long-lived TUI context, closed
+// over by the completer so it can re-resolve the model on every call.
+func attachEffortCompletion(items []Item, ctx context.Context, source effortLevelsSource) {
+	for i := range items {
+		if items[i].ID != "session.effort" {
+			continue
+		}
+		items[i].CompleteArgument = func() []ArgumentCandidate {
+			return effortCandidates(ctx, source)
+		}
+		return
+	}
+}
+
 // BuildCommandCategories builds the list of command categories for the command palette
 func BuildCommandCategories(ctx context.Context, application *app.App) []Category {
 	// Get session commands and filter based on model capabilities
@@ -662,6 +703,7 @@ func BuildCommandCategories(ctx context.Context, application *app.App) []Categor
 		sessionCommands = removeByIDs(sessionCommands, snapshotCommandIDs)
 	}
 	attachToolsetRestartCompletion(sessionCommands, application)
+	attachEffortCompletion(sessionCommands, ctx, application)
 
 	categories := []Category{
 		{

@@ -78,7 +78,7 @@ Type `/` during a session to see available commands, or press <kbd>Ctrl</kbd>+<k
 | `/export`          | Export the session as HTML                                                           |
 | `/sessions`        | Browse and load past sessions                                                        |
 | `/model`           | Change the model for the current agent                                               |
-| `/effort`          | Set the current model's reasoning-effort level (`/effort <none\|minimal\|low\|medium\|high\|xhigh\|max>`, or `/effort` alone to pick from the supported levels; reasoning models only) |
+| `/effort`          | Set the current model's reasoning-effort level (`/effort <none\|minimal\|low\|medium\|high\|xhigh\|max>`, or `/effort` alone to pick from the supported levels; reasoning models only). Press <kbd>Tab</kbd> after `/effort` and a space to complete a level the current model supports |
 | `/settings`        | Manage appearance, behavior, and notification preferences                           |
 | `/yolo`            | Toggle automatic tool call approval                                                  |
 | `/title`           | Set or regenerate session title                                                      |
