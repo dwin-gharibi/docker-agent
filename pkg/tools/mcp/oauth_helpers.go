@@ -37,7 +37,14 @@ var oauthHTTPClient = httpclient.NewSafeClient(30*time.Second, false)
 
 func oauthHTTPClientForAllowPrivateIPs(allowPrivateIPs bool) *http.Client {
 	if allowPrivateIPs {
-		return &http.Client{Timeout: 30 * time.Second}
+		// Clone keeps the default proxy/HTTP2/timeout behavior but gives the
+		// client its own connection pool: a nil Transport would share
+		// http.DefaultTransport's pool, which third parties may prune via
+		// CloseIdleConnections (httptest.Server.Close does).
+		return &http.Client{
+			Timeout:   30 * time.Second,
+			Transport: http.DefaultTransport.(*http.Transport).Clone(),
+		}
 	}
 	return oauthHTTPClient
 }

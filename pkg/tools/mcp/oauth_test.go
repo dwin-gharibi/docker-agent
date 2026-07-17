@@ -28,7 +28,7 @@ import (
 // test's in-flight request ("transport connection broken").
 func newTestTransport(t *testing.T) *http.Transport {
 	t.Helper()
-	tr := &http.Transport{}
+	tr := http.DefaultTransport.(*http.Transport).Clone()
 	t.Cleanup(tr.CloseIdleConnections)
 	return tr
 }

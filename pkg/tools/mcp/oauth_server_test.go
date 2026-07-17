@@ -99,7 +99,7 @@ func TestCallbackServer_DuplicateCallbacksDoNotBlock(t *testing.T) {
 	cs.SetExpectedState("expected-state")
 	callbackURL := cs.GetRedirectURI() + "?code=authcode&state=expected-state"
 
-	client := &http.Client{Timeout: 2 * time.Second}
+	client := &http.Client{Timeout: 2 * time.Second, Transport: newTestTransport(t)}
 
 	// Fire several callbacks back-to-back. Each one must complete (so the
 	// handler goroutine isn't stuck) regardless of whether anyone is
