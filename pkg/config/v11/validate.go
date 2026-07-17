@@ -176,9 +176,9 @@ func (a *AgentConfig) validateHarness() error {
 			return errors.New("harness.effort can only be used with harness.type 'claude-code'")
 		}
 		switch h.Effort {
-		case "low", "medium", "high", "max":
+		case "low", "medium", "high", "xhigh", "max":
 		default:
-			return errors.New("harness.effort must be one of: low, medium, high, max")
+			return errors.New("harness.effort must be one of: low, medium, high, xhigh, max")
 		}
 	}
 	if h.Agent != "" && h.Type != "opencode" {

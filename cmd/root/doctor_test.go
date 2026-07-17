@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/docker/docker-agent/pkg/codingharness"
 	"github.com/docker/docker-agent/pkg/config/latest"
 	"github.com/docker/docker-agent/pkg/environment"
 	"github.com/docker/docker-agent/pkg/model/provider/dmr"
@@ -22,7 +23,8 @@ import (
 // withDoctorTestEnv wires a hermetic doctor command: a map-backed secret
 // source chain, a stubbed DMR lister, and an empty user config, so tests
 // never exec `docker model` or credential helpers and never read the developer's
-// real configuration.
+// real configuration. The Claude Code probe panics unless a test overrides
+// it, proving that configs without a claude-code harness never probe the CLI.
 func withDoctorTestEnv(env map[string]string, dmrModels []string, dmrErr error) doctorCmdOption {
 	return func(f *doctorFlags) {
 		mapProvider := environment.NewMapEnvProvider(env)
@@ -30,6 +32,16 @@ func withDoctorTestEnv(env map[string]string, dmrModels []string, dmrErr error) 
 		f.sourcesForTests = []environment.Source{{Name: "environment", Provider: mapProvider}}
 		f.dmrLister = func(context.Context) ([]string, error) { return dmrModels, dmrErr }
 		f.loadUserConfig = func() (*userconfig.Config, error) { return &userconfig.Config{}, nil }
+		f.claudeProbe = func(context.Context) codingharness.ClaudeCLIStatus {
+			panic("doctor test: the Claude Code CLI probe must only run for claude-code harness configs")
+		}
+	}
+}
+
+// withClaudeProbe overrides the Claude Code CLI probe with a canned status.
+func withClaudeProbe(status codingharness.ClaudeCLIStatus) doctorCmdOption {
+	return func(f *doctorFlags) {
+		f.claudeProbe = func(context.Context) codingharness.ClaudeCLIStatus { return status }
 	}
 }
 
@@ -348,6 +360,247 @@ func TestDoctorCommand_AgentFileNotFound(t *testing.T) {
 		withDoctorTestEnv(nil, []string{"ai/qwen3:latest"}, nil))
 
 	require.Error(t, err)
+}
+
+// writeDoctorClaudeHarnessAgentFile writes an agent file whose root agent
+// delegates to a claude-code harness.
+func writeDoctorClaudeHarnessAgentFile(t *testing.T) string {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "claude-agent.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`
+agents:
+  root:
+    description: Claude Code specialist
+    instruction: test harness agent
+    harness:
+      type: claude-code
+      effort: xhigh
+`), 0o600))
+	return path
+}
+
+func TestDoctorCommand_ClaudeHarnessAuthenticated(t *testing.T) {
+	t.Parallel()
+
+	path := writeDoctorClaudeHarnessAgentFile(t)
+
+	output, err := executeDoctor(t, []string{path},
+		withDoctorTestEnv(nil, []string{"ai/qwen3:latest"}, nil),
+		withClaudeProbe(codingharness.ClaudeCLIStatus{
+			State:            codingharness.ClaudeStateAuthenticated,
+			Version:          "2.1.210 (Claude Code)",
+			AuthMethod:       "claude.ai",
+			APIProvider:      "firstParty",
+			SubscriptionType: "pro",
+		}))
+
+	require.NoError(t, err)
+	assert.Contains(t, output, "Claude Code harness")
+	assert.Contains(t, output, "Status: logged in (auth: claude.ai, api: firstParty, subscription: pro)")
+	assert.Contains(t, output, "Version: 2.1.210 (Claude Code)")
+	assert.Contains(t, output, "No issues found.")
+}
+
+func TestDoctorCommand_ClaudeHarnessNotInstalled(t *testing.T) {
+	t.Parallel()
+
+	path := writeDoctorClaudeHarnessAgentFile(t)
+
+	output, err := executeDoctor(t, []string{path},
+		withDoctorTestEnv(nil, []string{"ai/qwen3:latest"}, nil),
+		withClaudeProbe(codingharness.ClaudeCLIStatus{
+			State:  codingharness.ClaudeStateNotInstalled,
+			Detail: "the `claude` CLI was not found in PATH",
+		}))
+
+	require.Error(t, err)
+	statusErr, ok := errors.AsType[cli.StatusError](err)
+	require.True(t, ok, "expected a cli.StatusError, got %T", err)
+	assert.Equal(t, 1, statusErr.StatusCode)
+
+	assert.Contains(t, output, "Claude Code harness")
+	assert.Contains(t, output, "not found in PATH")
+	assert.Contains(t, output, codingharness.ClaudeInstallDocsURL)
+	assert.Contains(t, output, "claude auth login --claudeai")
+}
+
+func TestDoctorCommand_ClaudeHarnessUnauthenticated(t *testing.T) {
+	t.Parallel()
+
+	path := writeDoctorClaudeHarnessAgentFile(t)
+
+	output, err := executeDoctor(t, []string{path},
+		withDoctorTestEnv(nil, []string{"ai/qwen3:latest"}, nil),
+		withClaudeProbe(codingharness.ClaudeCLIStatus{
+			State:   codingharness.ClaudeStateUnauthenticated,
+			Version: "2.1.210 (Claude Code)",
+		}))
+
+	require.Error(t, err)
+	assert.Contains(t, output, "Status: installed (2.1.210 (Claude Code)), not logged in")
+	assert.Contains(t, output, "claude auth login --claudeai")
+	assert.Contains(t, output, "same OS user and environment")
+}
+
+func TestDoctorCommand_ClaudeHarnessAuthCheckFailed(t *testing.T) {
+	t.Parallel()
+
+	path := writeDoctorClaudeHarnessAgentFile(t)
+
+	output, err := executeDoctor(t, []string{path},
+		withDoctorTestEnv(nil, []string{"ai/qwen3:latest"}, nil),
+		withClaudeProbe(codingharness.ClaudeCLIStatus{
+			State:   codingharness.ClaudeStateAuthCheckFailed,
+			Version: "2.1.210 (Claude Code)",
+			Detail:  "`claude auth status` failed: exit status 1",
+		}))
+
+	require.Error(t, err)
+	assert.Contains(t, output, "login check failed")
+	assert.Contains(t, output, "exit status 1")
+	assert.Contains(t, output, "could not be verified")
+}
+
+func TestDoctorCommand_ClaudeHarnessJSON(t *testing.T) {
+	t.Parallel()
+
+	path := writeDoctorClaudeHarnessAgentFile(t)
+
+	output, err := executeDoctor(t, []string{"--json", path},
+		withDoctorTestEnv(nil, []string{"ai/qwen3:latest"}, nil),
+		withClaudeProbe(codingharness.ClaudeCLIStatus{
+			State:            codingharness.ClaudeStateAuthenticated,
+			Version:          "2.1.210 (Claude Code)",
+			AuthMethod:       "claude.ai",
+			APIProvider:      "firstParty",
+			SubscriptionType: "pro",
+		}))
+
+	require.NoError(t, err)
+	assert.NotContains(t, output, "email", "identity fields must never appear in the report")
+
+	var report doctorReport
+	require.NoError(t, json.Unmarshal([]byte(output), &report))
+	require.NotNil(t, report.AgentFile)
+	require.NotNil(t, report.AgentFile.ClaudeCode)
+	assert.Equal(t, codingharness.ClaudeStateAuthenticated, report.AgentFile.ClaudeCode.State)
+	assert.Equal(t, "2.1.210 (Claude Code)", report.AgentFile.ClaudeCode.Version)
+	assert.Equal(t, "claude.ai", report.AgentFile.ClaudeCode.AuthMethod)
+	assert.Equal(t, "pro", report.AgentFile.ClaudeCode.SubscriptionType)
+	assert.Empty(t, report.Issues)
+}
+
+// An agent file without a claude-code harness must not probe the CLI at all:
+// the withDoctorTestEnv probe panics when called, and the section must not
+// appear. Harnesses of other types do not trigger the probe either.
+func TestDoctorCommand_NoClaudeHarnessDoesNotProbe(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "codex-agent.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`
+agents:
+  root:
+    description: Codex specialist
+    instruction: test harness agent
+    harness:
+      type: codex
+`), 0o600))
+
+	output, err := executeDoctor(t, []string{path},
+		withDoctorTestEnv(nil, []string{"ai/qwen3:latest"}, nil))
+
+	require.NoError(t, err)
+	assert.NotContains(t, output, "Claude Code harness")
+	assert.Contains(t, output, "No issues found.")
+}
+
+// A file whose agents all delegate to coding harnesses needs no model from
+// Docker Agent: a machine without provider credentials or Docker Model Runner
+// must still pass as long as the harness itself is ready. Bare `doctor` in
+// the same environment stays an issue (see TestDoctorCommand_NoUsableModel).
+func TestDoctorCommand_HarnessOnlyFileDoesNotNeedAutoModel(t *testing.T) {
+	t.Parallel()
+
+	path := writeDoctorClaudeHarnessAgentFile(t)
+	opts := []doctorCmdOption{
+		withDoctorTestEnv(nil, nil, dmr.ErrNotInstalled),
+		withClaudeProbe(codingharness.ClaudeCLIStatus{
+			State:            codingharness.ClaudeStateAuthenticated,
+			Version:          "2.1.210 (Claude Code)",
+			AuthMethod:       "claude.ai",
+			APIProvider:      "firstParty",
+			SubscriptionType: "pro",
+		}),
+	}
+
+	output, err := executeDoctor(t, []string{path}, opts...)
+
+	require.NoError(t, err, "a harness-only file must not fail for the unused auto model")
+	assert.Contains(t, output, "Status: logged in (auth: claude.ai, api: firstParty, subscription: pro)")
+	assert.Contains(t, output, "Note: not required: every agent in "+path+" runs through a coding harness")
+	assert.NotContains(t, output, "no usable model")
+	assert.Contains(t, output, "No issues found.")
+
+	output, err = executeDoctor(t, []string{"--json", path}, opts...)
+
+	require.NoError(t, err)
+	var report doctorReport
+	require.NoError(t, json.Unmarshal([]byte(output), &report))
+	assert.False(t, report.AutoModel.Usable, "the JSON must stay truthful: the auto model itself is still unusable")
+	assert.Contains(t, report.AutoModel.Note, "not required")
+	assert.Empty(t, report.Issues)
+}
+
+// The harness-only demotion only covers the auto model: a harness that is not
+// ready to run stays a blocking issue even when no model setup exists.
+func TestDoctorCommand_HarnessOnlyFileStillFailsForUnreadyHarness(t *testing.T) {
+	t.Parallel()
+
+	path := writeDoctorClaudeHarnessAgentFile(t)
+
+	output, err := executeDoctor(t, []string{path},
+		withDoctorTestEnv(nil, nil, dmr.ErrNotInstalled),
+		withClaudeProbe(codingharness.ClaudeCLIStatus{
+			State:  codingharness.ClaudeStateNotInstalled,
+			Detail: "the `claude` CLI was not found in PATH",
+		}))
+
+	require.Error(t, err)
+	assert.NotContains(t, output, "no usable model")
+	assert.Contains(t, output, "not found in PATH")
+}
+
+// A mixed file keeps the model-backed agents' requirements: the global model
+// diagnosis stays blocking even though one agent runs through a harness.
+func TestDoctorCommand_MixedFileStillFailsForModelSetup(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "mixed-agent.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`
+agents:
+  root:
+    model: openai/gpt-5
+    instruction: route coding tasks
+    sub_agents:
+      - coder
+  coder:
+    description: Claude Code specialist
+    instruction: test harness agent
+    harness:
+      type: claude-code
+`), 0o600))
+
+	output, err := executeDoctor(t, []string{path},
+		withDoctorTestEnv(nil, nil, dmr.ErrNotInstalled),
+		withClaudeProbe(codingharness.ClaudeCLIStatus{
+			State:   codingharness.ClaudeStateAuthenticated,
+			Version: "2.1.210 (Claude Code)",
+		}))
+
+	require.Error(t, err, "a model-backed agent still needs the model setup")
+	assert.Contains(t, output, "no usable model")
+	assert.NotContains(t, output, "runs through a coding harness")
 }
 
 func TestCredentialCandidates(t *testing.T) {

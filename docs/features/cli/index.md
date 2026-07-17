@@ -229,7 +229,7 @@ $ docker agent toolsets --format json | jq             # machine-readable (type,
 
 ### `docker agent setup`
 
-Set up a model interactively. Three paths: pick a cloud provider, paste its API key, and store it in the Docker Agent env file `~/.config/cagent/.env`; check Docker Model Runner and pull a local model (no API key needed); or register a custom OpenAI-compatible provider (endpoint URL, API format, and API key variable) saved to your [user configuration](../../providers/custom/index.md#global-providers-user-configuration) so its models work everywhere via `--model <name>/<model>`. Ends with the exact command to start chatting. Secret values are never printed.
+Set up a model interactively. Four paths: pick a cloud provider, paste its API key, and store it in the Docker Agent env file `~/.config/cagent/.env`; check Docker Model Runner and pull a local model (no API key needed); register a custom OpenAI-compatible provider (endpoint URL, API format, and API key variable) saved to your [user configuration](../../providers/custom/index.md#global-providers-user-configuration) so its models work everywhere via `--model <name>/<model>`; or set up the [Claude Code harness](../harnesses/index.md) to use a Claude subscription through the official `claude` CLI — the wizard checks that the CLI is installed and logged in, offers to run `claude auth login --claudeai` (only after you confirm), and writes a ready-to-run `claude-code-agent.yaml`. Ends with the exact command to start chatting. Secret values are never printed, and Docker Agent never reads or copies the Claude CLI's credentials.
 
 The wizard is also offered automatically when an interactive run finds no usable model (decline-able; set `DOCKER_AGENT_NO_SETUP=1` to suppress the offer).
 
@@ -245,7 +245,7 @@ Diagnose the model and credential setup. Reports which model providers have cred
 $ docker agent doctor [agent-file|registry-ref] [flags]
 ```
 
-With an agent file, also lists the environment variables that file requires (model credentials and tool secrets such as `GITHUB_PERSONAL_ACCESS_TOKEN`), whether each one is set, and from which source.
+With an agent file, also lists the environment variables that file requires (model credentials and tool secrets such as `GITHUB_PERSONAL_ACCESS_TOKEN`), whether each one is set, and from which source. When the file declares a [`claude-code` harness](../harnesses/index.md) agent, the doctor additionally checks that the official `claude` CLI is installed and logged in, reporting its version and safe login metadata (auth method, API provider, subscription type — never your email, organization, or tokens); a missing or logged-out CLI is reported as an issue with the `claude auth login --claudeai` remediation.
 
 | Flag                     | Default | Description                                                    |
 | ------------------------ | ------- | -------------------------------------------------------------- |

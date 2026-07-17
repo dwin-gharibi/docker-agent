@@ -15,7 +15,9 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/docker/docker-agent/pkg/chatgpt"
+	"github.com/docker/docker-agent/pkg/codingharness"
 	"github.com/docker/docker-agent/pkg/config"
+	"github.com/docker/docker-agent/pkg/config/latest"
 	"github.com/docker/docker-agent/pkg/environment"
 	"github.com/docker/docker-agent/pkg/model/provider/dmr"
 	"github.com/docker/docker-agent/pkg/telemetry"
@@ -83,6 +85,9 @@ type doctorAgentFileStatus struct {
 	Ref            string                 `json:"ref"`
 	Requirements   []doctorEnvRequirement `json:"requirements,omitempty"`
 	ToolCheckError string                 `json:"tool_check_error,omitempty"`
+	// ClaudeCode is only set when the agent file uses a claude-code harness.
+	// It carries no identity or credential data (see ClaudeCLIStatus).
+	ClaudeCode *codingharness.ClaudeCLIStatus `json:"claude_code_harness,omitempty"`
 }
 
 type doctorEnvRequirement struct {
@@ -97,12 +102,14 @@ type doctorFlags struct {
 	runConfig  config.RuntimeConfig
 
 	// Test seams: sourcesForTests replaces the env-file + default secret-source
-	// chain, dmrLister replaces dmr.ListModels, and loadUserConfig replaces
-	// userconfig.Load so tests never exec `docker model` or credential helpers,
-	// and never read the developer's real configuration.
+	// chain, dmrLister replaces dmr.ListModels, loadUserConfig replaces
+	// userconfig.Load, and claudeProbe replaces the Claude Code CLI probe, so
+	// tests never exec `docker model`, `claude`, or credential helpers, and
+	// never read the developer's real configuration.
 	sourcesForTests []environment.Source
 	dmrLister       config.DMRModelLister
 	loadUserConfig  userConfigLoader
+	claudeProbe     func(ctx context.Context) codingharness.ClaudeCLIStatus
 }
 
 type doctorCmdOption func(*doctorFlags)
@@ -123,6 +130,8 @@ Reports, without ever printing secret values:
   - whether Docker Model Runner is reachable and which models are pulled
   - which model the 'auto' selection would pick
   - with an agent file: the environment variables it requires and their status
+  - with an agent file that uses a claude-code harness: whether the official
+    'claude' CLI is installed and logged in (safe metadata only, no tokens)
 
 Exits with a non-zero status when an issue would prevent an agent from running.`,
 		Example: `  docker-agent doctor
@@ -242,6 +251,21 @@ func (f *doctorFlags) buildReport(ctx context.Context, agentRef string) (*doctor
 		report.DMR = doctorDMRStatus{Status: dmrStatusUnreachable, Error: dmrErr.Error()}
 	}
 
+	// Load the supplied agent file before the model diagnosis: when every
+	// agent in it delegates to a coding harness, the file never uses Docker
+	// Agent's auto model, so global model issues must not block it.
+	var agentCfg *latest.Config
+	if agentRef != "" {
+		agentSource, err := config.Resolve(agentRef, env)
+		if err != nil {
+			return nil, err
+		}
+		if agentCfg, err = config.Load(ctx, agentSource); err != nil {
+			return nil, err
+		}
+	}
+	harnessOnly := agentCfg != nil && allAgentsHarnessBacked(agentCfg)
+
 	// Reuse the discovery results above instead of querying DMR a second time.
 	lister := func(context.Context) ([]string, error) { return dmrModels, dmrErr }
 	auto := config.AutoModelConfig(ctx, f.runConfig.ModelsGateway, env, f.runConfig.DefaultModel, lister)
@@ -257,6 +281,7 @@ func (f *doctorFlags) buildReport(ctx context.Context, agentRef string) (*doctor
 		Usable:           true,
 	}
 
+	var autoIssues []string
 	switch {
 	case f.runConfig.ModelsGateway != "":
 		autoStatus.Note = "credentials are supplied by the models gateway"
@@ -265,7 +290,7 @@ func (f *doctorFlags) buildReport(ctx context.Context, agentRef string) (*doctor
 		if environment.IsTrustedDockerURL(f.runConfig.ModelsGateway) {
 			if _, ok := findSource(ctx, sources, environment.DockerDesktopTokenEnv); !ok {
 				autoStatus.Usable = false
-				report.Issues = append(report.Issues,
+				autoIssues = append(autoIssues,
 					"the models gateway requires Docker Desktop sign-in and no DOCKER_TOKEN was found; sign in to Docker Desktop (check with `docker agent debug auth`)")
 			}
 		}
@@ -275,12 +300,12 @@ func (f *doctorFlags) buildReport(ctx context.Context, agentRef string) (*doctor
 		switch {
 		case dmrDown && fromDefault:
 			autoStatus.Usable = false
-			report.Issues = append(report.Issues, fmt.Sprintf(
+			autoIssues = append(autoIssues, fmt.Sprintf(
 				"the configured default model %s/%s needs Docker Model Runner, which is %s; install or start it (%s)",
 				auto.Provider, auto.Model, describeDMRStatus(report.DMR.Status), dmrDocsURL))
 		case dmrDown:
 			autoStatus.Usable = false
-			report.Issues = append(report.Issues, fmt.Sprintf(
+			autoIssues = append(autoIssues, fmt.Sprintf(
 				"no usable model: no provider credential was found and Docker Model Runner is %s; run `docker agent setup`, or set an API key for one of the providers above (%s) or install Docker Model Runner (%s)",
 				describeDMRStatus(report.DMR.Status), environment.SecretsDocsURL, dmrDocsURL))
 		case !slices.Contains(dmrModels, auto.Model):
@@ -292,35 +317,34 @@ func (f *doctorFlags) buildReport(ctx context.Context, agentRef string) (*doctor
 		// selection never picks a cloud provider without credentials.
 		if found, known := credFound[auto.Provider]; known && !found {
 			autoStatus.Usable = false
-			report.Issues = append(report.Issues, fmt.Sprintf(
+			autoIssues = append(autoIssues, fmt.Sprintf(
 				"the configured default model %s/%s has no credential for provider %s; %s (%s)",
 				auto.Provider, auto.Model, auto.Provider, providerCredentialHint(auto.Provider, primaryEnvVar[auto.Provider]), environment.SecretsDocsURL))
 		}
 	}
+
+	// Auto-model problems only block runs that need a model from Docker
+	// Agent. A harness-only file never does, so demote them to a note while
+	// keeping Usable truthful in the report.
+	if harnessOnly && len(autoIssues) > 0 {
+		autoStatus.Note = fmt.Sprintf("not required: every agent in %s runs through a coding harness", agentRef)
+	} else {
+		report.Issues = append(report.Issues, autoIssues...)
+	}
 	report.AutoModel = autoStatus
 
-	if agentRef != "" {
-		if err := f.checkAgentFile(ctx, agentRef, env, sources, report); err != nil {
-			return nil, err
-		}
+	if agentCfg != nil {
+		f.checkAgentFile(ctx, agentRef, agentCfg, env, sources, report)
 	}
 
 	return report, nil
 }
 
 // checkAgentFile reports the environment variables the agent configuration
-// requires (models and tools), whether each one is set, and from which source.
-func (f *doctorFlags) checkAgentFile(ctx context.Context, ref string, env environment.Provider, sources []environment.Source, report *doctorReport) error {
-	agentSource, err := config.Resolve(ref, env)
-	if err != nil {
-		return err
-	}
-
-	cfg, err := config.Load(ctx, agentSource)
-	if err != nil {
-		return err
-	}
-
+// requires (models and tools), whether each one is set, and from which
+// source. The configuration was already loaded by buildReport (which also
+// needs it for the harness-only check), so the file is never loaded twice.
+func (f *doctorFlags) checkAgentFile(ctx context.Context, ref string, cfg *latest.Config, env environment.Provider, sources []environment.Source, report *doctorReport) {
 	status := &doctorAgentFileStatus{Ref: ref}
 
 	// first_available selectors resolve to the first candidate with
@@ -361,8 +385,71 @@ func (f *doctorFlags) checkAgentFile(ctx context.Context, ref string, env enviro
 			ref, strings.Join(missing, ", "), environment.SecretsDocsURL))
 	}
 
+	// The Claude Code harness runs the local `claude` CLI with its own login,
+	// so its health is only relevant (and only probed) when the file actually
+	// declares a claude-code harness agent.
+	if agentsUseClaudeCodeHarness(cfg) {
+		claudeStatus := f.probeClaudeCode(ctx)
+		status.ClaudeCode = &claudeStatus
+		if issue := claudeHarnessIssue(ref, claudeStatus); issue != "" {
+			report.Issues = append(report.Issues, issue)
+		}
+	}
+
 	report.AgentFile = status
-	return nil
+}
+
+func (f *doctorFlags) probeClaudeCode(ctx context.Context) codingharness.ClaudeCLIStatus {
+	if f.claudeProbe != nil {
+		return f.claudeProbe(ctx)
+	}
+	return codingharness.ProbeClaudeCLI(ctx)
+}
+
+// agentsUseClaudeCodeHarness reports whether at least one agent in the
+// configuration delegates its work to a claude-code harness.
+func agentsUseClaudeCodeHarness(cfg *latest.Config) bool {
+	for _, agent := range cfg.Agents {
+		if agent.Harness != nil && agent.Harness.Type == codingharness.TypeClaudeCode {
+			return true
+		}
+	}
+	return false
+}
+
+// allAgentsHarnessBacked reports whether every agent in the configuration
+// delegates its work to a coding harness. Such a file never uses a Docker
+// Agent model provider, so the auto model selection is irrelevant to it.
+func allAgentsHarnessBacked(cfg *latest.Config) bool {
+	if len(cfg.Agents) == 0 {
+		return false
+	}
+	for _, agent := range cfg.Agents {
+		if agent.Harness == nil {
+			return false
+		}
+	}
+	return true
+}
+
+// claudeHarnessIssue phrases the report issue for a Claude Code harness that
+// is not ready to run, including how to fix it. The login always has to
+// happen as the OS user and environment that run docker-agent, because the
+// harness inherits the CLI's per-user credentials.
+func claudeHarnessIssue(ref string, status codingharness.ClaudeCLIStatus) string {
+	switch status.State {
+	case codingharness.ClaudeStateNotInstalled:
+		return fmt.Sprintf("%s uses a claude-code harness but the `claude` CLI was not found in PATH; install Claude Code (%s) and log in with `%s`",
+			ref, codingharness.ClaudeInstallDocsURL, codingharness.ClaudeLoginCommand)
+	case codingharness.ClaudeStateAuthCheckFailed:
+		return fmt.Sprintf("%s uses a claude-code harness but the Claude Code login could not be verified (%s); run `claude auth status` as the same OS user and environment that run docker-agent",
+			ref, status.Detail)
+	case codingharness.ClaudeStateUnauthenticated:
+		return fmt.Sprintf("%s uses a claude-code harness but the `claude` CLI is not logged in; run `%s` as the same OS user and environment that run docker-agent",
+			ref, codingharness.ClaudeLoginCommand)
+	default:
+		return ""
+	}
 }
 
 // secretSources returns the labeled secret sources in the same precedence
@@ -494,6 +581,7 @@ func printDoctorReport(w io.Writer, report *doctorReport) {
 		if af.ToolCheckError != "" {
 			fmt.Fprintf(w, "  Warning: %s\n", af.ToolCheckError)
 		}
+		printClaudeHarnessStatus(w, af.ClaudeCode)
 	}
 
 	if len(report.Issues) == 0 {
@@ -517,5 +605,35 @@ func credentialCandidates(envVars []string) string {
 		return envVars[0]
 	default:
 		return fmt.Sprintf("%s (+%d more)", envVars[0], len(envVars)-1)
+	}
+}
+
+// printClaudeHarnessStatus renders the Claude Code harness section of the
+// report: installation, version, and safe login metadata, with the
+// remediation for each unhealthy state.
+func printClaudeHarnessStatus(w io.Writer, status *codingharness.ClaudeCLIStatus) {
+	if status == nil {
+		return
+	}
+
+	version := status.Version
+	if version == "" {
+		version = "unknown version"
+	}
+
+	fmt.Fprintln(w, "\nClaude Code harness")
+	switch status.State {
+	case codingharness.ClaudeStateAuthenticated:
+		fmt.Fprintf(w, "  Status: logged in (%s)\n", status.AuthSummary())
+		fmt.Fprintf(w, "  Version: %s\n", version)
+	case codingharness.ClaudeStateUnauthenticated:
+		fmt.Fprintf(w, "  Status: installed (%s), not logged in\n", version)
+		fmt.Fprintf(w, "  Log in with `%s` as the same OS user and environment that run docker-agent.\n", codingharness.ClaudeLoginCommand)
+	case codingharness.ClaudeStateNotInstalled:
+		fmt.Fprintln(w, "  Status: the `claude` CLI was not found in PATH")
+		fmt.Fprintf(w, "  Install Claude Code (%s) and log in with `%s`.\n", codingharness.ClaudeInstallDocsURL, codingharness.ClaudeLoginCommand)
+	default: // auth-check-failed
+		fmt.Fprintf(w, "  Status: installed (%s), login check failed: %s\n", version, status.Detail)
+		fmt.Fprintln(w, "  Run `claude auth status` as the same OS user and environment that run docker-agent.")
 	}
 }

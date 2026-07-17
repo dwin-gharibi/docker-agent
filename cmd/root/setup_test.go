@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -15,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/docker/docker-agent/pkg/chatgpt"
+	"github.com/docker/docker-agent/pkg/codingharness"
 	"github.com/docker/docker-agent/pkg/config"
 	"github.com/docker/docker-agent/pkg/config/latest"
 	"github.com/docker/docker-agent/pkg/environment"
@@ -70,6 +73,10 @@ func newTestWizard(answers string, keys []string, stores []environment.SecretSto
 		},
 		saveProvider: func(string, latest.ProviderConfig) error { return nil },
 		listModels:   func(context.Context, string, string) []string { return nil },
+		probeClaudeCLI: func(context.Context) codingharness.ClaudeCLIStatus {
+			return codingharness.ClaudeCLIStatus{State: codingharness.ClaudeStateNotInstalled, Detail: "not scripted"}
+		},
+		claudeLogin: func(context.Context) error { return errors.New("claude login is not scripted") },
 	}
 	return wizard, &out, &pulled
 }
@@ -264,7 +271,7 @@ func TestSetupWizard_InvalidChoiceReasks(t *testing.T) {
 	_, err := wizard.run(t.Context())
 	require.NoError(t, err)
 
-	assert.Contains(t, out.String(), "Enter a number between 1 and 3.")
+	assert.Contains(t, out.String(), "Enter a number between 1 and 4.")
 	assert.Empty(t, *pulled)
 }
 
@@ -410,6 +417,370 @@ func TestSetupWizard_CustomPathSurfacesSaveFailure(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `saving provider "myprovider" to the user config`)
 	assert.Contains(t, err.Error(), "disk full")
+}
+
+// claudeProbeScript scripts successive probe results for the Claude harness
+// path and records how often the probe and the login ran.
+type claudeProbeScript struct {
+	statuses   []codingharness.ClaudeCLIStatus
+	probeCalls int
+	loginCalls int
+	loginErr   error
+}
+
+func (s *claudeProbeScript) probe(context.Context) codingharness.ClaudeCLIStatus {
+	status := s.statuses[min(s.probeCalls, len(s.statuses)-1)]
+	s.probeCalls++
+	return status
+}
+
+func (s *claudeProbeScript) login(context.Context) error {
+	s.loginCalls++
+	return s.loginErr
+}
+
+var claudeAuthenticatedStatus = codingharness.ClaudeCLIStatus{
+	State:            codingharness.ClaudeStateAuthenticated,
+	Version:          "2.1.210 (Claude Code)",
+	AuthMethod:       "claude.ai",
+	APIProvider:      "firstParty",
+	SubscriptionType: "pro",
+}
+
+// newClaudeHarnessWizard wires a wizard for the Claude harness path: scripted
+// probe results and a temp dir for the generated agent file.
+func newClaudeHarnessWizard(t *testing.T, answers string, script *claudeProbeScript) (*setupWizard, *bytes.Buffer, string) {
+	t.Helper()
+
+	wizard, out, _ := newTestWizard(answers, nil, nil, nil, nil)
+	wizard.probeClaudeCLI = script.probe
+	wizard.claudeLogin = script.login
+	dir := t.TempDir()
+	wizard.agentFileDir = dir
+	return wizard, out, dir
+}
+
+func TestSetupWizard_ClaudeHarnessAlreadyLoggedIn(t *testing.T) {
+	t.Parallel()
+
+	script := &claudeProbeScript{statuses: []codingharness.ClaudeCLIStatus{claudeAuthenticatedStatus}}
+	// harness -> no model override -> default effort
+	wizard, out, dir := newClaudeHarnessWizard(t, "4\n\n\n", script)
+
+	result, err := wizard.run(t.Context())
+	require.NoError(t, err)
+
+	assert.Zero(t, script.loginCalls, "an authenticated CLI must not trigger a login")
+	assert.True(t, result.ClaudeHarness)
+	assert.Equal(t, filepath.Join(dir, "claude-code-agent.yaml"), result.AgentFile)
+
+	content, readErr := os.ReadFile(result.AgentFile)
+	require.NoError(t, readErr)
+	assert.Contains(t, string(content), "type: claude-code")
+	assert.Contains(t, string(content), "effort: medium")
+	assert.NotContains(t, string(content), "model:", "an empty override keeps the Claude Code default")
+
+	output := out.String()
+	assert.Contains(t, output, "Claude Code 2.1.210 is installed and logged in (auth: claude.ai, api: firstParty, subscription: pro).")
+	assert.NotContains(t, output, "(Claude Code)", "the version must not repeat the product name")
+	assert.Contains(t, output, "--dangerously-skip-permissions")
+	assert.Contains(t, output, "--worktree")
+	assert.Contains(t, output, "`--sandbox` does not carry the `claude` CLI or its login", "sandbox mode must not be presented as harness isolation")
+	assert.Contains(t, output, "docker agent run "+result.AgentFile)
+	assert.Contains(t, output, "docker agent doctor "+result.AgentFile)
+	assert.NotContains(t, output, "--model", "the harness model is not a docker agent provider model")
+}
+
+func TestSetupWizard_ClaudeHarnessNotInstalled(t *testing.T) {
+	t.Parallel()
+
+	script := &claudeProbeScript{statuses: []codingharness.ClaudeCLIStatus{{
+		State:  codingharness.ClaudeStateNotInstalled,
+		Detail: "the `claude` CLI was not found in PATH",
+	}}}
+	wizard, _, _ := newClaudeHarnessWizard(t, "4\n", script)
+
+	_, err := wizard.run(t.Context())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found in PATH")
+	assert.Contains(t, err.Error(), codingharness.ClaudeInstallDocsURL)
+	assert.Contains(t, err.Error(), "claude auth login --claudeai")
+	assert.Zero(t, script.loginCalls)
+}
+
+func TestSetupWizard_ClaudeHarnessLoginDeclined(t *testing.T) {
+	t.Parallel()
+
+	script := &claudeProbeScript{statuses: []codingharness.ClaudeCLIStatus{{
+		State:   codingharness.ClaudeStateUnauthenticated,
+		Version: "2.1.210 (Claude Code)",
+	}}}
+	// harness -> decline the login offer
+	wizard, out, _ := newClaudeHarnessWizard(t, "4\nn\n", script)
+
+	_, err := wizard.run(t.Context())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not logged in")
+	assert.Contains(t, err.Error(), "claude auth login --claudeai")
+	assert.Zero(t, script.loginCalls, "declining must not run the login")
+
+	output := out.String()
+	assert.Contains(t, output, "Claude Code 2.1.210 is installed but not logged in.")
+	assert.Contains(t, output, "same OS user and environment")
+}
+
+// An empty answer to the login offer must not run the login either: only an
+// explicit yes does.
+func TestSetupWizard_ClaudeHarnessLoginNeedsExplicitYes(t *testing.T) {
+	t.Parallel()
+
+	script := &claudeProbeScript{statuses: []codingharness.ClaudeCLIStatus{{
+		State: codingharness.ClaudeStateUnauthenticated,
+	}}}
+	wizard, _, _ := newClaudeHarnessWizard(t, "4\n\n", script)
+
+	_, err := wizard.run(t.Context())
+	require.Error(t, err)
+	assert.Zero(t, script.loginCalls)
+}
+
+func TestSetupWizard_ClaudeHarnessLoginRunsAfterConfirmation(t *testing.T) {
+	t.Parallel()
+
+	script := &claudeProbeScript{statuses: []codingharness.ClaudeCLIStatus{
+		{State: codingharness.ClaudeStateUnauthenticated, Version: "2.1.210 (Claude Code)"},
+		claudeAuthenticatedStatus,
+	}}
+	// harness -> confirm login -> model override -> xhigh effort
+	wizard, out, _ := newClaudeHarnessWizard(t, "4\ny\nsonnet\nxhigh\n", script)
+
+	result, err := wizard.run(t.Context())
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, script.loginCalls)
+	assert.Equal(t, 2, script.probeCalls, "the state must be re-probed after the login")
+
+	content, readErr := os.ReadFile(result.AgentFile)
+	require.NoError(t, readErr)
+	assert.Contains(t, string(content), "model: sonnet")
+	assert.Contains(t, string(content), "effort: xhigh")
+
+	assert.Contains(t, out.String(), "Logged in (auth: claude.ai, api: firstParty, subscription: pro)")
+}
+
+func TestSetupWizard_ClaudeHarnessStillUnauthenticatedAfterLogin(t *testing.T) {
+	t.Parallel()
+
+	script := &claudeProbeScript{statuses: []codingharness.ClaudeCLIStatus{{
+		State: codingharness.ClaudeStateUnauthenticated,
+	}}}
+	wizard, _, _ := newClaudeHarnessWizard(t, "4\ny\n", script)
+
+	_, err := wizard.run(t.Context())
+	require.Error(t, err)
+	assert.Equal(t, 1, script.loginCalls)
+	assert.Contains(t, err.Error(), "still reports it is not logged in")
+	assert.Contains(t, err.Error(), "claude auth status")
+}
+
+func TestSetupWizard_ClaudeHarnessLoginFailure(t *testing.T) {
+	t.Parallel()
+
+	script := &claudeProbeScript{
+		statuses: []codingharness.ClaudeCLIStatus{{State: codingharness.ClaudeStateAuthCheckFailed, Detail: "`claude auth status` failed: exit status 1"}},
+		loginErr: errors.New("exit status 130"),
+	}
+	wizard, out, _ := newClaudeHarnessWizard(t, "4\ny\n", script)
+
+	_, err := wizard.run(t.Context())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "`claude auth login --claudeai` failed")
+	assert.Contains(t, err.Error(), "exit status 130")
+	assert.Contains(t, out.String(), "login check failed: `claude auth status` failed: exit status 1")
+}
+
+func TestSetupWizard_ClaudeHarnessInvalidEffortReasks(t *testing.T) {
+	t.Parallel()
+
+	script := &claudeProbeScript{statuses: []codingharness.ClaudeCLIStatus{claudeAuthenticatedStatus}}
+	// harness -> no model -> invalid effort -> xhigh
+	wizard, out, _ := newClaudeHarnessWizard(t, "4\n\nturbo\nxhigh\n", script)
+
+	result, err := wizard.run(t.Context())
+	require.NoError(t, err)
+
+	assert.Contains(t, out.String(), "Enter one of low, medium, high, xhigh, max")
+	content, readErr := os.ReadFile(result.AgentFile)
+	require.NoError(t, readErr)
+	assert.Contains(t, string(content), "effort: xhigh")
+}
+
+func TestSetupWizard_ClaudeHarnessGeneratedFileIsValidConfig(t *testing.T) {
+	t.Parallel()
+
+	script := &claudeProbeScript{statuses: []codingharness.ClaudeCLIStatus{claudeAuthenticatedStatus}}
+	wizard, _, _ := newClaudeHarnessWizard(t, "4\nclaude-sonnet-4-5\nmax\n", script)
+
+	result, err := wizard.run(t.Context())
+	require.NoError(t, err)
+
+	cfg, err := config.Load(t.Context(), config.NewFileSource(result.AgentFile))
+	require.NoError(t, err, "the generated file must load and validate")
+	require.Len(t, cfg.Agents, 1)
+	agent := cfg.Agents[0]
+	require.NotNil(t, agent.Harness)
+	assert.Equal(t, "claude-code", agent.Harness.Type)
+	assert.Equal(t, "claude-sonnet-4-5", agent.Harness.Model)
+	assert.Equal(t, "max", agent.Harness.Effort)
+}
+
+func TestSetupWizard_ClaudeHarnessDoesNotOverwriteWithoutConfirmation(t *testing.T) {
+	t.Parallel()
+
+	// Only an explicit yes overwrites: "n" and an empty answer both decline.
+	tests := []struct {
+		name   string
+		answer string
+	}{
+		{name: "explicit no", answer: "n"},
+		{name: "empty answer", answer: ""},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			script := &claudeProbeScript{statuses: []codingharness.ClaudeCLIStatus{claudeAuthenticatedStatus}}
+			// harness -> no model -> default effort -> decline the overwrite
+			wizard, out, dir := newClaudeHarnessWizard(t, "4\n\n\n"+test.answer+"\n", script)
+			existing := filepath.Join(dir, "claude-code-agent.yaml")
+			require.NoError(t, os.WriteFile(existing, []byte("# precious\n"), 0o600))
+
+			result, err := wizard.run(t.Context())
+			require.NoError(t, err)
+
+			assert.True(t, result.ClaudeHarness)
+			assert.Empty(t, result.AgentFile)
+
+			content, readErr := os.ReadFile(existing)
+			require.NoError(t, readErr)
+			assert.Equal(t, "# precious\n", string(content), "the existing file must be left untouched")
+
+			// The declined path prints the complete copyable config and the command.
+			output := out.String()
+			assert.Contains(t, output, "already exists")
+			assert.Contains(t, output, "type: claude-code")
+			assert.Contains(t, output, "effort: medium")
+			assert.Contains(t, output, "docker agent run")
+		})
+	}
+}
+
+func TestSetupWizard_ClaudeHarnessOverwriteAfterConfirmation(t *testing.T) {
+	t.Parallel()
+
+	script := &claudeProbeScript{statuses: []codingharness.ClaudeCLIStatus{claudeAuthenticatedStatus}}
+	// harness -> no model -> default effort -> confirm the overwrite
+	wizard, _, dir := newClaudeHarnessWizard(t, "4\n\n\ny\n", script)
+	existing := filepath.Join(dir, "claude-code-agent.yaml")
+	require.NoError(t, os.WriteFile(existing, []byte("# old\n"), 0o600))
+
+	result, err := wizard.run(t.Context())
+	require.NoError(t, err)
+
+	assert.Equal(t, existing, result.AgentFile)
+	content, readErr := os.ReadFile(existing)
+	require.NoError(t, readErr)
+	assert.Contains(t, string(content), "type: claude-code")
+}
+
+// The Claude Code harness path configures an external CLI agent file the
+// failed invocation cannot use: completing the offer must not retry the old
+// configuration and must not exit zero, because the original run never
+// happened.
+func TestCompleteOfferedSetup_ClaudeHarnessFailsWithoutRetry(t *testing.T) {
+	t.Parallel()
+
+	for _, result := range []*setupResult{
+		{ClaudeHarness: true, AgentFile: "claude-code-agent.yaml"},
+		{ClaudeHarness: true}, // declined overwrite: the config was printed, not written
+	} {
+		f := &runExecFlags{}
+		var out bytes.Buffer
+		retried := false
+
+		err := f.completeOfferedSetup(t.Context(), result, &out, func() error {
+			retried = true
+			return nil
+		})
+
+		require.ErrorIs(t, err, errClaudeHarnessConfigured)
+		assert.False(t, retried, "the old configuration must not be retried")
+		assert.Contains(t, err.Error(), "docker agent run")
+		assert.Empty(t, out.String(), "no retry banner when nothing is retried")
+	}
+}
+
+// The cloud, local, and custom paths still bridge the wizard's outcome into
+// the failed run and retry it exactly once.
+func TestCompleteOfferedSetup_ModelPathsRetry(t *testing.T) {
+	// Not parallel: the cloud case exports the stored key into the process
+	// environment (restored via t.Setenv).
+	tests := []struct {
+		name   string
+		result *setupResult
+		check  func(t *testing.T, f *runExecFlags)
+	}{
+		{
+			name:   "cloud key is exported for the retry",
+			result: &setupResult{EnvVar: "SETUP_RETRY_TEST_KEY", Value: "sk-retry", Model: "anthropic/claude-sonnet-4-6"},
+			check: func(t *testing.T, _ *runExecFlags) {
+				t.Helper()
+				assert.Equal(t, "sk-retry", os.Getenv("SETUP_RETRY_TEST_KEY"))
+			},
+		},
+		{
+			name:   "local model needs no bridging",
+			result: &setupResult{Model: "dmr/ai/qwen3:latest"},
+			check:  func(*testing.T, *runExecFlags) {},
+		},
+		{
+			name: "custom provider is bridged into the run config",
+			result: &setupResult{
+				ProviderName: "myprovider",
+				Provider:     &latest.ProviderConfig{BaseURL: "https://llm.example.com/v1", APIType: "openai_chatcompletions"},
+				Model:        "myprovider/corp-model",
+			},
+			check: func(t *testing.T, f *runExecFlags) {
+				t.Helper()
+				assert.Contains(t, f.runConfig.Providers, "myprovider")
+				require.NotNil(t, f.runConfig.DefaultModel)
+				assert.Equal(t, "myprovider", f.runConfig.DefaultModel.Provider)
+				assert.Equal(t, "corp-model", f.runConfig.DefaultModel.Model)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if test.result.EnvVar != "" {
+				t.Setenv(test.result.EnvVar, "") // restore the variable after the test
+			}
+
+			f := &runExecFlags{}
+			var out bytes.Buffer
+			retries := 0
+
+			err := f.completeOfferedSetup(t.Context(), test.result, &out, func() error {
+				retries++
+				return nil
+			})
+
+			require.NoError(t, err)
+			assert.Equal(t, 1, retries)
+			assert.Contains(t, out.String(), "Retrying with the new configuration...")
+			test.check(t, f)
+		})
+	}
 }
 
 func TestErrorIndicatesNoUsableModel(t *testing.T) {
