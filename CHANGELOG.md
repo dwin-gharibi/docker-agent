@@ -3,6 +3,82 @@
 All notable changes to this project will be documented in this file.
 
 
+## [v1.111.0] - 2026-07-17
+
+This release adds a new scheduler toolset, inline Mermaid diagram rendering, model switching in the lean TUI, project config autodiscovery, and a range of bug fixes and performance improvements across the agent, TUI, and server.
+
+## What's New
+
+- Adds a built-in `scheduler` toolset with `create_schedule`, `list_schedules`, and `cancel_schedule` tools, enabling agents to schedule instructions to run once at a time, after a delay, or on a recurring interval
+- Adds prompt cache miss warnings via an opt-in `warn_on_cache_miss` user setting that emits notifications when cached input tokens are absent after the first session response
+- Adds inline Mermaid diagram rendering in the TUI
+- Adds model switching (`/model`) to the lean TUI and shares fuzzy model search between the lean and full TUIs
+- Adds autodiscovery of `docker-agent.yaml`, `docker-agent.yml`, and `docker-agent.hcl` project config files for no-argument local `docker agent run`
+- Surfaces background-job elicitation (user-input) requests in the TUI, ensuring each request opens exactly one dialog regardless of which runtime delivers it
+- Makes a custom `base_url` on a model automatically imply `bypass_models_gateway: true`, removing the need to set it explicitly
+
+## Improvements
+
+- Improves session cost details in the TUI: aligns layout, color-codes cost percentages per message, groups averages together, and puts "Total" on its own line
+- Speeds up model switcher credential discovery by deduplicating credential names and resolving lookups concurrently, reducing model-picker latency
+- Parallelizes toolset startup and prefetches the MCP catalog off the load critical path, reducing agent startup time
+
+## Bug Fixes
+
+- Fixes glob wildcard matching in permissions so `*` and `?` span path separators (`/`) in argument values such as file paths and URLs
+- Fixes a bug where setting `defer_all: true` on a toolset caused the toolset's custom `Instructions` to be permanently dropped from the agent's context
+- Fixes `SafetyPolicy` not persisting across turns, causing users to be re-prompted for tool approvals they had already opted into
+- Fixes background elicitations over the API so requests from concurrent background jobs are replayable and answerable instead of being auto-declined
+- Fixes Anthropic cache breakpoints exceeding the hard limit of 4 when deferred tools are present, which caused API errors at runtime
+- Fixes the TUI editor not regaining focus after external editing (`Ctrl+G`), which caused Enter to route to the transcript instead of sending the composed message
+- Fixes the scheduler schema so `type: scheduler` is accepted in agent config files (was previously rejected by JSON schema validation)
+- Fixes foreground elicitations being delivered twice into the app event stream
+- Fixes a mutex unlock in the scheduler's `setRuntime` method to use `defer` for safer lock release
+- Fixes VCR cassette path normalization for portable prompt-file matching
+- Fixes CI workflow YAML indentation that caused all CI runs to fail before any job could start
+
+## Technical Changes
+
+- Adds `MapSlice` fan-out helper in the concurrent utilities package and uses it for parallel toolset operations
+- Serializes interactive OAuth flows across toolsets to prevent concurrent conflicts
+- Brings the documentation portal to WCAG 2.1 AA conformance across light and dark themes and adds a pa11y-ci CI gate to maintain it
+- Adds new documentation pages for the scheduler toolset, sandbox templates, custom commands, user settings, context and compaction guide, and fixes stale command syntax in the Named Commands docs
+### Pull Requests
+
+- [#3584](https://github.com/docker/docker-agent/pull/3584) - feat(tui,app): surface and correlate background-job elicitations in the TUI (#3584)
+- [#3605](https://github.com/docker/docker-agent/pull/3605) - fix(permissions): match glob wildcards across path separators
+- [#3624](https://github.com/docker/docker-agent/pull/3624) - feat(tui,app): surface & correlate background-job elicitations (#3584)
+- [#3625](https://github.com/docker/docker-agent/pull/3625) - feat(server): session-scoped elicitation sink for API/server runtimes (#3584)
+- [#3632](https://github.com/docker/docker-agent/pull/3632) - feat(tools): add "scheduler" toolset to run instructions on a time or recurring interval
+- [#3665](https://github.com/docker/docker-agent/pull/3665) - docs: update CHANGELOG.md for v1.110.0
+- [#3666](https://github.com/docker/docker-agent/pull/3666) - fix: repair CI workflow YAML and failing AgentsMd e2e test on main
+- [#3667](https://github.com/docker/docker-agent/pull/3667) - feat: custom base_url implies bypass_models_gateway
+- [#3670](https://github.com/docker/docker-agent/pull/3670) - fix(config): add scheduler toolset to agent-schema.json type enum
+- [#3671](https://github.com/docker/docker-agent/pull/3671) - feat: add prompt cache miss warnings
+- [#3672](https://github.com/docker/docker-agent/pull/3672) - Improve session cost details
+- [#3673](https://github.com/docker/docker-agent/pull/3673) - perf: speed up model switcher credential discovery
+- [#3674](https://github.com/docker/docker-agent/pull/3674) - Add model switching to the lean TUI
+- [#3675](https://github.com/docker/docker-agent/pull/3675) - chore: bump go-isatty, openai-go, and libopenapi
+- [#3676](https://github.com/docker/docker-agent/pull/3676) - ci: bump golangci-lint-action to v9.3.0 and fix DeferMutexUnlock lint offense
+- [#3677](https://github.com/docker/docker-agent/pull/3677) - ci: bump pinned actions to latest same-major versions
+- [#3678](https://github.com/docker/docker-agent/pull/3678) - fix(server): surface background elicitations over API
+- [#3679](https://github.com/docker/docker-agent/pull/3679) - Render Mermaid diagrams inline
+- [#3680](https://github.com/docker/docker-agent/pull/3680) - fix(teamloader): preserve deferred toolset instructions
+- [#3681](https://github.com/docker/docker-agent/pull/3681) - feat(run): autodiscover project agent config
+- [#3682](https://github.com/docker/docker-agent/pull/3682) - docs(sandbox): document Docker Sandboxes integration and published sbx templates
+- [#3683](https://github.com/docker/docker-agent/pull/3683) - docs: surface orphan pages and add compaction, commands, and user-settings docs
+- [#3684](https://github.com/docker/docker-agent/pull/3684) - docs(agents): fix stale command syntax and sub_agents claim in Named Commands
+- [#3685](https://github.com/docker/docker-agent/pull/3685) - fix(session): persist SafetyPolicy across turns
+- [#3687](https://github.com/docker/docker-agent/pull/3687) - fix(docs): WCAG 2.1 AA accessibility remediation for the docs portal
+- [#3688](https://github.com/docker/docker-agent/pull/3688) - perf: parallelize toolset startup and prefetch MCP catalog
+- [#3690](https://github.com/docker/docker-agent/pull/3690) - fix(tui): refocus the editor after external editing so Enter sends the content
+- [#3691](https://github.com/docker/docker-agent/pull/3691) - Implements the path-aware, two-tier documentation accessibility CI gate
+- [#3692](https://github.com/docker/docker-agent/pull/3692) - fix(anthropic): keep cache breakpoints within Anthropic's limit of 4 with deferred tools
+- [#3693](https://github.com/docker/docker-agent/pull/3693) - fix(docs): render --link-hover on light-mode callout-link hover
+- [#3697](https://github.com/docker/docker-agent/pull/3697) - build(deps): bump the pip group across 1 directory with 2 updates
+- [#566581](https://github.com/docker/docker-agent/pull/566581) - fix(docs): rebalance how-it-works.svg colors for both themes (a11y PR 8/9)
+
+
 ## [v1.110.0] - 2026-07-15
 
 This release adds dynamic MCP HTTP headers, new shell safety policies, per-model custom pricing, and cache-stable dynamic prompts, along with fixes for elicitation delivery and session cost tracking.
@@ -4746,3 +4822,5 @@ This release improves the terminal user interface with better error handling and
 [v1.109.0]: https://github.com/docker/docker-agent/releases/tag/v1.109.0
 
 [v1.110.0]: https://github.com/docker/docker-agent/releases/tag/v1.110.0
+
+[v1.111.0]: https://github.com/docker/docker-agent/releases/tag/v1.111.0
