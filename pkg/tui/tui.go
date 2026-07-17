@@ -38,6 +38,7 @@ import (
 	"github.com/docker/docker-agent/pkg/tui/components/tour"
 	"github.com/docker/docker-agent/pkg/tui/core"
 	"github.com/docker/docker-agent/pkg/tui/dialog"
+	tuiimage "github.com/docker/docker-agent/pkg/tui/image"
 	"github.com/docker/docker-agent/pkg/tui/internal/editorname"
 	"github.com/docker/docker-agent/pkg/tui/internal/termfeatures"
 	"github.com/docker/docker-agent/pkg/tui/messages"
@@ -257,6 +258,8 @@ type appModel struct {
 	// disabledCommands holds slash commands to hide and disable.
 	// Normalized to start with "/".
 	disabledCommands map[string]bool
+
+	imageWriter *tuiimage.Writer
 }
 
 // themeFileWatcher is the subset of *styles.ThemeWatcher the model drives.
@@ -294,6 +297,13 @@ func WithLeanMode() Option {
 func WithHideSidebar() Option {
 	return func(m *appModel) {
 		m.hideSidebar = true
+	}
+}
+
+// WithImageWriter enables image overlays for Bubble Tea's cell-based renderer.
+func WithImageWriter(writer *tuiimage.Writer) Option {
+	return func(m *appModel) {
+		m.imageWriter = writer
 	}
 }
 
@@ -890,6 +900,9 @@ func (m *appModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// --- Window / Terminal ---
 
 	case tea.WindowSizeMsg:
+		if m.imageWriter != nil {
+			m.imageWriter.Invalidate()
+		}
 		m.wWidth, m.wHeight = msg.Width, msg.Height
 		cmd := m.handleWindowResize(msg.Width, msg.Height)
 		return m, cmd
@@ -2836,10 +2849,17 @@ func (m *appModel) View() tea.View {
 		}
 
 		compositor := lipgloss.NewCompositor(allLayers...)
-		return toFullscreenView(compositor.Render(), windowTitle, m.chatPage.IsWorking(), m.leanMode)
+		return m.fullscreenView(compositor.Render(), windowTitle)
 	}
 
-	return toFullscreenView(baseView, windowTitle, m.chatPage.IsWorking(), m.leanMode)
+	return m.fullscreenView(baseView, windowTitle)
+}
+
+func (m *appModel) fullscreenView(content, windowTitle string) tea.View {
+	if m.imageWriter != nil {
+		content = m.imageWriter.SetContent(content)
+	}
+	return toFullscreenView(content, windowTitle, m.chatPage.IsWorking(), m.leanMode)
 }
 
 // windowTitle returns the terminal window title for the current model state.

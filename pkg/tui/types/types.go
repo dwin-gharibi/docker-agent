@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/docker/docker-agent/pkg/tools"
+	tuiimage "github.com/docker/docker-agent/pkg/tui/image"
 )
 
 // MessageType represents different types of messages
@@ -70,6 +71,7 @@ type Message struct {
 	ToolDefinition tools.Tool            // Definition of the tool being called
 	ToolStatus     ToolStatus            // Status for tool calls
 	ToolResult     *tools.ToolCallResult // Result of tool call (when completed)
+	Images         []tuiimage.Inline     // Prepared terminal images from the result
 	// StartedAt records when a tool call entered ToolStatusRunning.
 	// Used to display elapsed time for long-running tool calls.
 	StartedAt *time.Time

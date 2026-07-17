@@ -110,13 +110,16 @@ func resolve(key string) (Builder, bool) {
 // Lookup order: exact tool name, then "category:<category>", then default.
 // At each tier a registered custom renderer wins over the built-in one.
 func New(msg *types.Message, sessionState service.SessionStateReader) layout.Model {
+	var view layout.Model
 	if b, ok := resolve(msg.ToolCall.Function.Name); ok {
-		return b(msg, sessionState)
-	}
-	if cat := msg.ToolDefinition.Category; cat != "" {
+		view = b(msg, sessionState)
+	} else if cat := msg.ToolDefinition.Category; cat != "" {
 		if b, ok := resolve("category:" + cat); ok {
-			return b(msg, sessionState)
+			view = b(msg, sessionState)
 		}
 	}
-	return defaulttool.New(msg, sessionState)
+	if view == nil {
+		view = defaulttool.New(msg, sessionState)
+	}
+	return withInlineImages(view, msg.Images, sessionState)
 }

@@ -27,6 +27,7 @@ type Config struct {
 
 	AppName          string
 	DisabledCommands []string
+	RenderImages     *bool
 
 	// Banner overrides the ASCII-art welcome banner. When nil the built-in
 	// bannerLines ("docker agent") is used; embedders set it to brand the lean
@@ -166,6 +167,7 @@ type model struct {
 	appName          string
 	banner           []string
 	disabledCommands map[string]bool
+	renderImages     bool
 }
 
 func newModel(term *ui.Terminal, cfg Config) *model {
@@ -184,6 +186,8 @@ func newModel(term *ui.Terminal, cfg Config) *model {
 		sessionState = service.NewSessionState(cfg.App.Session())
 	}
 
+	renderImages := cfg.RenderImages == nil || *cfg.RenderImages
+
 	return &model{
 		app:              cfg.App,
 		term:             term,
@@ -197,6 +201,7 @@ func newModel(term *ui.Terminal, cfg Config) *model {
 		appName:          appName,
 		banner:           cfg.Banner,
 		disabledCommands: disabled,
+		renderImages:     renderImages,
 	}
 }
 

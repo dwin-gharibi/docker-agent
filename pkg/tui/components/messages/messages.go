@@ -29,6 +29,7 @@ import (
 	"github.com/docker/docker-agent/pkg/tui/components/tool/editfile"
 	"github.com/docker/docker-agent/pkg/tui/core"
 	"github.com/docker/docker-agent/pkg/tui/core/layout"
+	tuiimage "github.com/docker/docker-agent/pkg/tui/image"
 	"github.com/docker/docker-agent/pkg/tui/messages"
 	"github.com/docker/docker-agent/pkg/tui/service"
 	"github.com/docker/docker-agent/pkg/tui/styles"
@@ -1666,7 +1667,7 @@ func (m *model) AddToolResult(msg *runtime.ToolCallResponseEvent, status types.T
 		if m.messages[i].Type == types.MessageTypeAssistantReasoningBlock {
 			if block, ok := m.views[i].(*reasoningblock.Model); ok {
 				if block.HasToolCall(msg.ToolCallID) {
-					cmd := block.UpdateToolResult(msg.ToolCallID, msg.Response, status, msg.Result.WithoutPayload())
+					cmd := block.UpdateToolResult(msg.ToolCallID, msg.Response, status, msg.Result)
 					m.invalidateItem(i)
 					return cmd
 				}
@@ -1681,6 +1682,7 @@ func (m *model) AddToolResult(msg *runtime.ToolCallResponseEvent, status types.T
 			toolMessage.Content = strings.ReplaceAll(msg.Response, "\t", "    ")
 			toolMessage.ToolStatus = status
 			toolMessage.ToolResult = msg.Result.WithoutPayload()
+			toolMessage.Images = tuiimage.FromToolResult(msg.Result)
 			m.invalidateItem(i)
 
 			// The replaced view may still hold a running-spinner subscription.

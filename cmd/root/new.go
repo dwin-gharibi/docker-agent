@@ -17,8 +17,10 @@ import (
 	"github.com/docker/docker-agent/pkg/session"
 	"github.com/docker/docker-agent/pkg/telemetry"
 	"github.com/docker/docker-agent/pkg/tui"
+	tuiimage "github.com/docker/docker-agent/pkg/tui/image"
 	tuiinput "github.com/docker/docker-agent/pkg/tui/input"
 	"github.com/docker/docker-agent/pkg/tui/styles"
+	"github.com/docker/docker-agent/pkg/userconfig"
 )
 
 type newFlags struct {
@@ -131,12 +133,17 @@ func runTUIWrapped(ctx context.Context, rt runtime.Runtime, sess *session.Sessio
 	if wd == "" {
 		wd, _ = os.Getwd()
 	}
+	imageWriter := tuiimage.NewWriter(os.Stdout)
+	imageWriter.SetSupported(tuiimage.SupportsKittyGraphics(os.Stdin, os.Stdout))
+	imageWriter.SetEnabled(userconfig.Get().GetRenderImages())
+	tuiimage.SetRenderingEnabled(imageWriter.RenderingEnabled())
+	tuiOpts = append(tuiOpts, tui.WithImageWriter(imageWriter))
 	model := tui.New(ctx, spawner, a, wd, cleanup, tuiOpts...)
 	if wrap != nil {
 		model = wrap(model)
 	}
 
-	p := tea.NewProgram(model, tea.WithContext(ctx), tea.WithFilter(filter))
+	p := tea.NewProgram(model, tea.WithContext(ctx), tea.WithFilter(filter), tea.WithOutput(imageWriter))
 	coalescer.SetSender(p.Send)
 
 	if m, ok := model.(interface{ SetProgram(p *tea.Program) }); ok {

@@ -43,6 +43,7 @@ const (
 	rowSplitDiff
 	rowExpandThinking
 	rowHideToolResults
+	rowRenderImages
 	appearanceRowCount
 )
 
@@ -232,6 +233,8 @@ func (d *settingsDialog) changeValue(delta int) tea.Cmd {
 			d.current.ExpandThinking = !d.current.ExpandThinking
 		case rowHideToolResults:
 			d.current.HideToolResults = !d.current.HideToolResults
+		case rowRenderImages:
+			d.current.RenderImages = !d.current.RenderImages
 		}
 		if d.selected[d.tab] >= rowPosition && d.selected[d.tab] <= rowTodos {
 			return core.CmdHandler(messages.PreviewLayoutMsg{Layout: d.current.Layout})
@@ -361,7 +364,8 @@ func (d *settingsDialog) renderAppearanceTab(content *Content, inner int) {
 	content.AddSpace().
 		AddContent(d.renderToggleRow(rowSplitDiff, "Split diff view", d.current.SplitDiffView)).
 		AddContent(d.renderToggleRow(rowExpandThinking, "Expand thinking by default", d.current.ExpandThinking)).
-		AddContent(d.renderToggleRow(rowHideToolResults, "Hide tool results by default", d.current.HideToolResults))
+		AddContent(d.renderToggleRow(rowHideToolResults, "Hide tool results by default", d.current.HideToolResults)).
+		AddContent(d.renderToggleRow(rowRenderImages, "Render images", d.current.RenderImages))
 }
 
 func (d *settingsDialog) renderBehaviorTab(content *Content, inner int) {

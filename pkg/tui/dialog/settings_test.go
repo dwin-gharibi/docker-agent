@@ -13,7 +13,7 @@ import (
 
 func newTestSettingsDialog(t *testing.T, layout messages.LayoutSettings) *settingsDialog {
 	t.Helper()
-	d, ok := NewSettingsDialog(messages.Preferences{Layout: layout, SendMode: messages.SendModeSteer, SplitDiffView: true, TabTitleMaxLength: 20, SoundThreshold: 10}, true).(*settingsDialog)
+	d, ok := NewSettingsDialog(messages.Preferences{Layout: layout, SendMode: messages.SendModeSteer, SplitDiffView: true, RenderImages: true, TabTitleMaxLength: 20, SoundThreshold: 10}, true).(*settingsDialog)
 	require.True(t, ok)
 	d.Init()
 	d.Update(tea.WindowSizeMsg{Width: 100, Height: 50})
@@ -52,10 +52,10 @@ func TestSettingsDialogNavigation(t *testing.T) {
 	for range 20 {
 		d.Update(down)
 	}
-	require.Equal(t, rowHideToolResults, d.selected[tabAppearance], "down must stop at the last row")
+	require.Equal(t, rowRenderImages, d.selected[tabAppearance], "down must stop at the last row")
 
 	d.Update(up)
-	require.Equal(t, rowExpandThinking, d.selected[tabAppearance])
+	require.Equal(t, rowHideToolResults, d.selected[tabAppearance])
 }
 
 func TestSettingsDialogTabSwitching(t *testing.T) {

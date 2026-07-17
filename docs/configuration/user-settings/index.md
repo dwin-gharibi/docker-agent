@@ -39,6 +39,7 @@ You rarely need to hand-edit this file. Most fields are managed from the TUI's `
 | `hide_tool_results` | boolean | `false` | Hide tool call results in the TUI by default. Mirrors the `--hide-tool-results` flag and the <kbd>Ctrl</kbd>+<kbd>O</kbd> toggle. |
 | `expand_thinking` | boolean | `false` | Start new sessions with thinking/tool blocks expanded instead of collapsed. |
 | `split_diff_view` | boolean | `true` | Render file-edit diffs side-by-side instead of unified. |
+| `render_images` | boolean | `true` | Render images returned by tools in terminals that support the Kitty graphics protocol. |
 | `theme` | string | `default` | Theme name, loaded from a built-in theme or `~/.cagent/themes/<name>.yaml`. The special value `auto` follows the terminal's light/dark background. See [Theming](../../features/tui/index.md#theming). |
 | `theme_dark` | string | `default` | Theme applied when `theme: auto` and the terminal background is dark. |
 | `theme_light` | string | `default-light` | Theme applied when `theme: auto` and the terminal background is light. |
@@ -90,6 +91,7 @@ settings:
   lean: false
   expand_thinking: false
   split_diff_view: true
+  render_images: true
   hide_tool_results: false
   sound: true
   sound_threshold: 10
@@ -124,4 +126,4 @@ User settings are the **lowest-priority** source: they establish defaults, and a
 - **Aliases sit between CLI flags and user settings.** An [alias](../../features/cli/index.md#docker-agent-alias) (`docker agent alias add ...`) can bundle its own `yolo`, `model`, `hide_tool_results`, and `sandbox` defaults; those apply when the corresponding flag was not explicitly passed, the same way user settings do, but are resolved after user settings so an alias's own choices take priority over your global defaults.
 - **Permissions are merged, not overridden.** Global `settings.permissions` and an agent's own `permissions:` are combined into a single set of `deny` → `allow` → `ask` patterns before evaluation — a global deny always blocks, regardless of what the agent config allows. See [Merging Behavior](../permissions/index.md#merging-behavior).
 - **Hooks are additive, not overridden.** For a given lifecycle event, hooks from the agent config, `settings.hooks`, `hooks.d/` drop-ins, and `--hook-*` CLI flags **all** run, in that order. Global hooks cannot be suppressed by an individual agent.
-- **Everything else is a plain default.** Fields with no CLI or agent-config equivalent (`sound`, `sound_threshold`, `restore_tabs`, `tab_title_max_length`, `split_diff_view`, `cache_stable_prompts`, `warn_on_cache_miss`, `busy_send_mode`, `keybindings`, `layout`) only ever come from `settings:` (or the `/settings` dialog that writes it) — there is nothing to override them per run.
+- **Everything else is a plain default.** Fields with no CLI or agent-config equivalent (`sound`, `sound_threshold`, `restore_tabs`, `tab_title_max_length`, `split_diff_view`, `render_images`, `cache_stable_prompts`, `warn_on_cache_miss`, `busy_send_mode`, `keybindings`, `layout`) only ever come from `settings:` (or the `/settings` dialog that writes it) — there is nothing to override them per run.

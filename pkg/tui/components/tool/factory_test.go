@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -10,6 +11,7 @@ import (
 	"github.com/docker/docker-agent/pkg/tools/builtin/plan"
 	shelltool "github.com/docker/docker-agent/pkg/tools/builtin/shell"
 	"github.com/docker/docker-agent/pkg/tui/core/layout"
+	tuiimage "github.com/docker/docker-agent/pkg/tui/image"
 	"github.com/docker/docker-agent/pkg/tui/service"
 	"github.com/docker/docker-agent/pkg/tui/types"
 )
@@ -131,6 +133,23 @@ func TestNew_Dispatch(t *testing.T) {
 // renderer: the single-plan write/status tools do, while read_plan (shows the
 // full body), list_plans (many plans) and delete_plan (no status) intentionally
 // fall through to the default renderer.
+func TestNewRendersResultImagesWithinToolWidth(t *testing.T) {
+	msg := &types.Message{
+		ToolCall: tools.ToolCall{Function: tools.FunctionCall{Name: "image_tool"}},
+		Images: []tuiimage.Inline{{
+			Name: "screenshot.png", MIME: "image/png", PNGData: []byte("png"), Width: 1600, Height: 900,
+		}},
+	}
+
+	view := New(msg, service.StaticSessionState{})
+	view.SetSize(40, 0)
+	rendered := view.View()
+
+	assert.Contains(t, rendered, "cagent-image")
+	assert.Contains(t, rendered, ";36;", "image must stay inside the tool's available width")
+	assert.LessOrEqual(t, len(strings.Split(rendered, "\n")), 22, "image height must remain bounded")
+}
+
 func TestPlanToolsRouting(t *testing.T) {
 	withCleanToolRegistry(t)
 

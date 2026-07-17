@@ -55,7 +55,11 @@ func (m *model) handleEvent(ctx context.Context, ev any) {
 			}
 		}
 	case *runtime.ToolCallResponseEvent:
-		m.screen.Transcript.FinishTool(e.ToolCallID, ui.ToolResult{Response: e.Response, Result: e.Result, AgentName: e.GetAgentName(), ToolDefinition: e.ToolDefinition, Images: inlineImagesFromToolResult(e.Result)}, m.sessionState)
+		var images []ui.InlineImage
+		if m.renderImages {
+			images = inlineImagesFromToolResult(e.Result)
+		}
+		m.screen.Transcript.FinishTool(e.ToolCallID, ui.ToolResult{Response: e.Response, Result: e.Result, AgentName: e.GetAgentName(), ToolDefinition: e.ToolDefinition, Images: images}, m.sessionState)
 	case *runtime.ToolCallConfirmationEvent:
 		m.screen.Transcript.RemoveTool(ui.ToolViewID(e.ToolCall))
 		toolDef := ui.EnsureToolDefinition(e.ToolCall, e.ToolDefinition)

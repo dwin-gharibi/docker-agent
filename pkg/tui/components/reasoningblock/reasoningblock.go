@@ -17,6 +17,7 @@ import (
 	"github.com/docker/docker-agent/pkg/tui/components/markdown"
 	"github.com/docker/docker-agent/pkg/tui/components/tool"
 	"github.com/docker/docker-agent/pkg/tui/core/layout"
+	tuiimage "github.com/docker/docker-agent/pkg/tui/image"
 	"github.com/docker/docker-agent/pkg/tui/messages"
 	"github.com/docker/docker-agent/pkg/tui/service"
 	"github.com/docker/docker-agent/pkg/tui/styles"
@@ -275,7 +276,8 @@ func (m *Model) UpdateToolResult(toolCallID, content string, status types.ToolSt
 
 		entry.msg.Content = strings.ReplaceAll(content, "\t", "    ")
 		entry.msg.ToolStatus = status
-		entry.msg.ToolResult = result
+		entry.msg.ToolResult = result.WithoutPayload()
+		entry.msg.Images = tuiimage.FromToolResult(result)
 
 		// Set grace period if transitioning from in-progress to completed
 		// Total visible time = completedToolVisibleDuration + completedToolFadeDuration
