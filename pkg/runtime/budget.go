@@ -26,12 +26,12 @@ type budgetTracker struct {
 	maxCost   float64
 	maxTokens int64
 	maxTime   time.Duration
-	mu     sync.Mutex
-	cost   float64
-	tokens int64
-	active   time.Duration
-	unpriced bool
-	perAgent map[string]*agentSpend
+	mu        sync.Mutex
+	cost      float64
+	tokens    int64
+	active    time.Duration
+	unpriced  bool
+	perAgent  map[string]*agentSpend
 }
 
 type agentSpend struct {
@@ -96,8 +96,8 @@ type budgetSnapshot struct {
 	MaxTokens int64
 	Elapsed   time.Duration
 	MaxTime   time.Duration
-	Unpriced bool
-	PerAgent []agentBudgetSpend
+	Unpriced  bool
+	PerAgent  []agentBudgetSpend
 }
 
 type agentBudgetSpend struct {
@@ -218,9 +218,9 @@ func formatUSD(v float64) string {
 const runBudgetName = "run"
 
 type budgetSet struct {
-	trackers map[string]*budgetTracker
+	trackers     map[string]*budgetTracker
 	agentBudgets map[string][]string
-	order []string
+	order        []string
 }
 
 func (s *budgetSet) budgetsFor(agentName string) []namedTracker {
