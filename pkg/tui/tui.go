@@ -2753,7 +2753,7 @@ func (m *appModel) renderResizeHandle(width int) string {
 
 	// Always center handle on full width
 	fullLine := lipgloss.PlaceHorizontal(
-		max(0, innerWidth), lipgloss.Center, handle,
+		innerWidth, lipgloss.Center, handle,
 		lipgloss.WithWhitespaceChars("─"),
 		lipgloss.WithWhitespaceStyle(styles.ResizeHandleStyle),
 	)
@@ -2764,14 +2764,12 @@ func (m *appModel) renderResizeHandle(width int) string {
 		// Static indicator: the loop is idle until the user resumes.
 		resumeKey := styles.HighlightWhiteStyle.Render("/pause")
 		suffix := " " + styles.WarningStyle.Render("⏸ Paused") + " (" + resumeKey + " to resume)"
-		suffixWidth := lipgloss.Width(suffix)
-		result = lipgloss.NewStyle().MaxWidth(innerWidth-suffixWidth).Render(fullLine) + suffix
+		result = lineWithSuffix(fullLine, suffix, innerWidth)
 
 	case m.sessionState.PauseState() == service.PausePausing:
 		// The agent is finishing the in-flight request before it pauses.
 		suffix := " " + m.workingSpinner.View() + " " + styles.WarningStyle.Render("Pausing…") + " (finishing current request)"
-		suffixWidth := lipgloss.Width(suffix)
-		result = lipgloss.NewStyle().MaxWidth(innerWidth-suffixWidth).Render(fullLine) + suffix
+		result = lineWithSuffix(fullLine, suffix, innerWidth)
 
 	case m.chatPage.IsWorking():
 		// Truncate right side and append spinner (handle stays centered)
@@ -2782,20 +2780,30 @@ func (m *appModel) renderResizeHandle(width int) string {
 		suffix := " " + m.workingSpinner.View() + " " + styles.SpinnerDotsHighlightStyle.Render(workingText)
 		cancelKeyPart := styles.HighlightWhiteStyle.Render("Esc")
 		suffix += " (" + cancelKeyPart + " to interrupt)"
-		suffixWidth := lipgloss.Width(suffix)
-		result = lipgloss.NewStyle().MaxWidth(innerWidth-suffixWidth).Render(fullLine) + suffix
+		result = lineWithSuffix(fullLine, suffix, innerWidth)
 
 	case m.chatPage.QueueLength() > 0:
 		queueText := fmt.Sprintf("%d queued", m.chatPage.QueueLength())
 		suffix := " " + styles.WarningStyle.Render(queueText) + " "
-		suffixWidth := lipgloss.Width(suffix)
-		result = lipgloss.NewStyle().MaxWidth(innerWidth-suffixWidth).Render(fullLine) + suffix
+		result = lineWithSuffix(fullLine, suffix, innerWidth)
 
 	default:
 		result = fullLine
 	}
 
 	return lipgloss.NewStyle().Padding(0, styles.AppPadding).Render(result)
+}
+
+// lineWithSuffix appends a status suffix to the centered handle line,
+// truncating so the total never exceeds width. lipgloss ignores non-positive
+// MaxWidth values, so a suffix wider than the line must be truncated itself
+// or the row would overflow on narrow terminals.
+func lineWithSuffix(line, suffix string, width int) string {
+	suffixWidth := lipgloss.Width(suffix)
+	if suffixWidth >= width {
+		return lipgloss.NewStyle().MaxWidth(width).Render(suffix)
+	}
+	return lipgloss.NewStyle().MaxWidth(width-suffixWidth).Render(line) + suffix
 }
 
 // View renders the model.

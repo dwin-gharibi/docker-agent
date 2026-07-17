@@ -17,8 +17,9 @@ func TestChat_DegenerateResizeDoesNotPanic(t *testing.T) {
 
 	d.WaitFor(tuitest.Contains("Type your message here"))
 
-	// Stream an answer while cycling through degenerate sizes so the busy
-	// chrome (working indicator, resize handle suffix) renders too.
+	// Submit a prompt first so the busy chrome (working indicator, resize
+	// handle suffix) can render during the sweep when replay is still
+	// streaming; the sizes themselves are what must never panic.
 	d.Type("What's 2+2?").Enter()
 	for _, size := range [][2]int{{0, 0}, {1, 1}, {2, 2}, {1, 40}, {120, 1}, {3, 3}} {
 		d.Resize(size[0], size[1])
