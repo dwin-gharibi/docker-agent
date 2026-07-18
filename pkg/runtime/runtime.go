@@ -1139,6 +1139,7 @@ func toolsetStatusFor(ts tools.ToolSet) tools.ToolsetStatus {
 		// earlier if Start failed.
 		status.State = lifecycleStateForUnsupervised(ts)
 	}
+	_, status.Restartable = tools.As[tools.Restartable](ts)
 	status.Name = nameFor(ts, status.Description)
 	return status
 }

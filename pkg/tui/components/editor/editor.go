@@ -67,6 +67,15 @@ type Editor interface {
 	layout.Focusable
 	SetWorking(working bool) tea.Cmd
 	AcceptSuggestion() tea.Cmd
+	// TryStartArgumentCompletion opens the argument-completion popup for the
+	// slash command at the start of the editor's value (e.g.
+	// "/toolset-restart "), if that command exposes argument candidates.
+	// Called from the Tab/switchFocus path, never from editor keypress
+	// handling, so a bare space after a command never auto-opens a popup —
+	// only Tab does. Returns nil (leaving editor state untouched) when
+	// there's nothing to complete, so the caller can fall through to its own
+	// Tab handling (e.g. focus switch).
+	TryStartArgumentCompletion() tea.Cmd
 	ScrollByWheel(delta int)
 	// Value returns the current editor content
 	Value() string
@@ -123,6 +132,11 @@ type editor struct {
 	// completionWord stores the word being completed
 	completionWord    string
 	currentCompletion completions.Completion
+	// argumentPrefix is the exact "/slashCommand " prefix active during an
+	// argument-completion session (non-empty only then). It disambiguates
+	// full-line-splice argument selection (see the completion.SelectedMsg
+	// case) from the trigger-word splice used for name completion (/, @).
+	argumentPrefix string
 
 	suggestion    string
 	hasSuggestion bool
@@ -716,6 +730,20 @@ func (e *editor) Update(msg tea.Msg) (layout.Model, tea.Cmd) {
 		return e, cmd
 
 	case completion.SelectedMsg:
+		if e.argumentPrefix != "" {
+			// Argument-mode selection: Value is the FULL command line (e.g.
+			// "/toolset-restart github"), not a single word, so it replaces
+			// the editor content wholesale rather than splicing a trigger word.
+			if msg.AutoSubmit {
+				cmd := e.resetAndSend(msg.Value)
+				return e, cmd
+			}
+			e.textarea.SetValue(msg.Value)
+			e.textarea.MoveToEnd()
+			e.clearSuggestion()
+			return e, nil
+		}
+
 		if e.currentCompletion == nil {
 			return e, nil
 		}
@@ -765,6 +793,7 @@ func (e *editor) Update(msg tea.Msg) (layout.Model, tea.Cmd) {
 	case completion.ClosedMsg:
 		e.completionWord = ""
 		e.currentCompletion = nil
+		e.argumentPrefix = ""
 		e.refreshSuggestion()
 		// Reset file loading state
 		e.fileLoadStarted = false
@@ -1064,6 +1093,20 @@ func (e *editor) handleGraphemeBackspace() (layout.Model, tea.Cmd) {
 // updateCompletionQuery sends the appropriate completion message based on current editor state.
 // It returns a command that either updates the completion query or closes the completion popup.
 func (e *editor) updateCompletionQuery() tea.Cmd {
+	if e.argumentPrefix != "" {
+		value := e.textarea.Value()
+		if query, ok := strings.CutPrefix(value, e.argumentPrefix); ok {
+			return core.CmdHandler(completion.QueryMsg{Query: query})
+		}
+		// Value no longer starts with the argument prefix (e.g. the command
+		// name itself was edited) - end the argument-completion session.
+		e.argumentPrefix = ""
+		e.currentCompletion = nil
+		e.completionWord = ""
+		e.clearSuggestion()
+		return core.CmdHandler(completion.CloseMsg{})
+	}
+
 	currentWord := e.textarea.Word()
 
 	if e.currentCompletion != nil && strings.HasPrefix(currentWord, e.currentCompletion.Trigger()) {
@@ -1131,8 +1174,6 @@ func (e *editor) startFullFileLoad() tea.Cmd {
 }
 
 func (e *editor) startCompletion(c completions.Completion) tea.Cmd {
-	e.currentCompletion = c
-
 	// For @ trigger, open instantly with paste items + "Browse files…" and start async file loading
 	if c.Trigger() == "@" {
 		items := e.getPasteCompletionItems()
@@ -1147,10 +1188,7 @@ func (e *editor) startCompletion(c completions.Completion) tea.Cmd {
 			Pinned: true,
 		})
 
-		openCmd := core.CmdHandler(completion.OpenMsg{
-			Items:     items,
-			MatchMode: c.MatchMode(),
-		})
+		openCmd := e.openCompletion(c, items)
 
 		// Start initial shallow file loading immediately
 		loadCmd := e.startInitialFileLoad()
@@ -1158,12 +1196,55 @@ func (e *editor) startCompletion(c completions.Completion) tea.Cmd {
 		return tea.Batch(openCmd, loadCmd)
 	}
 
-	items := c.Items()
+	return e.openCompletion(c, c.Items())
+}
 
+// openCompletion activates c as the current completion source and opens the
+// popup with the given items. Shared by name-completion (startCompletion)
+// and argument-mode (TryStartArgumentCompletion), which supply different
+// item sets for the same completion source.
+func (e *editor) openCompletion(c completions.Completion, items []completion.Item) tea.Cmd {
+	e.currentCompletion = c
 	return core.CmdHandler(completion.OpenMsg{
 		Items:     items,
 		MatchMode: c.MatchMode(),
 	})
+}
+
+// TryStartArgumentCompletion implements [Editor]. See the interface doc for
+// the full contract.
+func (e *editor) TryStartArgumentCompletion() tea.Cmd {
+	value := e.textarea.Value()
+	// Require a space so a command name that's still being typed (and whose
+	// name-completion popup narrows it) never gets reinterpreted as an
+	// argument-completion trigger.
+	if !strings.Contains(value, " ") {
+		return nil
+	}
+
+	for _, c := range e.completions {
+		argCompleter, ok := c.(completions.ArgumentCompleter)
+		if !ok {
+			continue
+		}
+
+		items, matched := argCompleter.ArgumentItems(value)
+		if !matched || len(items) == 0 {
+			continue
+		}
+
+		slashCommand, query, _ := strings.Cut(value, " ")
+		e.argumentPrefix = slashCommand + " "
+
+		// Sequenced (not batched) so the popup opens with the full item set
+		// before the query narrows it, regardless of scheduling order.
+		return tea.Sequence(
+			e.openCompletion(c, items),
+			core.CmdHandler(completion.QueryMsg{Query: query}),
+		)
+	}
+
+	return nil
 }
 
 // startInitialFileLoad starts a shallow file scan for immediate display.

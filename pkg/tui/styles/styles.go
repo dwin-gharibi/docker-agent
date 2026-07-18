@@ -545,6 +545,23 @@ var (
 					Foreground(TextMuted).
 					Italic(true).
 					Align(lipgloss.Center)
+
+	// CompletionDisabledStyle renders a completion item that is shown for
+	// context but cannot be submitted (e.g. a non-restartable toolset for
+	// /toolset-restart): dim and unbolded so it reads as inert next to the
+	// selectable entries.
+	CompletionDisabledStyle = BaseStyle.
+				Foreground(TextMuted).
+				Italic(true)
+
+	// CompletionDisabledSelectedStyle is CompletionDisabledStyle with the
+	// cursor position still visible (underline) but without the selected
+	// blue background, so the cursor can rest on a disabled row without it
+	// looking submittable.
+	CompletionDisabledSelectedStyle = CompletionDisabledStyle.
+					Underline(true)
+
+	CompletionDisabledDescStyle = CompletionDisabledStyle
 )
 
 // Agent and transfer badge styles

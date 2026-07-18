@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"slices"
@@ -11,6 +12,7 @@ import (
 	"github.com/docker/docker-agent/pkg/app"
 	"github.com/docker/docker-agent/pkg/config/types"
 	"github.com/docker/docker-agent/pkg/feedback"
+	"github.com/docker/docker-agent/pkg/tools"
 	mcptools "github.com/docker/docker-agent/pkg/tools/mcp"
 	"github.com/docker/docker-agent/pkg/tui/components/toolcommon"
 	"github.com/docker/docker-agent/pkg/tui/core"
@@ -26,6 +28,18 @@ type Category struct {
 	Commands []Item
 }
 
+// ArgumentCandidate is one completable value for a command's argument,
+// e.g. a toolset name for /toolset-restart. It is intentionally free of any
+// completion-UI or app-domain types so pkg/tui/commands stays decoupled from
+// both pkg/tui/components/completion and pkg/app.
+type ArgumentCandidate struct {
+	Label       string
+	Description string
+	// Disabled marks a candidate that is shown for context but cannot be
+	// submitted (e.g. a non-restartable toolset for /toolset-restart).
+	Disabled bool
+}
+
 // Item represents a single command in the palette
 type Item struct {
 	ID           string
@@ -38,6 +52,11 @@ type Item struct {
 	// Immediate marks commands that should run as soon as they are submitted
 	// instead of being treated as ordinary queued chat input.
 	Immediate bool
+	// CompleteArgument, when set, returns the candidates for this command's
+	// argument. Called lazily at completion-popup-open time so results
+	// reflect current runtime state (e.g. toolset lifecycle). Nil for
+	// commands with no argument completion.
+	CompleteArgument func() []ArgumentCandidate
 }
 
 func builtInSessionCommands() []Item {
@@ -577,6 +596,64 @@ func newMCPPromptItem(promptName string, promptInfo mcptools.PromptInfo) Item {
 	}
 }
 
+// toolsetStatusSource is the minimal surface toolsetRestartCandidates needs.
+// *app.App satisfies it; tests can supply a stub instead of constructing a
+// full application.
+type toolsetStatusSource interface {
+	CurrentAgentToolsetStatuses() []tools.ToolsetStatus
+}
+
+// toolsetRestartCandidates returns one ArgumentCandidate per toolset of the
+// current agent, in declaration order, deduplicated by name (preferring the
+// restartable entry when duplicate names disagree — display names are not
+// guaranteed unique, mirroring runtime.RestartToolset's own matching).
+// Non-restartable toolsets are marked Disabled rather than omitted, so the
+// popup teaches users the full toolset inventory and why a restart isn't
+// offered for some of them.
+func toolsetRestartCandidates(source toolsetStatusSource) []ArgumentCandidate {
+	statuses := source.CurrentAgentToolsetStatuses()
+	byName := make(map[string]tools.ToolsetStatus, len(statuses))
+	order := make([]string, 0, len(statuses))
+	for _, s := range statuses {
+		if s.Name == "" {
+			continue
+		}
+		if existing, ok := byName[s.Name]; !ok {
+			byName[s.Name] = s
+			order = append(order, s.Name)
+		} else if !existing.Restartable && s.Restartable {
+			byName[s.Name] = s
+		}
+	}
+
+	candidates := make([]ArgumentCandidate, 0, len(order))
+	for _, name := range order {
+		s := byName[name]
+		candidates = append(candidates, ArgumentCandidate{
+			Label:       s.Name,
+			Description: cmp.Or(s.Kind, "Built-in") + " · " + s.State.String(),
+			Disabled:    !s.Restartable,
+		})
+	}
+	return candidates
+}
+
+// attachToolsetRestartCompletion wires the toolset-name argument completer
+// onto the /toolset-restart item. Attached post-hoc (rather than inline in
+// builtInSessionCommands) so that function stays free of any status-source
+// dependency.
+func attachToolsetRestartCompletion(items []Item, source toolsetStatusSource) {
+	for i := range items {
+		if items[i].ID != "session.toolset.restart" {
+			continue
+		}
+		items[i].CompleteArgument = func() []ArgumentCandidate {
+			return toolsetRestartCandidates(source)
+		}
+		return
+	}
+}
+
 // BuildCommandCategories builds the list of command categories for the command palette
 func BuildCommandCategories(ctx context.Context, application *app.App) []Category {
 	// Get session commands and filter based on model capabilities
@@ -584,6 +661,7 @@ func BuildCommandCategories(ctx context.Context, application *app.App) []Categor
 	if !application.SnapshotsEnabled() {
 		sessionCommands = removeByIDs(sessionCommands, snapshotCommandIDs)
 	}
+	attachToolsetRestartCompletion(sessionCommands, application)
 
 	categories := []Category{
 		{

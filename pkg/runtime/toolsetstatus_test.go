@@ -59,6 +59,23 @@ func TestToolsetStatusFor_NoStatableMeansReady(t *testing.T) {
 	assert.Equal(t, 0, got.RestartCount)
 	require.NoError(t, got.LastError)
 	assert.Equal(t, "filesystem", got.Description)
+	assert.False(t, got.Restartable, "toolset without Restart() must report Restartable=false")
+}
+
+func TestToolsetStatusFor_RestartableReportsTrue(t *testing.T) {
+	t.Parallel()
+
+	ts := &restartableToolset{desc: "mcp(stdio cmd=foo)", state: lifecycle.StateInfo{State: lifecycle.StateReady}}
+	got := toolsetStatusFor(ts)
+	assert.True(t, got.Restartable)
+}
+
+func TestToolsetStatusFor_NonRestartableReportsFalse(t *testing.T) {
+	t.Parallel()
+
+	ts := &statefulToolset{desc: "filesystem", info: lifecycle.StateInfo{State: lifecycle.StateReady}}
+	got := toolsetStatusFor(ts)
+	assert.False(t, got.Restartable)
 }
 
 // TestToolsetStatusFor_UnwrapsStartable verifies the inner Statable is

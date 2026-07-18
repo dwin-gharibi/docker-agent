@@ -2385,7 +2385,16 @@ func parseCtrlNumberKey(msg tea.KeyPressMsg) int {
 func (m *appModel) switchFocus() (tea.Model, tea.Cmd) {
 	switch m.focusedPanel {
 	case PanelEditor:
-		// Check if editor has a suggestion to accept first
+		// Tab-triggered argument completion (e.g. "/toolset-restart ") takes
+		// priority over both suggestion-acceptance and switching focus; it's a
+		// no-op when not applicable. Checked first so a stale ghost suggestion
+		// left over from history (e.g. a previous "/toolset-restart <toolset>")
+		// never gets silently accepted in place of opening a fresh, current
+		// candidate popup - see regression test for the bug this guards against.
+		if cmd := m.editor.TryStartArgumentCompletion(); cmd != nil {
+			return m, cmd
+		}
+		// Otherwise, accept a pending suggestion if there is one.
 		if cmd := m.editor.AcceptSuggestion(); cmd != nil {
 			return m, cmd
 		}

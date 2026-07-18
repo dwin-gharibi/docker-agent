@@ -43,4 +43,9 @@ type ToolsetStatus struct {
 	// RestartCount is the number of supervisor restarts since the last
 	// successful Ready transition. Zero for toolsets without a supervisor.
 	RestartCount int
+	// Restartable reports whether the toolset implements Restartable
+	// (typically supervisor-backed MCP/LSP toolsets). Surfaces such as the
+	// /toolset-restart completion popup use this to annotate, not hide,
+	// entries that cannot actually be restarted.
+	Restartable bool
 }
