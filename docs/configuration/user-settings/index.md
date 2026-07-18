@@ -39,7 +39,7 @@ You rarely need to hand-edit this file. Most fields are managed from the TUI's `
 | `hide_tool_results` | boolean | `false` | Hide tool call results in the TUI by default. Mirrors the `--hide-tool-results` flag and the <kbd>Ctrl</kbd>+<kbd>O</kbd> toggle. |
 | `expand_thinking` | boolean | `false` | Start new sessions with thinking/tool blocks expanded instead of collapsed. |
 | `split_diff_view` | boolean | `true` | Render file-edit diffs side-by-side instead of unified. |
-| `render_images` | boolean | `true` | Render images returned by tools in terminals that support the Kitty graphics protocol. |
+| `render_images` | boolean | `true` | Render images in the TUI using the Kitty graphics protocol. Applies to both tool-result images and Markdown images in agent responses. Automatically disabled when the terminal does not support Kitty. |
 | `theme` | string | `default` | Theme name, loaded from a built-in theme or `~/.cagent/themes/<name>.yaml`. The special value `auto` follows the terminal's light/dark background. See [Theming](../../features/tui/index.md#theming). |
 | `theme_dark` | string | `default` | Theme applied when `theme: auto` and the terminal background is dark. |
 | `theme_light` | string | `default-light` | Theme applied when `theme: auto` and the terminal background is light. |
