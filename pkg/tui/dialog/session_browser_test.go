@@ -532,6 +532,38 @@ func TestSessionBrowserWorkspaceSymlinkNormalization(t *testing.T) {
 	require.True(t, m.matches(link), "a symlinked session dir should match its resolved workspace")
 }
 
+func TestSessionBrowserWorkspaceGitRootNormalization(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	repo := filepath.Join(base, "repo")
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, ".git"), 0o755))
+	sub := filepath.Join(repo, "pkg", "tui")
+	require.NoError(t, os.MkdirAll(sub, 0o755))
+
+	// git worktree layout: wt/.git file -> repo/.git/worktrees/wt (with commondir)
+	gitdir := filepath.Join(repo, ".git", "worktrees", "wt")
+	require.NoError(t, os.MkdirAll(gitdir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(gitdir, "commondir"), []byte("../..\n"), 0o644))
+	wt := filepath.Join(base, "wt")
+	require.NoError(t, os.MkdirAll(wt, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(wt, ".git"), []byte("gitdir: "+gitdir+"\n"), 0o644))
+
+	m := newWorkspaceMatcher(repo)
+	require.True(t, m.matches(sub), "a session in a subdirectory should match its repo root")
+	require.True(t, m.matches(wt), "a session in a linked worktree should match the main repo")
+	require.False(t, m.matches(base), "a dir outside the repo should not match")
+
+	// Opening the browser from the worktree also groups main-repo sessions.
+	require.True(t, newWorkspaceMatcher(wt).matches(repo))
+
+	// The "This workspace" header shows the repository root, not the
+	// subdirectory or worktree the browser was opened from.
+	require.Equal(t, repo, workspaceDisplayDir(sub))
+	require.Equal(t, repo, workspaceDisplayDir(wt))
+	require.Equal(t, base, workspaceDisplayDir(base), "non-repo dirs are shown as-is")
+}
+
 func TestSessionBrowserHeaderRowsNotSelectable(t *testing.T) {
 	t.Parallel()
 	dialog := NewSessionBrowserDialog(workspaceTestSessions(), "/work/project")

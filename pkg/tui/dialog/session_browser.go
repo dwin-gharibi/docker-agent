@@ -15,6 +15,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/atotto/clipboard"
 
+	"github.com/docker/docker-agent/pkg/gitroot"
 	pathx "github.com/docker/docker-agent/pkg/path"
 	"github.com/docker/docker-agent/pkg/session"
 	"github.com/docker/docker-agent/pkg/tui/components/notification"
@@ -60,7 +61,9 @@ type browserRow struct {
 // workspaceMatcher reports whether a session's working directory belongs to
 // the workspace the browser was opened from. Paths are normalized with
 // filepath.Clean and EvalSymlinks so symlinked variants of the same
-// directory (e.g. /tmp vs /private/tmp on macOS) compare equal.
+// directory (e.g. /tmp vs /private/tmp on macOS) compare equal, then
+// resolved to their git repository root (worktree-aware) so sessions from
+// any subdirectory or worktree of one repository group together.
 // Normalization results are cached because many sessions share the same
 // directory and EvalSymlinks touches the filesystem.
 type workspaceMatcher struct {
@@ -100,6 +103,14 @@ func (m *workspaceMatcher) normalize(dir string) string {
 	if resolved, err := filepath.EvalSymlinks(normalized); err == nil {
 		normalized = resolved
 	}
+	if root := gitroot.Root(normalized); root != "" {
+		// The root comes from .git metadata and may itself be a symlinked
+		// variant of the path (e.g. /var vs /private/var on macOS).
+		if resolved, err := filepath.EvalSymlinks(root); err == nil {
+			root = resolved
+		}
+		normalized = root
+	}
 	m.cache[dir] = normalized
 	return normalized
 }
@@ -111,6 +122,21 @@ func workspacePathsEqual(a, b string) bool {
 		return strings.EqualFold(a, b)
 	}
 	return a == b
+}
+
+// workspaceDisplayDir returns the directory shown in the "This workspace"
+// header. Since sessions group by repository, a dir inside a git repo (or
+// worktree) displays as the repository root. Unlike matcher normalization,
+// symlinks are not resolved so the label stays close to what the user typed.
+func workspaceDisplayDir(dir string) string {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return ""
+	}
+	if root := gitroot.Root(filepath.Clean(dir)); root != "" {
+		return root
+	}
+	return dir
 }
 
 type sessionBrowserDialog struct {
@@ -127,7 +153,7 @@ type sessionBrowserDialog struct {
 
 	// Workspace grouping state
 	workspace       *workspaceMatcher
-	workspaceDir    string // raw directory the browser was opened from, for display
+	workspaceDir    string // workspace root shown in the section header
 	workspaceFilter int    // 0 = all, 1 = this workspace only, 2 = other locations only
 	rows            []browserRow
 	rowForSession   []int // filtered index -> row index
@@ -162,7 +188,7 @@ func NewSessionBrowserDialog(sessions []session.Summary, workspaceDir string) Di
 		sessions:     nonEmptySessions,
 		scrollview:   scrollview.New(scrollview.WithReserveScrollbarSpace(true)),
 		workspace:    newWorkspaceMatcher(workspaceDir),
-		workspaceDir: strings.TrimSpace(workspaceDir),
+		workspaceDir: workspaceDisplayDir(workspaceDir),
 		keyMap: sessionBrowserKeyMap{
 			Up:              key.NewBinding(key.WithKeys("up", "ctrl+k")),
 			Down:            key.NewBinding(key.WithKeys("down", "ctrl+j")),
