@@ -320,3 +320,27 @@ func (p *testEnvProvider) Get(_ context.Context, name string) (string, bool) {
 func testExpander() *js.Expander {
 	return js.NewJsExpander(noopEnvProvider{})
 }
+
+func TestAPITool_ErrorStatusCode(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":"internal server error"}`))
+	}))
+	t.Cleanup(func() {
+		server.Close()
+	})
+
+	tool := newAPIToolForTest(latest.APIToolConfig{
+		Method:   http.MethodGet,
+		Endpoint: server.URL,
+	}, testExpander())
+
+	result, err := tool.callTool(t.Context(), tools.ToolCall{}, tools.NopRuntime{})
+	require.NoError(t, err)
+
+	assert.True(t, result.IsError)
+	assert.Contains(t, result.Output, "API request failed with status 500")
+	assert.Contains(t, result.Output, "internal server error")
+}

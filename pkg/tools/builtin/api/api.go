@@ -88,6 +88,10 @@ func (t *ToolSet) callTool(ctx context.Context, toolCall tools.ToolCall, _ tools
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
+	if resp.StatusCode >= 400 {
+		return tools.ResultError(fmt.Sprintf("API request failed with status %d %s: %s", resp.StatusCode, http.StatusText(resp.StatusCode), limitOutput(string(body)))), nil
+	}
+
 	return tools.ResultSuccess(limitOutput(string(body))), nil
 }
 

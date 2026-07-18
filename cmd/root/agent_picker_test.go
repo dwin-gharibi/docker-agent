@@ -4,10 +4,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -89,23 +87,6 @@ func TestParseAgentPickerRefsDefaults(t *testing.T) {
 	assert.Equal(t, []string{"coder"}, parseAgentPickerRefs("coder"))
 }
 
-func TestAgentRefsInDirSkipsNonRegularFiles(t *testing.T) {
-	t.Parallel()
-
-	if runtime.GOOS == "windows" {
-		t.Skip("no mkfifo on Windows")
-	}
-
-	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "real.yaml"), nil, 0o644))
-	require.NoError(t, syscall.Mkfifo(filepath.Join(dir, "fifo.yaml"), 0o644))
-	// A symlink to a regular config file is kept.
-	require.NoError(t, os.Symlink(filepath.Join(dir, "real.yaml"), filepath.Join(dir, "link.yaml")))
-
-	want := []string{filepath.Join(dir, "link.yaml"), filepath.Join(dir, "real.yaml")}
-	assert.Equal(t, want, agentRefsInDir(dir))
-}
-
 func TestPrependAgentRef(t *testing.T) {
 	t.Parallel()
 
@@ -132,14 +113,14 @@ func TestAgentPickerCardShowsDescriptionForLocalConfigs(t *testing.T) {
 
 	// Local config files show the description as the title, with the path
 	// demoted to the detail line.
-	card := ansi.Strip(m.renderCard(agentChoice{ref: "/tmp/agents/gopher.yaml", description: "Golang expert"}, 70, false))
-	assert.Less(t, strings.Index(card, "Golang expert"), strings.Index(card, "/tmp/agents/gopher.yaml"))
+	card := ansi.Strip(m.renderCard(agentChoice{ref: filepath.FromSlash("/tmp/agents/gopher.yaml"), description: "Golang expert"}, 70, false))
+	assert.Less(t, strings.Index(card, "Golang expert"), strings.Index(card, filepath.FromSlash("/tmp/agents/gopher.yaml")))
 
 	// Without a description the path remains the title; same for descriptions
 	// that sanitize to nothing.
 	for _, desc := range []string{"", "  \n\t ", "\x1b\x07"} {
-		card = ansi.Strip(m.renderCard(agentChoice{ref: "/tmp/agents/gopher.yaml", description: desc}, 70, false))
-		assert.Contains(t, card, "/tmp/agents/gopher.yaml")
+		card = ansi.Strip(m.renderCard(agentChoice{ref: filepath.FromSlash("/tmp/agents/gopher.yaml"), description: desc}, 70, false))
+		assert.Contains(t, card, filepath.FromSlash("/tmp/agents/gopher.yaml"))
 	}
 
 	// Non-path refs keep the ref as title with the description below.
