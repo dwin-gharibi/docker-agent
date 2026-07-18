@@ -55,6 +55,19 @@ func TestDeferredToolset_SearchTool(t *testing.T) {
 		require.NoError(t, err)
 		assert.Contains(t, result.Output, "No deferred tools found")
 	})
+
+	t.Run("fuzzy search by name", func(t *testing.T) {
+		result, err := dt.handleSearchTool(ctx, SearchToolArgs{Query: "crfil"})
+		require.NoError(t, err)
+		assert.Contains(t, result.Output, "create_file")
+		assert.NotContains(t, result.Output, "read_file")
+	})
+
+	t.Run("fuzzy search by description", func(t *testing.T) {
+		result, err := dt.handleSearchTool(ctx, SearchToolArgs{Query: "dfle"})
+		require.NoError(t, err)
+		assert.Contains(t, result.Output, "delete_file")
+	})
 }
 
 func TestDeferredToolset_AddTool(t *testing.T) {

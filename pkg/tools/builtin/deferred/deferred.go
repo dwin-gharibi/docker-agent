@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"sort"
 	"strings"
 	"sync"
 
+	"github.com/junegunn/fzf/src/algo"
+	"github.com/junegunn/fzf/src/util"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
@@ -99,22 +102,58 @@ type AddToolArgs struct {
 }
 
 func (d *ToolSet) handleSearchTool(ctx context.Context, args SearchToolArgs) (*tools.ToolCallResult, error) {
-	query := strings.ToLower(args.Query)
+	queryRunes := []rune(strings.ToLower(strings.TrimSpace(args.Query)))
 
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
-	var results []SearchToolResult
+	type scoredDeferredTool struct {
+		result SearchToolResult
+		score  int
+	}
+
+	var matches []scoredDeferredTool
 	for name, entry := range d.deferredTools {
-		// Search in name and description
-		// TODO: fuzzy search? Levenshtein distance? Semantic search?
-		if strings.Contains(strings.ToLower(name), query) ||
-			strings.Contains(strings.ToLower(entry.tool.Description), query) {
-			results = append(results, SearchToolResult{
-				Name:        name,
-				Description: entry.tool.Description,
+		if len(queryRunes) == 0 {
+			matches = append(matches, scoredDeferredTool{
+				result: SearchToolResult{
+					Name:        name,
+					Description: entry.tool.Description,
+				},
+				score: 0,
+			})
+			continue
+		}
+
+		chars := util.ToChars([]byte(name + " " + entry.tool.Description))
+		res, _ := algo.FuzzyMatchV2(
+			false, // caseSensitive
+			true,  // normalize
+			true,  // forward
+			&chars,
+			queryRunes,
+			true, // withPos
+			nil,  // slab
+		)
+
+		if res.Start >= 0 {
+			matches = append(matches, scoredDeferredTool{
+				result: SearchToolResult{
+					Name:        name,
+					Description: entry.tool.Description,
+				},
+				score: res.Score,
 			})
 		}
+	}
+
+	sort.SliceStable(matches, func(i, j int) bool {
+		return matches[i].score > matches[j].score
+	})
+
+	var results []SearchToolResult
+	for _, match := range matches {
+		results = append(results, match.result)
 	}
 
 	if span := trace.SpanFromContext(ctx); span.IsRecording() {
