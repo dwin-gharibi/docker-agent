@@ -1172,6 +1172,18 @@ func (a *App) CompactLiveSession(ctx context.Context, sessionID, additionalPromp
 	return compactor.CompactLiveSession(ctx, sessionID, additionalPrompt, sink)
 }
 
+// AttachedFiles returns the current session's attached file paths, the same
+// inventory DropAttachedFile resolves against. Backs /drop argument
+// completion; nil when there is no active session. Attachments are
+// in-memory client-side session state, so this works on remote runtimes too.
+func (a *App) AttachedFiles() []string {
+	sess := a.Session()
+	if sess == nil {
+		return nil
+	}
+	return sess.AttachedFilesSnapshot()
+}
+
 // DropAttachedFile removes a file from the current session's attached files
 // and returns the absolute path that was dropped. The path is resolved
 // against the session's attachment list: exact match first, then the

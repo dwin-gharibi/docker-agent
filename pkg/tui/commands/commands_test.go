@@ -497,3 +497,93 @@ func TestAttachEffortCompletion_QueriesFreshOnEachCall(t *testing.T) {
 	assert.Equal(t, "none", second[0].Label)
 	assert.Equal(t, "xhigh", second[5].Label)
 }
+
+// stubAttachedFilesSource is a minimal attachedFilesSource for exercising
+// dropCandidates without a real *app.App.
+type stubAttachedFilesSource struct {
+	paths []string
+}
+
+func (s *stubAttachedFilesSource) AttachedFiles() []string {
+	return s.paths
+}
+
+func TestDropCandidates_ReturnsAttachedFilesInOrder(t *testing.T) {
+	t.Parallel()
+
+	source := &stubAttachedFilesSource{paths: []string{"/repo/notes.md", "/repo/path with spaces.txt"}}
+
+	candidates := dropCandidates(source)
+	require.Len(t, candidates, 2)
+	assert.Equal(t, "/repo/notes.md", candidates[0].Label)
+	assert.False(t, candidates[0].Disabled, "every attached file is droppable")
+	assert.Equal(t, "/repo/path with spaces.txt", candidates[1].Label)
+	assert.False(t, candidates[1].Disabled)
+}
+
+func TestDropCandidates_NoAttachmentsIsEmpty(t *testing.T) {
+	t.Parallel()
+
+	assert.Empty(t, dropCandidates(&stubAttachedFilesSource{}))
+}
+
+func TestAttachDropCompletion(t *testing.T) {
+	t.Parallel()
+
+	items := builtInSessionCommands()
+	source := &stubAttachedFilesSource{paths: []string{"/repo/notes.md"}}
+	attachDropCompletion(items, source)
+
+	var drop, other *Item
+	for i := range items {
+		switch items[i].ID {
+		case "session.drop":
+			drop = &items[i]
+		case "session.exit":
+			other = &items[i]
+		}
+	}
+	require.NotNil(t, drop)
+	require.NotNil(t, drop.CompleteArgument, "the drop item must get a completer")
+	candidates := drop.CompleteArgument()
+	require.Len(t, candidates, 1)
+	assert.Equal(t, "/repo/notes.md", candidates[0].Label)
+
+	require.NotNil(t, other)
+	assert.Nil(t, other.CompleteArgument, "commands without a provider keep a nil CompleteArgument")
+}
+
+// TestAttachDropCompletion_QueriesFreshOnEachCall is a regression test for
+// bug 2 (PR #3728, mirrored for /drop): the attached CompleteArgument
+// closure must query the attached-files source live on every call, not
+// capture a snapshot at attach time. Attachments change between /attach and
+// /drop calls in the same session.
+func TestAttachDropCompletion_QueriesFreshOnEachCall(t *testing.T) {
+	t.Parallel()
+
+	items := builtInSessionCommands()
+	source := &stubAttachedFilesSource{paths: []string{"/repo/notes.md"}}
+	attachDropCompletion(items, source)
+
+	var drop *Item
+	for i := range items {
+		if items[i].ID == "session.drop" {
+			drop = &items[i]
+		}
+	}
+	require.NotNil(t, drop)
+
+	first := drop.CompleteArgument()
+	require.Len(t, first, 1)
+	assert.Equal(t, "/repo/notes.md", first[0].Label)
+
+	// A file gets attached after the completer was attached (e.g. via /attach
+	// or @). A second call must reflect that change rather than replaying the
+	// first snapshot.
+	source.paths = []string{"/repo/notes.md", "/repo/plan.md"}
+
+	second := drop.CompleteArgument()
+	require.Len(t, second, 2, "must reflect the current attachment list, not the one captured at attach time")
+	assert.Equal(t, "/repo/notes.md", second[0].Label)
+	assert.Equal(t, "/repo/plan.md", second[1].Label)
+}
