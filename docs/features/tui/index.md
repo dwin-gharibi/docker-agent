@@ -87,7 +87,7 @@ Type `/` during a session to see available commands, or press <kbd>Ctrl</kbd>+<k
 | `/star`            | Star/unstar the current session                                                      |
 | `/context`         | Show a context-window breakdown: estimated tokens per category (system prompt, tool definitions, prompt files, messages, tool results, compaction summary), a team-level **Live sessions** view (the current session plus every running sub-agent session with its agent, short session ID, and context budget), plus a per-file inventory of attached files and prompt files. Use the arrow keys to select a row: press <kbd>Enter</kbd> on a live session to explicitly compact it, or <kbd>d</kbd> on an attached file to drop it |
 | `/drop`            | Remove an attached file from the session context (`/drop <path>`, or `/drop` alone to review and drop from the `/context` dialog)  |
-| `/cost`            | Show cost breakdown for this session                                                 |
+| `/cost`            | Show cost breakdown for this session. Includes a **By Agent** section (alongside **By Model**) showing cumulative cost per agent; unattributed usage and compaction spend appear in their own buckets. |
 | `/eval`            | Create an evaluation report                                                          |
 | `/pause`           | Pause/resume the runtime loop. While the agent is mid-request, the resize handle shows "Pausing…" until the in-flight request completes; once the loop is blocked the indicator changes to "⏸ Paused". Run `/pause` again to resume. |
 | `/tools`           | Show every toolset (with lifecycle state) and the tools they expose                  |
@@ -103,7 +103,12 @@ Agent-defined commands (prompts, URL links, agent-switching shortcuts) are confi
 
 ### Agents Panel
 
-The sidebar's **Agents** section lists every agent in the team. The current agent is shown as a focus **card** (rendered in place at its position in the list) with its name, a wrapped description, its full `provider/model`, and a thinking line. Every other agent is shown as a compact **two-line row** — line 1 is the shortcut/spinner, the agent name (in its accent color), and a right-aligned thinking **gauge**; line 2 is the indented full `provider/model` — so a large team stays scannable while still showing each model. Once an agent has run (in the main session, as a delegated sub-agent, or as a background agent task), line 2 also carries its latest **context usage** as a right-aligned percentage of its context window, so per-agent context accounting is visible at a glance across the whole team. Agents are separated by a blank line so the two-line rows stay visually distinct. The effort **gauge** is the only visual language for thinking; the focus card and the Agent Inspector spell out the exact level alongside it. Left-click any agent to switch to it.
+The sidebar's **Agents** section lists every agent in the team and has two display modes selectable via **Sidebar info mode** in `/settings`:
+
+- **Compact** (default) — The current agent is shown as a focus **card** (rendered in place at its position in the list) with its name, a wrapped description, its full `provider/model`, and a thinking line. Every other agent is shown as a compact **two-line row** — line 1 is the shortcut/spinner, the agent name (in its accent color), and a right-aligned thinking **gauge**; line 2 is the indented full `provider/model` and, once the agent has run, its latest **context usage** as a right-aligned percentage of its context window.
+- **Detailed** — Each agent is shown as a responsive card with labeled **Effort**, **Context**, and **Cost** metrics on a single line (or split across lines at narrow sidebar widths), making cumulative per-agent cost visible at a glance across the team.
+
+Agents are separated by a blank line so rows stay visually distinct. The effort **gauge** is the only visual language for thinking; the focus card and the Agent Inspector spell out the exact level alongside it. Left-click any agent to switch to it.
 
 #### Agent inspector
 
@@ -119,6 +124,7 @@ The title is rendered in the agent's accent color. Sections appear in this order
 - **Live state** — a `● current agent` line when the inspected agent is the one currently running.
 - **Model / Fallback / Thinking** — the `provider/model`, any fallback models, and the gauge + value thinking line (omitted for models with no selectable thinking, e.g. harness-backed agents).
 - **Context** — the agent's latest known context usage, e.g. `Context: 12.8K of 128.0K tokens (10%)` (a bare token count when the context limit is unknown; omitted until the agent has run). Sub-agent and background-agent runs are accounted for.
+- **Cost** — the agent's cumulative cost across all runs in the session tree. Repeated session snapshots are not double-counted. Omitted until the agent has run.
 - **Sub-agents (N) / Handoffs (N) / Skills (N)** — compact, inline, comma-separated lists wrapped to the dialog width.
 - **Limits** — the configured per-agent limits that are set, e.g. `Limits: max-iter 50 · history 40 · max-tool-calls 5`.
 - **Options** — the enabled option flags, e.g. `Options: add-date · add-environment-info · redact-secrets`.
@@ -216,6 +222,12 @@ The TUI renders Mermaid diagram blocks inline rather than displaying raw syntax.
 
 Mermaid rendering works in both the full TUI and the lean TUI. Unsupported or syntactically invalid diagram blocks are displayed as ordinary fenced code blocks — no configuration is required and there is no way to disable it.
 
+### Markdown Images
+
+The TUI fetches and renders images referenced in agent responses using the Kitty graphics protocol. When an assistant message contains a standard Markdown image reference, the TUI downloads the image in the background and displays it inline at the point of the reference. While the image is loading a placeholder is shown; once loaded, the message re-renders with the image in place.
+
+Only `http://`, `https://`, and `data:image/…;base64,…` URIs are resolved. `file://`, `sandbox://`, and any other URI scheme are rejected as a security measure against prompt-injection attacks that could otherwise read local files. Bare relative paths (e.g. `./output.png`, used for agent-generated images) are read via the local filesystem. Images that fail to load are silently dropped — the surrounding message text is unaffected. Image rendering requires a terminal that supports the Kitty graphics protocol; it is automatically disabled when the terminal does not support it. You can also disable it explicitly via `render_images: false` in `~/.config/cagent/config.yaml` or the **Render images** toggle in `/settings`.
+
 ### Snapshots, `/undo`, and `/snapshots`
 
 Enable shadow-git snapshots globally in `~/.config/cagent/config.yaml`:
@@ -288,7 +300,7 @@ Each error message includes a clickable **↻ retry** button. Clicking it resume
 
 Docker Agent automatically saves your sessions. Use `/sessions` to browse past conversations:
 
-- **Browse** past sessions with search and filtering
+- **Browse** past sessions with search and filtering. The search matches against session **titles** and **session IDs** (full UUIDs, dash-less variants, and partial fragments all resolve correctly — useful when jumping back to a session from a copied ID or log).
 - **Workspace grouping**: sessions started in the current directory are listed first under "This workspace", everything else under "Other locations" with its originating directory shown next to each entry; press <kbd>Ctrl</kbd>+<kbd>G</kbd> in the browser to cycle between all, current-directory only, and other-directory views. Restoring a session reopens it in its original directory, so the label always matches where a restore will land
 - **Star** important sessions with `/star`
 - **Branch** conversations by editing any previous user message — preserving the original session history
@@ -401,6 +413,7 @@ Run `/settings` to open the settings dialog. Use <kbd>Tab</kbd> to switch betwee
 The **Appearance** tab selects the theme and customizes the layout. Layout changes show a live schematic preview and apply immediately to the UI behind the dialog:
 
 - **Sidebar position**: `Right` (default), `Left`, `Top`, or `Bottom`. Left/right keep the full vertical sidebar next to the chat; top/bottom render it as a compact horizontal band above or below the chat (session title, working directory, usage, plus a one-line summary of the current agent, tools, and todos).
+- **Sidebar info mode**: `Compact` (default) or `Detailed`. Controls how the Agents panel renders agent rows — see [Agents Panel](#agents-panel) for details. Persisted as `settings.layout.sidebar_info_mode: detailed`; compact is the default and omitted from the config.
 - **Section spacing**: `Compact`, `Normal` (default), or `Relaxed`, the number of blank lines between the sidebar sections (1, 2, or 3).
 - **Sidebar sections**: toggle the visibility of the **Session path** (the working directory line, including its git branch) and the **Token usage**, **Agents**, **Tools**, and **Todos** sections. The session title is always shown.
 
@@ -418,6 +431,7 @@ settings:
   busy_send_mode: queue # steer (default), queue
   layout:
     sidebar_position: left # right (default), left, top, bottom
+    sidebar_info_mode: detailed # compact (default, omitted), detailed
     section_spacing: compact # normal (default), compact, relaxed
     hide_session_path: false
     hide_usage: true
