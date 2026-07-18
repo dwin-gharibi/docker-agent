@@ -12,6 +12,8 @@ agents:
     instruction: You are a senior software engineer.
     harness:
       type: claude-code
+      model: claude-sonnet-4-5 # optional; omit to use the Claude Code default
+      effort: xhigh # low | medium | high | xhigh | max
 
   codex-coder:
     description: Codex for code generation

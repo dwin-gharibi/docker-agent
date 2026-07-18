@@ -9,16 +9,20 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
+	"github.com/goccy/go-yaml"
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
 	"github.com/docker/docker-agent/pkg/chatgpt"
 	"github.com/docker/docker-agent/pkg/cli"
+	"github.com/docker/docker-agent/pkg/codingharness"
 	"github.com/docker/docker-agent/pkg/config"
 	"github.com/docker/docker-agent/pkg/config/latest"
 	"github.com/docker/docker-agent/pkg/environment"
@@ -38,6 +42,14 @@ var errSetupCancelled = errors.New("setup cancelled")
 // offer, so returning the original error would print it twice.
 var errNoUsableModel = errors.New("no usable model is configured; run `docker agent setup` or see `docker agent doctor`")
 
+// errClaudeHarnessConfigured ends an offered setup that took the Claude Code
+// harness path: the wizard configured an agent file for the external CLI,
+// not a credential the failed invocation could pick up, so the original run
+// never happened and must not exit as a success. The message stays concise:
+// the wizard already printed the agent file (or its content) and the exact
+// command to run.
+var errClaudeHarnessConfigured = errors.New("this run was not retried: setup configured a Claude Code harness agent; start it with the `docker agent run <file>` command shown above")
+
 // setupResult reports what the wizard configured, so the caller that offered
 // setup after a failed run can retry with the new credential in place.
 type setupResult struct {
@@ -50,6 +62,12 @@ type setupResult struct {
 	// OpenAI-compatible provider in the user config.
 	ProviderName string
 	Provider     *latest.ProviderConfig
+	// ClaudeHarness marks the Claude Code harness path, which configures an
+	// external CLI instead of a model provider. AgentFile is the local agent
+	// configuration it wrote; it is empty when the user declined to overwrite
+	// an existing file and the config was printed instead.
+	ClaudeHarness bool
+	AgentFile     string
 }
 
 // setupWizard drives the interactive model setup. The function fields are
@@ -62,22 +80,28 @@ type setupWizard struct {
 	in  *bufio.Reader
 	out io.Writer
 
-	readSecret   func(prompt string) (string, error)
-	stores       []environment.SecretStore
-	dmrLister    config.DMRModelLister
-	pullModel    func(ctx context.Context, model string) error
-	chatgptLogin func(ctx context.Context, out io.Writer) (*chatgpt.LoginResult, error)
-	saveProvider func(name string, provider latest.ProviderConfig) error
-	listModels   func(ctx context.Context, baseURL, token string) []string
+	readSecret     func(prompt string) (string, error)
+	stores         []environment.SecretStore
+	dmrLister      config.DMRModelLister
+	pullModel      func(ctx context.Context, model string) error
+	chatgptLogin   func(ctx context.Context, out io.Writer) (*chatgpt.LoginResult, error)
+	saveProvider   func(name string, provider latest.ProviderConfig) error
+	listModels     func(ctx context.Context, baseURL, token string) []string
+	probeClaudeCLI func(ctx context.Context) codingharness.ClaudeCLIStatus
+	claudeLogin    func(ctx context.Context) error
+
+	// agentFileDir is where generated agent files are written: the current
+	// directory in production, a temp dir in tests.
+	agentFileDir string
 }
 
 func newSetupCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "setup",
-		Short: "Interactively set up a model (API key, local, or custom endpoint)",
+		Short: "Interactively set up a model (API key, local, custom endpoint, or Claude Code)",
 		Long: `Set up a model for docker agent, interactively.
 
-Three paths:
+Four paths:
   - Cloud provider: pick a provider, paste its API key, and store it in the
     docker agent env file (~/.config/cagent/.env). Picking chatgpt signs in
     with your ChatGPT account in the browser instead of asking for an API key.
@@ -86,6 +110,11 @@ Three paths:
     a corporate gateway, ...) with its API format and API key variable. The
     provider is saved to your user configuration and its models become
     usable everywhere via --model <name>/<model>.
+  - Claude Code harness: use your Claude subscription through the official
+    'claude' CLI. Checks that the CLI is installed and logged in (offering
+    'claude auth login --claudeai'), then writes a ready-to-run agent file.
+    No API key needed; docker agent never reads or copies the CLI's
+    credentials.
 
 Ends with the exact command to start chatting. Secret values are never
 printed. Check the result anytime with 'docker agent doctor'.`,
@@ -143,7 +172,10 @@ func newTerminalSetupWizard(in io.Reader, out io.Writer) *setupWizard {
 				return cfg.SetProvider(name, provider)
 			})
 		},
-		listModels: fetchOpenAICompatibleModels,
+		listModels:     fetchOpenAICompatibleModels,
+		probeClaudeCLI: codingharness.ProbeClaudeCLI,
+		claudeLogin:    codingharness.RunClaudeLogin,
+		agentFileDir:   ".",
 	}
 }
 
@@ -156,8 +188,9 @@ func (w *setupWizard) run(ctx context.Context) (*setupResult, error) {
 	fmt.Fprintln(w.out, "  1. Cloud provider (needs an API key)")
 	fmt.Fprintln(w.out, "  2. Local model via Docker Model Runner (no API key)")
 	fmt.Fprintln(w.out, "  3. OpenAI-compatible provider (custom endpoint, e.g. vLLM, LiteLLM)")
+	fmt.Fprintln(w.out, "  4. Claude Code harness (Claude subscription via the official `claude` CLI)")
 
-	choice, err := w.promptChoice(ctx, 3, 1)
+	choice, err := w.promptChoice(ctx, 4, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -168,8 +201,10 @@ func (w *setupWizard) run(ctx context.Context) (*setupResult, error) {
 		result, err = w.setupCloudProvider(ctx)
 	case 2:
 		result, err = w.setupLocalModel(ctx)
-	default:
+	case 3:
 		result, err = w.setupCustomProvider(ctx)
+	default:
+		result, err = w.setupClaudeHarness(ctx)
 	}
 	if err != nil {
 		return nil, err
@@ -507,9 +542,253 @@ func isValidEnvVarName(name string) bool {
 	return envVarNameRe.MatchString(name)
 }
 
+// claudeAgentFileName is the agent configuration the Claude Code harness
+// path writes into the current directory.
+const claudeAgentFileName = "claude-code-agent.yaml"
+
+// claudeEffortLevels are the values the Claude Code CLI accepts for --effort.
+var claudeEffortLevels = []string{"low", "medium", "high", "xhigh", "max"}
+
+const defaultClaudeEffort = "medium"
+
+// setupClaudeHarness walks the Claude Code harness path: verify the official
+// `claude` CLI is installed and logged in (offering the official login,
+// never running it without confirmation), pick a model override and effort,
+// and write a ready-to-run agent file. No API key and no token handling:
+// docker agent only checks the CLI's state and never reads its credentials.
+func (w *setupWizard) setupClaudeHarness(ctx context.Context) (*setupResult, error) {
+	fmt.Fprintln(w.out)
+	fmt.Fprintln(w.out, "Checking the Claude Code CLI...")
+
+	status := w.probeClaudeCLI(ctx)
+	if !status.Installed() {
+		return nil, fmt.Errorf("cannot use the Claude Code harness: the `claude` CLI was not found in PATH.\n"+
+			"Install Claude Code (%s) and log in with `%s`, then run `docker agent setup` again",
+			codingharness.ClaudeInstallDocsURL, codingharness.ClaudeLoginCommand)
+	}
+
+	if status.Authenticated() {
+		fmt.Fprintf(w.out, "Claude Code%s is installed and logged in (%s).\n", claudeVersionSuffix(status), status.AuthSummary())
+	} else if err := w.claudeLoginFlow(ctx, status); err != nil {
+		return nil, err
+	}
+
+	model, err := w.promptClaudeModel(ctx)
+	if err != nil {
+		return nil, err
+	}
+	effort, err := w.promptClaudeEffort(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	content, err := claudeAgentYAML(model, effort)
+	if err != nil {
+		return nil, fmt.Errorf("generating the agent configuration: %w", err)
+	}
+
+	fmt.Fprintln(w.out)
+	fmt.Fprintln(w.out, "Heads-up: the harness runs the official `claude` CLI non-interactively with")
+	fmt.Fprintln(w.out, "its own tools and skips Claude Code's permission prompts")
+	fmt.Fprintln(w.out, "(--dangerously-skip-permissions). Use it in a repository you trust, and prefer")
+	fmt.Fprintln(w.out, "`docker agent run --worktree` to isolate its changes in a git worktree.")
+	fmt.Fprintln(w.out, "`--sandbox` does not carry the `claude` CLI or its login into the sandbox;")
+	fmt.Fprintln(w.out, "use it only with a sandbox image that ships and authenticates the CLI.")
+
+	path, err := w.writeClaudeAgentFile(ctx, content)
+	if err != nil {
+		return nil, err
+	}
+	if path == "" {
+		// Declined overwrite: the copyable config and the run command were
+		// already printed by writeClaudeAgentFile.
+		return &setupResult{ClaudeHarness: true}, nil
+	}
+
+	fmt.Fprintf(w.out, "\nWrote %s.\n", path)
+	return &setupResult{ClaudeHarness: true, AgentFile: path}, nil
+}
+
+// claudeLoginFlow offers the official interactive login for a CLI that is
+// installed but not (verifiably) logged in. The login only runs after an
+// explicit yes, and the state is re-probed afterwards so a failed or aborted
+// sign-in cannot end the wizard in a broken state.
+func (w *setupWizard) claudeLoginFlow(ctx context.Context, status codingharness.ClaudeCLIStatus) error {
+	if status.State == codingharness.ClaudeStateAuthCheckFailed {
+		fmt.Fprintf(w.out, "Claude Code%s is installed but the login check failed: %s.\n", claudeVersionSuffix(status), status.Detail)
+	} else {
+		fmt.Fprintf(w.out, "Claude Code%s is installed but not logged in.\n", claudeVersionSuffix(status))
+	}
+	fmt.Fprintln(w.out, "Log in with your Claude subscription using the official command, run as the")
+	fmt.Fprintln(w.out, "same OS user and environment as docker agent:")
+	fmt.Fprintln(w.out)
+	fmt.Fprintf(w.out, "  %s\n", codingharness.ClaudeLoginCommand)
+	fmt.Fprintln(w.out)
+	fmt.Fprint(w.out, "Run it now? ([y]es/[n]o): ")
+
+	answer, err := w.readLine(ctx)
+	if err != nil {
+		return err
+	}
+	answer = strings.TrimSpace(strings.ToLower(answer))
+	if answer != "y" && answer != "yes" {
+		return fmt.Errorf("the Claude Code CLI is not logged in.\n"+
+			"Run `%s` yourself, then run `docker agent setup` again", codingharness.ClaudeLoginCommand)
+	}
+
+	fmt.Fprintln(w.out)
+	if err := w.claudeLogin(ctx); err != nil {
+		return fmt.Errorf("`%s` failed: %w", codingharness.ClaudeLoginCommand, err)
+	}
+
+	status = w.probeClaudeCLI(ctx)
+	if !status.Authenticated() {
+		return errors.New("the `claude` CLI still reports it is not logged in after the login attempt.\n" +
+			"Check `claude auth status` as the same OS user and environment that run docker agent,\n" +
+			"then run `docker agent setup` again")
+	}
+
+	fmt.Fprintf(w.out, "Logged in (%s).\n", status.AuthSummary())
+	return nil
+}
+
+// claudeVersionSuffix renders the probed version for a sentence that already
+// starts with "Claude Code": `claude --version` reports e.g.
+// "2.1.210 (Claude Code)", so the product-name suffix is dropped to avoid
+// printing "Claude Code 2.1.210 (Claude Code)".
+func claudeVersionSuffix(status codingharness.ClaudeCLIStatus) string {
+	version := strings.TrimSpace(strings.TrimSuffix(status.Version, "(Claude Code)"))
+	if version == "" {
+		return ""
+	}
+	return " " + version
+}
+
+// promptClaudeModel asks for the optional model override forwarded to the
+// CLI; empty keeps Claude Code's own default model.
+func (w *setupWizard) promptClaudeModel(ctx context.Context) (string, error) {
+	fmt.Fprintln(w.out)
+	fmt.Fprint(w.out, "Claude model override, an alias like sonnet/opus/haiku or a full model ID\n(leave empty for the Claude Code default): ")
+	model, err := w.readLine(ctx)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(model), nil
+}
+
+// promptClaudeEffort asks for the effort level forwarded as --effort,
+// re-asking until the answer is one of the levels the CLI accepts.
+func (w *setupWizard) promptClaudeEffort(ctx context.Context) (string, error) {
+	levels := strings.Join(claudeEffortLevels, ", ")
+	for {
+		fmt.Fprintf(w.out, "Effort level (%s) [%s]: ", levels, defaultClaudeEffort)
+		answer, err := w.readLine(ctx)
+		if err != nil {
+			return "", err
+		}
+		answer = strings.ToLower(strings.TrimSpace(answer))
+		if answer == "" {
+			return defaultClaudeEffort, nil
+		}
+		if slices.Contains(claudeEffortLevels, answer) {
+			return answer, nil
+		}
+		fmt.Fprintf(w.out, "Enter one of %s, or leave it empty for %s.\n", levels, defaultClaudeEffort)
+	}
+}
+
+// claudeAgentYAML renders the generated agent configuration: a single root
+// agent that delegates to the claude-code harness. It never contains a
+// credential; the harness uses the CLI's own login at run time.
+func claudeAgentYAML(model, effort string) ([]byte, error) {
+	harness := yaml.MapSlice{{Key: "type", Value: codingharness.TypeClaudeCode}}
+	if model != "" {
+		harness = append(harness, yaml.MapItem{Key: "model", Value: model})
+	}
+	harness = append(harness, yaml.MapItem{Key: "effort", Value: effort})
+
+	return yaml.Marshal(yaml.MapSlice{
+		{Key: "agents", Value: yaml.MapSlice{
+			{Key: "root", Value: yaml.MapSlice{
+				{Key: "description", Value: "Claude Code running on your Claude subscription"},
+				{Key: "harness", Value: harness},
+			}},
+		}},
+	})
+}
+
+// writeClaudeAgentFile writes the generated configuration to
+// claude-code-agent.yaml in the wizard's agent-file directory. An existing
+// file is only replaced after explicit confirmation; on decline the complete
+// config is printed instead so nothing is lost. Returns the written path, or
+// "" when the user declined to overwrite.
+func (w *setupWizard) writeClaudeAgentFile(ctx context.Context, content []byte) (string, error) {
+	path := filepath.Join(w.agentFileDir, claudeAgentFileName)
+	if _, err := os.Lstat(path); err == nil {
+		fmt.Fprintf(w.out, "\n%s already exists. Overwrite it? ([y]es/[n]o): ", path)
+		answer, err := w.readLine(ctx)
+		if err != nil {
+			return "", err
+		}
+		answer = strings.TrimSpace(strings.ToLower(answer))
+		if answer != "y" && answer != "yes" {
+			fmt.Fprintf(w.out, "\nKeeping %s. Save this configuration to a file of your choice:\n\n%s\n", path, content)
+			fmt.Fprintln(w.out, "Then start it with `docker agent run <file>`.")
+			return "", nil
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("checking %s: %w", path, err)
+	}
+
+	if err := atomicWriteFile(path, content); err != nil {
+		return "", fmt.Errorf("writing %s: %w", path, err)
+	}
+	return path, nil
+}
+
+// atomicWriteFile writes through a temp file in the same directory plus a
+// rename, so an interrupted write never leaves a truncated config behind.
+func atomicWriteFile(path string, content []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+"-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name()) // no-op after a successful rename
+
+	if _, err := tmp.Write(content); err != nil {
+		tmp.Close()
+		return err
+	}
+	// 0o644 like a hand-written config: the file carries no secret.
+	if err := tmp.Chmod(0o644); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
+}
+
 // printNextSteps ends the wizard with ready-to-copy commands.
 func (w *setupWizard) printNextSteps(result *setupResult) {
 	fmt.Fprintln(w.out)
+
+	// The harness runs through a generated agent file, not a --model flag:
+	// the harness model belongs to the external CLI, not to a docker agent
+	// model provider.
+	if result.ClaudeHarness {
+		if result.AgentFile != "" {
+			fmt.Fprintln(w.out, "You're all set. Start the Claude Code agent with:")
+			fmt.Fprintln(w.out)
+			fmt.Fprintf(w.out, "  docker agent run %s\n", result.AgentFile)
+			fmt.Fprintln(w.out)
+			fmt.Fprintf(w.out, "Check the harness anytime with `docker agent doctor %s`.\n", result.AgentFile)
+		} else {
+			fmt.Fprintln(w.out, "Check your setup anytime with `docker agent doctor <file>`.")
+		}
+		return
+	}
 
 	// Auto-selection never picks a custom provider, so its next steps must
 	// carry the explicit --model reference (or how to find one) instead of
@@ -630,8 +909,8 @@ func shouldOfferSetup(runErr error, execMode bool, getenv func(string) string) b
 
 // offerSetupOnNoModel completes an interactive run that failed for lack of a
 // usable model: it surfaces the failure, offers the setup wizard (decline-able),
-// and retries the run once when setup succeeds. In every other case the
-// original error is returned unchanged.
+// and hands a successful setup to completeOfferedSetup for the retry. In
+// every other case the original error is returned unchanged.
 func (f *runExecFlags) offerSetupOnNoModel(ctx context.Context, cmd *cobra.Command, out *cli.Printer, args []string, useTUI bool, runErr error) error {
 	if !shouldOfferSetup(runErr, f.exec, os.Getenv) {
 		return runErr
@@ -661,6 +940,22 @@ func (f *runExecFlags) offerSetupOnNoModel(ctx context.Context, cmd *cobra.Comma
 		return err
 	}
 
+	return f.completeOfferedSetup(ctx, result, cmd.OutOrStdout(), func() error {
+		return f.runOrExec(ctx, out, args, useTUI)
+	})
+}
+
+// completeOfferedSetup finishes a setup that was offered after a failed run:
+// it bridges what the wizard configured into the retry's environment and run
+// config, then retries the original invocation once. The Claude Code harness
+// path is the exception: it configured an external CLI agent file the failed
+// invocation cannot use, so nothing is retried and the sentinel keeps the
+// exit status non-zero.
+func (f *runExecFlags) completeOfferedSetup(ctx context.Context, result *setupResult, out io.Writer, retry func() error) error {
+	if result.ClaudeHarness {
+		return errClaudeHarnessConfigured
+	}
+
 	// The run's env provider chain was built before the wizard stored the key,
 	// so bridge it into the process environment for the retry: the config env
 	// file is not live when it did not exist at chain construction.
@@ -684,6 +979,6 @@ func (f *runExecFlags) offerSetupOnNoModel(ctx context.Context, cmd *cobra.Comma
 		}
 	}
 
-	fmt.Fprintln(cmd.OutOrStdout(), "Retrying with the new configuration...")
-	return f.runOrExec(ctx, out, args, useTUI)
+	fmt.Fprintln(out, "Retrying with the new configuration...")
+	return retry()
 }
