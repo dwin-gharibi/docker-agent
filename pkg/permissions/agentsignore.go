@@ -12,7 +12,11 @@ var pathToolArgs = []struct {
 	arg  string
 }{
 	{"read_file", "path"},
-	{"read_multiple_files", "paths"},
+	// read_multiple_files is intentionally omitted: its "paths" argument is an
+	// array, not a scalar string. The permission evaluator formats arrays as
+	// "[elem1 elem2]", so a scalar glob like "secrets.env" can never match.
+	// Per-path enforcement for read_multiple_files happens in the filesystem
+	// layer (resolveAndCheckPath called for each element) and is unaffected.
 	{"write_file", "path"},
 	{"edit_file", "path"},
 	{"create_directory", "path"},
@@ -49,6 +53,15 @@ func FromAgentsIgnore(startDir string) *Checker {
 func permissionGlobsFor(pattern string) []string {
 	p := strings.TrimSpace(pattern)
 	if p == "" || strings.HasPrefix(p, "#") || strings.HasPrefix(p, "!") {
+		// NOTE: negation patterns (e.g. "!public.key") are intentionally dropped
+		// here because a deny-list cannot express "except this path". The
+		// filesystem layer re-includes negated paths correctly (gitignore
+		// semantics), so actual access is unaffected. However, the advisory
+		// /permissions display may show a path as denied even when the agent
+		// can actually reach it — for example, if ".agentsignore" contains
+		// "*.key" and "!public.key", the display will flag public.key as
+		// blocked even though the filesystem layer permits it. This is a
+		// known limitation of the advisory permission layer.
 		return nil
 	}
 	p = strings.TrimSuffix(p, "/")
