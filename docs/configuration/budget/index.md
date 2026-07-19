@@ -110,17 +110,16 @@ Unlike [`max_iterations`](../agents/index.md), a budget stop is **terminal** —
 
 ## Tracking spend in the TUI
 
-The sidebar's Token Usage panel lists every active budget by name, with consumption against each ceiling it declares. Where more than one agent draws on a budget, it breaks the total down per agent — biggest spender first — with that agent's cost, tokens, and active time:
+The sidebar's Token Usage panel lists every active budget by name, with consumption against each ceiling it declares:
 
 ```text
 run        $0.12/$0.50 · 12.3K/100.0K · 2m14s/10m
-  developer  $0.09 · 8.0K · 1m12s
-  root       $0.03 · 4.3K · 1m02s
 shell-work $0.09/$0.10 · 4.3K/20.0K
-  developer  $0.09 · 4.3K · 1m12s
 ```
 
-Only the ceilings you configured appear, and a budget drawn on by a single agent omits the breakdown. Each reading warns once it passes 80% of its limit, so a run about to be stopped is visible before it stops.
+Only the ceilings you configured appear. Each reading is colored by the sidebar's shared gauge bands — the same ones a context gauge uses as it nears compaction — so a budget turns amber well before its ceiling and red just short of it, and a run about to be stopped is visible before it stops.
+
+For a per-agent view of who spent what, set **Sidebar info mode** to `Detailed` in `/settings` → Appearance: the Agents section then reports each agent's cost alongside its effort and context. The budget line deliberately does not repeat that breakdown — the same numbers twice would crowd the sidebar's narrowest column. The per-agent split is still carried on the `budget_usage` event for programmatic consumers, and `/cost` has a **By Agent** section.
 
 ## Limits and caveats
 
