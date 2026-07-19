@@ -448,6 +448,15 @@ toolsets:
 
 When `defer` is a list of tool names, only those specific tools are deferred; all other tools in the toolset load eagerly. Setting `defer: true` defers the entire toolset.
 
+### Tool Discovery with `search_tool`
+
+When an entire toolset is deferred (`defer: true`), the deferred toolset exposes two built-in tools to the agent:
+
+- **`search_tool`** — Discover available deferred tools by keyword. The search uses **fuzzy matching** against both tool names and descriptions: all characters of the query must appear in the target string in order (but not necessarily adjacently), so a query like `"crfil"` matches `"create_file"`. Returns a list of matching tool names with descriptions.
+- **`add_tool`** — Activate a discovered tool by name so it becomes available for use.
+
+These tools let the agent browse a large toolset on-demand without activating every tool upfront.
+
 See [`examples/deferred.yaml`](https://github.com/docker/docker-agent/blob/main/examples/deferred.yaml) for a complete example.
 
 ## Combined Example
