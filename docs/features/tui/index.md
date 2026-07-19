@@ -92,7 +92,7 @@ Type `/` during a session to see available commands, or press <kbd>Ctrl</kbd>+<k
 | `/pause`           | Pause/resume the runtime loop. While the agent is mid-request, the resize handle shows "Pausing…" until the in-flight request completes; once the loop is blocked the indicator changes to "⏸ Paused". Run `/pause` again to resume. |
 | `/tools`           | Show every toolset (with lifecycle state) and the tools they expose                  |
 | `/skills`          | List skills available to the current agent                                           |
-| `/toolset-restart` | Force a supervisor-driven reconnect of the named toolset (`/toolset-restart <name>`) |
+| `/toolset-restart` | Force a supervisor-driven reconnect of the named toolset (`/toolset-restart <name>`). Press <kbd>Tab</kbd> after `/toolset-restart` and a space to complete a toolset name; non-restartable toolsets are shown dimmed and cannot be selected. |
 | `/permissions`     | Inspect and edit tool permission rules                                               |
 | `/speak`           | Voice input via system speech-to-text (macOS only)                                   |
 | `/exit`            | Exit the application (aliases: `/quit`, `/q`)                                        |
@@ -301,7 +301,7 @@ Each error message includes a clickable **↻ retry** button. Clicking it resume
 Docker Agent automatically saves your sessions. Use `/sessions` to browse past conversations:
 
 - **Browse** past sessions with search and filtering. The search matches against session **titles** and **session IDs** (full UUIDs, dash-less variants, and partial fragments all resolve correctly — useful when jumping back to a session from a copied ID or log).
-- **Workspace grouping**: sessions started in the current directory are listed first under "This workspace", everything else under "Other locations" with its originating directory shown next to each entry; press <kbd>Ctrl</kbd>+<kbd>G</kbd> in the browser to cycle between all, current-directory only, and other-directory views. Restoring a session reopens it in its original directory, so the label always matches where a restore will land
+- **Workspace grouping**: sessions are grouped by **git repository root** (worktree-aware) — sessions from any subdirectory or linked worktree of the same repository are grouped together under "This workspace", and the header shows the repository root path. Sessions outside the current repository appear under "Other locations" with their originating directory. Press <kbd>Ctrl</kbd>+<kbd>G</kbd> in the browser to cycle between all, current-workspace only, and other-directory views. Restoring a session reopens it in its original directory, so the label always matches where a restore will land.
 - **Star** important sessions with `/star`
 - **Branch** conversations by editing any previous user message — preserving the original session history
 - **Resume** sessions with `docker agent run config.yaml --session <id>`
@@ -412,7 +412,7 @@ Run `/settings` to open the settings dialog. Use <kbd>Tab</kbd> to switch betwee
 
 The **Appearance** tab selects the theme and customizes the layout. Layout changes show a live schematic preview and apply immediately to the UI behind the dialog:
 
-- **Sidebar position**: `Right` (default), `Left`, `Top`, or `Bottom`. Left/right keep the full vertical sidebar next to the chat; top/bottom render it as a compact horizontal band above or below the chat (session title, working directory, usage, plus a one-line summary of the current agent, tools, and todos).
+- **Sidebar position**: `Right` (default), `Left`, `Top`, or `Bottom`. Left/right keep the full vertical sidebar next to the chat; top/bottom render it as a compact horizontal band above or below the chat (session title, working directory, token usage, plus a one-line summary of the current agent and its model; in multi-agent configurations all team agents are listed by name after the current agent).
 - **Sidebar info mode**: `Compact` (default) or `Detailed`. Controls how the Agents panel renders agent rows — see [Agents Panel](#agents-panel) for details. Persisted as `settings.layout.sidebar_info_mode: detailed`; compact is the default and omitted from the config.
 - **Section spacing**: `Compact`, `Normal` (default), or `Relaxed`, the number of blank lines between the sidebar sections (1, 2, or 3).
 - **Sidebar sections**: toggle the visibility of the **Session path** (the working directory line, including its git branch) and the **Token usage**, **Agents**, **Tools**, and **Todos** sections. The session title is always shown.
