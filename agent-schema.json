@@ -106,7 +106,7 @@
     },
     "runtime": {
       "$ref": "#/definitions/RuntimeDefaults",
-      "description": "Execution-time defaults the agent author wants applied. Values act as defaults only — explicit CLI flags or user-config settings always win."
+      "description": "Execution-time defaults the agent author wants applied. Values act as defaults only \u2014 explicit CLI flags or user-config settings always win."
     }
   },
   "additionalProperties": false,
@@ -1527,7 +1527,7 @@
           "description": "Whether to track usage"
         },
         "thinking_budget": {
-          "description": "Controls reasoning effort/budget. Use 'none' or 0 to disable thinking. OpenAI: string levels ('none','minimal','low','medium','high','xhigh','max') — 'xhigh' requires gpt-5.2+; 'none' and 'max' require gpt-5.6+ (Sol/Terra/Luna); 'minimal' is not accepted on gpt-5.6+. Anthropic: integer token budget (1024-32768), 'adaptive' (adaptive thinking with high effort by default), 'adaptive/<effort>' where effort is low/medium/high/xhigh/max ('xhigh' is supported by Claude Opus 4.7+), or effort levels ('low','medium','high','xhigh','max') which use adaptive thinking with the given effort. Amazon Bedrock (Claude): integer token budget or effort levels ('low','medium','high') mapped to token budgets. Google Gemini 2.5: integer token budget (-1 for dynamic, 0 to disable, 24576 max). Google Gemini 3: string levels ('minimal' Flash only,'low','medium','high'). Thinking is only enabled when explicitly configured.",
+          "description": "Controls reasoning effort/budget. Use 'none' or 0 to disable thinking. OpenAI: string levels ('none','minimal','low','medium','high','xhigh','max') \u2014 'xhigh' requires gpt-5.2+; 'none' and 'max' require gpt-5.6+ (Sol/Terra/Luna); 'minimal' is not accepted on gpt-5.6+. Anthropic: integer token budget (1024-32768), 'adaptive' (adaptive thinking with high effort by default), 'adaptive/<effort>' where effort is low/medium/high/xhigh/max ('xhigh' is supported by Claude Opus 4.7+), or effort levels ('low','medium','high','xhigh','max') which use adaptive thinking with the given effort. Amazon Bedrock (Claude): integer token budget or effort levels ('low','medium','high') mapped to token budgets. Google Gemini 2.5: integer token budget (-1 for dynamic, 0 to disable, 24576 max). Google Gemini 3: string levels ('minimal' Flash only,'low','medium','high'). Thinking is only enabled when explicitly configured.",
           "oneOf": [
             {
               "type": "string",
@@ -1771,7 +1771,7 @@
       "properties": {
         "sandbox": {
           "type": "boolean",
-          "description": "When true, run the agent inside a Docker sandbox by default — equivalent to passing --sandbox on the command line. An explicit --sandbox=false on the CLI still wins."
+          "description": "When true, run the agent inside a Docker sandbox by default \u2014 equivalent to passing --sandbox on the command line. An explicit --sandbox=false on the CLI still wins."
         },
         "network_allowlist": {
           "type": "array",
@@ -2617,7 +2617,10 @@
           "type": "string",
           "description": "Destination chat id (provider: telegram)"
         }
-      }
+      },
+      "required": [
+        "url"
+      ]
     },
     "ApiConfig": {
       "type": "object",

@@ -266,6 +266,12 @@ func (t *ToolSet) attempt(ctx context.Context, args SendArgs) (verdict, time.Dur
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
+		// http.NewRequestWithContext may return a *url.Error; its Error() string embeds
+		// the full request URL which may contain secrets.
+		var urlErr *url.Error
+		if errors.As(err, &urlErr) {
+			return permanent, 0, urlErr.Err.Error()
+		}
 		return permanent, 0, err.Error()
 	}
 	req.Header.Set("Content-Type", "application/json")
@@ -276,6 +282,13 @@ func (t *ToolSet) attempt(ctx context.Context, args SendArgs) (verdict, time.Dur
 
 	resp, err := t.client.Do(req)
 	if err != nil {
+		// http.Client.Do returns *url.Error on network failures; its Error() string
+		// embeds the full request URL which may carry embedded secrets (e.g. Slack/Discord tokens).
+		// Unwrap to expose only the underlying cause and never the URL.
+		var urlErr *url.Error
+		if errors.As(err, &urlErr) {
+			return transient, 0, "request failed: " + urlErr.Err.Error()
+		}
 		return transient, 0, "request failed: " + err.Error()
 	}
 	defer resp.Body.Close()
