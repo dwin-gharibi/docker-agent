@@ -92,7 +92,7 @@ Type `/` during a session to see available commands, or press <kbd>Ctrl</kbd>+<k
 | `/pause`           | Pause/resume the runtime loop. While the agent is mid-request, the resize handle shows "Pausing…" until the in-flight request completes; once the loop is blocked the indicator changes to "⏸ Paused". Run `/pause` again to resume. |
 | `/tools`           | Show every toolset (with lifecycle state) and the tools they expose                  |
 | `/skills`          | List skills available to the current agent                                           |
-| `/toolset-restart` | Force a supervisor-driven reconnect of the named toolset (`/toolset-restart <name>`) |
+| `/toolset-restart` | Force a supervisor-driven reconnect of the named toolset (`/toolset-restart <name>`). Press <kbd>Tab</kbd> after `/toolset-restart` and a space to complete a toolset name; non-restartable toolsets are shown dimmed and cannot be selected. |
 | `/permissions`     | Inspect and edit tool permission rules                                               |
 | `/speak`           | Voice input via system speech-to-text (macOS only)                                   |
 | `/exit`            | Exit the application (aliases: `/quit`, `/q`)                                        |
