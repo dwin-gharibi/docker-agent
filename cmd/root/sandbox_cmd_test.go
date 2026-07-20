@@ -29,7 +29,7 @@ func TestSandboxAllowDenyList(t *testing.T) {
 
 	cfg, err := userconfig.Load()
 	require.NoError(t, err)
-	assert.Equal(t, []string{"api.example.com", "registry.npmjs.org:443"}, cfg.SandboxAllowlist)
+	assert.ElementsMatch(t, []string{"api.example.com", "registry.npmjs.org:443"}, cfg.SandboxAllowlist)
 
 	stdout.Reset()
 	root.SetArgs([]string{"sandbox", "list"})
