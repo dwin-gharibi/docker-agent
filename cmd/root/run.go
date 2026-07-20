@@ -1120,6 +1120,10 @@ func (f *runExecFlags) createSessionSpawner(agentSource config.Source, sessStore
 			t.SetPermissions(permissions.Merge(t.Permissions(), f.globalPermissions))
 		}
 
+		if ignoreRules := permissions.FromAgentsIgnore(f.runConfig.WorkingDir); ignoreRules != nil {
+			t.SetPermissions(permissions.Merge(t.Permissions(), ignoreRules))
+		}
+
 		rtOpts, ctrl, err := f.snapshotRuntimeOpts()
 		if err != nil {
 			return nil, nil, nil, err

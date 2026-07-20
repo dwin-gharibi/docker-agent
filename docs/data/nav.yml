@@ -40,6 +40,8 @@
       url: /configuration/hooks/
     - title: Permissions
       url: /configuration/permissions/
+    - title: Ignoring Files
+      url: /configuration/agentsignore/
     - title: Sandbox Mode
       url: /configuration/sandbox/
     - title: Structured Output

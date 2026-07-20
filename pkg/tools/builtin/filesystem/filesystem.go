@@ -100,7 +100,8 @@ type ToolSet struct {
 	// denyList, when non-nil, rejects every filesystem operation on paths
 	// that resolve under one of the listed roots, even when the path also
 	// matches the allow-list. nil means "no deny-list".
-	denyList *pathRootSet
+	denyList     *pathRootSet
+	agentsIgnore *fsx.AgentsIgnoreMatcher
 }
 
 // Verify interface compliance
@@ -121,6 +122,12 @@ func WithPostEditCommands(postEditCommands []PostEditConfig) Opt {
 func WithIgnoreVCS(ignoreVCS bool) Opt {
 	return func(t *ToolSet) {
 		t.ignoreVCS = ignoreVCS
+	}
+}
+
+func WithAgentsIgnore(m *fsx.AgentsIgnoreMatcher) Opt {
+	return func(t *ToolSet) {
+		t.agentsIgnore = m
 	}
 }
 
@@ -185,6 +192,14 @@ func CreateToolSet(toolset latest.Toolset, runConfig *config.RuntimeConfig) (too
 		ignoreVCS = *toolset.IgnoreVCS
 	}
 	opts = append(opts, WithIgnoreVCS(ignoreVCS))
+
+	matcher, err := fsx.NewAgentsIgnoreMatcher(wd)
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", fsx.AgentsIgnoreFile, err)
+	}
+	if matcher != nil {
+		opts = append(opts, WithAgentsIgnore(matcher))
+	}
 
 	if len(toolset.AllowList) > 0 {
 		opts = append(opts, WithAllowList(toolset.AllowList))
@@ -638,6 +653,9 @@ func (t *ToolSet) resolveAndCheckPath(path string) (string, error) {
 	}
 
 	resolved := t.resolvePath(path)
+	if t.agentsIgnore.Match(resolved) {
+		return "", fmt.Errorf("path %q is excluded by %s", path, fsx.AgentsIgnoreFile)
+	}
 	if t.allowList == nil && t.denyList == nil {
 		return resolved, nil
 	}
@@ -803,6 +821,10 @@ func (t *ToolSet) initGitignoreMatcher() {
 
 // shouldIgnorePath checks if a path should be ignored based on VCS rules
 func (t *ToolSet) shouldIgnorePath(path string) bool {
+	if t.agentsIgnore.Match(path) {
+		return true
+	}
+
 	if !t.ignoreVCS {
 		return false
 	}
