@@ -191,7 +191,24 @@ func renderUsage(w io.Writer, report usage.Report, asJSON bool) error {
 		fmt.Fprintf(w, "\n! Cost is understated: no pricing for %s\n",
 			strings.Join(report.UnpricedModels, ", "))
 	}
+	if unmetered := unmeteredModels(report.Models); len(unmetered) > 0 {
+		fmt.Fprintf(w, "\n! Token counts are understated: no usage reported for some calls to %s\n",
+			strings.Join(unmetered, ", "))
+	}
 	return nil
+}
+
+// unmeteredModels names the models that served at least one call the provider
+// reported no usage for. Their token columns are short for a reason the table
+// itself cannot show.
+func unmeteredModels(models []usage.ModelRow) []string {
+	var out []string
+	for _, m := range models {
+		if m.Unmetered > 0 {
+			out = append(out, m.Model)
+		}
+	}
+	return out
 }
 
 // formatUsageCost renders a cost, marking the ones known to be incomplete with a

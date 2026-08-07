@@ -45,7 +45,18 @@ type Tokens struct {
 // Total is the headline "tokens moved" figure: input plus output. CachedInput is
 // already a subset of Input, and CacheWrite/Reasoning are reported on their own
 // rather than folded in, so adding them would double-count.
+//
+// Total is for display. Use [Tokens.AnySpend] to ask whether anything was
+// consumed at all — a run can burn reasoning tokens without moving a single
+// input or output token, and Total would report 0 for it.
 func (t Tokens) Total() int64 { return t.Input + t.Output }
+
+// AnySpend reports whether any tokens at all were consumed, including the kinds
+// [Tokens.Total] deliberately leaves out. It is what "did this cost anything?"
+// should be keyed on.
+func (t Tokens) AnySpend() bool {
+	return t.Input > 0 || t.CachedInput > 0 || t.CacheWrite > 0 || t.Output > 0 || t.Reasoning > 0
+}
 
 // addUsage accumulates u into dst. A free function rather than a method so
 // Tokens keeps value receivers throughout (it is embedded in JSON-serialized
@@ -77,11 +88,17 @@ type SessionRow struct {
 }
 
 // ModelRow is one model's token spend across every session in the report.
-// Calls counts model responses, not tool calls.
+//
+// Calls counts model responses, not tool calls, and counts a response whether or
+// not the provider reported usage for it: the call happened either way, and
+// dropping it would hide a model that a usage-tracking-disabled provider served
+// entirely. Unmetered is how many of those calls carried no usage, so short
+// token columns are explained rather than mysterious.
 type ModelRow struct {
-	Model  string `json:"model"`
-	Calls  int    `json:"calls"`
-	Tokens Tokens `json:"tokens"`
+	Model     string `json:"model"`
+	Calls     int    `json:"calls"`
+	Unmetered int    `json:"unmetered_calls,omitempty"`
+	Tokens    Tokens `json:"tokens"`
 }
 
 // ToolRow is how often a tool was called across every session in the report.
@@ -138,7 +155,14 @@ func Aggregate(sessions []*session.Session) Report {
 					mr = &ModelRow{Model: model}
 					modelTokens[model] = mr
 				}
+				// An attributed model with no usage still happened — the
+				// provider just did not report tokens (usage tracking off, or an
+				// older session). Counting it keeps the model visible; Unmetered
+				// records why its token columns are short.
 				mr.Calls++
+				if itemUsage == nil {
+					mr.Unmetered++
+				}
 				addUsage(&mr.Tokens, itemUsage)
 			}
 
@@ -153,8 +177,10 @@ func Aggregate(sessions []*session.Session) Report {
 
 		row.Models = sortedKeys(sessionModels)
 
-		// Tokens moved but nothing was charged: the model is unpriced.
-		if row.Tokens.Total() > 0 && row.Cost == 0 {
+		// Tokens consumed but nothing charged: the model is unpriced. Keyed on
+		// AnySpend, not Total, so a reasoning-only run is not silently reported
+		// as a genuine $0.00.
+		if row.Tokens.AnySpend() && row.Cost == 0 {
 			row.CostIncomplete = true
 			for _, m := range row.Models {
 				unpriced[m] = struct{}{}
