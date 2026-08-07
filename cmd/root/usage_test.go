@@ -186,3 +186,49 @@ func TestTruncateTitle(t *testing.T) {
 	assert.Equal(t, "éééé…", got)
 	assert.Len(t, []rune(got), 5)
 }
+
+// A model whose provider reported no usage shows real calls against short token
+// columns. Without a note that reads as "41 calls, 0 tokens, free", which is the
+// same silent-understatement trap as an unpriced cost.
+func TestRenderUsage_WarnsAboutUnmeteredCalls(t *testing.T) {
+	t.Parallel()
+
+	report := usage.Report{
+		Sessions: []usage.SessionRow{{
+			ID:        "s1",
+			CreatedAt: time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC),
+			Tokens:    usage.Tokens{Input: 100, Output: 10},
+			Cost:      0.2,
+		}},
+		Models: []usage.ModelRow{
+			{Model: "openai/gpt-5", Calls: 3, Unmetered: 2, Tokens: usage.Tokens{Input: 100, Output: 10}},
+			{Model: "anthropic/claude-opus-5", Calls: 1, Tokens: usage.Tokens{Input: 10}},
+		},
+		Tokens: usage.Tokens{Input: 110, Output: 10},
+		Cost:   0.2,
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, renderUsage(&buf, report, false))
+	out := buf.String()
+
+	assert.Contains(t, out, "Token counts are understated")
+	assert.Contains(t, out, "openai/gpt-5")
+	assert.NotContains(t, out, "no usage reported for some calls to anthropic/claude-opus-5",
+		"a fully metered model must not be named")
+}
+
+func TestRenderUsage_NoUnmeteredNoteWhenAllCallsMetered(t *testing.T) {
+	t.Parallel()
+
+	report := usage.Report{
+		Sessions: []usage.SessionRow{{ID: "s1", Tokens: usage.Tokens{Input: 10, Output: 2}, Cost: 1}},
+		Models:   []usage.ModelRow{{Model: "openai/gpt-5", Calls: 1, Tokens: usage.Tokens{Input: 10, Output: 2}}},
+		Tokens:   usage.Tokens{Input: 10, Output: 2},
+		Cost:     1,
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, renderUsage(&buf, report, false))
+	assert.NotContains(t, buf.String(), "understated")
+}

@@ -200,3 +200,64 @@ func TestTokens_Total(t *testing.T) {
 	tk := usage.Tokens{Input: 100, CachedInput: 90, CacheWrite: 10, Output: 5, Reasoning: 3}
 	assert.Equal(t, int64(105), tk.Total())
 }
+
+// An attributed model whose provider reported no usage still made a call. The
+// call is counted — dropping it would hide a model served entirely by a
+// usage-tracking-disabled provider — and Unmetered explains the short tokens.
+func TestAggregate_UnmeteredCallsAreCountedAndFlagged(t *testing.T) {
+	t.Parallel()
+
+	s := &session.Session{
+		ID: "s1", CreatedAt: day(1), Cost: 0.1,
+		Messages: []session.Item{
+			assistant("openai/gpt-5", &chat.Usage{InputTokens: 100, OutputTokens: 10}),
+			assistant("openai/gpt-5", nil), // model attributed, no usage reported
+			// A non-message item (compaction) with a model but no usage.
+			{Model: "openai/gpt-5"},
+		},
+	}
+
+	got := usage.Aggregate([]*session.Session{s})
+	require.Len(t, got.Models, 1)
+
+	assert.Equal(t, 3, got.Models[0].Calls, "every attributed response counts as a call")
+	assert.Equal(t, 2, got.Models[0].Unmetered, "the two without usage are flagged")
+	assert.Equal(t, int64(100), got.Models[0].Tokens.Input, "tokens only come from reported usage")
+}
+
+// Total() is input+output by design, so a run that burned only reasoning tokens
+// reports Total()==0. Keying the unpriced check on Total would silently report
+// such a session as a genuine $0.00.
+func TestAggregate_ReasoningOnlySpendIsFlaggedAsUnpriced(t *testing.T) {
+	t.Parallel()
+
+	s := &session.Session{
+		ID: "s1", CreatedAt: day(1), Cost: 0,
+		Messages: []session.Item{
+			assistant("test/fake-root", &chat.Usage{ReasoningTokens: 500}),
+		},
+	}
+
+	got := usage.Aggregate([]*session.Session{s})
+	require.Len(t, got.Sessions, 1)
+
+	require.Zero(t, got.Sessions[0].Tokens.Total(), "Total deliberately excludes reasoning")
+	assert.True(t, got.Sessions[0].Tokens.AnySpend(), "but something was consumed")
+	assert.True(t, got.Sessions[0].CostIncomplete, "so the zero cost must be flagged")
+	assert.Equal(t, []string{"test/fake-root"}, got.UnpricedModels)
+}
+
+func TestTokens_AnySpend(t *testing.T) {
+	t.Parallel()
+
+	assert.False(t, usage.Tokens{}.AnySpend())
+	for name, tk := range map[string]usage.Tokens{
+		"input":       {Input: 1},
+		"output":      {Output: 1},
+		"cached":      {CachedInput: 1},
+		"cache write": {CacheWrite: 1},
+		"reasoning":   {Reasoning: 1},
+	} {
+		assert.Truef(t, tk.AnySpend(), "%s alone counts as spend", name)
+	}
+}
