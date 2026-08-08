@@ -447,6 +447,44 @@ $ docker agent share pull docker.io/username/my-agent:latest --force
 
 See [Agent Distribution](../../concepts/distribution/index.md) for full registry workflow details.
 
+### `docker agent usage`
+
+Report what recorded sessions spent, broken down by session, model, and tool.
+Token and cost figures are otherwise reachable only from the TUI's cost dialog,
+so this is how a headless run — `--exec` in CI, the API server, MCP/A2A — gets
+at them.
+
+```bash
+$ docker agent usage [flags]
+```
+
+```console
+$ docker agent usage --since 24h
+SESSION   CREATED           INPUT   CACHED  OUTPUT  COST   TITLE
+a1b2c3d4  2026-08-06 12:04  128.4K  96.2K   4.1K    $0.42  fix the failing cache test
+3 session(s)                412.7K  310.1K  11.9K   $1.28
+
+MODEL                    CALLS  INPUT   CACHED  OUTPUT  COST
+anthropic/claude-opus-5     41  380.2K  295.0K  10.4K   $1.28
+
+TOOL             CALLS
+read_file           58
+shell               21
+```
+
+| Flag                | Default                              | Description                                                       |
+| ------------------- | ------------------------------------ | ------------------------------------------------------------------ |
+| `-s, --session-db`  | `<data-dir>/session.db`              | Path to the session database                                      |
+| `--session <ref>`   | (all)                                | Report only this session; accepts a full ID, a unique ID prefix, or a relative ref such as `-1` |
+| `--since <dur>`     | (all)                                | Report only sessions created within this duration (e.g. `24h`)    |
+| `--json`            | `false`                              | Emit the report as JSON, for CI                                   |
+
+Spend from delegated sub-agents is counted into the session that started them,
+matching the TUI. Cost is what the runtime recorded as it ran — nothing is
+re-priced — so a session that moved tokens but recorded no cost means the model
+was missing from the pricing catalogue. Those are flagged with a trailing `+`
+and named at the end of the report rather than shown as a plain `$0.00`.
+
 ### `docker agent eval`
 
 Run agent evaluations against a directory of recorded sessions.
