@@ -14,7 +14,11 @@ import (
 )
 
 func assistant(model string, u *chat.Usage, toolNames ...string) session.Item {
-	msg := chat.Message{Role: chat.MessageRoleAssistant, Model: model, Usage: u}
+	return assistantCost(model, u, 0, toolNames...)
+}
+
+func assistantCost(model string, u *chat.Usage, cost float64, toolNames ...string) session.Item {
+	msg := chat.Message{Role: chat.MessageRoleAssistant, Model: model, Usage: u, Cost: cost}
 	for _, name := range toolNames {
 		msg.ToolCalls = append(msg.ToolCalls, tools.ToolCall{
 			Function: tools.FunctionCall{Name: name},
@@ -41,14 +45,14 @@ func TestAggregate_SumsTokensAndCostPerSession(t *testing.T) {
 	t.Parallel()
 
 	s := &session.Session{
-		ID: "s1", Title: "fix the bug", CreatedAt: day(1), Cost: 0.25,
+		ID: "s1", Title: "fix the bug", CreatedAt: day(1),
 		Messages: []session.Item{
-			assistant("anthropic/claude-opus-5", &chat.Usage{
+			assistantCost("anthropic/claude-opus-5", &chat.Usage{
 				InputTokens: 100, OutputTokens: 20, CachedInputTokens: 80, CacheWriteTokens: 5,
-			}),
-			assistant("anthropic/claude-opus-5", &chat.Usage{
+			}, 0.10),
+			assistantCost("anthropic/claude-opus-5", &chat.Usage{
 				InputTokens: 200, OutputTokens: 30, ReasoningTokens: 7,
-			}),
+			}, 0.15),
 		},
 	}
 
@@ -74,7 +78,7 @@ func TestAggregate_AttributesTokensPerModel(t *testing.T) {
 	t.Parallel()
 
 	s := &session.Session{
-		ID: "s1", CreatedAt: day(1), Cost: 1,
+		ID: "s1", CreatedAt: day(1),
 		Messages: []session.Item{
 			assistant("anthropic/claude-opus-5", &chat.Usage{InputTokens: 100, OutputTokens: 10}),
 			assistant("openai/gpt-5", &chat.Usage{InputTokens: 300, OutputTokens: 40}),
@@ -122,8 +126,8 @@ func TestAggregate_FlagsUnpricedUsage(t *testing.T) {
 	t.Parallel()
 
 	priced := &session.Session{
-		ID: "priced", CreatedAt: day(2), Cost: 0.5,
-		Messages: []session.Item{assistant("anthropic/claude-opus-5", &chat.Usage{InputTokens: 100, OutputTokens: 10})},
+		ID: "priced", CreatedAt: day(2),
+		Messages: []session.Item{assistantCost("anthropic/claude-opus-5", &chat.Usage{InputTokens: 100, OutputTokens: 10}, 0.5)},
 	}
 	unpriced := &session.Session{
 		ID: "unpriced", CreatedAt: day(1), Cost: 0,
@@ -162,9 +166,9 @@ func TestAggregate_IncludesNonMessageItemUsage(t *testing.T) {
 	t.Parallel()
 
 	s := &session.Session{
-		ID: "s1", CreatedAt: day(1), Cost: 0.4,
+		ID: "s1", CreatedAt: day(1),
 		Messages: []session.Item{
-			assistant("anthropic/claude-opus-5", &chat.Usage{InputTokens: 100, OutputTokens: 10}),
+			assistantCost("anthropic/claude-opus-5", &chat.Usage{InputTokens: 100, OutputTokens: 10}, 0.3),
 			{Model: "anthropic/claude-opus-5", Cost: 0.1, Usage: &chat.Usage{InputTokens: 900, OutputTokens: 50}},
 		},
 	}
@@ -208,7 +212,7 @@ func TestAggregate_UnmeteredCallsAreCountedAndFlagged(t *testing.T) {
 	t.Parallel()
 
 	s := &session.Session{
-		ID: "s1", CreatedAt: day(1), Cost: 0.1,
+		ID: "s1", CreatedAt: day(1),
 		Messages: []session.Item{
 			assistant("openai/gpt-5", &chat.Usage{InputTokens: 100, OutputTokens: 10}),
 			assistant("openai/gpt-5", nil), // model attributed, no usage reported
@@ -260,4 +264,112 @@ func TestTokens_AnySpend(t *testing.T) {
 	} {
 		assert.Truef(t, tk.AnySpend(), "%s alone counts as spend", name)
 	}
+}
+
+// Delegated work lives in sub-sessions, and the store's session listing is
+// root-only — so a sub-agent's spend has nowhere to be reported except the
+// parent's row. Missing it understated a real multi-agent session by 99.8%.
+func TestAggregate_IncludesSubSessionSpend(t *testing.T) {
+	t.Parallel()
+
+	sub := &session.Session{ID: "sub", Messages: []session.Item{
+		assistantCost("openai/gpt-5", &chat.Usage{InputTokens: 900, OutputTokens: 90}, 0.9, "read_file"),
+	}}
+	parent := &session.Session{
+		ID: "root", CreatedAt: day(1),
+		Messages: []session.Item{
+			assistantCost("anthropic/claude-opus-5", &chat.Usage{InputTokens: 100, OutputTokens: 10}, 0.1, "transfer_task"),
+			session.NewSubSessionItem(sub),
+		},
+	}
+
+	got := usage.Aggregate([]*session.Session{parent})
+	require.Len(t, got.Sessions, 1)
+
+	row := got.Sessions[0]
+	assert.Equal(t, int64(1000), row.Tokens.Input, "sub-agent tokens count")
+	assert.Equal(t, int64(100), row.Tokens.Output)
+	assert.InDelta(t, 1.0, row.Cost, 1e-9, "sub-agent cost counts")
+	assert.Equal(t, []string{"anthropic/claude-opus-5", "openai/gpt-5"}, row.Models)
+
+	// The sub-agent's model and tool calls appear in the breakdowns too.
+	require.Len(t, got.Models, 2)
+	assert.Equal(t, "openai/gpt-5", got.Models[0].Model)
+	assert.InDelta(t, 0.9, got.Models[0].Cost, 1e-9)
+
+	toolCalls := map[string]int{}
+	for _, tr := range got.Tools {
+		toolCalls[tr.Tool] = tr.Calls
+	}
+	assert.Equal(t, map[string]int{"read_file": 1, "transfer_task": 1}, toolCalls)
+}
+
+func TestAggregate_RecursesThroughNestedSubSessions(t *testing.T) {
+	t.Parallel()
+
+	deep := &session.Session{ID: "deep", Messages: []session.Item{
+		assistantCost("m", &chat.Usage{InputTokens: 5}, 0.05),
+	}}
+	mid := &session.Session{ID: "mid", Messages: []session.Item{
+		assistantCost("m", &chat.Usage{InputTokens: 50}, 0.5),
+		session.NewSubSessionItem(deep),
+	}}
+	root := &session.Session{ID: "root", CreatedAt: day(1), Messages: []session.Item{
+		assistantCost("m", &chat.Usage{InputTokens: 500}, 5),
+		session.NewSubSessionItem(mid),
+	}}
+
+	got := usage.Aggregate([]*session.Session{root})
+	require.Len(t, got.Sessions, 1)
+	assert.Equal(t, int64(555), got.Sessions[0].Tokens.Input)
+	assert.InDelta(t, 5.55, got.Sessions[0].Cost, 1e-9)
+}
+
+// Cost must agree with session.TotalCost, which is what every other consumer
+// reports. The legacy session-level Cost field is only kept for backward-
+// compatible persistence and understates a delegating run.
+func TestAggregate_CostMatchesSessionTotalCost(t *testing.T) {
+	t.Parallel()
+
+	sub := &session.Session{ID: "sub", Messages: []session.Item{
+		assistantCost("m", &chat.Usage{InputTokens: 10}, 2.5),
+	}}
+	root := &session.Session{
+		ID: "root", CreatedAt: day(1),
+		// The legacy field is deliberately left at a stale value: it must not
+		// be what the report reads.
+		Cost: 0.01,
+		Messages: []session.Item{
+			assistantCost("m", &chat.Usage{InputTokens: 10}, 1.25),
+			session.NewSubSessionItem(sub),
+			// A compaction item carries its own cost alongside messages.
+			{Model: "m", Cost: 0.25, Usage: &chat.Usage{InputTokens: 100}},
+		},
+	}
+
+	got := usage.Aggregate([]*session.Session{root})
+	require.Len(t, got.Sessions, 1)
+	assert.InDelta(t, root.TotalCost(), got.Sessions[0].Cost, 1e-9)
+	assert.InDelta(t, 4.0, got.Sessions[0].Cost, 1e-9)
+}
+
+// Cost is attributable per model, since it is recorded per message.
+func TestAggregate_AttributesCostPerModel(t *testing.T) {
+	t.Parallel()
+
+	s := &session.Session{ID: "s1", CreatedAt: day(1), Messages: []session.Item{
+		assistantCost("openai/gpt-5", &chat.Usage{InputTokens: 300}, 0.75),
+		assistantCost("anthropic/claude-opus-5", &chat.Usage{InputTokens: 100}, 0.25),
+		assistantCost("openai/gpt-5", &chat.Usage{InputTokens: 200}, 0.50),
+	}}
+
+	got := usage.Aggregate([]*session.Session{s})
+	require.Len(t, got.Models, 2)
+
+	byModel := map[string]float64{}
+	for _, m := range got.Models {
+		byModel[m.Model] = m.Cost
+	}
+	assert.InDelta(t, 1.25, byModel["openai/gpt-5"], 1e-9)
+	assert.InDelta(t, 0.25, byModel["anthropic/claude-opus-5"], 1e-9)
 }

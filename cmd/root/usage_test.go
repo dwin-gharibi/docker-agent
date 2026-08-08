@@ -3,6 +3,7 @@ package root
 import (
 	"bytes"
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -10,15 +11,17 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/docker/docker-agent/pkg/chat"
 	"github.com/docker/docker-agent/pkg/session"
+	"github.com/docker/docker-agent/pkg/session/sqlitestore"
 	"github.com/docker/docker-agent/pkg/usage"
 )
 
-func TestFilterSessions(t *testing.T) {
+func TestKeepSummariesSince(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
-	sessions := []*session.Session{
+	summaries := []session.Summary{
 		{ID: "recent", CreatedAt: now.Add(-1 * time.Hour)},
 		{ID: "old", CreatedAt: now.Add(-72 * time.Hour)},
 		{ID: "undated"}, // zero CreatedAt
@@ -26,13 +29,12 @@ func TestFilterSessions(t *testing.T) {
 
 	t.Run("zero since keeps everything", func(t *testing.T) {
 		t.Parallel()
-		got := filterSessions(sessions, 0, now)
-		assert.Len(t, got, 3)
+		assert.Len(t, keepSummariesSince(summaries, 0, now), 3)
 	})
 
 	t.Run("drops sessions older than the cutoff", func(t *testing.T) {
 		t.Parallel()
-		got := filterSessions(sessions, 24*time.Hour, now)
+		got := keepSummariesSince(summaries, 24*time.Hour, now)
 		ids := make([]string, 0, len(got))
 		for _, s := range got {
 			ids = append(ids, s.ID)
@@ -43,11 +45,11 @@ func TestFilterSessions(t *testing.T) {
 
 	t.Run("does not mutate the caller's slice", func(t *testing.T) {
 		t.Parallel()
-		input := []*session.Session{
+		input := []session.Summary{
 			{ID: "a", CreatedAt: now.Add(-72 * time.Hour)},
 			{ID: "b", CreatedAt: now},
 		}
-		_ = filterSessions(input, time.Hour, now)
+		_ = keepSummariesSince(input, time.Hour, now)
 		require.Len(t, input, 2)
 		assert.Equal(t, "a", input[0].ID, "filtering must not reorder or clobber the input")
 		assert.Equal(t, "b", input[1].ID)
@@ -231,4 +233,102 @@ func TestRenderUsage_NoUnmeteredNoteWhenAllCallsMetered(t *testing.T) {
 	var buf bytes.Buffer
 	require.NoError(t, renderUsage(&buf, report, false))
 	assert.NotContains(t, buf.String(), "understated")
+}
+
+// storeFixture builds a real SQLite store containing a delegating session, so
+// the loading path is exercised end to end rather than through fixtures. Both
+// blocking defects in the first round of this feature — dropped sub-session
+// spend and cost read from the legacy field — were invisible to fixture tests
+// and only showed up against a real store.
+func storeFixture(t *testing.T) (session.Store, *session.Session) {
+	t.Helper()
+
+	store, err := sqlitestore.New(t.Context(), filepath.Join(t.TempDir(), "s.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+
+	msg := func(model string, in, out int64, cost float64) session.Item {
+		return session.Item{Message: &session.Message{
+			AgentName: "root",
+			Message: chat.Message{
+				Role:  chat.MessageRoleAssistant,
+				Model: model,
+				Usage: &chat.Usage{InputTokens: in, OutputTokens: out},
+				Cost:  cost,
+			},
+		}}
+	}
+
+	sub := &session.Session{ID: "sub-1", Messages: []session.Item{msg("openai/gpt-5", 900, 90, 0.90)}}
+	root := &session.Session{
+		ID:        "abcdef0123456789",
+		Title:     "delegating run",
+		CreatedAt: time.Now().Add(-time.Hour),
+		Messages: []session.Item{
+			msg("anthropic/claude-opus-5", 100, 10, 0.10),
+			session.NewSubSessionItem(sub),
+		},
+	}
+	require.NoError(t, store.AddSession(t.Context(), root))
+
+	return store, root
+}
+
+func TestLoadUsageSessions_CountsSubSessionSpend(t *testing.T) {
+	t.Parallel()
+
+	store, root := storeFixture(t)
+
+	sessions, err := loadUsageSessions(t.Context(), store, "", 0, time.Now())
+	require.NoError(t, err)
+	require.Len(t, sessions, 1, "the listing is root-only, so sub-sessions arrive nested")
+
+	report := usage.Aggregate(sessions)
+	require.Len(t, report.Sessions, 1)
+	assert.Equal(t, int64(1000), report.Sessions[0].Tokens.Input,
+		"the sub-agent's tokens must be counted")
+	assert.InDelta(t, root.TotalCost(), report.Sessions[0].Cost, 1e-9)
+	assert.False(t, report.Sessions[0].CostIncomplete,
+		"a priced run must not be flagged as having no pricing")
+}
+
+// The table prints a shortened ID, so --session must accept it.
+func TestLoadUsageSessions_AcceptsAnIDPrefix(t *testing.T) {
+	t.Parallel()
+
+	store, root := storeFixture(t)
+
+	sessions, err := loadUsageSessions(t.Context(), store, shortSessionID(root.ID), 0, time.Now())
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	assert.Equal(t, root.ID, sessions[0].ID)
+
+	// A full ID still works.
+	sessions, err = loadUsageSessions(t.Context(), store, root.ID, 0, time.Now())
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+}
+
+func TestLoadUsageSessions_UnknownSessionIsAnError(t *testing.T) {
+	t.Parallel()
+
+	store, _ := storeFixture(t)
+
+	_, err := loadUsageSessions(t.Context(), store, "nosuchsession", 0, time.Now())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no session matches")
+}
+
+func TestLoadUsageSessions_SinceFiltersBeforeLoading(t *testing.T) {
+	t.Parallel()
+
+	store, _ := storeFixture(t)
+
+	sessions, err := loadUsageSessions(t.Context(), store, "", time.Minute, time.Now())
+	require.NoError(t, err)
+	assert.Empty(t, sessions, "a session older than the window must not be loaded")
+
+	sessions, err = loadUsageSessions(t.Context(), store, "", 24*time.Hour, time.Now())
+	require.NoError(t, err)
+	assert.Len(t, sessions, 1)
 }
