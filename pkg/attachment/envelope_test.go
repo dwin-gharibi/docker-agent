@@ -177,6 +177,22 @@ func TestTXTEnvelope_EmptyBody(t *testing.T) {
 	t.Parallel()
 
 	got := attachment.TXTEnvelope("empty.txt", "text/plain", "")
-	assert.Equal(t, "<document-empty-txt-text-plain>\n\n</document-empty-txt-text-plain>", got,
-		"an empty body must not gain stray blank lines")
+	assert.True(t, strings.HasPrefix(got, "<document-empty-txt-text-plain>\n"))
+	assert.True(t, strings.HasSuffix(got, "\n</document-empty-txt-text-plain>"))
+}
+
+// The envelope should say what the region is, so a model has a stated reason to
+// treat it as data rather than as instructions.
+func TestTXTEnvelope_MarksContentAsUntrustedData(t *testing.T) {
+	t.Parallel()
+
+	got := attachment.TXTEnvelope("readme.md", "text/markdown", "# Hello")
+	lower := strings.ToLower(got)
+
+	assert.Contains(t, lower, "untrusted", "the envelope must label the region as untrusted")
+	assert.Contains(t, lower, "not instructions", "the envelope must say the content is not instructions")
+
+	// The notice belongs before the content the model is about to read.
+	assert.Less(t, strings.Index(lower, "untrusted"), strings.Index(got, "# Hello"),
+		"the notice must precede the body")
 }
