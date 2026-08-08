@@ -77,42 +77,99 @@ func (f *usageFlags) run(cmd *cobra.Command, _ []string) error {
 		}
 	}()
 
-	sessions, err := loadUsageSessions(ctx, store, f.sessionID)
+	sessions, err := loadUsageSessions(ctx, store, f.sessionID, f.since, time.Now())
 	if err != nil {
 		return err
 	}
 
-	report := usage.Aggregate(filterSessions(sessions, f.since, time.Now()))
-	return renderUsage(cmd.OutOrStdout(), report, f.asJSON)
+	return renderUsage(cmd.OutOrStdout(), usage.Aggregate(sessions), f.asJSON)
 }
 
-// loadUsageSessions fetches either one session or all of them.
-func loadUsageSessions(ctx context.Context, store session.Store, sessionID string) ([]*session.Session, error) {
-	if sessionID != "" {
-		s, err := store.GetSession(ctx, sessionID)
+// loadUsageSessions fetches either one session or every session in the window.
+//
+// The listing is filtered on metadata first and only the survivors are loaded
+// with their items. GetSessions pulls every message of every session into
+// memory, which on a large store is gigabytes — far too much for a report that
+// may be printing three rows, and for the CI use case --json exists for.
+func loadUsageSessions(ctx context.Context, store session.Store, sessionRef string,
+	since time.Duration, now time.Time,
+) ([]*session.Session, error) {
+	if sessionRef != "" {
+		id, err := resolveSessionRef(ctx, store, sessionRef)
 		if err != nil {
-			return nil, fmt.Errorf("reading session %q: %w", sessionID, err)
+			return nil, err
+		}
+		s, err := store.GetSession(ctx, id)
+		if err != nil {
+			return nil, fmt.Errorf("reading session %q: %w", sessionRef, err)
 		}
 		return []*session.Session{s}, nil
 	}
-	sessions, err := store.GetSessions(ctx)
+
+	summaries, err := store.GetSessionSummaries(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("listing sessions: %w", err)
+	}
+
+	sessions := make([]*session.Session, 0, len(summaries))
+	for _, summary := range keepSummariesSince(summaries, since, now) {
+		s, err := store.GetSession(ctx, summary.ID)
+		if err != nil {
+			return nil, fmt.Errorf("reading session %q: %w", summary.ID, err)
+		}
+		sessions = append(sessions, s)
 	}
 	return sessions, nil
 }
 
-// filterSessions drops sessions created before now-since. A non-positive since
-// keeps everything, and a session with a zero CreatedAt is kept rather than
-// silently dropped — an unknown timestamp is not evidence of age.
-func filterSessions(sessions []*session.Session, since time.Duration, now time.Time) []*session.Session {
+// keepSummariesSince drops sessions created before now-since. A non-positive
+// since keeps everything, and a session with a zero CreatedAt is kept rather
+// than silently dropped — an unknown timestamp is not evidence of age.
+func keepSummariesSince(summaries []session.Summary, since time.Duration, now time.Time) []session.Summary {
 	if since <= 0 {
-		return sessions
+		return summaries
 	}
 	cutoff := now.Add(-since)
-	return slices.DeleteFunc(slices.Clone(sessions), func(s *session.Session) bool {
-		return s != nil && !s.CreatedAt.IsZero() && s.CreatedAt.Before(cutoff)
+	return slices.DeleteFunc(slices.Clone(summaries), func(s session.Summary) bool {
+		return !s.CreatedAt.IsZero() && s.CreatedAt.Before(cutoff)
 	})
+}
+
+// resolveSessionRef turns a user-supplied reference into a session ID,
+// accepting the same relative forms as the rest of the CLI (-1 for the most
+// recent) plus any unambiguous ID prefix.
+//
+// The prefix form exists because the report prints shortened IDs: rejecting the
+// very string it just displayed makes --session unusable without a separate
+// lookup, and there is no `sessions ls` to do that lookup with.
+func resolveSessionRef(ctx context.Context, store session.Store, ref string) (string, error) {
+	id, err := session.ResolveSessionID(ctx, store, ref)
+	if err != nil {
+		return "", err
+	}
+	if _, err := store.GetSession(ctx, id); err == nil {
+		return id, nil
+	}
+
+	summaries, err := store.GetSessionSummaries(ctx)
+	if err != nil {
+		return "", fmt.Errorf("listing sessions: %w", err)
+	}
+
+	var matches []string
+	for _, summary := range summaries {
+		if strings.HasPrefix(summary.ID, id) {
+			matches = append(matches, summary.ID)
+		}
+	}
+	switch len(matches) {
+	case 1:
+		return matches[0], nil
+	case 0:
+		return "", fmt.Errorf("no session matches %q", ref)
+	default:
+		return "", fmt.Errorf("%q matches %d sessions; use more characters", ref, len(matches))
+	}
 }
 
 // renderUsage writes the report as JSON or as aligned text.
@@ -164,13 +221,14 @@ func renderUsage(w io.Writer, report usage.Report, asJSON bool) error {
 
 	if len(report.Models) > 0 {
 		fmt.Fprintln(tw, "\t\t\t\t\t\t")
-		fmt.Fprintln(tw, "MODEL\tCALLS\tINPUT\tCACHED\tOUTPUT\t\t")
+		fmt.Fprintln(tw, "MODEL\tCALLS\tINPUT\tCACHED\tOUTPUT\tCOST\t")
 		for _, m := range report.Models {
-			fmt.Fprintf(tw, "%s\t%d\t%s\t%s\t%s\t\t\n",
+			fmt.Fprintf(tw, "%s\t%d\t%s\t%s\t%s\t%s\t\n",
 				m.Model, m.Calls,
 				formatTokens(m.Tokens.Input),
 				formatTokens(m.Tokens.CachedInput),
 				formatTokens(m.Tokens.Output),
+				formatUsageCost(m.Cost, m.Tokens.AnySpend() && m.Cost == 0),
 			)
 		}
 	}

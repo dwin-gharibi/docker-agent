@@ -6,21 +6,25 @@
 //
 // # What the numbers mean
 //
-// Cost is taken from each session's own cumulative counter, which is what the
-// runtime recorded as it ran — this package never re-prices anything. Token
-// figures are summed from per-message usage, which is the only place the
-// cached-input and cache-write breakdown is persisted.
+// Cost is summed from the per-message cost the runtime recorded as it ran — this
+// package never re-prices anything. Token figures come from the same per-message
+// usage, which is also the only place the cached-input and cache-write breakdown
+// is persisted. Both are read from the same items, so a per-model cost breakdown
+// falls out for free.
 //
-// Those two sources can disagree: a session whose messages carry no usage (an
-// older session, or one recorded by a provider with usage tracking disabled)
-// reports zero tokens while still reporting a cost. The reverse — tokens with no
-// cost — means the model was missing from the pricing catalogue, and is surfaced
-// as [SessionRow.CostIncomplete] and [Report.UnpricedModels] rather than being
+// Cost and tokens are both read per message, so they agree with each other and
+// with what the TUI's cost dialog shows. Tokens with no cost means the model was
+// missing from the pricing catalogue, and is surfaced as
+// [SessionRow.CostIncomplete] and [Report.UnpricedModels] rather than being
 // silently reported as $0.00.
 //
-// Per-model *cost* is deliberately absent: cost is persisted per session and per
-// non-message item, never per message, so attributing it across the models used
-// inside one session is not possible without a schema change.
+// # Sub-sessions
+//
+// Delegated work lives in sub-sessions, and in a multi-agent run that is where
+// most of the spend is. Aggregation recurses into them, matching
+// [session.Session.TotalCost] and the TUI. A sub-agent's tokens, cost, model
+// calls and tool calls all land in the parent session's row, since that is the
+// unit a user starts and pays for.
 package usage
 
 import (
@@ -95,10 +99,11 @@ type SessionRow struct {
 // entirely. Unmetered is how many of those calls carried no usage, so short
 // token columns are explained rather than mysterious.
 type ModelRow struct {
-	Model     string `json:"model"`
-	Calls     int    `json:"calls"`
-	Unmetered int    `json:"unmetered_calls,omitempty"`
-	Tokens    Tokens `json:"tokens"`
+	Model     string  `json:"model"`
+	Calls     int     `json:"calls"`
+	Unmetered int     `json:"unmetered_calls,omitempty"`
+	Tokens    Tokens  `json:"tokens"`
+	Cost      float64 `json:"cost"`
 }
 
 // ToolRow is how often a tool was called across every session in the report.
@@ -125,7 +130,7 @@ type Report struct {
 func Aggregate(sessions []*session.Session) Report {
 	var report Report
 
-	modelTokens := map[string]*ModelRow{}
+	models := map[string]*ModelRow{}
 	toolCalls := map[string]int{}
 	unpriced := map[string]struct{}{}
 
@@ -134,46 +139,10 @@ func Aggregate(sessions []*session.Session) Report {
 			continue
 		}
 
-		row := SessionRow{ID: s.ID, Title: s.Title, CreatedAt: s.CreatedAt, Cost: s.Cost}
+		row := SessionRow{ID: s.ID, Title: s.Title, CreatedAt: s.CreatedAt}
 		sessionModels := map[string]struct{}{}
 
-		for i := range s.Messages {
-			item := &s.Messages[i]
-
-			// Non-message items (compaction summaries and the like) carry their
-			// own model and usage; they are real spend.
-			model, itemUsage := itemModelAndUsage(item)
-			if itemUsage == nil && model == "" {
-				continue
-			}
-
-			addUsage(&row.Tokens, itemUsage)
-			if model != "" {
-				sessionModels[model] = struct{}{}
-				mr, ok := modelTokens[model]
-				if !ok {
-					mr = &ModelRow{Model: model}
-					modelTokens[model] = mr
-				}
-				// An attributed model with no usage still happened — the
-				// provider just did not report tokens (usage tracking off, or an
-				// older session). Counting it keeps the model visible; Unmetered
-				// records why its token columns are short.
-				mr.Calls++
-				if itemUsage == nil {
-					mr.Unmetered++
-				}
-				addUsage(&mr.Tokens, itemUsage)
-			}
-
-			if item.Message != nil {
-				for _, tc := range item.Message.Message.ToolCalls {
-					if tc.Function.Name != "" {
-						toolCalls[tc.Function.Name]++
-					}
-				}
-			}
-		}
+		walkSession(s, &row, sessionModels, models, toolCalls)
 
 		row.Models = sortedKeys(sessionModels)
 
@@ -203,7 +172,7 @@ func Aggregate(sessions []*session.Session) Report {
 		return cmp.Compare(a.ID, b.ID)
 	})
 
-	for _, mr := range modelTokens {
+	for _, mr := range models {
 		report.Models = append(report.Models, *mr)
 	}
 	slices.SortFunc(report.Models, func(a, b ModelRow) int {
@@ -227,14 +196,76 @@ func Aggregate(sessions []*session.Session) Report {
 	return report
 }
 
-// itemModelAndUsage returns the model and usage behind one session item,
-// whichever shape it takes: an assistant message, or a non-message item such as
-// a compaction summary that records its own spend.
-func itemModelAndUsage(item *session.Item) (string, *chat.Usage) {
-	if item.Message != nil {
-		return item.Message.Message.Model, item.Message.Message.Usage
+// walkSession accumulates one session's spend into row and the report-wide
+// tallies, recursing into sub-sessions.
+//
+// Sub-session spend is folded into the parent's row rather than reported
+// separately: a delegating run is one thing the user started, and
+// [session.Session.TotalCost] counts it the same way. The store agrees — its
+// session listing is root-only — so a sub-session has nowhere else to be
+// reported.
+func walkSession(s *session.Session, row *SessionRow, sessionModels map[string]struct{},
+	models map[string]*ModelRow, toolCalls map[string]int,
+) {
+	if s == nil {
+		return
 	}
-	return item.Model, item.Usage
+
+	// MessagesSnapshot copies under the session lock, so a live session being
+	// written to cannot race this walk.
+	for _, item := range s.MessagesSnapshot() {
+		if item.IsSubSession() {
+			walkSession(item.SubSession, row, sessionModels, models, toolCalls)
+		}
+
+		model, itemUsage, itemCost := itemSpend(&item)
+
+		row.Cost += itemCost
+		addUsage(&row.Tokens, itemUsage)
+
+		if model != "" {
+			sessionModels[model] = struct{}{}
+			mr, ok := models[model]
+			if !ok {
+				mr = &ModelRow{Model: model}
+				models[model] = mr
+			}
+			// An attributed model with no usage still happened — the provider
+			// just did not report tokens (usage tracking off, or an older
+			// session). Counting it keeps the model visible; Unmetered records
+			// why its token columns are short.
+			mr.Calls++
+			if itemUsage == nil {
+				mr.Unmetered++
+			}
+			addUsage(&mr.Tokens, itemUsage)
+			mr.Cost += itemCost
+		}
+
+		if item.IsMessage() {
+			for _, tc := range item.Message.Message.ToolCalls {
+				if tc.Function.Name != "" {
+					toolCalls[tc.Function.Name]++
+				}
+			}
+		}
+	}
+}
+
+// itemSpend returns the model, usage and cost behind one session item, whichever
+// shape it takes: an assistant message, or a non-message item such as a
+// compaction summary that records its own spend.
+//
+// An item can carry both — a message plus an item-level compaction cost — so the
+// two costs are added rather than chosen between, matching
+// [session.Session.TotalCost].
+func itemSpend(item *session.Item) (model string, usage *chat.Usage, cost float64) {
+	cost = item.Cost
+	if item.IsMessage() {
+		msg := &item.Message.Message
+		return msg.Model, msg.Usage, cost + msg.Cost
+	}
+	return item.Model, item.Usage, cost
 }
 
 func sortedKeys(set map[string]struct{}) []string {
