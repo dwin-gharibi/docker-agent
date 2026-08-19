@@ -309,6 +309,19 @@ func TestLoadUsageSessions_AcceptsAnIDPrefix(t *testing.T) {
 	require.Len(t, sessions, 1)
 }
 
+// The help text promises the relative form the rest of the CLI accepts, so it
+// has to resolve here too rather than only through `sessions diff`.
+func TestLoadUsageSessions_AcceptsARelativeRef(t *testing.T) {
+	t.Parallel()
+
+	store, root := storeFixture(t)
+
+	sessions, err := loadUsageSessions(t.Context(), store, "-1", 0, time.Now())
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	assert.Equal(t, root.ID, sessions[0].ID, "-1 must resolve to the most recent run")
+}
+
 func TestLoadUsageSessions_UnknownSessionIsAnError(t *testing.T) {
 	t.Parallel()
 

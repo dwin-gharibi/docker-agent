@@ -37,22 +37,29 @@ func newUsageCmd() *cobra.Command {
 		Args:    cobra.NoArgs,
 		Long: `Report what recorded sessions spent, broken down by session, model, and tool.
 
-Cost comes from each session's own recorded counter; this command never re-prices
-anything. Token figures are summed from per-message usage, which is where the
+Cost and token figures are summed from what the runtime recorded per message and
+per non-message item, recursing into delegated sub-agents — the same walk
+session.TotalCost() performs, so a session's total here matches the TUI's cost
+dialog. Nothing is re-priced. Summing per-message usage is also where the
 cached-input breakdown lives, so prompt-caching wins are visible.
 
 A session that moved tokens but recorded no cost means the model was missing from
 the pricing catalogue. Those are flagged rather than reported as $0.00, because a
-report that quietly understates spend is worse than no report.`,
+report that quietly understates spend is worse than no report.
+
+--session accepts a full session ID, any unambiguous ID prefix (including the
+shortened form this report prints), or a relative reference such as -1 for the
+most recent run.`,
 		Example: `  docker agent usage
   docker agent usage --since 24h
-  docker agent usage --session <id>
+  docker agent usage --session a1b2c3d4
+  docker agent usage --session -1
   docker agent usage --json | jq '.cost'`,
 		RunE: flags.run,
 	}
 
 	cmd.Flags().StringVarP(&flags.sessionDB, "session-db", "s", "", "Path to the session database (default: <data-dir>/session.db)")
-	cmd.Flags().StringVar(&flags.sessionID, "session", "", "Report only this session ID")
+	cmd.Flags().StringVar(&flags.sessionID, "session", "", "Report only this session: a full ID, an unambiguous ID prefix, or a relative ref such as -1")
 	cmd.Flags().DurationVar(&flags.since, "since", 0, "Report only sessions created within this duration (e.g. 24h)")
 	cmd.Flags().BoolVar(&flags.asJSON, "json", false, "Emit the report as JSON")
 
